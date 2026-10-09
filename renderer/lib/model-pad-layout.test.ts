@@ -9,6 +9,7 @@ import {
   MODEL_PAD_VIEWPORT_GUTTER_PX,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
+  addModelPadPlacement,
   modelPadLayoutsEqual,
   modelPadPointKey,
   moveModelPadPoint,
@@ -92,12 +93,49 @@ test("adding a model places it against the grid for one more placed model", () =
   for (let index = 0; index < 9; index += 1) {
     placements[`model-${index}`] = nextModelPadPlacement(placements);
   }
-  // Nine placed models fit a 7x7 grid; the tenth is placed on the 9x9 grid it creates.
+  // With nine models already placed, the tenth is placed on the 9x9 grid for ten models.
   const tenth = nextModelPadPlacement(placements, 10);
   const nineByNine = modelPadGridSize(10);
   assert.equal(nineByNine, 9);
   assert.deepEqual(snapToModelPadGrid(tenth, nineByNine), { x: tenth.x, y: tenth.y });
   assert.notDeepEqual(snapToModelPadGrid(tenth, 7), { x: tenth.x, y: tenth.y });
+});
+
+test("adding after a removal keeps existing dots on the grid they will share with the new one", () => {
+  const ninth = (column: number, row: number): ModelPadPlacement => ({
+    x: column / 8,
+    y: row / 8,
+    xSource: "user",
+    ySource: "user",
+  });
+  // Nine models laid out on the 9x9 lattice; one is then removed (eight placed -> 7x7 grid).
+  const placements: Record<string, ModelPadPlacement> = {
+    m1: ninth(2, 4),
+    m2: ninth(6, 4),
+    m3: ninth(4, 1),
+    m4: ninth(4, 7),
+    m5: ninth(0, 0),
+    m6: ninth(8, 8),
+    m7: ninth(1, 6),
+    m8: ninth(7, 2),
+    offline: { x: 0.33, y: 0.66, xSource: "user", ySource: "benchmark" },
+  };
+  const visibleValues = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "new"];
+  assert.equal(modelPadGridSizeForPlacements(placements, visibleValues), 7);
+
+  const next = addModelPadPlacement(placements, visibleValues, "new");
+
+  // Back to nine placed models on the 9x9 grid: every existing dot returns to where it was.
+  for (const value of ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"]) {
+    assert.deepEqual(next[value], placements[value], value);
+  }
+  assert.deepEqual(next.offline, placements.offline);
+  assert.equal(next.new.xSource, "user");
+  assert.deepEqual(snapToModelPadGrid(next.new, 9), { x: next.new.x, y: next.new.y });
+  const cells = visibleValues.map((value) => modelPadPointKey(next[value], 9));
+  assert.equal(new Set(cells).size, visibleValues.length);
+  // An already placed model is left alone.
+  assert.equal(addModelPadPlacement(placements, visibleValues, "m1"), placements);
 });
 
 test("pointer targets snap to nodes and choose the nearest free node", () => {

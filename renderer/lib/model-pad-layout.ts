@@ -357,3 +357,29 @@ export function nextModelPadPlacement(
   );
   return { x: candidate.x, y: candidate.y, xSource: "user", ySource: "user" };
 }
+
+/**
+ * Add `value` to the Pad. Existing visible placements are reflowed onto the
+ * grid for `placedCount + 1` (the grid the Pad will have afterwards) and the new
+ * model takes the nearest open cell to the center on that same grid, so no dot
+ * is snapped twice through an intermediate lattice. Returns `placements`
+ * unchanged when `value` is already placed.
+ */
+export function addModelPadPlacement(
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+  visibleValues: readonly string[],
+  value: string,
+): Readonly<Record<string, ModelPadPlacement>> {
+  if (placements[value]) return placements;
+  const placedValues = placedVisibleModelPadValues(placements, visibleValues);
+  const placedCount = placedValues.length + 1;
+  const reflowed = reflowVisibleModelPadPlacements(
+    placements,
+    visibleValues,
+    modelPadGridSize(placedCount),
+  );
+  const visiblePlacements = Object.fromEntries(
+    placedValues.map((candidate) => [candidate, reflowed[candidate]] as const),
+  );
+  return { ...reflowed, [value]: nextModelPadPlacement(visiblePlacements, placedCount) };
+}

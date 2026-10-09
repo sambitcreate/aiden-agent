@@ -28,6 +28,7 @@ import {
   type ModelEntry,
 } from "../../lib/model-picker-data";
 import {
+  addModelPadPlacement,
   distributeCapabilityOnlyModelPadSuggestions,
   emptyModelPadLayout,
   modelPadGridSize,
@@ -38,7 +39,6 @@ import {
   modelPadTopPercent,
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
-  nextModelPadPlacement,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
@@ -647,24 +647,8 @@ export function ModelPadSettings() {
 
   const addModel = (value: string) => {
     setDraft((current) => {
-      if (current.placements[value]) return current;
-      const reflowed = reflowVisibleModelPadPlacements(current.placements, visibleValues);
-      const visiblePlacements = Object.fromEntries(
-        placedVisibleModelPadValues(reflowed, visibleValues).map(
-          (candidate) => [candidate, reflowed[candidate]] as const,
-        ),
-      );
-      return {
-        ...current,
-        placements: {
-          ...reflowed,
-          // Place against the grid the Pad will have once this model joins it.
-          [value]: nextModelPadPlacement(
-            visiblePlacements,
-            Object.keys(visiblePlacements).length + 1,
-          ),
-        },
-      };
+      const placements = addModelPadPlacement(current.placements, visibleValues, value);
+      return placements === current.placements ? current : { ...current, placements };
     });
     setActiveValue(value);
   };
