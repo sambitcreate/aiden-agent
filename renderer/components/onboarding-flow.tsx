@@ -992,7 +992,7 @@ export function OnboardingFlow({
                     </Text>
                   </div>
                 </div>
-                <OnboardingFeatureGallery features={visibleFeatureBentos} />
+                <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
               </div>
             ) : null}
           </main>

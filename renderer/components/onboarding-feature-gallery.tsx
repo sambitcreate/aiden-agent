@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { Text } from "./ui";
 import { onboardingModelDescription } from "../lib/onboarding-provider";
+import type { KeyboardPlatform } from "../shared/keybindings";
 import {
   FeatureArt,
   featureArtTintStyle,
@@ -302,7 +303,14 @@ const TITLE_LAYOUTS: Readonly<Record<FeatureArtSize, string>> = {
 };
 
 /** The final onboarding step's feature tour: grouped bento tiles with code-drawn art. */
-export function OnboardingFeatureGallery({ features }: { features: readonly OnboardingFeature[] }) {
+export function OnboardingFeatureGallery({
+  features,
+  platform,
+}: {
+  features: readonly OnboardingFeature[];
+  /** Keyboard platform, so drawn shortcuts match the ones this machine uses. */
+  platform: KeyboardPlatform;
+}) {
   return (
     <div
       data-onboarding-bento
@@ -338,7 +346,7 @@ export function OnboardingFeatureGallery({ features }: { features: readonly Onbo
                       aria-hidden="true"
                       className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0 motion-reduce:transition-none"
                     >
-                      <FeatureArt id={feature.id} size={feature.size} />
+                      <FeatureArt id={feature.id} size={feature.size} platform={platform} />
                       <Text
                         variant="small-strong"
                         className={`absolute bottom-3 left-3 block leading-4 ${TITLE_LAYOUTS[feature.size]}`}
