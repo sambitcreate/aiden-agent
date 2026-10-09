@@ -211,6 +211,48 @@ function EmptyModelPad({
   );
 }
 
+/**
+ * A secondary action inside a cmdk list row (Pin, Pad toggle). It never chooses
+ * the row: pointer presses don't reach cmdk's selection, and Enter is kept from
+ * the command root so the button's native activation runs instead.
+ */
+function ModelRowAction({
+  label,
+  pressed,
+  onToggle,
+  children,
+}: {
+  label: string;
+  pressed: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={pressed}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        pressed ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function ModelHoverDetails({
   model,
   metadataLoading,
@@ -664,9 +706,9 @@ export function ModelPicker({
         }}
       >
         <div className="relative w-[min(19.75rem,calc(100vw-1.5rem))] overflow-hidden rounded-popover bg-popover shadow-popover">
-        <div className="p-1.5 pb-0">
+        <div className="flex items-center gap-1 p-1.5 pb-0">
           <div
-            className="grid grid-cols-2 rounded-control bg-control/60 p-0.5"
+            className="grid min-w-0 flex-1 grid-cols-2 rounded-control bg-control/60 p-0.5"
             role="tablist"
             aria-label="Model picker view"
           >
@@ -706,6 +748,29 @@ export function ModelPicker({
               Pad
             </Button>
           </div>
+          {hasPadModels ? (
+            // The empty Pad has its own Customize call to action.
+            <>
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                className={cn("shrink-0", settingsBlockedReason && "opacity-45")}
+                aria-label="Customize Model Pad"
+                aria-disabled={Boolean(settingsBlockedReason)}
+                aria-describedby={settingsBlockedReason ? customizeBlockedReasonId : undefined}
+                title={settingsBlockedReason ?? "Customize Model Pad"}
+                onClick={openModelDataSettings}
+              >
+                <SlidersHorizontal />
+              </Button>
+              {settingsBlockedReason ? (
+                <span id={customizeBlockedReasonId} className="sr-only">
+                  {settingsBlockedReason}.
+                </span>
+              ) : null}
+            </>
+          ) : null}
         </div>
 
         {view === "pad" ? (
@@ -715,44 +780,17 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
-            {selectedOffPad || hasPadModels ? (
-              <div className="mb-2 flex min-w-0 items-center justify-end gap-1">
-                {selectedOffPad ? (
-                  <div className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
-                    <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
-                      <span className="min-w-0 truncate" title={selectedOffPad.label}>
-                        {selectedOffPad.label}
-                      </span>
-                      <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
-                    </Text>
-                    <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
-                      Add to Pad
-                    </Button>
-                  </div>
-                ) : null}
-                {hasPadModels ? (
-                  // The empty Pad has its own Customize call to action.
-                  <>
-                    <Button
-                      variant="transparent"
-                      size="small"
-                      iconOnly
-                      className={cn("shrink-0", settingsBlockedReason && "opacity-45")}
-                      aria-label="Customize Model Pad"
-                      aria-disabled={Boolean(settingsBlockedReason)}
-                      aria-describedby={settingsBlockedReason ? customizeBlockedReasonId : undefined}
-                      title={settingsBlockedReason ?? "Customize Model Pad"}
-                      onClick={openModelDataSettings}
-                    >
-                      <SlidersHorizontal />
-                    </Button>
-                    {settingsBlockedReason ? (
-                      <span id={customizeBlockedReasonId} className="sr-only">
-                        {settingsBlockedReason}.
-                      </span>
-                    ) : null}
-                  </>
-                ) : null}
+            {selectedOffPad ? (
+              <div className="mb-2 flex min-w-0 items-center gap-2 rounded-control bg-control/60 py-1 pr-1 pl-2.5">
+                <Text variant="small" color="secondary" as="p" className="flex min-w-0 flex-1">
+                  <span className="min-w-0 truncate" title={selectedOffPad.label}>
+                    {selectedOffPad.label}
+                  </span>
+                  <span className="shrink-0">{"\u00a0"}isn’t on your Pad</span>
+                </Text>
+                <Button size="small" className="shrink-0" onClick={addSelectedToPad}>
+                  Add to Pad
+                </Button>
               </div>
             ) : null}
             {hasPadModels ? (
@@ -830,54 +868,26 @@ export function ModelPicker({
                         {describeModel(entry)}
                       </span>
                       {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
-                      <button
-                        type="button"
-                        aria-label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
-                        aria-pressed={isPinned}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          togglePin(entry.value);
-                        }}
-                        className={cn(
-                          "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-                          isPinned
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                        )}
+                      <ModelRowAction
+                        label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
+                        pressed={isPinned}
+                        onToggle={() => togglePin(entry.value)}
                       >
                         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={
+                      </ModelRowAction>
+                      <ModelRowAction
+                        label={
                           isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`
                         }
-                        aria-pressed={isOnPad}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleOnPad(entry.value);
-                        }}
-                        className={cn(
-                          "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-                          isOnPad
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                        )}
+                        pressed={isOnPad}
+                        onToggle={() => toggleOnPad(entry.value)}
                       >
                         {isOnPad ? (
                           <Grid2x2Check className="size-3.5 text-accent" />
                         ) : (
                           <Grid2x2Plus className="size-3.5" />
                         )}
-                      </button>
+                      </ModelRowAction>
                     </CommandItem>
                   );
                 })}

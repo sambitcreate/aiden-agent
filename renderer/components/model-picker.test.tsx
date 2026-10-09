@@ -306,3 +306,73 @@ test("Customize Model Pad explains why settings are unavailable and stays put", 
   assert.notEqual(router.state.location.pathname, "/settings");
   assert.ok(screen.getByRole("listbox", { name: /Model pad/u }));
 });
+
+// Keyboard users activate a row action with Enter; native button activation then
+// clicks it. The command list must not treat that Enter as choosing the row.
+function pressEnter(button: HTMLElement) {
+  button.focus();
+  const notPrevented = fireEvent.keyDown(button, { key: "Enter" });
+  assert.ok(notPrevented, "Enter reaches the button's own activation");
+  fireEvent.click(button);
+}
+
+test("Enter on a row's Pad toggle edits the Pad and keeps the list open", async () => {
+  const server = settingsServer(placedSettings);
+  const changes: string[] = [];
+  const search = await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  pressEnter(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Placed Two to Pad" })));
+  assert.deepEqual(savedPlacements(server), [
+    { "acme::placed-one": placedSettings.modelPadPlacements?.["acme::placed-one"] },
+  ]);
+  assert.deepEqual(changes, []);
+  assert.ok(search.isConnected, "the list stayed open");
+});
+
+test("Enter on a row's Pin pins the model and keeps the list open", async () => {
+  const server = settingsServer(placedSettings);
+  const changes: string[] = [];
+  const search = await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  pressEnter(screen.getByRole("button", { name: "Pin Placed Two" }));
+
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Unpin Placed Two" })));
+  const writes = server.calls.filter((call) => call.channel === "settings:set");
+  assert.deepEqual(
+    writes.map((call) => (call.args[0] as AppSettings).pinnedModels),
+    [["acme::placed-two"]],
+  );
+  assert.deepEqual(changes, []);
+  assert.ok(search.isConnected, "the list stayed open");
+});
+
+test("Customize Model Pad is available from the List while the Pad has models", async () => {
+  const server = settingsServer(placedSettings);
+  await openList(server);
+
+  assert.equal(screen.getAllByRole("button", { name: "Customize Model Pad" }).length, 1);
+});
+
+test("a current model removed from the Pad in the List is offered again on the Pad", async () => {
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": { x: 0.5, y: 0.5, ...user },
+    },
+  });
+  await openList(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove Current Model from Pad" }));
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" })));
+  fireEvent.click(screen.getByRole("tab", { name: "Personal Model Pad" }));
+
+  const pad = await screen.findByRole("listbox", { name: /Model pad/u });
+  assert.equal(pad.getAttribute("aria-activedescendant"), null);
+  assert.match(screen.getByRole("tabpanel").textContent ?? "", /Current Model\sisn’t on your Pad/u);
+});
