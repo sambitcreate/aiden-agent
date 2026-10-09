@@ -18,6 +18,7 @@ import { RemoteNewChatView } from "./remote-new-chat-view";
 import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { parseBotPageSearch } from "./bots/bot-page-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
@@ -124,6 +125,7 @@ const botsRoute = createRoute({
 const botRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/bots/$botId",
+  validateSearch: parseBotPageSearch,
   component: BotsRoute,
   staticData: { title: "Bot" },
 });

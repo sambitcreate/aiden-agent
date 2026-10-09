@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
+import {
+  BotRuntimeInventoryLeaseInvalidError,
+  BotRuntimeInventoryLeaseRegistry,
+  readUnderFreshBotRuntimeInventoryLease,
+} from "./bot-runtime-inventory-lease.js";
 
 for (const mutation of [
   "settings",
@@ -55,4 +59,43 @@ test("release is idempotent and removes the inventory lease", () => {
   lease.release();
   assert.equal(registry.activeCount(), 0);
   assert.throws(() => lease.assertCurrent(), /capabilities changed/u);
+});
+
+test("a fresh-lease read retries a mid-read fence and returns a still-held current lease", async () => {
+  const registry = new BotRuntimeInventoryLeaseRegistry();
+  let reads = 0;
+  const { lease, value } = await readUnderFreshBotRuntimeInventoryLease(registry, async () => {
+    reads += 1;
+    if (reads === 1) registry.invalidate("provider_credential");
+    return `snapshot-${reads}`;
+  });
+  assert.equal(value, "snapshot-2");
+  assert.doesNotThrow(() => lease.assertCurrent());
+  assert.equal(registry.activeCount(), 1);
+  lease.release();
+});
+
+test("a fresh-lease read gives up after bounded fences and does not retry other failures", async () => {
+  const registry = new BotRuntimeInventoryLeaseRegistry();
+  let reads = 0;
+  await assert.rejects(
+    readUnderFreshBotRuntimeInventoryLease(registry, async () => {
+      reads += 1;
+      registry.invalidate("mcp_credential");
+    }),
+    BotRuntimeInventoryLeaseInvalidError,
+  );
+  assert.equal(reads, 3);
+  assert.equal(registry.activeCount(), 0);
+
+  reads = 0;
+  await assert.rejects(
+    readUnderFreshBotRuntimeInventoryLease(registry, async () => {
+      reads += 1;
+      throw new Error("catalog unavailable");
+    }),
+    /catalog unavailable/u,
+  );
+  assert.equal(reads, 1);
+  assert.equal(registry.activeCount(), 0);
 });

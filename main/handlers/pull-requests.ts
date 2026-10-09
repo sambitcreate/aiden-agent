@@ -7,6 +7,7 @@ import {
   isSafeChatPullRequestChatId,
   normalizePullRequestRef,
   parseExpectedHeadSha,
+  parseSidebarChatIds,
   parsePullRequestRepository,
 } from "../../renderer/shared/chat-pull-requests.js";
 import { chatPullRequestService } from "../services/chat-pull-request-service-main.js";
@@ -88,6 +89,10 @@ export function registerPullRequestHandlers(): void {
 
   ipcMain.handle("pullRequests:current", async (_event, chatId: unknown) =>
     chatPullRequestService.current(asChatId(chatId)),
+  );
+
+  ipcMain.handle("pullRequests:sidebar", async (_event, chatIds: unknown) =>
+    chatPullRequestService.sidebar(parseSidebarChatIds(chatIds)),
   );
 
   ipcMain.handle(

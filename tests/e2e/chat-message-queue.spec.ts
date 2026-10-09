@@ -659,7 +659,7 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   await expect(attach).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   const image = (
-    await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
+    await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))
   ).toString("base64");
   await composer.evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
@@ -753,7 +753,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
   // Draft editing includes removing attachments while the local compaction
   // command is still pending, before a remount clears its local busy state.
   const image = (
-    await readFile(path.join(REPOSITORY_ROOT, "renderer/assets/onboarding/aiden-workspace.png"))
+    await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))
   ).toString("base64");
   await composer.evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));

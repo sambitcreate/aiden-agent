@@ -3,7 +3,7 @@ import type { BotDefinition } from "../shared/bots";
 import { Button } from "./ui";
 
 /**
- * "Meet Your First Bot" onboarding step: the shared starter carousel. Start Chat
+ * "Meet your first Bot" onboarding step: the shared starter carousel. Start chat
  * creates that starter Bot (its chat opens once onboarding finishes) and Skip
  * creates none; either way onboarding moves on.
  */

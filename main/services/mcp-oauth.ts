@@ -27,7 +27,8 @@ import {
   mcpAuthorizationBinding,
   publicMcpClientInformation,
   sessionMatchesMcpBinding,
-  sessionForFreshMcpAuthorization,
+  sessionForMcpAuthorizationAttempt,
+  sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
 import {
@@ -184,13 +185,9 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.observeTokens?.(tokens);
     const session = await this.boundSession();
     this.assertCanMutate();
-    const grantedScope = tokens.scope || this.authorization.requestedScope || session.tokens?.scope || session.grantedScope;
-    await this.saveSession({
-      ...session,
-      authorizationBinding: this.binding,
-      tokens,
-      ...(grantedScope ? { grantedScope } : {}),
-    });
+    await this.saveSession(
+      sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope),
+    );
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -477,7 +474,7 @@ export async function authorizeMcpServer(
     () => isCurrent() && oauthOperations.isCurrent(operation),
   );
   const transaction = new McpOAuthSessionTransaction(
-    sessionForFreshMcpAuthorization(previousSession, binding),
+    sessionForMcpAuthorizationAttempt(previousSession, binding),
   );
   const authorization = new McpOAuthAuthorizationFlow();
   const provider = new McpOAuthProvider(

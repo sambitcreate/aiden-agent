@@ -15,7 +15,18 @@ use std::thread;
 const TERMINATE_GRACE: Duration = Duration::from_millis(500);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(2);
-const DRIVER_ARGUMENTS: &[&str] = &["mcp", "--embedded", "--host-bundle-id", BROKER_BUNDLE_ID];
+// cua-driver 0.34 refuses `mcp --embedded` without a private `--socket`
+// service unless `--direct` asks the MCP process itself to own the runtime.
+// Direct mode keeps the driver a plain child of this LaunchServices-owned
+// helper, so TCC attributes it to CuaDriver.app; embedded mode skips the
+// responsibility disclaim re-exec and never raises its own prompts.
+const DRIVER_ARGUMENTS: &[&str] = &[
+    "mcp",
+    "--embedded",
+    "--direct",
+    "--host-bundle-id",
+    BROKER_BUNDLE_ID,
+];
 const LAUNCH_COMMAND: u8 = 0xa6;
 const LAUNCHER_READY: u8 = 0xb5;
 const LAUNCH_FRAME_BYTES: usize = 12;
@@ -74,6 +85,9 @@ fn allowed_driver_environment() -> Vec<String> {
         "CUA_DRIVER_RS_TELEMETRY_ENABLED=0".to_owned(),
         "CUA_TELEMETRY_ENABLED=0".to_owned(),
         "CUA_DRIVER_RS_UPDATE_CHECK=false".to_owned(),
+        // Upstream's cross-tool opt-out; it takes precedence over every other
+        // telemetry switch, including persisted driver configuration.
+        "DO_NOT_TRACK=1".to_owned(),
         "NO_COLOR=1".to_owned(),
     ];
     for (key, fallback) in [
@@ -585,14 +599,21 @@ mod tests {
     #[test]
     fn launch_requirement_is_the_exact_reviewed_cross_architecture_constraint() {
         let bytes = darwin::launch_requirement_bytes();
+        // Regenerate with `node scripts/generate-cua-launch-requirement.mjs`.
         assert_eq!(bytes.len(), 272);
         assert_eq!(
             format!("{:x}", Sha256::digest(bytes)),
-            "ad026fbd60b3d23a310f4dcd73ae7c7eeeb3d6f0db09e98e28f0be0420853637"
+            "7cd4189a267910cc8c341ee9796536d1e2b82b2ed24f9f2996b38228339f5d3d"
         );
         assert_eq!(
             DRIVER_ARGUMENTS,
-            ["mcp", "--embedded", "--host-bundle-id", BROKER_BUNDLE_ID]
+            [
+                "mcp",
+                "--embedded",
+                "--direct",
+                "--host-bundle-id",
+                BROKER_BUNDLE_ID
+            ]
         );
     }
 
@@ -733,11 +754,25 @@ mod tests {
             "DYLD_INSERT_LIBRARIES",
             "HTTPS_PROXY",
             "CUA_DRIVER_POLICY_FILE",
+            "CUA_DRIVER_PERMISSION_MODE",
+            "CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS",
+            "CUA_DRIVER_MCP_ENVELOPES",
         ] {
             assert!(!keys.contains(&forbidden));
         }
         assert!(environment.contains(&"CUA_DRIVER_EMBEDDED=1".to_owned()));
         assert!(environment.contains(&format!("CUA_DRIVER_HOST_BUNDLE_ID={BROKER_BUNDLE_ID}")));
+        for opt_out in [
+            "DO_NOT_TRACK=1",
+            "CUA_DRIVER_RS_TELEMETRY_ENABLED=0",
+            "CUA_TELEMETRY_ENABLED=0",
+            "CUA_DRIVER_RS_UPDATE_CHECK=false",
+        ] {
+            assert!(
+                environment.contains(&opt_out.to_owned()),
+                "missing {opt_out}"
+            );
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { FileText, Square } from "lucide-react";
+import { CircleAlert, FileText, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
@@ -12,7 +12,8 @@ import { toolLabel } from "../../components/chat-approval-card";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
-import { Button, EmptyState, Text, toast } from "../../components/ui";
+import { Button, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
+import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
@@ -21,7 +22,7 @@ import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import { BotChatActions, BotChatTitle } from "./bot-chat-header";
+import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
@@ -53,29 +54,30 @@ export function BotInterruptedCard({
 }) {
   const accessChanged = blocked === "access_changed";
   return (
-    <div role="group" aria-label={`${name} was interrupted`} className="flex max-w-md flex-col gap-3 rounded-2xl bg-control/50 p-4">
-      <Text as="p" color="primary">
-        {BOT_INTERRUPTED_TEXT}
-      </Text>
-      {accessChanged ? (
-        <Text as="p" variant="small" color="secondary">
-          {BOT_ACCESS_CHANGED_TEXT}{" "}
-          <Button variant="transparent" size="small" onClick={onReviewAccess}>
-            Open Advanced
+    <BotNoticeCard
+      label={`${name} was interrupted`}
+      icon={<Pause />}
+      iconTone="warning"
+      title={BOT_INTERRUPTED_TEXT}
+      actions={
+        <>
+          <Button variant="transparent" size="small" disabled={busy} onClick={onDismiss}>
+            Dismiss
           </Button>
-        </Text>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        {accessChanged ? null : (
-          <Button variant="accent" size="medium" disabled={busy} onClick={onResume}>
-            Resume
-          </Button>
-        )}
-        <Button variant="transparent" size="medium" disabled={busy} onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
-    </div>
+          {accessChanged ? (
+            <Button variant="accent" size="small" onClick={onReviewAccess}>
+              Open Advanced
+            </Button>
+          ) : (
+            <Button variant="accent" size="small" disabled={busy} onClick={onResume}>
+              Resume
+            </Button>
+          )}
+        </>
+      }
+    >
+      {accessChanged ? <p>{BOT_ACCESS_CHANGED_TEXT}</p> : null}
+    </BotNoticeCard>
   );
 }
 
@@ -131,24 +133,29 @@ export function BotApprovalCard({
   onAnswer(decision: "allow" | "deny"): void;
 }) {
   return (
-    <div role="group" aria-label={`${name} needs approval`} className="flex max-w-md flex-col gap-3 rounded-2xl bg-control/50 p-4">
-      <Text as="p" color="primary">
-        {`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-      </Text>
+    <BotNoticeCard
+      label={`${name} needs approval`}
+      elevated
+      icon={<ShieldQuestion />}
+      iconTone="warning"
+      title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
+      actions={
+        <>
+          <Button variant="transparent" size="small" onClick={() => onAnswer("deny")}>
+            Deny
+          </Button>
+          <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
+            Allow
+          </Button>
+        </>
+      }
+    >
       {prompt.summary ? (
-        <Text as="p" variant="small" color="secondary" className="whitespace-pre-wrap break-words">
+        <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
           {prompt.summary}
-        </Text>
+        </p>
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="accent" size="medium" onClick={() => onAnswer("allow")}>
-          Allow
-        </Button>
-        <Button variant="transparent" size="medium" onClick={() => onAnswer("deny")}>
-          Deny
-        </Button>
-      </div>
-    </div>
+    </BotNoticeCard>
   );
 }
 
@@ -185,23 +192,56 @@ export function BotFailedTurnCard({
   onRetry(): void;
 }) {
   return (
-    <div role="group" aria-label={`${name} couldn’t finish a reply`} className="flex max-w-md flex-col gap-3 rounded-2xl bg-control/50 p-4">
-      <Text as="p" color="primary">
-        {BOT_FAILED_TURN_TEXT}
-      </Text>
-      {errorMessage ? (
-        <Text as="p" variant="small" color="secondary" className="whitespace-pre-wrap break-words">
-          {errorMessage}
-        </Text>
-      ) : null}
-      {retryable ? (
-        <div className="flex items-center gap-2">
-          <Button variant="accent" size="medium" disabled={busy} onClick={onRetry}>
-            Retry
+    <BotNoticeCard
+      label={`${name} couldn’t finish a reply`}
+      icon={<CircleAlert />}
+      iconTone="red"
+      title={BOT_FAILED_TURN_TEXT}
+      actions={
+        retryable ? (
+          <Button variant="filled" size="small" disabled={busy} onClick={onRetry}>
+            <RotateCcw /> Retry
           </Button>
-        </div>
-      ) : null}
-    </div>
+        ) : undefined
+      }
+    >
+      {errorMessage ? <p className="whitespace-pre-wrap">{errorMessage}</p> : null}
+    </BotNoticeCard>
+  );
+}
+
+/** The Bot has a model, but it can't be used right now (sign-in, a missing provider). */
+export function BotModelErrorCard({
+  name,
+  message,
+  onChooseModel,
+  onOpenProviders,
+}: {
+  name: string;
+  message: string;
+  onChooseModel(): void;
+  onOpenProviders(): void;
+}) {
+  return (
+    <BotNoticeCard
+      role="alert"
+      label={`${name} can’t reach its AI model`}
+      icon={<CircleAlert />}
+      iconTone="red"
+      title={`${name} can’t reach its AI model`}
+      actions={
+        <>
+          <Button variant="transparent" size="small" onClick={onOpenProviders}>
+            Open Providers
+          </Button>
+          <Button variant="filled" size="small" onClick={onChooseModel}>
+            Choose a model
+          </Button>
+        </>
+      }
+    >
+      <p className="whitespace-pre-wrap">{message}</p>
+    </BotNoticeCard>
   );
 }
 
@@ -292,7 +332,7 @@ function TranscriptEntries({
             );
           case "notice":
             return (
-              <Text key={row.id} as="p" variant="small" color="secondary" role="note">
+              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
                 {row.notice === "session_reset" ? "This conversation was reset." : BOT_INTERRUPTED_TEXT}
               </Text>
             );
@@ -315,6 +355,18 @@ function TranscriptEntries({
   );
 }
 
+/** Bubble-shaped placeholders while a chat opens. */
+function BotChatSkeleton() {
+  return (
+    <div role="status" aria-label="Loading chat" className="aiden-dock-inset chat-content-column flex flex-col gap-4 py-6">
+      <div className="ml-auto h-9 w-48 rounded-card bg-well motion-safe:animate-pulse" />
+      <div className="h-16 w-72 max-w-full rounded-card bg-well motion-safe:animate-pulse" />
+      <div className="ml-auto h-9 w-36 rounded-card bg-well motion-safe:animate-pulse" />
+      <span className="sr-only">Loading…</span>
+    </div>
+  );
+}
+
 export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const bot = useBot(botId);
@@ -323,7 +375,6 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
   const [retrying, setRetrying] = React.useState(false);
   const [pausedBusy, setPausedBusy] = React.useState(false);
-  const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
   const state: BotSessionState | undefined = snapshot?.state;
@@ -333,46 +384,108 @@ export function BotChatPane({ botId }: { botId: string }) {
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
 
-  React.useEffect(() => {
-    const node = scrollRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [snapshot?.entries.length, snapshot?.partial]);
+  const back = () => void navigate({ to: "/bots" });
+  const current = bot.data ?? null;
 
-  if (bot.isLoading) {
-    return <Text color="secondary">Loading…</Text>;
-  }
-  if (!bot.data) {
-    return <EmptyState title="Bot not found" description="This Bot may have been deleted." />;
+  const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
+    <ScrollArea
+      scrollRestorationId={`bot-chat:${botId}`}
+      className="h-full min-h-0"
+      alignFooterToScrollContent
+      leading={<BotChatBackButton onBack={back} />}
+      title={
+        current ? (
+          <BotChatNamePill
+            bot={current}
+            onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
+          />
+        ) : bot.isLoading ? (
+          <span className="block h-4 w-28 rounded-full bg-control motion-safe:animate-pulse" aria-hidden="true" />
+        ) : (
+          "Bot"
+        )
+      }
+      actions={
+        current ? (
+          <BotChatActions
+            bot={current}
+            onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
+            onOpenFiles={() => setFiles({ open: true, path: null })}
+            onDelete={() => setDeleteOpen(true)}
+          />
+        ) : null
+      }
+      autoScrollToBottom
+      autoScrollResetKey={botId}
+      autoScrollDeps={[
+        snapshot?.entries.length,
+        snapshot?.partial,
+        state?.kind,
+        approvals.prompts.length,
+        snapshot?.question?.waitId,
+      ]}
+      showScrollToBottomButton
+      footer={footer}
+    >
+      {body}
+      {current ? (
+        <>
+          <BotDeleteDialog bot={current} open={deleteOpen} onOpenChange={setDeleteOpen} />
+          <BotFilesDialog
+            botId={current.id}
+            botName={current.name}
+            open={files.open}
+            initialPath={files.path}
+            onOpenChange={(open) => setFiles((value) => ({ ...value, open }))}
+          />
+        </>
+      ) : null}
+      {connectionSetup.dialog}
+    </ScrollArea>
+  );
+
+  if (bot.isLoading) return shell(<BotChatSkeleton />);
+  if (!current) {
+    return shell(
+      <div className="flex min-h-full items-center justify-center">
+        <EmptyState
+          title="Bot not found"
+          description="This Bot may have been deleted."
+          action={
+            <Button variant="filled" onClick={back}>
+              All Bots
+            </Button>
+          }
+        />
+      </div>,
+    );
   }
   if (snapshot === null) {
-    return live.failed ? (
-      <EmptyState
-        role="alert"
-        title="This chat didn’t open"
-        description={`Aiden couldn’t load ${bot.data.name}’s chat.`}
-        action={
-          <Button variant="accent" size="medium" onClick={live.reload}>
-            Try again
-          </Button>
-        }
-      />
-    ) : (
-      <Text color="secondary">Loading…</Text>
+    return shell(
+      live.failed ? (
+        <div className="flex min-h-full items-center justify-center">
+          <EmptyState
+            role="alert"
+            title="This chat didn’t open"
+            description={`Aiden couldn’t load ${current.name}’s chat.`}
+            action={
+              <Button variant="accent" size="medium" onClick={live.reload}>
+                Try again
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <BotChatSkeleton />
+      ),
     );
   }
-  const current = bot.data;
-  const back = () => void navigate({ to: "/bots" });
-  const openProfile = () => void navigate({ to: "/bots/$botId", params: { botId: current.id } });
+  const openAdvanced = () =>
+    void navigate({ to: "/bots/$botId", params: { botId: current.id }, search: { page: "advanced" } });
+  const openProviders = () => void navigate({ to: "/settings", search: { section: "providers" } });
 
   if (state?.kind === "needs_model") {
-    return (
-      <BotNeedsModel
-        bot={current}
-        onBack={back}
-        onOpenProfile={openProfile}
-        onSetUp={() => void navigate({ to: "/settings", search: { section: "providers" } })}
-      />
-    );
+    return shell(<BotNeedsModel bot={current} onSetUp={openProviders} />);
   }
 
   const question = snapshot.question;
@@ -476,43 +589,10 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-2 pb-2">
-        <BotChatTitle bot={current} onBack={back} onOpenProfile={openProfile} />
-        <BotChatActions
-          bot={current}
-          onOpenProfile={openProfile}
-          onOpenFiles={() => setFiles({ open: true, path: null })}
-          onDelete={() => setDeleteOpen(true)}
-        />
-      </header>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-4">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
-          <MessageAttachmentPreviewProvider>
-            <TranscriptEntries
-              name={current.name}
-              entries={snapshot.entries}
-              partial={snapshot.partial}
-              running={running}
-              retrying={retrying}
-              onConnect={(pluginId) => void connectionSetup.open(pluginId)}
-              onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
-              onOpenFile={(path) => setFiles({ open: true, path })}
-              onReply={reply}
-              onRetry={(text) => void retry(text)}
-            />
-          </MessageAttachmentPreviewProvider>
-          {state?.kind === "interrupted" ? (
-            <BotInterruptedCard
-              name={current.name}
-              {...(state.blocked ? { blocked: state.blocked } : {})}
-              busy={pausedBusy}
-              onResume={() => void resume()}
-              onDismiss={() => void dismiss()}
-              onReviewAccess={openProfile}
-            />
-          ) : null}
+  const footer = (
+    <div className="flex flex-col">
+      {approvals.prompts.length > 0 ? (
+        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
           {approvals.prompts.map((prompt) => (
             <BotApprovalCard
               key={prompt.waitId}
@@ -527,59 +607,81 @@ export function BotChatPane({ botId }: { botId: string }) {
               }}
             />
           ))}
-          {state?.kind === "model_error" ? (
-            <Text as="p" variant="small" color="secondary" role="alert">
-              {state.message}
-            </Text>
-          ) : null}
         </div>
-      </div>
-      <div className="mx-auto w-full max-w-3xl shrink-0 px-2 pb-4">
-        {/* A waiting A–E question takes the composer's place, as in workspace chats. */}
-        {question ? (
-          <div className="flex flex-col gap-2">
-            <AskUserQuestionComposer
-              key={question.waitId}
-              prompt={questionPrompt(question)}
-              submitting={answering}
-              onRespond={(response) => answerQuestion(question, response)}
-            />
-            {/* The card replaces the composer, so Stop lives here while it waits. */}
-            <div className="flex justify-end">
-              <Button variant="filled" size="medium" className="gap-2" onClick={stop}>
-                <Square aria-hidden="true" />
-                Stop
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Composer
-            key={`bot:${current.id}`}
-            ready={!state || state.kind !== "unavailable"}
-            readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
-            hasMessages={snapshot.entries.length > 0}
-            chatId={`bot:${current.id}`}
-            placeholder={`Ask ${current.name}`}
-            onSend={(text, attachments) => send(text, attachments)}
-            onQueue={(text, attachments) => send(text, attachments, "followUp")}
-            onSteer={(text, attachments) => send(text, attachments, "steer")}
-            onStop={stop}
-            isGenerating={running}
-            canStopGeneration={running}
-            inputRef={composerRef}
-            surfaces={BOT_CHAT_COMPOSER_SURFACES}
+      ) : null}
+      {/* A waiting A–E question takes the composer's place, as in workspace chats. */}
+      {question ? (
+        <>
+          <AskUserQuestionComposer
+            key={question.waitId}
+            prompt={questionPrompt(question)}
+            submitting={answering}
+            onRespond={(response) => answerQuestion(question, response)}
           />
-        )}
-      </div>
-      <BotDeleteDialog bot={current} open={deleteOpen} onOpenChange={setDeleteOpen} />
-      <BotFilesDialog
-        botId={current.id}
-        botName={current.name}
-        open={files.open}
-        initialPath={files.path}
-        onOpenChange={(open) => setFiles((value) => ({ ...value, open }))}
-      />
-      {connectionSetup.dialog}
+          {/* The card replaces the composer, so Stop lives here while it waits. */}
+          <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
+            <Button variant="filled" size="small" onClick={stop}>
+              <Square aria-hidden="true" />
+              Stop
+            </Button>
+          </div>
+        </>
+      ) : (
+        <Composer
+          key={`bot:${current.id}`}
+          ready={!state || state.kind !== "unavailable"}
+          readinessMessage={state?.kind === "unavailable" ? BOT_UNAVAILABLE_LABEL : undefined}
+          hasMessages={snapshot.entries.length > 0}
+          chatId={`bot:${current.id}`}
+          placeholder={`Ask ${current.name}`}
+          onSend={(text, attachments) => send(text, attachments)}
+          onQueue={(text, attachments) => send(text, attachments, "followUp")}
+          onSteer={(text, attachments) => send(text, attachments, "steer")}
+          onStop={stop}
+          isGenerating={running}
+          canStopGeneration={running}
+          inputRef={composerRef}
+          surfaces={BOT_CHAT_COMPOSER_SURFACES}
+        />
+      )}
     </div>
+  );
+
+  return shell(
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6">
+      <MessageAttachmentPreviewProvider>
+        <TranscriptEntries
+          name={current.name}
+          entries={snapshot.entries}
+          partial={snapshot.partial}
+          running={running}
+          retrying={retrying}
+          onConnect={(pluginId) => void connectionSetup.open(pluginId)}
+          onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
+          onOpenFile={(path) => setFiles({ open: true, path })}
+          onReply={reply}
+          onRetry={(text) => void retry(text)}
+        />
+      </MessageAttachmentPreviewProvider>
+      {state?.kind === "interrupted" ? (
+        <BotInterruptedCard
+          name={current.name}
+          {...(state.blocked ? { blocked: state.blocked } : {})}
+          busy={pausedBusy}
+          onResume={() => void resume()}
+          onDismiss={() => void dismiss()}
+          onReviewAccess={openAdvanced}
+        />
+      ) : null}
+      {state?.kind === "model_error" ? (
+        <BotModelErrorCard
+          name={current.name}
+          message={state.message}
+          onChooseModel={openAdvanced}
+          onOpenProviders={openProviders}
+        />
+      ) : null}
+    </div>,
+    footer,
   );
 }

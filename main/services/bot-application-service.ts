@@ -452,7 +452,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     audienceId: string,
     requested?: BotAccessUpdate,
   ) => {
-    return withInventoryLease(async (assertCurrent) => {
+    return withFreshInventoryLease(async (assertCurrent) => {
       const { snapshot, access, binding, modelBinding, visionModelBinding } = await accessForCreate(
         audienceId,
         requested,

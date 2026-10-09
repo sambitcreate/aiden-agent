@@ -501,6 +501,17 @@ async function retainedProviders(
   ];
 }
 
+/**
+ * Attempts per admission. A legitimate global inventory mutation (credential
+ * login, settings save, skill edit) can land while the fresh catalog snapshot
+ * is being taken; the admission is retried under a fresh lease rather than
+ * failing a turn that nothing about this Bot invalidated.
+ */
+const ADMISSION_ATTEMPTS = 3;
+
+/** Internal: the inventory lease was fenced while this admission was assembled. */
+class InventoryFencedDuringAdmission extends Error {}
+
 /** Main-owned turn/effect admission resolver. This service must never be exposed over IPC. */
 export class BotRuntimeAuthorityResolver {
   constructor(private readonly deps: BotRuntimeAuthorityDependencies) {}
@@ -510,6 +521,19 @@ export class BotRuntimeAuthorityResolver {
     botId: string;
     chatId: string;
   }): Promise<BotRuntimeAuthorityAdmission> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.admitOnce(input, attempt < ADMISSION_ATTEMPTS);
+      } catch (error) {
+        if (!(error instanceof InventoryFencedDuringAdmission)) throw error;
+      }
+    }
+  }
+
+  private async admitOnce(
+    input: { audienceId: string; botId: string; chatId: string },
+    canRetry: boolean,
+  ): Promise<BotRuntimeAuthorityAdmission> {
     let lease: BotCapabilityAuthorityLease | undefined;
     let inventoryLease: BotRuntimeInventoryLease | undefined;
     try {
@@ -556,6 +580,7 @@ export class BotRuntimeAuthorityResolver {
         throw error;
       }
       lease = capabilityAdmission.lease;
+      inventoryLease.assertCurrent();
       const authority = buildAuthority({
         audienceId: input.audienceId,
         bot,
@@ -632,6 +657,7 @@ export class BotRuntimeAuthorityResolver {
     } catch (error) {
       lease?.release();
       inventoryLease?.release();
+      if (canRetry && inventoryLease?.signal.aborted) throw new InventoryFencedDuringAdmission();
       if (error instanceof BotRuntimeAuthorityError) throw error;
       fail("access_unavailable");
     }

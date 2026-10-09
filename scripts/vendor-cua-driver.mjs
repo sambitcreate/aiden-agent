@@ -25,6 +25,7 @@ import {
   CUA_DRIVER_SHA256,
   CUA_DRIVER_SIGNING_IDENTIFIER,
   CUA_DRIVER_SIGNING_TEAM_ID,
+  CUA_DRIVER_SIGSTORE_BUNDLE,
   appleRequirement,
   assertCuaDriverArtifactProvenance,
 } from "./computer-use-signing-pins.mjs";
@@ -43,6 +44,7 @@ const brokerPackage = path.join(repositoryRoot, "native", "computer-use-broker")
 const brokerTarget = path.join(repositoryRoot, "build", "computer-use-broker-cargo");
 const brokerApp = path.join(repositoryRoot, "build", "computer-use", "CuaDriver.app");
 const MAX_ARCHIVE_BYTES = 150 * 1024 * 1024;
+const MAX_SIGSTORE_BUNDLE_BYTES = 64 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 512 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -193,25 +195,107 @@ export async function validateVendoredBinary(binaryPath, runner = run, hashBinar
   }
 }
 
-async function findBinary(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    const candidate = path.join(directory, entry.name);
-    const info = await lstat(candidate);
-    if (info.isSymbolicLink()) {
-      throw new Error(`Refusing symlink in pinned cua-driver archive: ${entry.name}`);
-    }
-    if (info.isDirectory()) {
-      const nested = await findBinary(candidate);
-      if (nested) return nested;
-    } else if (info.isFile() && entry.name === "cua-driver") {
-      return candidate;
+// The 0.34 release tarball carries five signed members (cua-driver,
+// cua-cursor-theme, libcua_driver_sdk.dylib, cua_driver_node_runtime.node,
+// cua_driver_abi.h). Aiden vendors only the top-level `cua-driver` member.
+export const CUA_DRIVER_ARCHIVE_MEMBER = "cua-driver";
+
+/** Reject archive listings that could escape staging or hide the driver. */
+export function assertArchiveListing(listing) {
+  const names = listing.split(/\r?\n/).filter((name) => name.length > 0);
+  for (const name of names) {
+    const segments = name.split("/");
+    if (
+      name.startsWith("/") ||
+      name.includes("\\") ||
+      name.includes("\0") ||
+      segments.some((segment) => segment === "..")
+    ) {
+      throw new Error(`Refusing unsafe path in pinned cua-driver archive: ${JSON.stringify(name)}`);
     }
   }
-  return null;
+  const matches = names.filter((name) => name === CUA_DRIVER_ARCHIVE_MEMBER);
+  if (matches.length !== 1) {
+    throw new Error(
+      `The pinned archive must contain exactly one top-level ${CUA_DRIVER_ARCHIVE_MEMBER} member.`,
+    );
+  }
+  return names;
 }
 
-async function downloadArtifact(artifact, archive) {
+/** List the archive, then extract only the driver member into an empty directory. */
+export async function extractDriverMember(archive, directory, runner = run) {
+  assertArchiveListing(await runner("/usr/bin/tar", ["-tzf", archive]));
+  await runner("/usr/bin/tar", ["-xzf", archive, "-C", directory, CUA_DRIVER_ARCHIVE_MEMBER]);
+  const entries = await readdir(directory);
+  if (entries.length !== 1 || entries[0] !== CUA_DRIVER_ARCHIVE_MEMBER) {
+    throw new Error("Extracting cua-driver produced unexpected staging entries.");
+  }
+  const extracted = path.join(directory, CUA_DRIVER_ARCHIVE_MEMBER);
+  const info = await lstat(extracted);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("The pinned archive's cua-driver member is not a regular file.");
+  }
+  const resolvedDirectory = await realpath(directory);
+  const resolvedBinary = await realpath(extracted);
+  if (resolvedBinary !== path.join(resolvedDirectory, CUA_DRIVER_ARCHIVE_MEMBER)) {
+    throw new Error("The extracted cua-driver escaped its private staging directory.");
+  }
+  return extracted;
+}
+
+/** The archive digest a cosign bundle's Rekor `hashedrekord` entry attests. */
+export function sigstoreBundleArchiveDigest(bundle) {
+  const encodedBody = bundle?.rekorBundle?.Payload?.body;
+  if (typeof encodedBody !== "string") throw new Error("The Sigstore bundle has no Rekor entry.");
+  const body = JSON.parse(Buffer.from(encodedBody, "base64").toString("utf8"));
+  const hash = body?.spec?.data?.hash;
+  if (body?.kind !== "hashedrekord" || hash?.algorithm !== "sha256") {
+    throw new Error("The Sigstore bundle is not a SHA-256 hashedrekord entry.");
+  }
+  if (typeof hash.value !== "string" || !/^[0-9a-f]{64}$/.test(hash.value)) {
+    throw new Error("The Sigstore bundle carries an invalid archive digest.");
+  }
+  return hash.value;
+}
+
+/**
+ * Optional `--verify-sigstore` step. The archive SHA-256 pin stays the
+ * authority; this re-checks upstream's keyless signature with the `cosign`
+ * CLI against the exact release-workflow identity. cosign may refresh the
+ * Sigstore TUF trust root from its own servers.
+ */
+export async function verifySigstoreBundle(archive, bundlePath, runner = run) {
+  const bundleBytes = await readFile(bundlePath);
+  const bundleSha256 = createHash("sha256").update(bundleBytes).digest("hex");
+  if (bundleSha256 !== CUA_DRIVER_SIGSTORE_BUNDLE.sha256) {
+    throw new Error(`Sigstore bundle checksum mismatch: received ${bundleSha256}`);
+  }
+  const attested = sigstoreBundleArchiveDigest(JSON.parse(bundleBytes.toString("utf8")));
+  if (attested !== CUA_DRIVER_ARTIFACT_PROVENANCE.sha256) {
+    throw new Error("The Sigstore bundle attests a different archive than the pinned release.");
+  }
+  let cosign;
+  try {
+    cosign = (await runner("/usr/bin/which", ["cosign"])).trim();
+  } catch {
+    throw new Error(
+      "--verify-sigstore requires the cosign CLI on PATH (https://docs.sigstore.dev/cosign/).",
+    );
+  }
+  await runner(cosign, [
+    "verify-blob",
+    "--bundle",
+    bundlePath,
+    "--certificate-identity",
+    CUA_DRIVER_SIGSTORE_BUNDLE.certificateIdentity,
+    "--certificate-oidc-issuer",
+    CUA_DRIVER_SIGSTORE_BUNDLE.certificateOidcIssuer,
+    archive,
+  ]);
+}
+
+async function downloadArtifact(artifact, archive, maxBytes = MAX_ARCHIVE_BYTES) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
@@ -220,16 +304,16 @@ async function downloadArtifact(artifact, archive) {
       throw new Error(`Download failed with HTTP ${response.status}.`);
     }
     const declaredBytes = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_ARCHIVE_BYTES) {
-      throw new Error(`Pinned cua-driver archive exceeds ${MAX_ARCHIVE_BYTES} bytes.`);
+    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+      throw new Error(`Pinned cua-driver download exceeds ${maxBytes} bytes.`);
     }
     let downloadedBytes = 0;
     const bound = new Transform({
       transform(chunk, _encoding, callback) {
         downloadedBytes += chunk.byteLength;
         callback(
-          downloadedBytes > MAX_ARCHIVE_BYTES
-            ? new Error(`Pinned cua-driver archive exceeds ${MAX_ARCHIVE_BYTES} bytes.`)
+          downloadedBytes > maxBytes
+            ? new Error(`Pinned cua-driver download exceeds ${maxBytes} bytes.`)
             : undefined,
           chunk,
         );
@@ -373,9 +457,13 @@ async function main() {
   if (process.platform !== "darwin") {
     throw new Error("The pinned Aiden cua-driver artifact currently supports macOS only.");
   }
+  const args = process.argv.slice(2);
+  const unknown = args.filter((arg) => arg !== "--verify-sigstore");
+  if (unknown.length > 0) throw new Error(`Unknown argument: ${unknown[0]}`);
+  const verifySigstore = args.includes("--verify-sigstore");
   validateArtifact(JSON.parse(await readFile(artifactPath, "utf8")));
   const artifact = CUA_DRIVER_ARTIFACT_PROVENANCE;
-  if (await validateVendoredBinary(destination)) {
+  if (!verifySigstore && (await validateVendoredBinary(destination))) {
     await buildBrokerApp();
     console.log(`cua-driver ${artifact.version} is already verified at ${destination}`);
     console.log(`Aiden Computer Use broker: ${brokerApp}`);
@@ -393,16 +481,16 @@ async function main() {
       );
     }
 
+    if (verifySigstore) {
+      const bundle = path.join(temporary, `${artifact.asset}.sigstore.json`);
+      await downloadArtifact(CUA_DRIVER_SIGSTORE_BUNDLE, bundle, MAX_SIGSTORE_BUNDLE_BYTES);
+      await verifySigstoreBundle(archive, bundle);
+      console.log(`Sigstore bundle verified for ${CUA_DRIVER_SIGSTORE_BUNDLE.certificateIdentity}`);
+    }
+
     const extractDirectory = path.join(temporary, "extracted");
     await mkdir(extractDirectory, { mode: 0o700 });
-    await run("/usr/bin/tar", ["-xzf", archive, "-C", extractDirectory]);
-    const extractedBinary = await findBinary(extractDirectory);
-    if (!extractedBinary) throw new Error("The pinned archive did not contain cua-driver.");
-    const resolvedExtractDirectory = await realpath(extractDirectory);
-    const resolvedExtractedBinary = await realpath(extractedBinary);
-    if (!resolvedExtractedBinary.startsWith(`${resolvedExtractDirectory}${path.sep}`)) {
-      throw new Error("The extracted cua-driver escaped its private staging directory.");
-    }
+    const extractedBinary = await extractDriverMember(archive, extractDirectory);
     if (!(await validateVendoredBinary(extractedBinary))) {
       throw new Error("The downloaded cua-driver failed its binary hash or signing identity pin.");
     }

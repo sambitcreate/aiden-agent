@@ -12,6 +12,36 @@ export type RendererDiagnosticKind = (typeof RENDERER_DIAGNOSTIC_KINDS)[number];
 export const DIAGNOSTIC_ERROR_TYPES = [
   "AbortError",
   "AggregateError",
+  "BotAccessChangedError",
+  "BotApplicationUnavailableError",
+  "BotAvatarInputError",
+  "BotAvatarReplayError",
+  "BotAvatarRevisionConflictError",
+  "BotAvatarStateError",
+  "BotAvatarUnavailableError",
+  "BotCapabilityBindingDriftError",
+  "BotCapabilityCatalogConflictError",
+  "BotCapabilityCommitUncertainError",
+  "BotCapabilityNoticeRequiredError",
+  "BotCapabilityRevisionConflictError",
+  "BotCapabilitySubsetError",
+  "BotCapabilityUnavailableError",
+  "BotCapabilityValidationError",
+  "BotDeletedError",
+  "BotHarnessHostClosedError",
+  "BotHistoricalChatReadOnlyError",
+  "BotIdentityRevisionConflictError",
+  "BotInboxProjectionError",
+  "BotLifecycleJournalConflictError",
+  "BotLifecycleJournalStateError",
+  "BotManagedWorkspaceConflictError",
+  "BotManagedWorkspaceNotProvisionedError",
+  "BotManagedWorkspaceRollbackError",
+  "BotManagedWorkspaceStateError",
+  "BotPersistentChatDeletionError",
+  "BotRuntimeAuthorityError",
+  "BotRuntimeInventoryLeaseInvalidError",
+  "BotSessionError",
   "DOMException",
   "Error",
   "EvalError",
@@ -30,6 +60,8 @@ export const DIAGNOSTIC_ERROR_TYPES = [
   "UnknownError",
 ] as const;
 
+// Bot error classes are fixed, content-free names. Listing them keeps Bot
+// failures distinguishable in production logs instead of all "UnknownError".
 export type DiagnosticErrorType = (typeof DIAGNOSTIC_ERROR_TYPES)[number];
 
 export function normalizeDiagnosticErrorType(value: unknown): DiagnosticErrorType {

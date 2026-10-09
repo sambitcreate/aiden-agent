@@ -115,3 +115,28 @@ export function invalidateBotRuntimeInventoryAuthority(
 ): void {
   botRuntimeInventoryLeases.invalidate(reason);
 }
+
+/**
+ * Take a fresh read under a new lease and keep that lease. When a legitimate
+ * global mutation fences the lease mid-read, the read is retried (bounded) so
+ * a concurrent login or settings save cannot fail an unrelated Bot request.
+ * The returned lease is still held; the caller releases it.
+ */
+export async function readUnderFreshBotRuntimeInventoryLease<Value>(
+  registry: Pick<BotRuntimeInventoryLeaseRegistry, "acquire">,
+  read: (lease: BotRuntimeInventoryLease) => Promise<Value>,
+  attempts = 3,
+): Promise<{ lease: BotRuntimeInventoryLease; value: Value }> {
+  for (let attempt = 1; ; attempt += 1) {
+    const lease = registry.acquire();
+    try {
+      const value = await read(lease);
+      lease.assertCurrent();
+      return { lease, value };
+    } catch (error) {
+      lease.release();
+      const fenced = error instanceof BotRuntimeInventoryLeaseInvalidError || lease.signal.aborted;
+      if (!fenced || attempt >= attempts) throw error;
+    }
+  }
+}

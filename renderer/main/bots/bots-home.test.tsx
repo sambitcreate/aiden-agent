@@ -18,7 +18,7 @@ test("tapping a Bot row opens its one chat directly", async () => {
     "bots:live:summary": () => ({ ...idle, preview: "Lisbon in May", updatedAt: Date.now() }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const row = await screen.findByRole("button", { name: /Planner/u });
+  const row = await screen.findByRole("button", { name: /^Planner/u });
   await waitFor(() => assert.ok(within(row).getByText("Lisbon in May")));
 
   fireEvent.click(row);
@@ -26,13 +26,13 @@ test("tapping a Bot row opens its one chat directly", async () => {
   assert.deepEqual(calls.filter((call) => call.channel === "bots:send"), []);
 });
 
-test("the row context menu opens the Bot's profile", async () => {
+test("the row's ••• menu opens the Bot's profile", async () => {
   installBotTestIpc({
     "bots:list": () => [botFixture()],
     "bots:live:summary": () => idle,
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  fireEvent.contextMenu(await screen.findByRole("button", { name: /Planner/u }));
+  fireEvent.keyDown(await screen.findByRole("button", { name: "More for Planner" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Profile" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
 });
@@ -43,7 +43,7 @@ test("a Bot that needs a model says so in its row", async () => {
     "bots:live:summary": () => ({ ...idle, state: { kind: "needs_model" } }),
   });
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const row = await screen.findByRole("button", { name: /Planner/u });
+  const row = await screen.findByRole("button", { name: /^Planner/u });
   await waitFor(() => assert.ok(within(row).getByText("Needs an AI model")));
 });
 
@@ -53,11 +53,11 @@ test("an interrupted Bot's row reads Paused", async () => {
     "bots:live:summary": () => ({ ...idle, state: { kind: "interrupted", submissionId: "s-1" } }),
   });
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const row = await screen.findByRole("button", { name: /Planner/u });
+  const row = await screen.findByRole("button", { name: /^Planner/u });
   await waitFor(() => assert.ok(within(row).getByText("Paused — tap to resume")));
 });
 
-test("Start Chat on a starter Bot sends one create request and opens its chat", async () => {
+test("Start chat on a starter Bot sends one create request and opens its chat", async () => {
   let created = false;
   const calls = installBotTestIpc({
     "bots:list": () => (created ? [botFixture({ id: "bot-chief", name: "Chief of Staff" })] : []),
@@ -77,10 +77,10 @@ test("Start Chat on a starter Bot sends one create request and opens its chat", 
     }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  const heading = await screen.findByRole("heading", { name: "Meet Your First Bot" });
+  const heading = await screen.findByRole("heading", { name: "Meet your first Bot" });
   assert.ok(heading);
   const starters = screen.getByRole("list", { name: "Starter Bots" });
-  const startChat = within(starters).getAllByRole("button", { name: "Start Chat" })[0]!;
+  const startChat = within(starters).getAllByRole("button", { name: "Start chat" })[0]!;
 
   // A second tap while the first is still answering is ignored; the same Bot opens.
   fireEvent.click(startChat);
@@ -91,12 +91,12 @@ test("Start Chat on a starter Bot sends one create request and opens its chat", 
   assert.deepEqual(presetCalls[0]!.args[0], { presetId: "chief-of-staff" });
 });
 
-test("Create My Own from the first run opens the create flow", async () => {
+test("Create my own from the first run opens the create flow", async () => {
   installBotTestIpc({
     "bots:list": () => [],
   });
   await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
-  fireEvent.click(await screen.findByRole("button", { name: "Create My Own" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Create my own" }));
   assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
 });
 

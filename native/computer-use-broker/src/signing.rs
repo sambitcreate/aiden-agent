@@ -15,11 +15,11 @@ pub(crate) const AIDEN_TEAM_ID: &str = "5WP229CBB8";
 pub(crate) const DRIVER_IDENTIFIER: &str = "cua-driver";
 pub(crate) const DRIVER_TEAM_ID: &str = "YCK386LBJ7";
 pub(crate) const DRIVER_SHA256: &str =
-    "c1c015ccceda4880b9e171dc438700a8276af0eeecfdf0bb4b3fb23298ae7305";
+    "56bc881744bfb956d44386e6f6ccb2f6fc7f5cef47be25cc056e08265cdf4c7d";
 #[cfg(target_arch = "aarch64")]
-pub(crate) const DRIVER_CDHASH: &str = "7d385fc08996bc3698ef6295aa970d312bc610c5";
+pub(crate) const DRIVER_CDHASH: &str = "6553145ad98e84d4b70d223c94a74403f389dc99";
 #[cfg(target_arch = "x86_64")]
-pub(crate) const DRIVER_CDHASH: &str = "92c53b310cee9d8d71c97e760e2920c9c468086d";
+pub(crate) const DRIVER_CDHASH: &str = "17dcdcfd6ed7084835d9d16c36192a488c92c850";
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 compile_error!("the pinned universal cua-driver has no reviewed slice for this architecture");
 
@@ -271,9 +271,9 @@ mod tests {
     #[test]
     fn pins_the_current_universal_slice_cdhash() {
         #[cfg(target_arch = "aarch64")]
-        assert_eq!(DRIVER_CDHASH, "7d385fc08996bc3698ef6295aa970d312bc610c5");
+        assert_eq!(DRIVER_CDHASH, "6553145ad98e84d4b70d223c94a74403f389dc99");
         #[cfg(target_arch = "x86_64")]
-        assert_eq!(DRIVER_CDHASH, "92c53b310cee9d8d71c97e760e2920c9c468086d");
+        assert_eq!(DRIVER_CDHASH, "17dcdcfd6ed7084835d9d16c36192a488c92c850");
     }
 
     #[test]
