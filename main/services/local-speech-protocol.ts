@@ -32,7 +32,13 @@ export type LocalSpeechParentMessage =
     }
   | { version: V; kind: "release"; requestId: string };
 
-export type LocalSpeechFailureCode = "model-missing" | "engine-unavailable" | "decode-failed" | "unsupported-audio";
+export type LocalSpeechFailureCode =
+  | "model-missing"
+  | "engine-unavailable"
+  | "decode-failed"
+  | "unsupported-audio"
+  /** The worker rejected a malformed frame; a parent bug, never retried. */
+  | "invalid-request";
 
 export type LocalSpeechWorkerMessage =
   | {
@@ -49,7 +55,13 @@ export type LocalSpeechWorkerMessage =
   | { version: V; kind: "failure"; requestId: string; message: string; code?: LocalSpeechFailureCode };
 
 const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2"];
-const FAILURE_CODES: readonly LocalSpeechFailureCode[] = ["model-missing", "engine-unavailable", "decode-failed", "unsupported-audio"];
+const FAILURE_CODES: readonly LocalSpeechFailureCode[] = [
+  "model-missing",
+  "engine-unavailable",
+  "decode-failed",
+  "unsupported-audio",
+  "invalid-request",
+];
 const LANGUAGE = /^[a-z]{2,3}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

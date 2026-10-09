@@ -119,6 +119,6 @@ export async function replyToWorkerFrame(
     kind: "failure",
     requestId,
     message: INVALID_REQUEST_MESSAGE,
-    code: "decode-failed",
+    code: "invalid-request",
   };
 }

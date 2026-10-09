@@ -21,7 +21,8 @@ interface OpusStreamHeader {
 interface OggPageLike {
   codecFrames: Array<{ data: Uint8Array; header: OpusStreamHeader }>;
   isLastPage: boolean;
-  totalSamples: number;
+  /** Per-stream 48 kHz granule; counts pre-skip. Negative or absent when unknown. */
+  absoluteGranulePosition?: bigint | number;
 }
 
 function downmix(channelData: readonly Float32Array[], length: number): Float32Array {
@@ -69,6 +70,7 @@ export async function decodeOggOpusToPcm16k(bytes: Uint8Array): Promise<Float32A
 
   const output: Float32Array[] = [];
   let decoder: OpusDecoderInstance<typeof OUTPUT_RATE> | null = null;
+  let streamPreSkip = 0;
   let streamFrames: Uint8Array[] = [];
   let streamDecoded = 0;
   const flush = (lastPage?: OggPageLike) => {
@@ -77,13 +79,16 @@ export async function decodeOggOpusToPcm16k(bytes: Uint8Array): Promise<Float32A
     streamFrames = [];
     let length = decoded.samplesDecoded;
     streamDecoded += length;
-    if (lastPage) {
-      // The final granule position marks the true end; drop Opus padding past it.
-      const excess = Math.round(
-        ((streamDecoded / OUTPUT_RATE) * OPUS_GRANULE_RATE - lastPage.totalSamples) *
-          (OUTPUT_RATE / OPUS_GRANULE_RATE),
-      );
-      if (excess > 0) length = Math.max(0, length - excess);
+    const granule = lastPage?.absoluteGranulePosition;
+    if (granule !== undefined && Number(granule) >= streamPreSkip) {
+      // Ogg Opus: the last granule minus pre-skip is the stream's true length
+      // at 48 kHz. The decoder already dropped pre-skip; drop the end padding.
+      const expected = Math.round(((Number(granule) - streamPreSkip) * OUTPUT_RATE) / OPUS_GRANULE_RATE);
+      const excess = streamDecoded - expected;
+      if (excess > 0) {
+        length = Math.max(0, length - excess);
+        streamDecoded -= Math.min(excess, decoded.samplesDecoded);
+      }
     }
     if (length > 0) output.push(downmix(decoded.channelData, length));
   };
@@ -93,6 +98,7 @@ export async function decodeOggOpusToPcm16k(bytes: Uint8Array): Promise<Float32A
       const frames = page.codecFrames ?? [];
       if (frames.length > 0 && !decoder) {
         const header = frames[0]!.header;
+        streamPreSkip = header.preSkip;
         decoder = new OpusDecoder({
           sampleRate: OUTPUT_RATE,
           channels: header.channels,

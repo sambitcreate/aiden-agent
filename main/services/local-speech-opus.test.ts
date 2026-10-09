@@ -23,8 +23,8 @@ function zeroCrossings(samples: Float32Array, from: number, to: number): number 
 
 test("Ogg/Opus decodes to 16 kHz mono with channels averaged", async () => {
   const samples = await decodeOggOpusToPcm16k(new Uint8Array(await readFile(fixture)));
-  // One second at 16 kHz, give or take Opus pre-skip and end trimming.
-  assert.ok(Math.abs(samples.length - 16_000) <= 320, `length ${samples.length}`);
+  // Exactly one second: the decoder drops pre-skip and the final granule trims padding.
+  assert.equal(samples.length, 16_000);
   // Steady-state window away from codec warm-up at the edges.
   const from = 2_000;
   const to = 14_000;
@@ -34,6 +34,20 @@ test("Ogg/Opus decodes to 16 kHz mono with channels averaged", async () => {
   // A full-scale-1/8 sine has RMS ≈ 0.088; averaging with a silent channel halves it.
   const level = rms(samples, from, to);
   assert.ok(level > 0.035 && level < 0.055, `rms ${level}`);
+});
+
+test("a chained file decodes each stream to its exact length", async () => {
+  const first = new Uint8Array(await readFile(fixture));
+  // 0.5 s of 880 Hz, mono, its own stream serial.
+  const second = new Uint8Array(await readFile(new URL("./fixtures/voice-note-880hz-half-second.ogg", import.meta.url)));
+  const chained = new Uint8Array(first.length + second.length);
+  chained.set(first);
+  chained.set(second, first.length);
+  const samples = await decodeOggOpusToPcm16k(chained);
+  // Pre-skip and end padding are trimmed per stream, so the lengths add up exactly.
+  assert.equal(samples.length, 16_000 + 8_000);
+  const secondHz = zeroCrossings(samples, 18_000, 23_000) / 2 / (5_000 / 16_000);
+  assert.ok(Math.abs(secondHz - 880) < 20, `second stream frequency ${secondHz}`);
 });
 
 test("bytes that are not Ogg/Opus are rejected", async () => {

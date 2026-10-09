@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createTranscribeRouter, type TranscribeRouterDeps } from "./transcription-core.js";
+import { createCloudTranscriber, createTranscribeRouter, type TranscribeRouterDeps } from "./transcription-core.js";
 import type { VoiceProviderResolution } from "../../renderer/shared/voice-provider.js";
 
 function harness(resolution: VoiceProviderResolution) {
@@ -57,4 +57,43 @@ test("cloud resolutions keep their providers for every audio type", async () => 
   const gemini = harness({ kind: "ready", provider: "gemini", automatic: false });
   assert.equal(await gemini.transcribe(voiceNote), "gemini words");
   assert.deepEqual([...openai.calls, ...gemini.calls], ["openai", "gemini"]);
+});
+
+function cloudHarness(resolution: VoiceProviderResolution) {
+  const calls: string[] = [];
+  const transcribeCloud = createCloudTranscriber({
+    resolve: async () => {
+      calls.push("resolve");
+      return resolution;
+    },
+    openai: async () => {
+      calls.push("openai");
+      return "openai words";
+    },
+    gemini: async () => {
+      calls.push("gemini");
+      return "gemini words";
+    },
+  });
+  return { transcribeCloud, calls };
+}
+
+test("recorded cloud audio runs only for the provider main resolves now", async () => {
+  const gemini = cloudHarness({ kind: "ready", provider: "gemini", automatic: true });
+  assert.equal(await gemini.transcribeCloud(voiceNote, "gemini"), "gemini words");
+  assert.deepEqual(gemini.calls, ["resolve", "gemini"]);
+});
+
+test("a stale or forged cloud provider is refused before any upload", async () => {
+  const cases: Array<[VoiceProviderResolution, "openai" | "gemini"]> = [
+    // A chat-only Google key does not resolve to Gemini voice.
+    [{ kind: "ready", provider: "openai", automatic: true }, "gemini"],
+    [{ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: false }, "openai"],
+    [{ kind: "needs-setup", reason: "no-provider" }, "gemini"],
+  ];
+  for (const [resolution, requested] of cases) {
+    const h = cloudHarness(resolution);
+    await assert.rejects(h.transcribeCloud(voiceNote, requested), { message: "Voice settings changed. Try again." });
+    assert.deepEqual(h.calls, ["resolve"]);
+  }
 });

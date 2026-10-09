@@ -161,7 +161,8 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
     });
 
   const activate = async (id: string) => {
-    await settingsApi.set({ localVoiceModel: id, voiceProvider: "local" });
+    // Choosing a model never changes the provider choice (Automatic stays Automatic).
+    await settingsApi.set({ localVoiceModel: id });
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
     await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
   };

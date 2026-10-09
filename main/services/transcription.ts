@@ -16,6 +16,7 @@ import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-creden
 import {
   buildGeminiTranscriptionRequest,
   buildOpenAITranscriptionForm,
+  createCloudTranscriber,
   createTranscribeRouter,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
@@ -196,10 +197,15 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   }
 }
 
-/** Cloud transcription for a provider the caller already resolved. */
-export function transcribeCloud(input: TranscribeInput, provider: "openai" | "gemini"): Promise<string> {
-  return provider === "gemini" ? transcribeGemini(input) : transcribeOpenAI(input);
-}
+/**
+ * Cloud transcription of renderer-recorded audio. The renderer's provider must
+ * match what main resolves now (see createCloudTranscriber).
+ */
+export const transcribeCloud = createCloudTranscriber({
+  resolve: resolveVoiceProviderNow,
+  openai: transcribeOpenAI,
+  gemini: transcribeGemini,
+});
 
 async function transcribeLocalVoiceNote(
   bytes: Uint8Array,

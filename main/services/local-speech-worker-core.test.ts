@@ -187,7 +187,7 @@ test("an invalid frame that names a request fails at once instead of timing out"
     kind: "failure",
     requestId: "bad-1",
     message: "Invalid on-device transcription request.",
-    code: "decode-failed",
+    code: "invalid-request",
   });
   assert.equal(fake.requests.length, 0);
   assert.equal(await replyToWorkerFrame({ kind: "transcribe" }, handle), null);

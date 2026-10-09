@@ -1,65 +1,82 @@
 // Gathers the inputs for local-first voice provider resolution in main, so
-// key presence is all that is known outside the credential store.
+// key presence is all that is known outside the credential store. The live
+// dependencies load lazily, which keeps this module importable in tests.
 
 import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
 import {
   resolveVoiceProvider,
   type VoiceProviderResolution,
 } from "../../renderer/shared/voice-provider.js";
-import { configStore } from "./config-store.js";
-import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
-import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
-import { engineStatus } from "./local-speech.js";
-import { listModels } from "./local-speech-models.js";
-import { providerRegistry } from "./provider-registry.js";
+import type { AppSettings } from "./types.js";
 
-async function hasApiKey(providerId: string): Promise<boolean> {
+export interface VoiceProviderResolverDeps {
+  settings(): Promise<Pick<AppSettings, "voiceProvider" | "localVoiceModel" | "geminiUsageScope">>;
+  /** Installed on-device model ids in catalog order. */
+  installedModels(): Promise<readonly string[]>;
+  /** Probing forks the speech worker on first use, so it runs only when needed. */
+  engineStatus(): Promise<{ ready: boolean }>;
+  hasOpenAIKey(): Promise<boolean>;
+  hasGoogleKey(): Promise<boolean>;
+}
+
+async function orFalse(check: () => Promise<boolean>): Promise<boolean> {
   try {
-    const auth = await providerRegistry.getBuiltinRequestAuth(providerId);
-    return Boolean(auth?.auth.apiKey);
+    return await check();
   } catch {
     return false;
   }
 }
 
-function installedLocalModels(): string[] {
-  try {
-    return listModels()
-      .filter((model) => model.installed)
-      .map((model) => model.id);
-  } catch {
-    return [];
-  }
+export function createVoiceProviderResolver(
+  deps: VoiceProviderResolverDeps,
+): () => Promise<VoiceProviderResolution> {
+  return async () => {
+    const settings = await deps.settings();
+    let installed: readonly string[];
+    try {
+      installed = await deps.installedModels();
+    } catch {
+      installed = [];
+    }
+    const explicitCloud = settings.voiceProvider === "openai" || settings.voiceProvider === "gemini";
+    const [engineReady, hasOpenAIKey, hasGoogleKey] = await Promise.all([
+      installed.length > 0 && !explicitCloud
+        ? orFalse(async () => (await deps.engineStatus()).ready)
+        : Promise.resolve(false),
+      orFalse(deps.hasOpenAIKey),
+      orFalse(deps.hasGoogleKey),
+    ]);
+    return resolveVoiceProvider({
+      explicit: settings.voiceProvider,
+      localModelId: settings.localVoiceModel || undefined,
+      installedLocalModels: installed,
+      engineReady,
+      hasOpenAIKey,
+      // Voice goes to Google only after the user chose a Gemini usage scope
+      // (the Gemini voice setup); a chat-only Google key is not consent.
+      hasGeminiVoice: hasGoogleKey && isGeminiUsageScope(settings.geminiUsageScope),
+    });
+  };
 }
 
-async function engineReady(): Promise<boolean> {
-  try {
-    return (await engineStatus()).ready;
-  } catch {
-    return false;
-  }
-}
-
-export async function resolveVoiceProviderNow(): Promise<VoiceProviderResolution> {
-  const settings = await configStore.getSettings();
-  await listProvidersWithLegacyPiCredentialMigration().catch(() => undefined);
-  const installed = installedLocalModels();
-  const localPossible = installed.length > 0 && settings.voiceProvider !== "openai" && settings.voiceProvider !== "gemini";
-  const [ready, hasOpenAIKey, hasGoogleKey] = await Promise.all([
-    // Only ask the engine when a local model could be used; the status probe
-    // forks the speech worker on first use.
-    localPossible ? engineReady() : Promise.resolve(false),
-    hasApiKey("openai"),
-    hasApiKey(GOOGLE_PROVIDER_ID),
+async function hasBuiltinApiKey(providerId: string): Promise<boolean> {
+  const [{ listProvidersWithLegacyPiCredentialMigration }, { providerRegistry }] = await Promise.all([
+    import("./legacy-pi-credential-migration.js"),
+    import("./provider-registry.js"),
   ]);
-  return resolveVoiceProvider({
-    explicit: settings.voiceProvider,
-    localModelId: settings.localVoiceModel || undefined,
-    installedLocalModels: installed,
-    engineReady: ready,
-    hasOpenAIKey,
-    // Voice goes to Google only after the user chose a Gemini usage scope
-    // (the Gemini voice setup); a chat-only Google key is not consent.
-    hasGeminiVoice: hasGoogleKey && isGeminiUsageScope(settings.geminiUsageScope),
-  });
+  await listProvidersWithLegacyPiCredentialMigration().catch(() => undefined);
+  const auth = await providerRegistry.getBuiltinRequestAuth(providerId);
+  return Boolean(auth?.auth.apiKey);
 }
+
+export const resolveVoiceProviderNow = createVoiceProviderResolver({
+  settings: async () => (await import("./config-store.js")).configStore.getSettings(),
+  installedModels: async () =>
+    (await import("./local-speech-models.js"))
+      .listModels()
+      .filter((model) => model.installed)
+      .map((model) => model.id),
+  engineStatus: async () => (await import("./local-speech.js")).engineStatus(),
+  hasOpenAIKey: () => hasBuiltinApiKey("openai"),
+  hasGoogleKey: async () => hasBuiltinApiKey((await import("./google-provider.js")).GOOGLE_PROVIDER_ID),
+});

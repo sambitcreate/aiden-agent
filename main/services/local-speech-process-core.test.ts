@@ -102,6 +102,34 @@ test("worker failures surface their message and code", async () => {
   client.dispose();
 });
 
+test("an invalid-request failure is a plain error and is not retried", async () => {
+  let attempts = 0;
+  const fake = fakePort((message) => {
+    attempts += 1;
+    return {
+      version: 2,
+      kind: "failure",
+      requestId: message.requestId,
+      message: "Invalid on-device transcription request.",
+      code: "invalid-request",
+    };
+  });
+  const client = new LocalSpeechProcessClient(fake.port);
+  await assert.rejects(
+    runWithCrashRetry(() => client.transcribe(transcribeInput()), {
+      isCancelled: () => false,
+      isCrash: (error) => error instanceof WorkerCrashError,
+      onCrash: () => assert.fail("not a crash"),
+    }),
+    (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, "invalid-request");
+      return true;
+    },
+  );
+  assert.equal(attempts, 1);
+  client.dispose();
+});
+
 test("deadlines scale with audio length", () => {
   assert.equal(transcribeDeadlineMs(3), 120_000);
   assert.equal(transcribeDeadlineMs(600), 12_000_000);

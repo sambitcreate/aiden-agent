@@ -115,6 +115,10 @@ test("worker results and failures are validated", () => {
   );
   assert.equal(isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope" }), true);
   assert.equal(
+    isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "bad frame", code: "invalid-request" }),
+    true,
+  );
+  assert.equal(
     isLocalSpeechWorkerMessage({ version: 2, kind: "failure", requestId: "r1", message: "nope", code: "exploded" }),
     false,
   );

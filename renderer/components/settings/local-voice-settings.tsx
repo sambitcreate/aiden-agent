@@ -21,6 +21,7 @@ import { Settings2 } from "lucide-react";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
 import { ModelManagerView } from "./model-manager-view";
+import { effectiveLocalModelId } from "../../shared/voice-provider";
 import {
   DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES,
   isLocalVoiceIdleUnloadMinutes,
@@ -107,8 +108,14 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   const models = useLocalModels();
   const settings = useSettings();
   const activeId = settings.data?.localVoiceModel ?? "";
-  const active = (models.data ?? []).find((m) => m.id === activeId && m.installed);
-  const installedCount = (models.data ?? []).filter((m) => m.installed).length;
+  const installed = (models.data ?? []).filter((m) => m.installed);
+  const installedCount = installed.length;
+  const active = installed.find((m) => m.id === activeId);
+  // With no usable choice, dictation falls back to the first installed model.
+  const fallbackId = active
+    ? undefined
+    : effectiveLocalModelId(undefined, installed.map((m) => m.id));
+  const fallback = installed.find((m) => m.id === fallbackId);
 
   React.useEffect(() => {
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
@@ -124,7 +131,9 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
         </Callout>
       ) : (
         <Field label="Active model" description="Used when you dictate with the on-device provider.">
-          <Text variant="small-strong">{active ? active.name : "None selected"}</Text>
+          <Text variant="small-strong">
+            {active ? active.name : fallback ? `${fallback.name} (automatic)` : "None selected"}
+          </Text>
         </Field>
       )}
       <Field label="Models" description="Download, remove, and choose your on-device transcription model.">

@@ -103,6 +103,25 @@ export function createTranscribeRouter(deps: TranscribeRouterDeps): (input: Tran
   };
 }
 
+export type CloudTranscriberDeps = Pick<TranscribeRouterDeps, "resolve" | "openai" | "gemini">;
+
+/**
+ * Recorded audio from a renderer names the cloud provider it resolved at mic
+ * press. Main re-resolves and refuses a mismatch, so a stale or forged request
+ * can never upload to a provider the user has not set up for voice.
+ */
+export function createCloudTranscriber(
+  deps: CloudTranscriberDeps,
+): (input: TranscribeInput, provider: "openai" | "gemini") => Promise<string> {
+  return async (input, provider) => {
+    const resolution = await deps.resolve();
+    if (resolution.kind !== "ready" || resolution.provider !== provider) {
+      throw new Error("Voice settings changed. Try again.");
+    }
+    return provider === "gemini" ? deps.gemini(input) : deps.openai(input);
+  };
+}
+
 export function parseGeminiTranscriptionResponse(value: unknown): {
   text: string;
   usage: unknown;

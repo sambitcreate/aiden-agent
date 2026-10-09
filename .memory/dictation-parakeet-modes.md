@@ -57,13 +57,21 @@ Status (2026-10-01): merged in PR #279 (on main after 0.51.0); plan moved to `do
   renderers call `voice:resolveProvider` (allowed in the pill) at mic press.
 - Settings → Voice: "Automatic" (Select value `automatic`, since Radix rejects `""`) clears the
   key via `settings:set { voiceProvider: null }` (`parseVoiceProviderPatch`). Model downloads no
-  longer auto-activate a model.
+  longer auto-activate a model, and the manager's "Use" sets only `localVoiceModel`. With no
+  usable choice, "Active model" shows the fallback as "<name> (automatic)".
+- `voice-provider-resolution.ts` exports `createVoiceProviderResolver(deps)`; live deps load
+  lazily so the module is testable. Known follow-up: Settings' resolution query can fork the
+  speech worker through `engineStatus` when a model is installed (review M4, left as is).
 - `voice:transcribe` now takes the resolved cloud provider as a 5th arg and calls
-  `transcribeCloud`; only Telegram goes through `transcribe` (`createTranscribeRouter` in
+  `transcribeCloud` (`createCloudTranscriber`), which re-resolves in main and refuses a
+  mismatch with "Voice settings changed. Try again." before any upload; only Telegram goes through `transcribe` (`createTranscribeRouter` in
   `transcription-core.ts`), which routes `audio/ogg|opus` to `transcribeLocalOggOpus` with
   `local-voice` usage and refuses other types on-device.
 - Telegram transcription failures become `"<file> was not transcribed: <reason>"` notices.
 - Cloud language hints use the base code of `voiceLanguage`: OpenAI `language`, Gemini Live
   `languageCodes`, Gemini batch `transcription_config.language_codes`.
 - Worker entries go through `replyToWorkerFrame`: an invalid frame with a requestId gets an
-  immediate `decode-failed` failure instead of two hang deadlines.
+  immediate `invalid-request` failure (its own protocol code, never retried) instead of two
+  hang deadlines.
+- Opus end trim uses each stream's final granule minus its pre-skip, so chained files decode
+  to exact lengths.

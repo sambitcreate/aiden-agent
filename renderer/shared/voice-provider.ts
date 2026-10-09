@@ -18,9 +18,20 @@ export interface VoiceProviderInputs {
   hasGeminiVoice: boolean;
 }
 
+/**
+ * The on-device model dictation uses: the chosen one when installed, else the
+ * first installed model in catalog order (the recommended model first).
+ */
+export function effectiveLocalModelId(
+  localModelId: string | undefined,
+  installedLocalModels: readonly string[],
+): string | undefined {
+  if (localModelId && installedLocalModels.includes(localModelId)) return localModelId;
+  return installedLocalModels[0];
+}
+
 function chosenLocalModel(input: VoiceProviderInputs): string | undefined {
-  if (input.localModelId && input.installedLocalModels.includes(input.localModelId)) return input.localModelId;
-  return input.installedLocalModels[0];
+  return effectiveLocalModelId(input.localModelId, input.installedLocalModels);
 }
 
 export function resolveVoiceProvider(input: VoiceProviderInputs): VoiceProviderResolution {
