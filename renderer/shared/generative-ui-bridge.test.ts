@@ -13,6 +13,8 @@ import {
 
 test("bridge accepts the legacy escape string and typed messages only", () => {
   assert.deepEqual(parseGuestBridgeMessage(GENERATIVE_UI_ESCAPE_MESSAGE), { type: "escape" });
+  assert.deepEqual(parseGuestBridgeMessage({ type: "aiden:generative-ui:ready" }), { type: "ready" });
+  assert.equal(parseGuestBridgeMessage({ type: "aiden:generative-ui:ready", extra: 1 }), undefined);
   assert.deepEqual(
     parseGuestBridgeMessage({ type: "aiden:generative-ui:resize", height: 412.6 }),
     { type: "resize", height: 412.6 },

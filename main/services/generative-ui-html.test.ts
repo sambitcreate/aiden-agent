@@ -11,6 +11,7 @@ import {
   GENERATIVE_UI_PROTOCOL_SCHEME,
 } from "../../renderer/shared/generative-ui.js";
 import {
+  generativeUiDraftDocumentHead,
   generativeUiExportDocument,
   validateGenerativeUiHtml,
   wrapGenerativeUiHtml,
@@ -159,7 +160,6 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
   assert.match(frame, /section\.showPopover\(\)/u);
   assert.match(frame, /section\.hidePopover\(\)/u);
   assert.match(frame, /isolateExpandedArtifact\(section\)/u);
-  assert.equal(frame.match(/<HtmlArtifactIframe\b/gu)?.length, 1);
   assert.match(frame, /trigger\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(frame, /aria-modal=\{expanded \|\| undefined\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
@@ -203,6 +203,18 @@ test("wrapper emits sanitized vars, the kit stylesheet, and a transparent inline
   // Standalone pages (export, Design Studio) keep a solid canvas.
   const standalone = wrapGenerativeUiHtml("<p>x</p>", "T", theme);
   assert.match(standalone, /html, body \{[^}]*background: var\(--artifact-canvas\)/u);
+});
+
+test("the draft document head is open-ended and only its nonce'd bridge may run", () => {
+  const nonce = "abcdefghijklmnop0123==";
+  const head = generativeUiDraftDocumentHead("Draft", undefined, nonce);
+  assert.match(head, new RegExp(`<script nonce="${nonce}">`, "u"));
+  assert.match(head, /<body>\s*$/u);
+  assert.doesNotMatch(head, /<\/body>/u);
+  const meta = /http-equiv="Content-Security-Policy" content="([^"]+)"/u.exec(head)?.[1] ?? "";
+  assert.match(meta, new RegExp(`script-src 'nonce-${nonce}'`, "u"));
+  assert.doesNotMatch(/script-src[^;]*/u.exec(meta)?.[0] ?? "", /unsafe-inline/u);
+  assert.throws(() => generativeUiDraftDocumentHead("Draft", undefined, "\" onload=\"x"), /nonce/u);
 });
 
 test("legacy four-color theme callers still render", () => {

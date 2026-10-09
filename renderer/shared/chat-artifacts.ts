@@ -2,6 +2,7 @@ import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attach
 import {
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
+  generativeUiPreviewTokenFromUrl,
   isHtmlArtifactMediaId,
   isHtmlArtifactTitle,
 } from "./generative-ui.js";
@@ -58,6 +59,19 @@ export type ChatArtifactEventV1 =
   | {
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
       operation: "reset";
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A render_artifact call is still streaming; `src` is its live draft preview. */
+      operation: "draft";
+      toolCallId: string;
+      title?: string;
+      src: string;
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      operation: "draft_end";
+      toolCallId: string;
     };
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
@@ -67,6 +81,9 @@ const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
 const PRESENT_EVENT_WITH_CALL_KEYS = new Set(["version", "operation", "artifact", "toolCallId"]);
 const PLACEMENT_KEYS = new Set(["mediaId", "toolCallId"]);
+const DRAFT_EVENT_KEYS = new Set(["version", "operation", "toolCallId", "src"]);
+const DRAFT_EVENT_WITH_TITLE_KEYS = new Set(["version", "operation", "toolCallId", "title", "src"]);
+const DRAFT_END_EVENT_KEYS = new Set(["version", "operation", "toolCallId"]);
 const MAX_PLACEMENTS = 40;
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 512;
@@ -221,6 +238,25 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
   if (event.version !== CHAT_ARTIFACT_EVENT_VERSION) return undefined;
   if (event.operation === "reset" && hasExactKeys(event, RESET_EVENT_KEYS)) {
     return { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "reset" };
+  }
+  if (event.operation === "draft_end") {
+    return hasExactKeys(event, DRAFT_END_EVENT_KEYS) && isToolCallId(event.toolCallId)
+      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "draft_end", toolCallId: event.toolCallId }
+      : undefined;
+  }
+  if (event.operation === "draft") {
+    const titled = hasExactKeys(event, DRAFT_EVENT_WITH_TITLE_KEYS);
+    if (!titled && !hasExactKeys(event, DRAFT_EVENT_KEYS)) return undefined;
+    if (!isToolCallId(event.toolCallId) || typeof event.src !== "string") return undefined;
+    if (!generativeUiPreviewTokenFromUrl(event.src)) return undefined;
+    if (titled && !isHtmlArtifactTitle(event.title)) return undefined;
+    return {
+      version: CHAT_ARTIFACT_EVENT_VERSION,
+      operation: "draft",
+      toolCallId: event.toolCallId,
+      ...(titled ? { title: event.title as string } : {}),
+      src: event.src,
+    };
   }
   if (event.operation !== "present") return undefined;
   const withCall = hasExactKeys(event, PRESENT_EVENT_WITH_CALL_KEYS);

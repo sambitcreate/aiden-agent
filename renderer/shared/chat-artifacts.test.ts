@@ -110,6 +110,32 @@ test("placements keep valid entries and drop malformed ones individually", () =>
   assert.equal(parseHtmlArtifactPlacements([{ mediaId: "x", toolCallId: 1 }]), undefined);
 });
 
+test("draft events carry a preview URL for one tool call and nothing else", () => {
+  const src = `aiden-genui://preview/${"a".repeat(64)}`;
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src }),
+    { version: 1, operation: "draft", toolCallId: "call_1", title: "Chart", src },
+  );
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft", toolCallId: "call_1", src }),
+    { version: 1, operation: "draft", toolCallId: "call_1", src },
+  );
+  assert.deepEqual(
+    parseChatArtifactEventV1({ version: 1, operation: "draft_end", toolCallId: "call_1" }),
+    { version: 1, operation: "draft_end", toolCallId: "call_1" },
+  );
+  for (const bad of [
+    { version: 1, operation: "draft", toolCallId: "call_1", src: "https://example.com/x" },
+    { version: 1, operation: "draft", toolCallId: "call_1", src: `${src}?x=1` },
+    { version: 1, operation: "draft", toolCallId: "", src },
+    { version: 1, operation: "draft", toolCallId: "call_1", src, html: "<p>" },
+    { version: 1, operation: "draft", toolCallId: "call_1", title: " padded", src },
+    { version: 1, operation: "draft_end", toolCallId: "call_1", src },
+  ]) {
+    assert.equal(parseChatArtifactEventV1(bad), undefined, JSON.stringify(bad));
+  }
+});
+
 test("present events may carry the producing toolCallId", () => {
   const parsed = parseChatArtifactEventV1({ version: 1, operation: "present", artifact: HTML, toolCallId: "call_9" });
   assert.equal(parsed?.operation === "present" && parsed.toolCallId, "call_9");

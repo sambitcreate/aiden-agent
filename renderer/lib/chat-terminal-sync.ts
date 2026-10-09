@@ -639,6 +639,8 @@ export function subscribeDetachedTerminalChats(
     if (!event) return;
     updateDetachedProjection(parsed.streamId, (current) => {
       if (event.operation === "reset") return { ...current, artifacts: [] };
+      // Detached views show settled artifacts only; live drafts are per-window.
+      if (event.operation !== "present") return current;
       const identity = chatArtifactIdentity(event.artifact);
       const index = current.artifacts.findIndex(
         (candidate) => chatArtifactIdentity(candidate) === identity,

@@ -10,8 +10,12 @@ export const MAX_INLINE_VISUAL_HEIGHT = 1600;
 export const MAX_GUEST_PROMPT_CHARS = 2000;
 export const GUEST_PROMPT_COOLDOWN_MS = 3000;
 
+/** The guest bridge is running; the host answers with the current theme. */
+export const GENERATIVE_UI_READY_MESSAGE = "aiden:generative-ui:ready" as const;
+
 export type GuestBridgeMessage =
   | { type: "escape" }
+  | { type: "ready" }
   | { type: "resize"; height: number }
   | { type: "prompt"; text: string };
 
@@ -24,6 +28,9 @@ export function parseGuestBridgeMessage(data: unknown): GuestBridgeMessage | und
   if (data === GENERATIVE_UI_ESCAPE_MESSAGE) return { type: "escape" };
   if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
   const record = data as Record<string, unknown>;
+  if (record.type === GENERATIVE_UI_READY_MESSAGE && exactKeys(record, ["type"])) {
+    return { type: "ready" };
+  }
   if (record.type === GENERATIVE_UI_RESIZE_MESSAGE && exactKeys(record, ["type", "height"])) {
     return typeof record.height === "number" ? { type: "resize", height: record.height } : undefined;
   }

@@ -12,6 +12,7 @@ import {
   readGenerativeUiTheme,
   subscribeGenerativeUiTheme,
 } from "../lib/generative-ui-theme-snapshot";
+import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 
@@ -45,6 +46,14 @@ function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPrev
     return undefined;
   }
   return cached;
+}
+
+function postThemeTo(guest: Window): void {
+  const theme = readGenerativeUiTheme();
+  guest.postMessage(
+    { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
+    "*",
+  );
 }
 
 export type GuestPromptHandler = (
@@ -133,6 +142,9 @@ function HtmlArtifactIframe({
       const message = parseGuestBridgeMessage(event.data);
       if (!message) return;
       if (message.type === "escape") handlers.current.onEscape?.();
+      // A streaming draft never fires load until it completes; the bridge
+      // announces itself so the guest is themed from its first paint.
+      else if (message.type === "ready") postThemeTo(guest);
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else {
         const frameFocused = document.activeElement === frame;
@@ -152,12 +164,7 @@ function HtmlArtifactIframe({
   React.useEffect(() => {
     const sendTheme = () => {
       const guest = frameRef.current?.contentWindow;
-      if (!guest) return;
-      const theme = readGenerativeUiTheme();
-      guest.postMessage(
-        { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
-        "*",
-      );
+      if (guest) postThemeTo(guest);
     };
     const frame = frameRef.current;
     frame?.addEventListener("load", sendTheme);
@@ -420,6 +427,37 @@ function HtmlArtifactFrameImpl({
 }
 
 export const HtmlArtifactFrame = React.memo(HtmlArtifactFrameImpl);
+
+/**
+ * A visual the model is still writing: its draft preview grows as the tool
+ * call streams (model scripts stay blocked), then the presented frame takes
+ * its place in the same row.
+ */
+function HtmlArtifactDraftFrameImpl({ src, title }: { src: string; title?: string }) {
+  const [height, setHeight] = React.useState(INITIAL_VISUAL_HEIGHT);
+  const label = title ? `Visualizing ${title}` : "Visualizing";
+  return (
+    <section
+      role="region"
+      aria-label={label}
+      aria-busy="true"
+      className="aiden-inline-visual relative min-w-0 p-0 text-primary"
+      data-inline-visual-draft=""
+    >
+      <div className="aiden-inline-visual-status" aria-hidden="true">
+        <AidenActivityMark mark="scan-grid" size={14} />
+        <Text variant="small" color="secondary" className="min-w-0 max-w-[16rem] truncate">
+          {label}
+        </Text>
+      </div>
+      <div className="aiden-inline-visual-frame" data-inline-visual-frame="" style={{ height }}>
+        <HtmlArtifactIframe src={src} title={label} onHeight={setHeight} />
+      </div>
+    </section>
+  );
+}
+
+export const HtmlArtifactDraftFrame = React.memo(HtmlArtifactDraftFrameImpl);
 
 function HtmlArtifactListImpl({
   chatId,

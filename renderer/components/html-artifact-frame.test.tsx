@@ -4,7 +4,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
-import { HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
+import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import {
   GENERATIVE_UI_RESIZE_MESSAGE,
   GENERATIVE_UI_PROMPT_MESSAGE,
@@ -75,6 +75,17 @@ function postFrom(source: unknown, data: unknown) {
   });
 }
 
+test("a draft visual shows its streaming preview without expand or export actions", () => {
+  const src = `aiden-genui://preview/${"d".repeat(64)}`;
+  const view = render(<HtmlArtifactDraftFrame src={src} title="Revenue" />);
+  const iframe = view.container.querySelector("iframe");
+  assert.equal(iframe?.getAttribute("src"), src);
+  assert.equal(iframe?.getAttribute("sandbox"), "allow-scripts");
+  assert.ok(view.container.querySelector("[data-inline-visual-draft]"));
+  assert.equal(screen.queryByRole("button", { name: /Expand|Export/u }), null);
+  assert.ok(screen.getByText(/Revenue/u));
+});
+
 test("inline visual renders without card chrome and keeps an accessible title", () => {
   const html = renderToStaticMarkup(<HtmlArtifactFrame chatId="c1" artifact={artifact("Revenue")} />);
   assert.match(html, /data-inline-visual="media-\d+"/u);
@@ -130,6 +141,15 @@ test("theme update reaches a mounted frame without changing src", async () => {
     assert.equal(typeof themeMessage?.vars, "object");
   });
   assert.equal(iframe.getAttribute("src"), PREVIEW);
+});
+
+test("a guest announcing ready receives the current theme before its document finishes loading", async () => {
+  const { guest } = await mountedFrame();
+  postFrom(guest, { type: "aiden:generative-ui:ready" });
+  const themeMessage = guest.sent.find(
+    (data) => (data as { type?: string }).type === GENERATIVE_UI_THEME_MESSAGE,
+  ) as { vars?: unknown } | undefined;
+  assert.equal(typeof themeMessage?.vars, "object");
 });
 
 test("guest prompts report focus and consume one fresh focus entry", async () => {

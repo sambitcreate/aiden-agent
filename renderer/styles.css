@@ -862,6 +862,14 @@ textarea {
   pointer-events: auto;
 }
 
+/* A drafting visual names itself above the frame; it never overlays content. */
+.aiden-inline-visual-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 @media (pointer: coarse) {
   .aiden-inline-visual-toolbar {
     opacity: 1;

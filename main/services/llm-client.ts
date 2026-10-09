@@ -394,6 +394,8 @@ import {
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -805,7 +807,7 @@ async function prepareGeneration(
   const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
   const displayedHtmlIds = new Set<string>();
   /** mediaId → the render_artifact call it renders after. */
-  const htmlArtifactPlacements = new Map<string, string>();
+  const htmlArtifactPlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -1772,16 +1774,15 @@ async function prepareGeneration(
           displayedHtmlIds.add(artifact.mediaId);
           displayedHtmlArtifacts.push(artifact);
         }
-        if (!htmlArtifactPlacements.has(artifact.mediaId)) {
-          htmlArtifactPlacements.set(artifact.mediaId, context.toolCallId);
-        }
+        htmlArtifactPlacements.record(artifact.mediaId, context.toolCallId);
+        const placedToolCallId = htmlArtifactPlacements.publicIdFor(artifact.mediaId);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
-            toolCallId: htmlArtifactPlacements.get(artifact.mediaId),
+            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
           },
         });
         return true;
@@ -2267,6 +2268,12 @@ export const llmClient = {
       formFill.progressSink = (toolCallId, completed, total) =>
         timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
     }
+    // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
+    htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    const visualDrafts = createGenerativeUiDraftSession({
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -2323,12 +2330,7 @@ export const llmClient = {
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
-            htmlArtifactPlacements: displayedHtmlArtifacts.length > 0
-              ? displayedHtmlArtifacts.flatMap((artifact) => {
-                  const toolCallId = htmlArtifactPlacements.get(artifact.mediaId);
-                  return toolCallId ? [{ mediaId: artifact.mediaId, toolCallId }] : [];
-                })
-              : undefined,
+            htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
           },
           {
             providerId: params.providerId,
@@ -3513,6 +3515,7 @@ export const llmClient = {
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();
+            visualDrafts.dispose();
             break;
           case "message_start":
             if (event.message.role === "assistant") {
@@ -3551,6 +3554,17 @@ export const llmClient = {
                 typeof block.name === "string"
               ) {
                 timeline.toolStarted(block.id, block.name, {});
+              }
+            }
+            if (e.type === "toolcall_delta" || e.type === "toolcall_end") {
+              // Stream a render_artifact call's partial HTML to a draft preview.
+              const block = e.partial.content[e.contentIndex];
+              if (block?.type === "toolCall" && typeof block.id === "string" && block.id) {
+                if (e.type === "toolcall_delta") {
+                  visualDrafts.delta(block.id, block.name, block.arguments);
+                } else {
+                  visualDrafts.end(block.id);
+                }
               }
             }
             if (e.type === "text_delta") {
@@ -3683,6 +3697,8 @@ export const llmClient = {
                 : event.isError
                   ? "failed"
                   : "completed";
+            // A visual that will never present must not leave its draft behind.
+            if (terminalStatus !== "completed") visualDrafts.cancel(event.toolCallId);
             if (
               attendedAssistant &&
               event.isError &&
@@ -3718,6 +3734,7 @@ export const llmClient = {
       });
     } catch (error) {
       cacheWarmer?.dispose();
+            visualDrafts.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3954,6 +3971,7 @@ export const llmClient = {
         );
       });
       cacheWarmer?.dispose();
+            visualDrafts.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -4232,6 +4250,7 @@ export const llmClient = {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
           cacheWarmer?.dispose();
+            visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});

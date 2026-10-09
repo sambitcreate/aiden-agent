@@ -47,6 +47,44 @@ function liveList(text: string, steps: AgentToolStep[]) {
   );
 }
 
+test("a streaming draft renders in its tool row and yields to the presented visual", () => {
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  const intro = "Before chart.";
+  const renderStep = toolStep("tool-1", "call-render", "render_artifact", intro.length);
+  const timeline: GenerationTimeline = {
+    version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps: [renderStep],
+  };
+  const draftSrc = `aiden-genui://preview/${"d".repeat(64)}`;
+  const list = (presented: boolean) => (
+    <MessageList
+      chatId="chat-live"
+      messages={[]}
+      streamingText={`${intro} After chart.`}
+      streamingReasoning={null}
+      streamingArtifacts={presented ? [visual] : []}
+      streamingArtifactPlacements={new Map([[visual.mediaId, "call-render"]])}
+      streamingVisualDrafts={presented ? new Map() : new Map([["call-render", { src: draftSrc, title: "Chart" }]])}
+      timeline={timeline}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />
+  );
+  const view = render(list(false));
+  // Live prose reveals over animation frames, so anchor on the tool's activity row.
+  const html = view.container.innerHTML;
+  const activityAt = html.indexOf("render_artifact");
+  const draftAt = html.indexOf("data-inline-visual-draft");
+  assert.ok(activityAt >= 0 && draftAt > activityAt, "the draft follows its tool's activity row");
+  assert.equal(view.container.querySelector("[data-inline-visual-draft] iframe")?.getAttribute("src"), draftSrc);
+
+  view.rerender(list(true));
+  assert.equal(view.container.querySelector("[data-inline-visual-draft]"), null);
+  assert.ok(view.container.querySelector('[data-html-artifact="media-live"]'));
+});
+
 test("a live visual keeps its node when a later tool step outruns the buffered text", () => {
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
   const intro = "Before chart.";

@@ -7,8 +7,13 @@ import {
   GENERATIVE_UI_ESCAPE_MESSAGE,
   GENERATIVE_UI_IFRAME_SANDBOX,
   GENERATIVE_UI_PARENT_FRAME_SRC,
+  generativeUiDraftCsp,
 } from "../../renderer/shared/generative-ui";
-import { generativeUiExportDocument, wrapGenerativeUiHtml } from "../../main/services/generative-ui-html";
+import {
+  generativeUiDraftDocumentHead,
+  generativeUiExportDocument,
+  wrapGenerativeUiHtml,
+} from "../../main/services/generative-ui-html";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
 // condition. Named exports are unavailable; the default object carries them.
@@ -337,6 +342,40 @@ async function loadWrappedGuest(
 const ofType = (messages: BridgeMessage[], type: string) =>
   messages.filter((m): m is { type: string; height?: number; text?: string } =>
     typeof m === "object" && m !== null && m.type === type);
+
+test("draft preview renders partial markup without running model scripts", async ({ page }) => {
+  const nonce = "Zm9vYmFyYmF6cXV4MTIzNA==";
+  const draft = `${generativeUiDraftDocumentHead("Draft", undefined, nonce)}<p id="x">ok</p><script>parent.postMessage("ran", "*")</script><div style="height:400px">`;
+  let openDraft: { end: () => void } | undefined;
+  const site = await listen((request, response) => {
+    if (request.url === "/draft") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": generativeUiDraftCsp(nonce),
+      });
+      // Leave the document open, as a streaming draft is.
+      response.write(draft);
+      openDraft = response;
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<!DOCTYPE html><html><body>
+      <script>window.__msgs = []; window.addEventListener("message", (e) => window.__msgs.push(e.data));</script>
+      <iframe id="artifact" sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="/draft" style="width:600px;height:300px"></iframe>
+    </body></html>`);
+  });
+  try {
+    await page.goto(site.origin, { waitUntil: "commit" });
+    await expect(page.frameLocator("#artifact").locator("#x")).toHaveText("ok");
+    const messages = () => page.evaluate(() => (window as unknown as { __msgs: BridgeMessage[] }).__msgs);
+    await expect.poll(async () => ofType(await messages(), "aiden:generative-ui:ready").length).toBe(1);
+    await expect.poll(async () => ofType(await messages(), "aiden:generative-ui:resize").length).toBeGreaterThan(0);
+    expect((await messages()).includes("ran")).toBe(false);
+  } finally {
+    openDraft?.end();
+    await site.close().catch(() => undefined);
+  }
+});
 
 test("bridge reports content height to the parent", async ({ page }) => {
   const guest = await loadWrappedGuest(page, '<div style="height:640px">tall</div>');

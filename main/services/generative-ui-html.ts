@@ -9,6 +9,7 @@ import {
   GENERATIVE_UI_PROTOCOL_SCHEME,
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
+  generativeUiDraftCsp,
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../../renderer/shared/generative-ui-theme.js";
 import {
   GENERATIVE_UI_PROMPT_MESSAGE,
+  GENERATIVE_UI_READY_MESSAGE,
   GENERATIVE_UI_RESIZE_MESSAGE,
   GENERATIVE_UI_THEME_MESSAGE,
   MAX_GUEST_PROMPT_CHARS,
@@ -119,6 +121,7 @@ function guestBridgeScript(nonce?: string): string {
   });
   Object.defineProperty(window, "aiden", { value: api, writable: false, configurable: false, enumerable: true });
   document.addEventListener("DOMContentLoaded", applyChartDefaults);
+  post({ type: ${JSON.stringify(GENERATIVE_UI_READY_MESSAGE)} });
 })();
 </script>`;
 }
@@ -155,6 +158,24 @@ function themeVariableLines(vars: Readonly<Record<string, string>> | undefined):
   return Object.entries(vars ?? {})
     .map(([name, value]) => `  ${name}: ${value};`)
     .join("\n");
+}
+
+/**
+ * The final artifact's content rules, applied to a streaming prefix without
+ * throwing. A partial tag is fine; anything the final check would refuse
+ * stops the draft early (the draft CSP already blocks scripts and network).
+ */
+export function isGenerativeUiDraftAcceptable(html: string): boolean {
+  if (html.includes("\0") || Buffer.byteLength(html, "utf8") > MAX_HTML_ARTIFACT_BYTES) return false;
+  return ![
+    FORBIDDEN_OPEN_TAG,
+    SCRIPT_WITH_SRC,
+    META_HTTP_EQUIV,
+    LINK_TAG,
+    JAVASCRIPT_URL,
+    HTML_DATA_URL,
+    HTTP_SRC,
+  ].some((pattern) => pattern.test(html));
 }
 
 export function validateGenerativeUiHtml(html: string): Buffer {
@@ -256,13 +277,44 @@ export function wrapGenerativeUiHtml(
 ): string {
   const bytes = validateGenerativeUiHtml(html);
   const fragment = extractFragment(bytes.toString("utf8"));
+  return `${guestDocumentHead(title, theme, options, GENERATIVE_UI_GUEST_CSP)}${fragment}
+</body>
+</html>
+`;
+}
+
+/**
+ * The opening of a streaming draft document: everything up to `<body>`, with
+ * a nonce-only script policy. Main appends the model's partial HTML after it
+ * as the tool call streams; the browser's incremental parser renders it.
+ */
+export function generativeUiDraftDocumentHead(
+  title: string,
+  theme: GenerativeUiThemeTokens = DEFAULT_THEME,
+  nonce: string,
+): string {
+  if (!NONCE.test(nonce)) throw new Error("Invalid bridge nonce.");
+  return guestDocumentHead(
+    title,
+    theme,
+    { inline: true, bridgeNonce: nonce },
+    generativeUiDraftCsp(nonce),
+  );
+}
+
+function guestDocumentHead(
+  title: string,
+  theme: GenerativeUiThemeTokens,
+  options: GenerativeUiWrapOptions,
+  csp: string,
+): string {
   const safeTitle = escapeHtml(title);
   const tokens = parseGenerativeUiTheme(theme);
   return `<!DOCTYPE html>
 <html lang="en" data-color-scheme="${tokens.colorScheme}">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${GENERATIVE_UI_GUEST_CSP}">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <title>${safeTitle}</title>
 ${guestBridgeScript(options.bridgeNonce)}
 ${hostLibraryTags()}
@@ -292,9 +344,6 @@ button, input, select, textarea {
 </style>
 </head>
 <body>
-${fragment}
-</body>
-</html>
 `;
 }
 

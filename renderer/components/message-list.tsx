@@ -25,7 +25,7 @@ import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
-import { HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
+import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -43,6 +43,8 @@ import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/p
 import {
   htmlArtifactSlots,
   reuseUnchangedArtifactLists,
+  type PlacedVisualDraft,
+  type VisualDrafts,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
 
@@ -58,6 +60,8 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /** mediaId → producing render_artifact toolCallId for the live response. */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
+  /** Live render_artifact drafts by toolCallId for the streaming response. */
+  streamingVisualDrafts?: VisualDrafts;
   /** A visual asked to send a follow-up; the chat applies the admission policy. */
   onVisualPrompt?: GuestPromptHandler;
   streamComplete?: boolean;
@@ -109,6 +113,8 @@ interface AssistantResponseProps {
   /** mediaId → render_artifact toolCallId. */
   visualPlacements?: ReadonlyMap<string, string>;
   renderVisual?: (artifact: ChatHtmlArtifactV1) => React.ReactNode;
+  /** Live drafts by toolCallId; only the streaming response passes these. */
+  visualDrafts?: VisualDrafts;
 }
 
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
@@ -130,15 +136,20 @@ function AssistantResponse({
   visuals = EMPTY_VISUALS,
   visualPlacements = EMPTY_PLACEMENTS,
   renderVisual,
+  visualDrafts,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(
     content,
     streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
     reasoning ?? "",
   );
-  const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements);
+  const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements, visualDrafts);
   const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
     renderVisual && artifacts?.length ? artifacts.map(renderVisual) : null;
+  const draftNodes = (drafts: readonly PlacedVisualDraft[] | undefined) =>
+    drafts?.map((draft) => (
+      <HtmlArtifactDraftFrame key={`draft:${draft.toolCallId}`} src={draft.src} title={draft.title} />
+    )) ?? null;
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
@@ -216,6 +227,7 @@ function AssistantResponse({
                 animate={streaming}
               />
               {visualNodes(slots.byRowKey.get(row.key))}
+              {draftNodes(slots.draftsByRowKey.get(row.key))}
               {subagentActivityKey === row.key ? subagentChips : null}
             </React.Fragment>
           );
@@ -389,6 +401,7 @@ export function MessageList({
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
+  streamingVisualDrafts,
   onVisualPrompt,
   streamComplete,
   persistedHandoffMessageId = null,
@@ -607,6 +620,7 @@ export function MessageList({
           onStreamHandoffComplete={onStreamHandoffComplete}
           visuals={htmlArtifactsByAnchor.get("streaming")}
           visualPlacements={streamingArtifactPlacements}
+          visualDrafts={streamingVisualDrafts}
           renderVisual={renderVisual}
         />
       </div>,

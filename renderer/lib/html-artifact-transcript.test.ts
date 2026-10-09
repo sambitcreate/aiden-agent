@@ -2,7 +2,46 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import type { AssistantPresentationRow } from "./assistant-message-presentation";
-import { htmlArtifactSlots, reuseUnchangedArtifactLists } from "./html-artifact-transcript";
+import {
+  htmlArtifactSlots,
+  reduceVisualDrafts,
+  reuseUnchangedArtifactLists,
+  type VisualDrafts,
+} from "./html-artifact-transcript";
+
+const DRAFT_SRC = `aiden-genui://preview/${"d".repeat(64)}`;
+
+test("present clears the draft for its toolCallId; draft_end and reset clear too", () => {
+  let drafts: VisualDrafts = new Map();
+  drafts = reduceVisualDrafts(drafts, { version: 1, operation: "draft", toolCallId: "c1", title: "A", src: DRAFT_SRC });
+  drafts = reduceVisualDrafts(drafts, { version: 1, operation: "draft", toolCallId: "c2", src: DRAFT_SRC });
+  assert.deepEqual([...drafts.keys()], ["c1", "c2"]);
+  const art = {
+    version: 1 as const, kind: "html" as const, id: "i".repeat(64), title: "A",
+    mimeType: "text/html" as const, size: 1, mediaId: "m".repeat(64),
+  };
+  drafts = reduceVisualDrafts(drafts, { version: 1, operation: "present", artifact: art, toolCallId: "c1" });
+  assert.deepEqual([...drafts.keys()], ["c2"]);
+  const unchanged = reduceVisualDrafts(drafts, { version: 1, operation: "present", artifact: art });
+  assert.equal(unchanged, drafts);
+  drafts = reduceVisualDrafts(drafts, { version: 1, operation: "draft_end", toolCallId: "c2" });
+  assert.equal(drafts.size, 0);
+  drafts = reduceVisualDrafts(drafts, { version: 1, operation: "draft", toolCallId: "c3", src: DRAFT_SRC });
+  assert.equal(reduceVisualDrafts(drafts, { version: 1, operation: "reset" }).size, 0);
+});
+
+test("drafts sit in the row of their pending tool call and never beside a presented visual", () => {
+  const drafts: VisualDrafts = new Map([
+    ["call_a", { src: DRAFT_SRC, title: "A" }],
+    ["call_b", { src: DRAFT_SRC }],
+    ["call_gone", { src: DRAFT_SRC }],
+  ]);
+  const a = artifact("a");
+  const slots = htmlArtifactSlots(rows, [a], new Map([[a.mediaId, "call_a"]]), drafts);
+  assert.deepEqual(slots.draftsByRowKey.get("activity-5-a"), undefined);
+  assert.deepEqual(slots.draftsByRowKey.get("activity-11-b"), [{ toolCallId: "call_b", src: DRAFT_SRC }]);
+  assert.equal([...slots.draftsByRowKey.values()].flat().some((d) => d.toolCallId === "call_gone"), false);
+});
 
 const artifact = (n: string): ChatHtmlArtifactV1 => ({
   version: 1, kind: "html", id: n.repeat(64), title: `A${n}`,

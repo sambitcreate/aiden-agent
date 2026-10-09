@@ -1,11 +1,49 @@
 import type { ChatMessage } from "./types";
-import type { ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatArtifactEventV1, ChatHtmlArtifactV1 } from "../shared/chat-artifacts";
 import { isToolStep } from "../shared/generation-timeline";
 import type { AssistantPresentationRow } from "./assistant-message-presentation";
+
+export interface VisualDraft {
+  src: string;
+  title?: string;
+}
+
+/** Live draft previews by producing render_artifact toolCallId. */
+export type VisualDrafts = ReadonlyMap<string, VisualDraft>;
+const EMPTY_DRAFTS: VisualDrafts = new Map();
+
+/** Apply one live artifact event to the draft set; unchanged input is returned as-is. */
+export function reduceVisualDrafts(drafts: VisualDrafts, event: ChatArtifactEventV1): VisualDrafts {
+  switch (event.operation) {
+    case "reset":
+      return drafts.size ? new Map() : drafts;
+    case "draft":
+      return new Map(drafts).set(event.toolCallId, {
+        src: event.src,
+        ...(event.title ? { title: event.title } : {}),
+      });
+    case "draft_end":
+    case "present": {
+      const toolCallId = event.toolCallId;
+      if (!toolCallId || !drafts.has(toolCallId)) return drafts;
+      const next = new Map(drafts);
+      next.delete(toolCallId);
+      return next;
+    }
+  }
+}
+
+export interface PlacedVisualDraft {
+  toolCallId: string;
+  src: string;
+  title?: string;
+}
 
 export interface HtmlArtifactSlots {
   byRowKey: Map<string, ChatHtmlArtifactV1[]>;
   trailing: ChatHtmlArtifactV1[];
+  /** Drafts for calls in this response that have no presented visual yet. */
+  draftsByRowKey: Map<string, PlacedVisualDraft[]>;
 }
 
 function sameArtifacts(a: readonly ChatHtmlArtifactV1[], b: readonly ChatHtmlArtifactV1[]): boolean {
@@ -34,6 +72,7 @@ export function htmlArtifactSlots(
   rows: readonly AssistantPresentationRow[] | null,
   artifacts: readonly ChatHtmlArtifactV1[],
   placements: ReadonlyMap<string, string>,
+  drafts: VisualDrafts = EMPTY_DRAFTS,
 ): HtmlArtifactSlots {
   const rowKeyByCall = new Map<string, string>();
   for (const row of rows ?? []) {
@@ -42,6 +81,19 @@ export function htmlArtifactSlots(
   }
   const byRowKey = new Map<string, ChatHtmlArtifactV1[]>();
   const trailing: ChatHtmlArtifactV1[] = [];
+  const presentedCalls = new Set<string>();
+  for (const artifact of artifacts) {
+    const placedCall = placements.get(artifact.mediaId);
+    if (placedCall) presentedCalls.add(placedCall);
+  }
+  const draftsByRowKey = new Map<string, PlacedVisualDraft[]>();
+  for (const [toolCallId, draft] of drafts) {
+    const rowKey = rowKeyByCall.get(toolCallId);
+    if (!rowKey || presentedCalls.has(toolCallId)) continue;
+    const list = draftsByRowKey.get(rowKey) ?? [];
+    list.push({ toolCallId, ...draft });
+    draftsByRowKey.set(rowKey, list);
+  }
   for (const artifact of artifacts) {
     const call = placements.get(artifact.mediaId);
     const rowKey = call ? rowKeyByCall.get(call) : undefined;
@@ -53,7 +105,7 @@ export function htmlArtifactSlots(
     if (list) list.push(artifact);
     else byRowKey.set(rowKey, [artifact]);
   }
-  return { byRowKey, trailing };
+  return { byRowKey, trailing, draftsByRowKey };
 }
 
 export interface HtmlArtifactTranscriptEntry {
