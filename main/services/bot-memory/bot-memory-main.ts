@@ -7,11 +7,14 @@
 // `onChanged` itself.
 
 import { app, ipcMain, logger } from "../../platform.js";
-import { BOT_MEMORY_CHANNELS } from "../../../renderer/shared/bot-memory.js";
+import type { BOT_MEMORY_CHANNELS } from "../../../renderer/shared/bot-memory.js";
 import { createBotMemoryService, type BotMemoryRuntime, type BotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
 
 export type { BotMemoryRuntime, BotMemoryService };
+
+// A literal so the IPC inventory contract can see this push site.
+const BOT_MEMORY_CHANGED_CHANNEL: typeof BOT_MEMORY_CHANNELS.changed = "bots:memory:changed";
 
 let runtime: BotMemoryRuntime | undefined;
 
@@ -22,7 +25,7 @@ export function botMemoryRuntime(): BotMemoryRuntime {
       store: createBotMemoryStore({ profileDir: app.getPath("userData") }),
       onReport: (botId, error) => logger.warn("bots", `Bot ${botId} memory listener failed.`, error),
     });
-    runtime.onChanged((event) => ipcMain.broadcast(BOT_MEMORY_CHANNELS.changed, event));
+    runtime.onChanged((event) => ipcMain.broadcast(BOT_MEMORY_CHANGED_CHANNEL, event));
   }
   return runtime;
 }
