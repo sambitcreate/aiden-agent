@@ -367,6 +367,16 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Categorical chart series for inline visuals: the bot-avatar hues, deepened
+     for >=3:1 non-text contrast on light surfaces. Never status colors. */
+  --chart-1: #1e88c7;
+  --chart-2: #1f9d63;
+  --chart-3: #b98200;
+  --chart-4: #e0544e;
+  --chart-5: #8a5cf0;
+  --chart-6: #138f88;
+  --chart-7: #d64d86;
+  --chart-8: #6f9a17;
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
@@ -445,6 +455,15 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Dark surfaces take the bot-avatar hues as-is. */
+  --chart-1: var(--bot-avatar-sky);
+  --chart-2: var(--bot-avatar-mint);
+  --chart-3: var(--bot-avatar-sun);
+  --chart-4: var(--bot-avatar-coral);
+  --chart-5: var(--bot-avatar-lilac);
+  --chart-6: var(--bot-avatar-aqua);
+  --chart-7: var(--bot-avatar-rose);
+  --chart-8: var(--bot-avatar-lime);
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);

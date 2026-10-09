@@ -5,11 +5,14 @@ import {
   GENERATIVE_UI_GUEST_CSP,
   GENERATIVE_UI_HOST_LIBS,
   GENERATIVE_UI_IFRAME_SANDBOX,
+  GENERATIVE_UI_KIT_LIB,
   GENERATIVE_UI_PROTOCOL_SCHEME,
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
   isHtmlArtifactTitle,
 } from "../../renderer/shared/generative-ui.js";
+import { sanitizeGenerativeUiThemeVars } from "../../renderer/shared/generative-ui-theme.js";
+import { generativeUiKitCss } from "./generative-ui-kit.js";
 
 const FORBIDDEN_OPEN_TAG =
   /<\s*(iframe|object|embed|applet|frame|frameset|base)\b/iu;
@@ -26,6 +29,13 @@ export interface GenerativeUiThemeTokens {
   foreground: string;
   secondary: string;
   accent: string;
+  /** Allowlisted semantic tokens; sanitized again on every parse. */
+  vars?: Record<string, string>;
+}
+
+export interface GenerativeUiWrapOptions {
+  /** Chat-inline preview: transparent canvas so the transcript shows through. */
+  inline?: boolean;
 }
 
 const DEFAULT_THEME: GenerativeUiThemeTokens = {
@@ -52,7 +62,14 @@ export function parseGenerativeUiTheme(
     foreground: color(record.foreground, DEFAULT_THEME.foreground),
     secondary: color(record.secondary, DEFAULT_THEME.secondary),
     accent: color(record.accent, DEFAULT_THEME.accent),
+    vars: sanitizeGenerativeUiThemeVars(record.vars),
   };
+}
+
+function themeVariableLines(vars: Readonly<Record<string, string>> | undefined): string {
+  return Object.entries(vars ?? {})
+    .map(([name, value]) => `  ${name}: ${value};`)
+    .join("\n");
 }
 
 export function validateGenerativeUiHtml(html: string): Buffer {
@@ -150,6 +167,7 @@ export function wrapGenerativeUiHtml(
   html: string,
   title: string,
   theme: GenerativeUiThemeTokens = DEFAULT_THEME,
+  options: GenerativeUiWrapOptions = {},
 ): string {
   const bytes = validateGenerativeUiHtml(html);
   const fragment = extractFragment(bytes.toString("utf8"));
@@ -169,13 +187,15 @@ ${hostLibraryTags()}
   --artifact-text: ${tokens.foreground};
   --artifact-secondary: ${tokens.secondary};
   --artifact-accent: ${tokens.accent};
+${themeVariableLines(tokens.vars)}
 }
 html, body {
   margin: 0;
   min-height: 100%;
-  background: var(--artifact-canvas);
-  color: var(--artifact-text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: ${options.inline ? "transparent" : "var(--artifact-canvas)"};
+  color: var(--text-primary, var(--artifact-text));
+  font-family: var(--font-ui-family, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: var(--ui-font-size, 14px);
 }
 button, input, select, textarea {
   color: inherit;
@@ -209,7 +229,7 @@ export function generativeUiExportDocument(
   );
   for (const name of GENERATIVE_UI_HOST_LIBS) {
     const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
-    const source = libraries[name];
+    const source = name === GENERATIVE_UI_KIT_LIB ? generativeUiKitCss() : libraries[name];
     if (!source) {
       throw new Error(`Export is missing host library ${name}.`);
     }

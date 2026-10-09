@@ -19,7 +19,7 @@ export const GENERATIVE_UI_IFRAME_SANDBOX = "allow-scripts" as const;
  * load only from the `aiden-genui:` protocol registered by main.
  */
 export const GENERATIVE_UI_GUEST_CSP =
-  "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js; style-src 'unsafe-inline' aiden-genui://katex.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
+  "default-src 'none'; script-src 'unsafe-inline' aiden-genui://chart.js aiden-genui://plotly.js aiden-genui://katex.js; style-src 'unsafe-inline' aiden-genui://katex.css aiden-genui://aiden-ui.css; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src data:; webrtc 'block'";
 
 /** The sandboxed export guest has inlined libraries, so the custom protocol is not needed. */
 export const GENERATIVE_UI_EXPORT_CSP =
@@ -40,7 +40,11 @@ export const GENERATIVE_UI_PROTOCOL_SCHEME = "aiden-genui" as const;
 export const GENERATIVE_UI_PREVIEW_HOST = "preview" as const;
 
 
-export const GENERATIVE_UI_HOST_LIBS = ["chart.js", "plotly.js", "katex.js", "katex.css"] as const;
+/** Third-party libraries vendored as files under resources/generative-ui. */
+export const GENERATIVE_UI_VENDORED_LIBS = ["chart.js", "plotly.js", "katex.js", "katex.css"] as const;
+/** Aiden's generated component stylesheet, served from memory by main. */
+export const GENERATIVE_UI_KIT_LIB = "aiden-ui.css" as const;
+export const GENERATIVE_UI_HOST_LIBS = [...GENERATIVE_UI_VENDORED_LIBS, GENERATIVE_UI_KIT_LIB] as const;
 
 export const GENERATIVE_UI_UNSUPPORTED_DEVICE_COPY =
   "Can't view on this device. View in Aiden Agent." as const;

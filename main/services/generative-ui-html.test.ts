@@ -192,6 +192,40 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
   assert.match(chatPane, /visualizingVisible:/u);
 });
 
+test("wrapper emits sanitized vars, the kit stylesheet, and a transparent inline canvas", () => {
+  const theme = {
+    colorScheme: "dark" as const, canvas: "#111111", foreground: "#eeeeee", secondary: "#999999", accent: "#3388ff",
+    vars: { "--chart-1": "#83d8ff", "--text-primary": "red;}" },
+  };
+  const doc = wrapGenerativeUiHtml("<p>x</p>", "T", theme, { inline: true });
+  assert.match(doc, /--chart-1: #83d8ff;/u);
+  assert.doesNotMatch(doc, /red;\}/u);
+  assert.match(doc, /href="aiden-genui:\/\/aiden-ui\.css"/u);
+  assert.match(doc, /html, body \{[^}]*background: transparent/u);
+  // Standalone pages (export, Design Studio) keep a solid canvas.
+  const standalone = wrapGenerativeUiHtml("<p>x</p>", "T", theme);
+  assert.match(standalone, /html, body \{[^}]*background: var\(--artifact-canvas\)/u);
+});
+
+test("legacy four-color theme callers still render", () => {
+  const doc = wrapGenerativeUiHtml("<p>x</p>", "T", {
+    colorScheme: "light", canvas: "#ffffff", foreground: "#000000", secondary: "#666666", accent: "#0b7de5",
+  });
+  assert.match(doc, /--artifact-accent: #0b7de5;/u);
+  assert.match(doc, /<p>x<\/p>/u);
+});
+
+test("export inlines the generated Aiden kit without a caller-supplied copy", () => {
+  const exported = generativeUiExportDocument("<p class=\"aiden-card\">n</p>", TITLE, {
+    "chart.js": "window.Chart = function Chart() {};",
+    "plotly.js": "window.Plotly = {};",
+    "katex.js": "window.katex = {};",
+    "katex.css": "body { font-size: 16px; }",
+  });
+  assert.doesNotMatch(exported, /aiden-genui:\/\//u);
+  assert.match(exported, /\.aiden-card/u);
+});
+
 test("export refuses to silently drop missing host libraries", () => {
   assert.throws(
     () => generativeUiExportDocument("<p>n</p>", TITLE, { "chart.js": "window.Chart = 1;" }),

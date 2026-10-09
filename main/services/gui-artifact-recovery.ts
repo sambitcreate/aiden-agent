@@ -51,7 +51,9 @@ export async function wrapStoredHtmlArtifact(input: {
   const html = await generativeUiArtifactStore.htmlFor(input.chatId, input.mediaId);
   const artifact = await generativeUiArtifactStore.artifactFor(input.chatId, input.mediaId);
   if (html === undefined || !artifact) return undefined;
-  const srcdoc = wrapGenerativeUiHtml(html, artifact.title, parseGenerativeUiTheme(input.theme));
+  const srcdoc = wrapGenerativeUiHtml(html, artifact.title, parseGenerativeUiTheme(input.theme), {
+    inline: true,
+  });
   return {
     title: artifact.title,
     src: registerGenerativeUiPreviewDocument(srcdoc),
