@@ -88,6 +88,7 @@ export interface ChartProps {
 export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stacked = false, format, label }: ChartProps) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const themeVersion = useThemeVersion();
+  const [failed, setFailed] = React.useState(false);
   const rows = React.useMemo(() => (Array.isArray(data) ? data.slice(0, 500).map(asRecord) : []), [data]);
   const xKey = x || Object.keys(rows[0] ?? {}).find((key) => typeof rows[0]?.[key] === "string") || "";
   const seriesList = React.useMemo(() => seriesFor(rows, xKey, y, series), [rows, xKey, y, series]);
@@ -152,6 +153,10 @@ export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stac
       chart = created;
       // Lets the offscreen snapshot renderer know this chart has drawn.
       canvas.dataset.chartReady = "true";
+    }).catch(() => {
+      // Chart.js failed to load or draw: show the numbers as a table instead.
+      canvas.dataset.chartReady = "true";
+      if (!cancelled) setFailed(true);
     });
     return () => {
       cancelled = true;
@@ -162,10 +167,10 @@ export function AidenUiChart({ kind, data, x = "", y, series, height = 220, stac
 
   return (
     <figure className="m-0 min-w-0">
-      <div className="relative w-full" style={{ height: Math.min(Math.max(height, 120), 600) }}>
+      <div className={failed ? "hidden" : "relative w-full"} style={{ height: Math.min(Math.max(height, 120), 600) }}>
         <canvas ref={canvasRef} role="img" aria-label={label || "Chart"} />
       </div>
-      <table className="sr-only">
+      <table className={failed ? "w-full text-small text-secondary" : "sr-only"}>
         <caption>{label || "Chart data"}</caption>
         <thead>
           <tr>

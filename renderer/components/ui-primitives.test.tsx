@@ -14,7 +14,6 @@ import {
   Stat,
   Tabs,
 } from "./ui-primitives";
-import { Callout } from "./ui";
 
 afterEach(() => cleanup());
 
@@ -152,9 +151,4 @@ test("Stat and Kbd present their content accessibly", () => {
   assert.ok(screen.getByText("Total"));
   assert.ok(screen.getByText(/12%/u));
   assert.equal(screen.getByText("⌘K").tagName, "KBD");
-});
-
-test("Callout supports the soft status colors", () => {
-  render(<Callout color="green">All set</Callout>);
-  assert.ok(screen.getByText("All set").closest("[data-color='green']"));
 });

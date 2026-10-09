@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { evaluate, truthy } from "./evaluate.js";
+import { evaluate, MAX_CONCAT_CHARS, truthy } from "./evaluate.js";
 import type { AidenUiExprV1 } from "./types.js";
 
 interface Vector {
@@ -49,6 +49,13 @@ test("filter and sort cap their input at 10,000 items", () => {
     { vars: { rows }, budget: { steps: 1_000_000 } },
   );
   assert.equal(Array.isArray(filtered) && filtered.length, 10_000);
+});
+
+test("string concatenation is capped so repeated joins cannot balloon memory", () => {
+  let expr: AidenUiExprV1 = { op: "var", name: "s" };
+  for (let index = 0; index < 40; index += 1) expr = { op: "bin", o: "+", l: expr, r: { op: "var", name: "s" } };
+  const value = evaluate(expr, { vars: { s: "x".repeat(60_000) } });
+  assert.equal(typeof value === "string" && value.length, MAX_CONCAT_CHARS);
 });
 
 test("truthiness follows the documented rules", () => {

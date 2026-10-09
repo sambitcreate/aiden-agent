@@ -37,7 +37,10 @@ export function visualSnapshotAttachmentId(chatId: string, messageId: string, vi
 }
 
 export function snapshotAttachment(chatId: string, messageId: string, snapshot: CapturedSnapshot): Attachment {
-  const base = snapshot.title.replace(/[\\/:*?"<>|\u0000-\u001f]/gu, "").replace(/\s+/gu, " ").trim().slice(0, 100) || "Visual";
+  const safe = Array.from(snapshot.title)
+    .filter((character) => character.charCodeAt(0) >= 32 && !'\\/:*?"<>|'.includes(character))
+    .join("");
+  const base = safe.replace(/\s+/gu, " ").trim().slice(0, 100) || "Visual";
   return {
     id: visualSnapshotAttachmentId(chatId, messageId, snapshot.visualId),
     name: `${base}.${snapshot.mimeType === "image/png" ? "png" : "jpg"}`,

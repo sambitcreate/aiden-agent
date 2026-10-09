@@ -83,6 +83,7 @@ test("actions send, copy, and open only through their own handlers", async () =>
     <AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} onStateChange={(state) => states.push(state)} />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
   assert.deepEqual(actions, [{ kind: "send", text: "Start the team plan" }]);
 
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
@@ -126,7 +127,7 @@ test("a draft visual is inert: actions never fire and inputs are disabled", () =
   const actions: AidenUiAction[] = [];
   render(<AidenUiBlock visual={visualFrom("tabs")} draft onAction={(action) => actions.push(action)} />);
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
-  assert.deepEqual(actions, []);
+  assert.equal(actions.length, 0);
   assert.ok(screen.getByRole("figure").querySelector("[inert]"));
 });
 
@@ -158,4 +159,49 @@ test("the explainer renders math, code, inline keys, and its slider value", () =
   assert.equal(screen.getByText("⌘").tagName, "KBD");
   fireEvent.click(screen.getByRole("button", { name: "Show the code" }));
   assert.ok(screen.getByText(/def grow/u));
+});
+
+test("nested loops stay inside one render budget instead of hanging the chat", () => {
+  const rows = JSON.stringify(Array.from({ length: 500 }, (_, index) => index));
+  const compiled = compileAum(
+    `<Visual><Data name="a">${rows}</Data><Each in={$a}><Each in={$a}><Each in={$a}><Text>{$item}</Text></Each></Each></Each></Visual>`,
+  );
+  assert.ok(compiled.tree);
+  const started = Date.now();
+  const view = render(
+    <AidenUiBlock
+      visual={{ version: 1, kind: "ui", id: "ui-loops", title: "Loops", catalogVersion: 1, tree: compiled.tree, dataJson: compiled.dataJson, fallbackText: "" }}
+    />,
+  );
+  assert.ok(view.container.querySelectorAll("p").length <= 2000);
+  assert.ok(Date.now() - started < 5000);
+});
+
+test("a visual's follow-up waits for the user to confirm the exact text", () => {
+  const actions: AidenUiAction[] = [];
+  const view = render(<AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} />);
+  fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
+  assert.equal(actions.length, 0);
+  const chip = screen.getByRole("group", { name: "Follow-up suggested by Plan options" });
+  assert.ok(within(chip).getByText(/Start the team plan/u));
+  fireEvent.click(within(chip).getByRole("button", { name: "Send" }));
+  assert.deepEqual(actions, [{ kind: "send", text: "Start the team plan" }]);
+  assert.equal(screen.queryByRole("group", { name: "Follow-up suggested by Plan options" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss follow-up" }));
+  assert.equal(actions.length, 1);
+  view.rerender(<AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} followUpBusy />);
+  fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
+  assert.ok(screen.getByRole("button", { name: "Add to draft" }));
+});
+
+test("newer saved state re-seeds an untouched visual and merges into a touched one", () => {
+  const base = visualFrom("tabs");
+  const view = render(<AidenUiBlock visual={{ ...base, state: { plan: "team", seats: 5, annual: false, note: "" } }} />);
+  view.rerender(<AidenUiBlock visual={{ ...base, state: { plan: "solo", seats: 5, annual: false, note: "" } }} />);
+  assert.equal(screen.getByRole("tab", { name: "Solo" }).getAttribute("aria-selected"), "true");
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Team" }), { button: 0 });
+  fireEvent.click(screen.getByRole("tab", { name: "Team" }));
+  view.rerender(<AidenUiBlock visual={{ ...base, state: { plan: "solo", seats: 10, annual: false, note: "" } }} />);
+  assert.equal(screen.getByRole("tab", { name: "Team" }).getAttribute("aria-selected"), "true");
 });

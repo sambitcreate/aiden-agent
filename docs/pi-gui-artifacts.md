@@ -77,6 +77,12 @@ The model composes a visual from Aiden's own component catalog instead of writin
    - Local state is saved 800 ms after the last change (`chats:updateUiVisualState`).
    - Charts use a lazily loaded Chart.js with the live `--chart-1…8` tokens, and every chart has a screen-reader table of its numbers.
 7. **CLI.** `render_ui` compiles with the same compiler and prints the fallback text.
+8. **Safety.**
+   - **The compiler never throws.** Flattened unknown elements count toward the depth cap, and the parser stops nesting past 64 open elements.
+   - **Renders are budgeted.** One render draws at most 2,000 loop iterations and 4,000 components in total, so nested `<Each>` cannot multiply.
+   - **Follow-ups need confirmation.** A native button's `sendPrompt` waits in the same Aiden-drawn confirmation chip as HTML visuals, because its label is model-written and need not match the text it sends.
+   - **Saved state follows the newest copy.** A newer saved state re-seeds an untouched visual. In a visual the user has changed, it fills in only the keys that are missing.
+9. **Downgrade.** Older builds rebuild messages from the fields they know, so an older build that rewrites a chat drops `uiVisuals`. A reply that was only a visual then shows as an empty bubble there. HTML visuals only lose their placement.
 
 ## Extension points
 

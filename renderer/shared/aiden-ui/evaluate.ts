@@ -14,6 +14,8 @@ export interface AidenUiScope {
 }
 
 const DEFAULT_STEPS = 20_000;
+/** Longest string `+` may build; repeated concatenation cannot balloon memory. */
+export const MAX_CONCAT_CHARS = 65_536;
 const MAX_LIST_ITEMS = 10_000;
 const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -190,7 +192,7 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
         case "+":
           return typeof left === "number" && typeof right === "number"
             ? left + right
-            : displayString(left) + displayString(right);
+            : (displayString(left) + displayString(right)).slice(0, MAX_CONCAT_CHARS);
         case "==":
           return left === right;
         case "!=":

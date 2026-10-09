@@ -319,7 +319,8 @@ export function DataTable({
 }) {
   return (
     <div className={cn("min-w-0 overflow-x-auto", className)}>
-      <table className="w-full border-collapse text-small" aria-label={caption}>
+      <table className="w-full border-collapse text-small">
+        {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
           <tr>
             {columns.map((column) => (

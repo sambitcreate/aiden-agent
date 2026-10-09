@@ -213,6 +213,8 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
   const afterAt = html.indexOf("After the board.");
   assert.ok(activityAt >= 0 && visualAt > activityAt && afterAt > visualAt, "tool row → visual → later prose");
   fireEvent.click(view.getByRole("button", { name: "More" }));
+  assert.deepEqual(prompts, [], "a follow-up waits for confirmation");
+  fireEvent.click(view.getByRole("button", { name: "Send" }));
   assert.deepEqual(prompts, ["Tell me more"]);
 });
 

@@ -7,6 +7,8 @@ export interface AidenUiRenderContext {
   /** Evaluation scope: data bindings, state, and any `<Each>` locals. */
   scope: AidenUiScope;
   draft: boolean;
+  /** Shared by one whole render, so nested loops cannot multiply past it. */
+  budget: { iterations: number; nodes: number };
   state: Readonly<Record<string, unknown>>;
   setState: (key: string, value: unknown) => void;
   runAction: (action: AidenUiActionV1, scope: AidenUiScope) => void;

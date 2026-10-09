@@ -27,7 +27,8 @@ import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
 import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
-import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { isWireSafeKey } from "../shared/aiden-ui/visual";
 import {
   reuseUnchangedUiLists,
   uiVisualsByMessage,
@@ -465,10 +466,20 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
 }
 
 const UI_STATE_SAVE_DELAY_MS = 800;
+
+function stateKeysAreWireSafe(value: unknown, depth = 0): boolean {
+  if (depth > 16) return false;
+  if (Array.isArray(value)) return value.every((item) => stateKeysAreWireSafe(item, depth + 1));
+  if (!value || typeof value !== "object") return true;
+  return Object.entries(value).every(([key, inner]) => isWireSafeKey(key) && stateKeysAreWireSafe(inner, depth + 1));
+}
 const pendingUiStateSaves = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Remember a visual's local state shortly after the user stops changing it. */
 function scheduleUiVisualStateSave(chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) {
+  // State the store would refuse (too large, or holding a reserved key) stays local.
+  const json = JSON.stringify(state);
+  if (new TextEncoder().encode(json).length > AIDEN_UI_LIMITS.stateBytes || !stateKeysAreWireSafe(state)) return;
   const key = `${chatId}\u0000${messageId}\u0000${visualId}`;
   const pending = pendingUiStateSaves.get(key);
   if (pending) clearTimeout(pending);
@@ -640,12 +651,13 @@ export function MessageList({
         key={`ui:${visual.id}`}
         visual={visual}
         draft={draft}
+        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
       />
     ),
-    [stableVisualPrompt],
+    [stableVisualPrompt, visualFollowUpBusy],
   );
   const renderSettledUiVisual = React.useCallback(
     (visual: ChatUiVisualV1, message: ChatMessage) => (
@@ -653,13 +665,14 @@ export function MessageList({
         key={`ui:${visual.id}`}
         visual={visual}
         attachments={message.attachments}
+        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
         onStateChange={(state) => scheduleUiVisualStateSave(chatId, message.id, visual.id, state)}
       />
     ),
-    [chatId, stableVisualPrompt],
+    [chatId, stableVisualPrompt, visualFollowUpBusy],
   );
 
   React.useEffect(() => {
