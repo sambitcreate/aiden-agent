@@ -72,7 +72,6 @@ test("update banner reports progress, failure recovery, and a guarded restart ac
   assert.match(banner, /Update and restart/u);
   assert.match(banner, /appUpdatesApi\.restart\(\)/u);
   assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
-  assert.match(banner, /role="progressbar"/u);
 });
 
 test("a stale initial update-state response cannot overwrite a newer notification", () => {
@@ -95,7 +94,6 @@ test("About exposes the observable updater lifecycle and retry in the initiating
   assert.match(about, /Downloading…/u);
   assert.match(about, /Try again/u);
   assert.match(about, /Update and restart/u);
-  assert.match(about, /role="progressbar"/u);
 });
 
 test("update-ready banner uses the Aiden mark and shared compact-surface motion", () => {

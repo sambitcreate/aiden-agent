@@ -289,3 +289,55 @@ test("chat metadata projection includes visible transcript and artifact labels, 
   assert.equal(documents.some(({ text }) => text.includes("launch.txt")), true);
   assert.equal(documents.some(({ text }) => text.includes("Launch report")), true);
 });
+
+test("memory indexes a native visual by its title and plain-text rendering", () => {
+  const documents = memoryMetadataForChat(
+    chat({
+      messages: [
+        {
+          id: "m-1",
+          role: "assistant",
+          content: "Revenue rose.",
+          createdAt: 1,
+          uiVisuals: [
+            {
+              version: 1,
+              kind: "ui",
+              id: "ui-1",
+              title: "Q3 revenue",
+              catalogVersion: 1,
+              tree: { t: "Visual", k: "0" },
+              fallbackText: "Total: $6,930.00",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const visual = documents.find((document) => document.sourceId === "ui-1");
+  assert.ok(visual);
+  assert.match(visual.text, /Q3 revenue/u);
+  assert.match(visual.text, /Total: \$6,930\.00/u);
+});
+
+test("memory does not index visual snapshots as attachments", () => {
+  const documents = memoryMetadataForChat(
+    chat({
+      messages: [
+        {
+          id: "m-2",
+          role: "assistant",
+          content: "Here.",
+          createdAt: 1,
+          attachments: [
+            { id: `visual-snapshot_${"a".repeat(64)}`, name: "Board.png", mimeType: "image/png", kind: "image", size: 70 },
+            { id: "photo-1", name: "Photo.png", mimeType: "image/png", kind: "image", size: 70 },
+          ],
+        },
+      ],
+    }),
+  );
+  const sources = documents.map((document) => document.sourceId);
+  assert.ok(sources.includes("photo-1"));
+  assert.equal(sources.some((source) => source?.startsWith("visual-snapshot_")), false);
+});

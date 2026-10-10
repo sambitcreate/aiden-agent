@@ -1,5 +1,5 @@
 import type { ActivityMark } from "../shared/activity-marks";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 
 export interface ToolActivity {
   state: "running" | "finished" | "failed" | "blocked";
@@ -85,7 +85,7 @@ export function resolveAgentActivity({
   }
 
   if (toolActivity?.state === "running") {
-    if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME) {
+    if (toolActivity.toolName === RENDER_ARTIFACT_TOOL_NAME || toolActivity.toolName === RENDER_UI_TOOL_NAME) {
       return { phase: "visualizing", label: "Visualizing", mark: "scan-grid" };
     }
     return isSearchTool(toolActivity.toolName)

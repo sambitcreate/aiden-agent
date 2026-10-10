@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { generativeUiExportDocument, requireGenerativeUiTitle } from "../../../../main/services/generative-ui-html.js";
 import { MAX_HTML_ARTIFACTS_PER_CHAT, MAX_HTML_ARTIFACT_BYTES_PER_CHAT } from "../../../../renderer/shared/generative-ui.js";
+import { compileAum } from "../../../../renderer/shared/aiden-ui/compile.js";
 import { JsonStore } from "../state.ts";
 
 export function createArtifactsExtension(agentDir: string): InlineExtension {
@@ -35,6 +36,19 @@ export function createArtifactsExtension(agentDir: string): InlineExtension {
         } catch (error) { rmSync(path, { force: true }); throw error; }
         count++;
         return { content: [{ type: "text", text: `Created ${title}: ${path}` }], details: { path, title } };
+      },
+    });
+    // The terminal cannot draw Aiden's native components, so a render_ui visual
+    // compiles with the desktop's compiler and prints its plain-text rendering.
+    pi.registerTool({ name: "render_ui", label: "Visual", description: "Draw a visual with Aiden's native component catalog (Aiden UI Markup). In the terminal it is shown as its plain-text rendering.",
+      parameters: Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), layout: Type.Optional(Type.Union([Type.Literal("column"), Type.Literal("wide")])), markup: Type.String({ minLength: 1, maxLength: 400_000 }) }),
+      async execute(_id, input) {
+        const title = requireGenerativeUiTitle(input.title);
+        const compiled = compileAum(input.markup);
+        if (!compiled.tree) throw new Error("render_ui produced no visual.");
+        const repairs = compiled.diagnostics.slice(0, 12).map((diagnostic) => `- ${diagnostic.code}: ${diagnostic.message}`);
+        const text = [`## ${title}`, compiled.fallbackText, ...(repairs.length ? ["", "Repairs:", ...repairs] : [])].join("\n");
+        return { content: [{ type: "text", text }], details: { title } };
       },
     });
   } };

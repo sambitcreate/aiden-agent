@@ -3,6 +3,7 @@ import * as React from "react";
 import { Download, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button, Text, toast } from "../ui";
+import { Progress } from "../ui-primitives";
 import { harnessApi } from "../../lib/ipc";
 import {
   formatHarnessBytes,
@@ -248,19 +249,11 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
               summary above, as the app's other progress bars do, instead of a
               full bar that reads as finished. */}
           {progress !== null ? (
-            <div
-              className="h-1 w-full max-w-64 overflow-hidden rounded-full bg-control"
-              role="progressbar"
-              aria-label={`${label} installation progress`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progress}
-            >
-              <div
-                className="h-full rounded-full bg-accent transition-[width] duration-150 motion-reduce:transition-none"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
+            <Progress
+              className="max-w-64"
+              label={`${label} installation progress`}
+              value={progress}
+            />
           ) : null}
           <Button
             ref={cancelRef}

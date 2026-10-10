@@ -60,6 +60,7 @@ test("every Aiden extension registers and contributes its tools in a real sessio
 		"recall_memory",
 		"remember_fact",
 		"render_artifact",
+		"render_ui",
 		"schedule_task",
 		"subagent",
 		"todo",

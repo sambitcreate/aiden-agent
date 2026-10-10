@@ -25,7 +25,18 @@ import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
+import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
 import { HtmlArtifactDraftFrame, HtmlArtifactFrame, type GuestPromptHandler } from "./html-artifact-frame";
+import { AidenUiBlock } from "./aiden-ui/aiden-ui-block";
+import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { isWireSafeKey } from "../shared/aiden-ui/visual";
+import {
+  reuseUnchangedUiLists,
+  uiVisualsByMessage,
+  uiVisualSlots,
+  type UiDrafts,
+} from "../lib/ui-visual-transcript";
+import { chatsApi } from "../lib/ipc";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -62,6 +73,10 @@ interface MessageListProps {
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
   /** mediaIds of live visuals the model asked to span the chat pane. */
   streamingWideVisuals?: ReadonlySet<string>;
+  /** Native visuals presented so far in the streaming response. */
+  streamingUiVisuals?: readonly ChatUiVisualV1[];
+  /** Live render_ui drafts by toolCallId for the streaming response. */
+  streamingUiDrafts?: UiDrafts;
   /** Live render_artifact drafts by toolCallId for the streaming response. */
   streamingVisualDrafts?: VisualDrafts;
   /** A visual asked to send a follow-up; the chat applies the admission policy. */
@@ -121,7 +136,17 @@ interface AssistantResponseProps {
   renderVisual?: RenderVisual;
   /** Live drafts by toolCallId; only the streaming response passes these. */
   visualDrafts?: VisualDrafts;
+  /** Native (render_ui) visuals this response owns. */
+  uiVisuals?: readonly ChatUiVisualV1[];
+  /** Live native drafts by toolCallId; only the streaming response passes these. */
+  uiDrafts?: UiDrafts;
+  renderUiVisual?: RenderUiVisual;
 }
+
+type RenderUiVisual = (visual: ChatUiVisualV1, draft: boolean) => React.ReactNode;
+
+const EMPTY_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const EMPTY_UI_DRAFTS: UiDrafts = new Map();
 
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
 const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
@@ -151,6 +176,9 @@ function AssistantResponse({
   wideVisuals = EMPTY_WIDE_VISUALS,
   renderVisual,
   visualDrafts,
+  uiVisuals = EMPTY_UI_VISUALS,
+  uiDrafts = EMPTY_UI_DRAFTS,
+  renderUiVisual,
 }: AssistantResponseProps) {
   const rows = assistantPresentationRows(
     content,
@@ -158,6 +186,9 @@ function AssistantResponse({
     reasoning ?? "",
   );
   const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements, visualDrafts);
+  const uiSlots = uiVisualSlots(timeline ? rows : null, uiVisuals, uiDrafts);
+  const uiNodes = (list: readonly ChatUiVisualV1[] | undefined, draft: boolean) =>
+    renderUiVisual && list?.length ? list.map((visual) => renderUiVisual(visual, draft)) : null;
   const visualNodes = (artifacts: readonly ChatHtmlArtifactV1[] | undefined) =>
     renderVisual && artifacts?.length
       ? artifacts.map((artifact) =>
@@ -217,6 +248,7 @@ function AssistantResponse({
         ) : null}
         {!content ? proselessActions(footer, fork) : null}
         {visualNodes(slots.trailing)}
+        {uiNodes(uiSlots.trailing, false)}
       </>
     );
   }
@@ -256,6 +288,8 @@ function AssistantResponse({
               />
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
+              {uiNodes(uiSlots.byRowKey.get(row.key), false)}
+              {uiNodes(uiSlots.draftsByRowKey.get(row.key), true)}
               {subagentActivityKey === row.key ? subagentChips : null}
             </React.Fragment>
           );
@@ -283,6 +317,7 @@ function AssistantResponse({
       ) : null}
       {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
       {visualNodes(slots.trailing)}
+      {uiNodes(uiSlots.trailing, false)}
     </>
   );
 }
@@ -319,6 +354,10 @@ interface SettledMessageRowProps {
   visuals?: readonly ChatHtmlArtifactV1[];
   /** Stable across renders so settled rows stay memoized. */
   renderVisual?: RenderVisual;
+  /** Native visuals this row currently owns (live copies win during handoff). */
+  uiVisuals?: readonly ChatUiVisualV1[];
+  /** Stable; receives the owning message so local state can be remembered. */
+  renderSettledUiVisual?: (visual: ChatUiVisualV1, message: ChatMessage) => React.ReactNode;
 }
 
 /**
@@ -336,6 +375,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   onForkWithSummary,
   visuals,
   renderVisual,
+  uiVisuals,
+  renderSettledUiVisual,
 }: SettledMessageRowProps) {
   const visualPlacements = React.useMemo(
     () => new Map((message.htmlArtifactPlacements ?? []).map((p) => [p.mediaId, p.toolCallId])),
@@ -347,6 +388,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
         (message.htmlArtifactPlacements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : [])),
       ),
     [message.htmlArtifactPlacements],
+  );
+  const renderUiVisual = React.useCallback<RenderUiVisual>(
+    (visual) => renderSettledUiVisual?.(visual, message),
+    [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
     if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
@@ -367,7 +412,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
-            attachments={message.attachments}
+            // Snapshots exist for phones; this desktop draws the visual itself.
+            attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
             richLinks={richLinks}
             footer={settledTurnFooter(message)}
@@ -381,6 +427,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             visualPlacements={visualPlacements}
             wideVisuals={wideVisuals}
             renderVisual={renderVisual}
+            uiVisuals={uiVisuals}
+            renderUiVisual={renderSettledUiVisual ? renderUiVisual : undefined}
           />
           {message.providerFailure ? (
             <ProviderFailureCallout failure={message.providerFailure} />
@@ -419,6 +467,33 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
   );
 }
 
+const UI_STATE_SAVE_DELAY_MS = 800;
+
+function stateKeysAreWireSafe(value: unknown, depth = 0): boolean {
+  if (depth > 16) return false;
+  if (Array.isArray(value)) return value.every((item) => stateKeysAreWireSafe(item, depth + 1));
+  if (!value || typeof value !== "object") return true;
+  return Object.entries(value).every(([key, inner]) => isWireSafeKey(key) && stateKeysAreWireSafe(inner, depth + 1));
+}
+const pendingUiStateSaves = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Remember a visual's local state shortly after the user stops changing it. */
+function scheduleUiVisualStateSave(chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) {
+  // State the store would refuse (too large, or holding a reserved key) stays local.
+  const json = JSON.stringify(state);
+  if (new TextEncoder().encode(json).length > AIDEN_UI_LIMITS.stateBytes || !stateKeysAreWireSafe(state)) return;
+  const key = `${chatId}\u0000${messageId}\u0000${visualId}`;
+  const pending = pendingUiStateSaves.get(key);
+  if (pending) clearTimeout(pending);
+  pendingUiStateSaves.set(
+    key,
+    setTimeout(() => {
+      pendingUiStateSaves.delete(key);
+      void chatsApi.updateUiVisualState(chatId, messageId, visualId, state).catch(() => undefined);
+    }, UI_STATE_SAVE_DELAY_MS),
+  );
+}
+
 export function richLinkHandoffDuplicateMessageId(
   messages: readonly ChatMessage[],
   streamingText: string | null,
@@ -439,6 +514,8 @@ export function MessageList({
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
   streamingWideVisuals = EMPTY_WIDE_VISUALS,
   streamingVisualDrafts,
+  streamingUiVisuals = EMPTY_UI_VISUALS,
+  streamingUiDrafts = EMPTY_UI_DRAFTS,
   onVisualPrompt,
   visualFollowUpBusy = false,
   streamComplete,
@@ -507,7 +584,9 @@ export function MessageList({
       streamingReasoning ||
       streamingText ||
       liveAttachments.length > 0 ||
-      liveHtmlArtifacts.length > 0,
+      liveHtmlArtifacts.length > 0 ||
+      streamingUiVisuals.length > 0 ||
+      streamingUiDrafts.size > 0,
   );
   const richLinkHandoffDuplicateId = richLinkHandoffDuplicateMessageId(
     messages,
@@ -536,6 +615,15 @@ export function MessageList({
   React.useEffect(() => {
     previousArtifactsByAnchor.current = htmlArtifactsByAnchor;
   }, [htmlArtifactsByAnchor]);
+  const liveUiIds = React.useMemo(() => new Set(streamingUiVisuals.map((visual) => visual.id)), [streamingUiVisuals]);
+  const previousUiByMessage = React.useRef<Map<string, ChatUiVisualV1[]> | undefined>(undefined);
+  const uiByMessage = React.useMemo(
+    () => reuseUnchangedUiLists(previousUiByMessage.current, uiVisualsByMessage(messages, liveUiIds, streamingRowVisible)),
+    [liveUiIds, messages, streamingRowVisible],
+  );
+  React.useEffect(() => {
+    previousUiByMessage.current = uiByMessage;
+  }, [uiByMessage]);
   const onVisualPromptRef = React.useRef(onVisualPrompt);
   React.useLayoutEffect(() => {
     onVisualPromptRef.current = onVisualPrompt;
@@ -554,6 +642,36 @@ export function MessageList({
         followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
         layout={layout}
+      />
+    ),
+    [chatId, stableVisualPrompt, visualFollowUpBusy],
+  );
+
+  const renderLiveUiVisual = React.useCallback<RenderUiVisual>(
+    (visual, draft) => (
+      <AidenUiBlock
+        key={`ui:${visual.id}`}
+        visual={visual}
+        draft={draft}
+        followUpBusy={visualFollowUpBusy}
+        onAction={(action) => {
+          if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
+        }}
+      />
+    ),
+    [stableVisualPrompt, visualFollowUpBusy],
+  );
+  const renderSettledUiVisual = React.useCallback(
+    (visual: ChatUiVisualV1, message: ChatMessage) => (
+      <AidenUiBlock
+        key={`ui:${visual.id}`}
+        visual={visual}
+        attachments={message.attachments}
+        followUpBusy={visualFollowUpBusy}
+        onAction={(action) => {
+          if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
+        }}
+        onStateChange={(state) => scheduleUiVisualStateSave(chatId, message.id, visual.id, state)}
       />
     ),
     [chatId, stableVisualPrompt, visualFollowUpBusy],
@@ -636,6 +754,8 @@ export function MessageList({
         onForkWithSummary={summaryRows?.has(message.id) ? stableOnForkWithSummary : undefined}
         visuals={htmlArtifactsByAnchor.get(`message:${message.id}`)}
         renderVisual={renderVisual}
+        uiVisuals={uiByMessage.get(message.id)}
+        renderSettledUiVisual={renderSettledUiVisual}
       />,
     );
     if (forkSummary?.afterMessageId === message.id) {
@@ -664,6 +784,9 @@ export function MessageList({
           wideVisuals={streamingWideVisuals}
           visualDrafts={streamingVisualDrafts}
           renderVisual={renderVisual}
+          uiVisuals={streamingUiVisuals}
+          uiDrafts={streamingUiDrafts}
+          renderUiVisual={renderLiveUiVisual}
         />
       </div>,
     );

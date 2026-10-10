@@ -729,6 +729,12 @@
     <string name="chat_reasoning_expand">Expand reasoning</string>
     <string name="chat_timeline_file">File %1$s · %2$s</string>
 
+    <!-- Chat: inline visuals (contract revision 27) -->
+    <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
+    <string name="chat_visual_snapshot_open">Open snapshot</string>
+    <string name="chat_visual_show_more">Show more</string>
+    <string name="chat_visual_show_less">Show less</string>
+
     <!-- Chat: message actions -->
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_message_select_text_action">Select text</string>

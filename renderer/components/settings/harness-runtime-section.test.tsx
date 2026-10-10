@@ -25,7 +25,8 @@ test("before installing, the size, source and consent are stated next to Install
 
 test("installing shows determinate progress and a cancel action, but no install button", () => {
   const html = render({ status: "installing", phase: "downloading", receivedBytes: 55_000_000, totalBytes: 110_000_000 });
-  assert.match(html, /role="progressbar"[^>]*aria-valuenow="50"/u);
+  const bar = html.match(/<[^>]*role="progressbar"[^>]*>/u)?.[0] ?? "";
+  assert.match(bar, /aria-valuenow="50"/u);
   assert.match(html, />Cancel installation</u);
   assert.doesNotMatch(html, />Install Google Antigravity</u);
 });

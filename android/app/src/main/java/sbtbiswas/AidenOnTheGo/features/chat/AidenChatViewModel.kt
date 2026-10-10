@@ -64,7 +64,9 @@ class AidenChatViewModel(
     val initialChat: AidenChat? = null,
     private val liveNotificationManager: AidenRemoteLiveNotificationManager? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable
+    private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
+    private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
+    private val clock: () -> Instant = Instant::now
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -199,6 +201,10 @@ class AidenChatViewModel(
     private var titleRefreshJob: Job? = null
     private var terminalReconciliationJob: Job? = null
     private var progressObservationJob: Job? = null
+    /** Re-reads the transcript while the newest reply's visual snapshots are still being captured. */
+    private var visualSnapshotRefreshJob: Job? = null
+    private var visualSnapshotRefreshMessageId: String? = null
+    private var visualSnapshotRefreshAttempt = 0
     private var progressForeground = false
     private var progressObservationToken = 0L
     private var taskEpoch: String? = null
@@ -1001,6 +1007,7 @@ class AidenChatViewModel(
         streamJob?.cancel()
         titleRefreshJob?.cancel()
         terminalReconciliationJob?.cancel()
+        visualSnapshotRefreshJob?.cancel()
         forkSummaryPollJob?.cancel()
         forkSourceJob?.cancel()
         // The last keystrokes may still be inside the debounce window.
@@ -1255,6 +1262,7 @@ class AidenChatViewModel(
         transcriptGeneration++
         titleRefreshJob?.cancel()
         titleRefreshJob = null
+        cancelVisualSnapshotRefresh()
         _isStarting.value = true
         _presentedError.value = null
         _draft.value = ""
@@ -1496,6 +1504,7 @@ class AidenChatViewModel(
         if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
         terminalReconciliationJob?.cancel()
         terminalReconciliationJob = null
+        cancelVisualSnapshotRefresh()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             var stream = originalStream
@@ -2850,7 +2859,63 @@ class AidenChatViewModel(
             schedulePendingTitleRefresh()
         }
         reportChatViewed(presented)
+        scheduleVisualSnapshotRefresh()
         return true
+    }
+
+    private fun canRefreshForVisualSnapshots(): Boolean =
+        activeStreamId == null && !_isStarting.value && foreignRunId == null
+
+    /**
+     * After a transcript is published, re-read it a few times while the
+     * newest reply still has visuals without a usable snapshot: the Mac
+     * stores snapshots after the reply settles and sends no signal when they
+     * land. Tries are counted per reply, so later reads never extend them.
+     */
+    private fun scheduleVisualSnapshotRefresh() {
+        if (visualSnapshotRefreshJob?.isActive == true || !canRefreshForVisualSnapshots()) return
+        val watched = visualSnapshotRefresh.watchedMessage(_chat.value?.messages.orEmpty()) ?: return
+        if (watched.id != visualSnapshotRefreshMessageId) {
+            visualSnapshotRefreshMessageId = watched.id
+            visualSnapshotRefreshAttempt = 0
+        }
+        if (visualSnapshotRefresh.nextDelayMillis(watched, visualSnapshotRefreshAttempt, clock()) == null) return
+        visualSnapshotRefreshJob = viewModelScope.launch {
+            while (true) {
+                val message = visualSnapshotRefresh.watchedMessage(_chat.value?.messages.orEmpty())
+                if (message?.id != visualSnapshotRefreshMessageId) return@launch
+                val delayMs = visualSnapshotRefresh.nextDelayMillis(message, visualSnapshotRefreshAttempt, clock())
+                    ?: return@launch
+                delay(delayMs)
+                if (!canRefreshForVisualSnapshots()) return@launch
+                visualSnapshotRefreshAttempt++
+                refreshTranscriptQuietly()
+            }
+        }
+    }
+
+    /**
+     * The ordinary newest-transcript read, admitted through the same revision
+     * and generation fences, without surfacing a failure: a missed background
+     * re-read only leaves the fallback on screen.
+     */
+    private suspend fun refreshTranscriptQuietly() {
+        if (_isStarting.value) return
+        val generation = transcriptGeneration
+        val client = activeClient() ?: return
+        try {
+            val writeToken = chatCache.reserveChatWrite()
+            val latest = fetchLatestTranscript(client)
+            if (generation != transcriptGeneration || _isStarting.value || activeClient() !== client) return
+            acceptLatestTranscript(latest, writeToken)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
+    private fun cancelVisualSnapshotRefresh() {
+        visualSnapshotRefreshJob?.cancel()
+        visualSnapshotRefreshJob = null
     }
 
     /** Last chat revision reported read, so repeated reconciles send one report. */
@@ -2923,6 +2988,9 @@ class AidenChatViewModel(
             if (instanceId.isNotEmpty()) {
                 chatCache.removeActiveStream(instanceId, chatId, ifStreamId = expectedStreamId)
             }
+            // The terminal transcript was published while the stream still owned
+            // the chat, so the snapshot refresh could not arm then; arm it now.
+            scheduleVisualSnapshotRefresh()
         }
     }
 

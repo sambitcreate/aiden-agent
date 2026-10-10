@@ -221,12 +221,15 @@ export function Callout({
   color,
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { color?: string }) {
+}: React.HTMLAttributes<HTMLDivElement> & { color?: "gray" | "green" | "red" | "blue" | "warning" | (string & {}) }) {
   return (
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
         color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
+        color === "green" && "bg-status-green-surface text-status-green",
+        color === "blue" && "bg-status-accent-surface text-status-accent",
+        color === "warning" && "bg-status-warning-surface text-status-warning",
         className,
       )}
       {...props}

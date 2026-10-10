@@ -26,6 +26,9 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let reasoning: String?
     let attachments: [AidenMessageAttachment]?
     let htmlArtifacts: [AidenHtmlArtifact]?
+    /// Additive in contract revision 27: the inline visuals this reply drew, in
+    /// reply order. Entries this client cannot parse are dropped individually.
+    let visuals: [AidenChatVisual]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
     let createdAt: Date
@@ -37,6 +40,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         reasoning: String? = nil,
         attachments: [AidenMessageAttachment]? = nil,
         htmlArtifacts: [AidenHtmlArtifact]? = nil,
+        visuals: [AidenChatVisual]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
         createdAt: Date
@@ -47,6 +51,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.reasoning = reasoning
         self.attachments = attachments
         self.htmlArtifacts = htmlArtifacts
+        self.visuals = visuals
         self.outcome = outcome
         self.timeline = timeline
         self.createdAt = createdAt
@@ -68,6 +73,10 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .htmlArtifacts
         )
+        // Additive and lenient: a malformed list or entry never rejects the
+        // message, so an older or newer Mac's visuals cannot hide the reply.
+        visuals = (try? values.decodeIfPresent([AidenLossyChatVisual].self, forKey: .visuals))
+            .map(AidenChatVisual.deduplicated)
         outcome = try aidenDecodeOptionalNonNull(
             AidenMessageOutcome.self,
             from: values,
@@ -90,6 +99,8 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             && (attachments?.allSatisfy(\.isWireSafe) ?? true)
             && (htmlArtifacts?.count ?? 0) <= 40
             && (htmlArtifacts?.allSatisfy(\.isWireSafe) ?? true)
+            && (visuals?.count ?? 0) <= AidenChatVisual.maximumPerMessage
+            && (visuals?.allSatisfy(\.isWireSafe) ?? true)
             && (outcome?.isWireSafe ?? true)
             // Generation timelines originate in JavaScript, where String.length
             // measures UTF-16 code units. Keep that wire offset convention while
@@ -98,7 +109,185 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, reasoning, attachments, htmlArtifacts, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, visuals, outcome, timeline, createdAt
+    }
+}
+
+/// One inline visual (contract revision 27): a native `render_ui` component or
+/// a sandboxed `render_artifact` page drawn on the Mac. Phones never receive
+/// its markup; they show the Mac's snapshot image, its text description, or
+/// its title, at the timeline tool step that drew it.
+struct AidenChatVisual: Codable, Identifiable, Equatable, Sendable {
+    static let maximumPerMessage = 40
+    static let maximumTitleLength = 120
+    static let maximumFallbackTextLength = 4_000
+    static let snapshotAttachmentPrefix = "visual-snapshot_"
+
+    enum Kind: String, Codable, Sendable {
+        case ui
+        case html
+        /// A kind a newer Mac introduced; it still shows its snapshot or text.
+        case other
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Kind(rawValue: raw) ?? .other
+        }
+    }
+
+    enum Layout: String, Codable, Sendable {
+        case wide
+    }
+
+    let id: String
+    let kind: Kind
+    let title: String
+    let toolCallId: String?
+    let fallbackText: String?
+    let snapshotAttachmentId: String?
+    let layout: Layout?
+
+    init(
+        id: String,
+        kind: Kind,
+        title: String,
+        toolCallId: String? = nil,
+        fallbackText: String? = nil,
+        snapshotAttachmentId: String? = nil,
+        layout: Layout? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.toolCallId = toolCallId
+        self.fallbackText = fallbackText
+        self.snapshotAttachmentId = snapshotAttachmentId
+        self.layout = layout
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        title = try values.decode(String.self, forKey: .title)
+        toolCallId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .toolCallId)
+        fallbackText = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .fallbackText)
+        snapshotAttachmentId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .snapshotAttachmentId)
+        // Layout is a presentation hint; an unknown value is ignored rather
+        // than costing the visual.
+        layout = try? values.decodeIfPresent(Layout.self, forKey: .layout)
+        guard isWireSafe else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "Chat visual contains an unsafe identity, title, tool call, or description."
+            )
+        }
+    }
+
+    var isWireSafe: Bool {
+        Self.isSafeIdentifier(id)
+            && !title.isEmpty
+            && title.unicodeScalars.count <= Self.maximumTitleLength
+            && (toolCallId.map(Self.isToolCallIdentifier) ?? true)
+            && (fallbackText.map { !$0.isEmpty && $0.unicodeScalars.count <= Self.maximumFallbackTextLength } ?? true)
+            && (snapshotAttachmentId.map(Self.isSafeIdentifier) ?? true)
+    }
+
+    /// Keeps the first entry per id, in reply order, so row identities stay unique.
+    static func deduplicated(_ entries: [AidenLossyChatVisual]) -> [AidenChatVisual] {
+        var seen = Set<String>()
+        return entries.compactMap(\.value).filter { seen.insert($0.id).inserted }
+    }
+
+    private static func isSafeIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.unicodeScalars.count <= 256 && value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 46, 58, 95: return true
+            default: return false
+            }
+        }
+    }
+
+    /// `call-<n>` with a positive decimal `n`, as the Mac's timeline names tool calls.
+    private static func isToolCallIdentifier(_ value: String) -> Bool {
+        guard value.hasPrefix("call-") else { return false }
+        let digits = value.dropFirst(5)
+        return !digits.isEmpty && digits.count <= 16 && digits.first != "0"
+            && digits.unicodeScalars.allSatisfy { (48...57).contains($0.value) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, toolCallId, fallbackText, snapshotAttachmentId, layout
+    }
+}
+
+/// Decodes one `visuals` entry without letting a malformed entry fail the list.
+struct AidenLossyChatVisual: Decodable {
+    let value: AidenChatVisual?
+
+    init(from decoder: Decoder) throws {
+        value = try? AidenChatVisual(from: decoder)
+    }
+}
+
+/// Presentation decisions for inline visuals, kept pure so they can be tested
+/// without rendering the transcript.
+enum AidenChatVisualPresentation {
+    /// Whether an attachment is a visual's snapshot rather than a user-facing
+    /// image: either a visual names it, or it carries the reserved id prefix.
+    static func isSnapshotAttachment(_ attachment: AidenMessageAttachment, in message: AidenChatMessage) -> Bool {
+        attachment.id.hasPrefix(AidenChatVisual.snapshotAttachmentPrefix)
+            || (message.visuals?.contains { $0.snapshotAttachmentId == attachment.id } ?? false)
+    }
+
+    /// The attachments the ordinary attachment strip shows: everything except
+    /// snapshots, which appear once, inline at their visual.
+    static func stripAttachments(for message: AidenChatMessage) -> [AidenMessageAttachment] {
+        (message.attachments ?? []).filter { !isSnapshotAttachment($0, in: message) }
+    }
+
+    /// The image attachment holding a visual's snapshot, when the message
+    /// carries one that the image views can display.
+    static func snapshotAttachment(
+        for visual: AidenChatVisual,
+        in message: AidenChatMessage
+    ) -> AidenMessageAttachment? {
+        guard let id = visual.snapshotAttachmentId, let attachments = message.attachments else { return nil }
+        let matches = attachments.filter { $0.id == id }
+        guard matches.count == 1, let attachment = matches.first,
+              AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
+        else { return nil }
+        return attachment
+    }
+
+    /// The visuals that get an inline row, in reply order. An html visual
+    /// without a usable snapshot gets none: its "Can't view on this device"
+    /// card already represents it. Other kinds always get a row, falling back
+    /// from snapshot to description to title.
+    static func rowVisuals(in message: AidenChatMessage) -> [AidenChatVisual] {
+        (message.visuals ?? []).filter { visual in
+            visual.kind != .html || snapshotAttachment(for: visual, in: message) != nil
+        }
+    }
+
+    /// HTML artifacts that still need the "Can't view on this device" card:
+    /// those without a visual whose snapshot this message can show.
+    static func unviewableHtmlArtifacts(in message: AidenChatMessage) -> [AidenHtmlArtifact] {
+        let replaced = Set((message.visuals ?? []).compactMap { visual in
+            snapshotAttachment(for: visual, in: message) == nil ? nil : visual.id
+        })
+        return (message.htmlArtifacts ?? []).filter { !replaced.contains($0.id) }
+    }
+}
+
+enum AidenMessageAttachmentPresentation {
+    /// An attachment the inline image views decode: a bounded, non-empty PNG or JPEG image.
+    static func isDisplayableImage(_ attachment: AidenMessageAttachment) -> Bool {
+        attachment.kind == .image
+            && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
+            && attachment.size > 0
+            && attachment.size <= AidenAttachmentImageValidation.maximumBytes
     }
 }
 
@@ -290,7 +479,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool }
+    enum Kind: Equatable { case text, reasoning, tool, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -298,7 +487,15 @@ struct AidenChronologicalRow: Identifiable, Equatable {
 }
 
 enum AidenChronologicalProjection {
-    static func rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?) -> [AidenChronologicalRow]? {
+    /// `visuals` come only from a committed message: each follows the tool row
+    /// whose step drew it, and any whose step is missing trail the reply. The
+    /// live stream passes none, since snapshots exist only after commit.
+    static func rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: [AidenChatVisual] = []
+    ) -> [AidenChronologicalRow]? {
         guard let timeline, timeline.version == 3,
               timeline.steps.allSatisfy({ $0.contentOffset != nil }),
               timeline.isRendererSafe(contentLength: text.utf16.count, reasoningLength: reasoning.utf16.count)
@@ -320,6 +517,8 @@ enum AidenChronologicalProjection {
               reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         let steps = timeline.steps
+        let visualToolCalls = Set(visuals.compactMap(\.toolCallId))
+        var placedVisuals = Set<Int>()
         var result: [AidenChronologicalRow] = []
         var cursor = 0
         var index = 0
@@ -341,10 +540,20 @@ enum AidenChronologicalProjection {
             } else {
                 var group: [AidenAgentStep] = []
                 while index < steps.count && steps[index].kind == .tool && steps[index].contentOffset == offset {
-                    group.append(steps[index])
+                    let groupedStep = steps[index]
+                    group.append(groupedStep)
                     index += 1
+                    // A step that drew a visual closes its group so the visual
+                    // sits directly beneath it.
+                    if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+                let groupCalls = Set(group.compactMap(\.toolCallId))
+                for (visualIndex, visual) in visuals.enumerated()
+                where !placedVisuals.contains(visualIndex) && visual.toolCallId.map(groupCalls.contains) == true {
+                    placedVisuals.insert(visualIndex)
+                    result.append(visualRow(visual, at: visualIndex))
+                }
             }
             cursor = offset
         }
@@ -354,7 +563,14 @@ enum AidenChronologicalProjection {
                 result.append(.init(id: "text-\(cursor)", kind: .text, text: slice, steps: []))
             }
         }
+        for (visualIndex, visual) in visuals.enumerated() where !placedVisuals.contains(visualIndex) {
+            result.append(visualRow(visual, at: visualIndex))
+        }
         return result
+    }
+
+    private static func visualRow(_ visual: AidenChatVisual, at index: Int) -> AidenChronologicalRow {
+        .init(id: "visual-\(index)-\(visual.id)", kind: .visual(visual), text: "", steps: [])
     }
 }
 

@@ -150,6 +150,31 @@ test("journal rehydration preserves bounded continuity for an image-only assista
   );
 });
 
+test("journal rehydration never counts a visual's snapshot as an image the assistant displayed", () => {
+  const image = (id: string) => ({
+    id,
+    name: "visual.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: 4,
+    data: "PRIVATE_IMAGE_BYTES",
+  });
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-visual-only",
+      role: "assistant",
+      content: "",
+      createdAt: 123_458,
+      attachments: [image(`visual-snapshot_${"a".repeat(64)}`), image("displayed-image")],
+    },
+    model,
+    false,
+  );
+  assert.deepEqual(message.content, [
+    { type: "text", text: "[Assistant displayed 1 inline image.]" },
+  ]);
+});
+
 test("journal rehydration preserves canonical mixed-provider Pi provenance", () => {
   const canonical = {
     role: "assistant" as const,

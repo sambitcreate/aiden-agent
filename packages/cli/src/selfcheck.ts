@@ -27,7 +27,7 @@ const aidenTools = session
 	.getAllTools()
 	.map((tool) => tool.name)
 	.filter((name) =>
-		["todo", "ask_user_question", "web_search", "display_image", "recall_memory", "remember_fact", "advisor", "subagent", "render_artifact", "schedule_task"].includes(name),
+		["todo", "ask_user_question", "web_search", "display_image", "recall_memory", "remember_fact", "advisor", "subagent", "render_artifact", "render_ui", "schedule_task"].includes(name),
 	)
 	.sort();
 const extensionNames = loader

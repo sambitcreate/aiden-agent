@@ -1,0 +1,11 @@
+<Visual title="Team velocity">
+  <div className="card" style={{padding: 8}}>
+    <Heading level="2">Velocity</Heading>
+    <p>Points per sprint, last three sprints.</p>
+  </div>
+  <Stat label="Sprint 42" value={34} onClick={() => alert(1)} />
+  <Button action="next">Next</Button>
+  <Chart kind="radar" data={[]} />
+  <Text>{items.map(i => i.name)}</Text>
+  <Data name="data">{not json}</Data>
+</Visual>

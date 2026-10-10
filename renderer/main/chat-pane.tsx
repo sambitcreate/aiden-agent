@@ -15,6 +15,8 @@ import {
   stageComposerText,
 } from "../lib/composer-draft-store";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
+import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
+import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
@@ -142,7 +144,7 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -210,6 +212,8 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
 const TEXT_STREAMING_IDLE_MS = 2_000;
 /** Stable so idle frames don't rebuild the transcript artifact plan. */
 const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
+const NO_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const NO_UI_DRAFTS: UiDrafts = new Map();
 const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
@@ -539,6 +543,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => new Set(),
   );
   const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
+  const [streamingUiVisuals, setStreamingUiVisuals] = React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
+  const [uiDrafts, setUiDrafts] = React.useState<UiDrafts>(NO_UI_DRAFTS);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
     null,
@@ -718,6 +724,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     clearTextStreaming();
     setStreamingArtifacts([]);
     setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setPersistedHandoffMessageId(null);
@@ -807,6 +815,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     streamingArtifacts.length > 0
       ? streamingArtifacts
       : (visibleDetachedProjection?.artifacts ?? NO_STREAMING_ARTIFACTS);
+  const displayedStreamingUiVisuals =
+    streamingUiVisuals.length > 0 ? streamingUiVisuals : (visibleDetachedProjection?.uiVisuals ?? NO_UI_VISUALS);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -1202,6 +1212,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       clearTextStreaming();
       setStreamingArtifacts([]);
       setVisualDrafts(NO_VISUAL_DRAFTS);
+      setStreamingUiVisuals(NO_UI_VISUALS);
+      setUiDrafts(NO_UI_DRAFTS);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
       setPersistedHandoffMessageId(null);
@@ -1283,7 +1295,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onArtifactEvent: (event) => {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             setVisualDrafts((current) => reduceVisualDrafts(current, event));
+            setUiDrafts((current) => reduceUiDrafts(current, event));
+            setStreamingUiVisuals((current) => reduceUiVisuals(current, event));
             if (event.operation === "draft" || event.operation === "draft_end") return;
+            if (event.operation === "ui" || event.operation === "ui_draft") {
+              if (event.operation === "ui") setIsModelLoading(false);
+              return;
+            }
             if (event.operation === "reset") {
               setStreamingArtifacts([]);
               streamingArtifactsRef.current = [];
@@ -1445,6 +1463,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setStreamingReasoning(null);
               setStreamingArtifacts([]);
               setVisualDrafts(NO_VISUAL_DRAFTS);
+              setStreamingUiVisuals(NO_UI_VISUALS);
+              setUiDrafts(NO_UI_DRAFTS);
               streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
@@ -1527,6 +1547,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 if (updatedChat) {
                   setStreamingArtifacts([]);
                   setVisualDrafts(NO_VISUAL_DRAFTS);
+                  setStreamingUiVisuals(NO_UI_VISUALS);
+                  setUiDrafts(NO_UI_DRAFTS);
                   streamingArtifactsRef.current = [];
                 }
                 setIsStoppingGeneration(false);
@@ -1954,6 +1976,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingReasoning(null);
     setStreamingArtifacts([]);
     setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -2462,7 +2486,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     toolActivity,
   });
   const visualizingLive =
-    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
+      hasActiveToolStep(displayedGenerationTimeline, RENDER_UI_TOOL_NAME)) &&
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
@@ -2479,7 +2504,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
     visualizingVisible:
       visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
     toolVisible:
       chronologicalLiveRows?.some((row) => row.kind === "activity" &&
         row.steps.some((step) => step.kind === "tool" &&
@@ -3048,6 +3074,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onVisualPrompt={handleVisualPrompt}
             visualFollowUpBusy={visualPromptBusy}
             streamingVisualDrafts={visualDrafts}
+            streamingUiVisuals={displayedStreamingUiVisuals}
+            streamingUiDrafts={uiDrafts}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
