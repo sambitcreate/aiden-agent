@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  benchmarkCoverage,
   createChatModelProviders,
   createModelEntries,
   decodeSelection,
@@ -915,4 +916,67 @@ test("nearest selection ignores points beyond the capture radius of every model"
     nearestModel(models, { x: 0.6, y: 0.62 }, "corner", 0.025, MODEL_PAD_CAPTURE_RADIUS)?.value,
     "center",
   );
+});
+
+test("benchmark coverage counts scored Pad and visible models and explains unmatched Pad models", () => {
+  const scores = {
+    source: "openrouter",
+    datasetSource: "artificial-analysis",
+    sourceLabel: "Artificial Analysis via OpenRouter",
+    sourceUrl: "https://openrouter.ai",
+    citation: "Artificial Analysis",
+    asOf: "2026-10-01",
+    license: "CC BY 4.0",
+  } as const;
+  const scored = (value: string): ModelEntry => ({
+    ...entry(value),
+    info: {
+      id: value,
+      metadataSource: "fallback",
+      matched: true,
+      benchmark: { ...scores, coding: 40 },
+    },
+  });
+  const entries: ModelEntry[] = [
+    scored("test::placed-scored"),
+    { ...entry("test::placed-hosted"), label: "Hosted One" },
+    { ...entry("ollama::placed-local"), label: "Local One", providerLabel: "Ollama", isLocal: true },
+    // A benchmark record without a finite score is not a match.
+    {
+      ...entry("test::placed-empty"),
+      info: { id: "empty", metadataSource: "fallback", matched: true, benchmark: { ...scores } },
+    },
+    scored("test::unplaced-scored"),
+    entry("test::unplaced-unscored"),
+  ];
+  const at: ModelPadPlacement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" };
+  const coverage = benchmarkCoverage(entries, {
+    "test::placed-scored": at,
+    "test::placed-hosted": at,
+    "ollama::placed-local": at,
+    "test::placed-empty": at,
+    // A placement for a model that is no longer visible is not counted.
+    "gone::model": at,
+  });
+
+  assert.deepEqual(coverage.pad, { matched: 1, total: 4 });
+  assert.deepEqual(coverage.visible, { matched: 2, total: 6 });
+  assert.deepEqual(coverage.unmatchedPad, [
+    { value: "test::placed-hosted", label: "Hosted One", providerLabel: "Test", reason: "no-row" },
+    { value: "ollama::placed-local", label: "Local One", providerLabel: "Ollama", reason: "local" },
+    {
+      value: "test::placed-empty",
+      label: "test::placed-empty",
+      providerLabel: "Test",
+      reason: "no-row",
+    },
+  ]);
+});
+
+test("benchmark coverage of an empty Pad has nothing unmatched", () => {
+  assert.deepEqual(benchmarkCoverage([entry("test::a")], {}), {
+    pad: { matched: 0, total: 0 },
+    visible: { matched: 0, total: 1 },
+    unmatchedPad: [],
+  });
 });

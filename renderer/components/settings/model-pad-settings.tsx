@@ -20,6 +20,7 @@ import { modelInsightsApi } from "../../lib/ipc";
 import { ProviderIcon } from "../provider-icon";
 import { ModelPadLegend } from "./model-pad-legend";
 import {
+  benchmarkCoverage,
   createModelEntries,
   encodeSelection,
   modelBenchmarkPercentiles,
@@ -684,6 +685,10 @@ export function ModelPadSettings() {
         `${entry.label} ${entry.providerLabel} ${entry.model}`.toLocaleLowerCase().includes(query),
       )
     : entries;
+  const coverage = React.useMemo(
+    () => benchmarkCoverage(entries, placements),
+    [entries, placements],
+  );
   const benchmarkPercentiles = React.useMemo(
     () => modelBenchmarkPercentiles(entries, benchmarkMetric),
     [entries, benchmarkMetric],
@@ -1679,6 +1684,49 @@ export function ModelPadSettings() {
               Preview suggestions
             </Button>
           </div>
+          {modelInsights.data?.ready ? (
+            <div className="mt-2 rounded-control bg-background/45 px-3 py-2.5">
+              <Text as="h3" variant="small-strong">
+                Coverage
+              </Text>
+              <ul className="mt-0.5 grid gap-0.5 text-small text-secondary">
+                <li>{`${coverage.pad.matched} of ${coverage.pad.total} Pad models matched`}</li>
+                <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible models`}</li>
+                {modelInsights.data.skippedAmbiguousCount > 0 ? (
+                  <li>
+                    {`${modelInsights.data.skippedAmbiguousCount} ambiguous benchmark rows skipped`}
+                  </li>
+                ) : null}
+              </ul>
+              {coverage.unmatchedPad.length > 0 ? (
+                <details className="model-pad-coverage-details -mx-2 mt-1.5">
+                  <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+                    {`Unmatched Pad models (${coverage.unmatchedPad.length})`}
+                  </summary>
+                  <div className="grid gap-1.5 px-2 pb-1 pt-1">
+                    <Text as="p" variant="small" color="tertiary">
+                      Benchmarks cover hosted models; reasoning variants are matched separately.
+                    </Text>
+                    <ul className="grid gap-1 text-small">
+                      {coverage.unmatchedPad.map((model) => (
+                        <li
+                          key={model.value}
+                          className="flex min-w-0 items-baseline justify-between gap-3"
+                        >
+                          <span className="min-w-0 truncate text-primary">
+                            {`${model.label} · ${model.providerLabel}`}
+                          </span>
+                          <span className="shrink-0 text-tertiary">
+                            {model.reason === "local" ? "Local model" : "No benchmark row"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
           <ModelPadBenchmarkConnection />
         </section>
 

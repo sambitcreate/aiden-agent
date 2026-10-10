@@ -5,6 +5,7 @@ import {
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   modelPadPlacementKind,
+  placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   type ModelPadCapabilitySuggestion,
   type ModelPadPlacement,
@@ -38,6 +39,65 @@ export interface ModelEntry {
   isLocal: boolean;
   info?: ModelInfo;
   ranking?: ModelRanking;
+}
+
+/** Why a Pad model has no benchmark scores. */
+export type BenchmarkCoverageGapReason = "local" | "no-row";
+
+export interface BenchmarkCoverage {
+  /** Placed, visible models. */
+  pad: { matched: number; total: number };
+  /** Every visible chat model. */
+  visible: { matched: number; total: number };
+  /** Placed, visible models without a score, in entry order. */
+  unmatchedPad: Array<{
+    value: string;
+    label: string;
+    providerLabel: string;
+    reason: BenchmarkCoverageGapReason;
+  }>;
+}
+
+function hasBenchmarkScore(entry: ModelEntry): boolean {
+  const scores = entry.info?.benchmark;
+  return [scores?.intelligence, scores?.coding, scores?.agentic].some(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+}
+
+/** How many Pad and visible models the cached benchmark snapshot covers. */
+export function benchmarkCoverage(
+  entries: readonly ModelEntry[],
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+): BenchmarkCoverage {
+  const placed = new Set(
+    placedVisibleModelPadValues(
+      placements,
+      entries.map((entry) => entry.value),
+    ),
+  );
+  const coverage: BenchmarkCoverage = {
+    pad: { matched: 0, total: 0 },
+    visible: { matched: 0, total: entries.length },
+    unmatchedPad: [],
+  };
+  for (const entry of entries) {
+    const matched = hasBenchmarkScore(entry);
+    if (matched) coverage.visible.matched += 1;
+    if (!placed.has(entry.value)) continue;
+    coverage.pad.total += 1;
+    if (matched) {
+      coverage.pad.matched += 1;
+    } else {
+      coverage.unmatchedPad.push({
+        value: entry.value,
+        label: entry.label,
+        providerLabel: entry.providerLabel,
+        reason: entry.isLocal ? "local" : "no-row",
+      });
+    }
+  }
+  return coverage;
 }
 
 /** Return benchmark-score percentiles with average ranks for ties. */

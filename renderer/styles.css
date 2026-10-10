@@ -1268,11 +1268,13 @@ textarea {
   margin-top: 1.5rem;
 }
 
-.model-pad-management > summary::-webkit-details-marker {
+.model-pad-management > summary::-webkit-details-marker,
+.model-pad-coverage-details > summary::-webkit-details-marker {
   display: none;
 }
 
-.model-pad-management > summary::after {
+.model-pad-management > summary::after,
+.model-pad-coverage-details > summary::after {
   float: right;
   color: var(--text-tertiary);
   content: "›";
@@ -1280,7 +1282,8 @@ textarea {
   transition: transform 150ms ease-out;
 }
 
-.model-pad-management[open] > summary::after {
+.model-pad-management[open] > summary::after,
+.model-pad-coverage-details[open] > summary::after {
   transform: rotate(-90deg);
 }
 

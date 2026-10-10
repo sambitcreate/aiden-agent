@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -52,6 +52,11 @@ function editorServer(
     insightsReady?: boolean;
     /** Whether models carry benchmark scores; defaults to `insightsReady`. */
     scored?: boolean;
+    /** Score only these models instead of all of them. */
+    scoredModels?: readonly string[];
+    /** Add a loopback provider (label "Ollama") serving these unscored models. */
+    localModels?: readonly string[];
+    skippedAmbiguousCount?: number;
     /** Keep the provider list loading forever. */
     providersPending?: boolean;
     /** Reject every settings write. */
@@ -69,25 +74,46 @@ function editorServer(
   } as AppSettings;
   const info: Record<string, ModelInfo> = (options.scored ?? options.insightsReady)
     ? Object.fromEntries(
-        MODELS.map((model, index): [string, ModelInfo] => [
-          model,
-          {
-            id: model,
-            metadataSource: "fallback",
-            matched: false,
-            benchmark: benchmark(10 + index, 50 - index),
-          },
-        ]),
+        MODELS.flatMap((model, index): Array<[string, ModelInfo]> => {
+          if (options.scoredModels && !options.scoredModels.includes(model)) return [];
+          return [
+            [
+              model,
+              {
+                id: model,
+                metadataSource: "fallback",
+                matched: false,
+                benchmark: benchmark(10 + index, 50 - index),
+              },
+            ],
+          ];
+        }),
       )
     : {};
   const calls = installBotTestIpc({
     "providers:list": () =>
-      options.providersPending ? new Promise<Provider[]>(() => {}) : [provider],
+      options.providersPending
+        ? new Promise<Provider[]>(() => {})
+        : [
+            provider,
+            ...(options.localModels
+              ? [
+                  {
+                    ...provider,
+                    id: "ollama",
+                    label: "Ollama",
+                    baseUrl: "http://localhost:11434/v1",
+                    models: [...options.localModels],
+                  },
+                ]
+              : []),
+          ],
     "models:info": () => info,
     "modelInsights:status": () => ({
       hasKey: Boolean(options.insightsReady),
       ready: Boolean(options.insightsReady),
       cachedModelCount: options.insightsReady ? MODELS.length : 0,
+      skippedAmbiguousCount: options.skippedAmbiguousCount ?? 0,
     }),
     "settings:get": () => structuredClone(current),
     "settings:set": async (patch: unknown) => {
@@ -623,4 +649,54 @@ test("a failed accept of the last suggestion brings it back", async () => {
   await waitFor(() => assert.deepEqual(suggestionNames(), ["M9"]));
   assert.equal(markerCount(), 9);
   assert.equal(Object.keys(server.stored()).length, 9);
+});
+
+test("benchmark insights report Pad and visible coverage and why Pad models are unmatched", async () => {
+  editorServer({
+    insightsReady: true,
+    scoredModels: ["m0", "m1", "m2"],
+    localModels: ["llama"],
+    skippedAmbiguousCount: 3,
+    placements: {
+      "test::m0": userPlacement,
+      "test::m5": { ...userPlacement, x: 0 },
+      "ollama::llama": { ...userPlacement, x: 1 },
+    },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 3));
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("1 of 3 Pad models matched");
+  within(panel).getByText("3 of 11 visible models");
+  within(panel).getByText("3 ambiguous benchmark rows skipped");
+  const details = within(panel).getByText("Unmatched Pad models (2)").closest("details");
+  assert.ok(details);
+  assert.equal(details.open, false, "the unmatched list starts collapsed");
+  assert.deepEqual(
+    within(details)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    ["M5 · TestNo benchmark row", "Llama · OllamaLocal model"],
+  );
+});
+
+test("benchmark coverage omits the unmatched list and skipped rows when there are none", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("1 of 1 Pad models matched");
+  assert.equal(within(panel).queryByText(/Unmatched Pad models/u), null);
+  assert.equal(within(panel).queryByText(/ambiguous benchmark rows skipped/u), null);
+});
+
+test("benchmark coverage stays hidden until insights are ready", async () => {
+  editorServer({ scored: true });
+  mountEditor();
+  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
+  assert.equal(screen.queryByText(/Pad models matched/u), null);
 });
