@@ -54,8 +54,13 @@ function editorServer(
     scored?: boolean;
     /** Keep the provider list loading forever. */
     providersPending?: boolean;
+    /** Reject every settings write. */
+    failWrites?: boolean;
+    /** Hold each settings write until the returned `release` is called. */
+    holdWrites?: boolean;
   } = {},
 ) {
+  const held: Array<() => void> = [];
   let current = {
     modelPadPlacements: options.placements ?? {},
     pinnedModels: options.pinnedModels ?? [],
@@ -85,7 +90,9 @@ function editorServer(
       cachedModelCount: options.insightsReady ? MODELS.length : 0,
     }),
     "settings:get": () => structuredClone(current),
-    "settings:set": (patch: unknown) => {
+    "settings:set": async (patch: unknown) => {
+      if (options.holdWrites) await new Promise<void>((resolve) => held.push(resolve));
+      if (options.failWrites) throw new Error("disk full");
       current = { ...current, ...(patch as Partial<AppSettings>) };
       return structuredClone(current);
     },
@@ -94,6 +101,7 @@ function editorServer(
     writes: () => calls.filter((call) => call.channel === "settings:set").length,
     stored: () => current.modelPadPlacements ?? {},
     settings: () => current,
+    release: () => held.splice(0).forEach((resolve) => resolve()),
   };
 }
 
@@ -434,7 +442,9 @@ test("changing the metric saves it and previews again for the new score", async 
     "true",
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "General" }));
+  const general = screen.getByRole("button", { name: "General" });
+  general.focus();
+  fireEvent.click(general);
 
   await waitFor(() => assert.equal(server.settings().modelPadMetric, "intelligence"));
   // m0 is placed, so the most capable unplaced General models are m1 onwards.
@@ -445,6 +455,8 @@ test("changing the metric saves it and previews again for the new score", async 
     screen.getByRole("button", { name: "General" }).getAttribute("aria-pressed"),
     "true",
   );
+  // Keyboard users stay on the metric buttons; only Preview suggestions moves focus.
+  assert.equal(document.activeElement, general);
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });
 
@@ -469,4 +481,97 @@ test("the legend names no metric while every height is the user's own", async ()
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
   assert.ok(!screen.queryByText(/^Height:/u));
+});
+
+function percentPoint(element: HTMLElement): [number, number] {
+  return [Number.parseFloat(element.style.left), Number.parseFloat(element.style.top)];
+}
+
+test("suggestions take their own dots: no grid dot under a ghost and no two markers share a spot", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+
+  const spots = [...suggestions(), marker("M0")].map(percentPoint);
+  const keys = new Set(spots.map(([left, top]) => `${left.toFixed(2)}:${top.toFixed(2)}`));
+  assert.equal(keys.size, spots.length);
+  for (const dot of pad().querySelectorAll<HTMLElement>("[data-grid-cell]")) {
+    const [left, top] = percentPoint(dot);
+    for (const [ghostLeft, ghostTop] of spots) {
+      assert.ok(
+        Math.abs(left - ghostLeft) > 0.01 || Math.abs(top - ghostTop) > 0.01,
+        "a grid dot is drawn under a marker",
+      );
+    }
+  }
+});
+
+test("adding or removing a model from the list dismisses an open preview", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  fireEvent.click(browseButton());
+  // M1 is the one unplaced model that is not previewed.
+  fireEvent.click(screen.getByRole("button", { name: "Add M1 from Test to Pad" }));
+  await screen.findByText("Added M1 from Test");
+  assert.equal(suggestions().length, 0);
+
+  await openPreview();
+  fireEvent.click(browseButton());
+  fireEvent.click(screen.getByRole("button", { name: "Remove M0 from Test from Pad" }));
+  await screen.findByText("Removed M0 from Test");
+  assert.equal(suggestions().length, 0);
+});
+
+test("the Pad keeps the preview grid while Accept all is saving", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+    holdWrites: true,
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const previewGrid = pad().dataset.gridSize;
+  const seen: string[] = [];
+  const observer = new MutationObserver(() => seen.push(pad().dataset.gridSize ?? ""));
+  observer.observe(pad(), { attributes: true, attributeFilter: ["data-grid-size"] });
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+  // The ghosts stay until the saved layout holds them.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(pad().dataset.gridSize, previewGrid);
+  server.release();
+  await screen.findByText("Added 8 suggestions");
+  await waitFor(() => assert.equal(markerCount(), 9));
+  observer.disconnect();
+
+  assert.equal(pad().dataset.gridSize, previewGrid);
+  assert.deepEqual(
+    seen.filter((size) => size !== previewGrid),
+    [],
+  );
+  assert.equal(suggestions().length, 0);
+});
+
+test("a failed accept keeps the suggestion on the Pad", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+    failWrites: true,
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+
+  const ghost = screen.getByRole("button", { name: "Accept suggestion: M5 from Test" });
+  ghost.focus();
+  fireEvent.click(ghost);
+
+  await screen.findByText("Aiden couldn’t save your Model Pad.");
+  await waitFor(() => assert.equal(suggestions().length, 8));
+  assert.ok(screen.getByRole("button", { name: "Accept suggestion: M5 from Test" }));
+  assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });

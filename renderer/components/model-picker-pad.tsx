@@ -11,12 +11,15 @@ import {
 import {
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX,
+  MODEL_PAD_METRIC_LABELS,
   MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
+  modelPadHeightCaption,
   modelPadKnobTagLayout,
   modelPadLabelPlacement,
   modelPadLeftPercent,
   modelPadTopPercent,
+  type ModelPadMetric,
 } from "../lib/model-pad-layout";
 import { cn } from "../lib/ui-utils";
 import { ProviderIcon } from "./provider-icon";
@@ -151,8 +154,8 @@ interface ModelPickerPadProps {
   onCommit: (model: PositionedModel) => void;
   /** Called with a printable character typed on the Pad, so the picker can search for it. */
   onTypeToSearch?: (character: string) => void;
-  /** Label of the benchmark score behind benchmark-assisted heights, when any is on the Pad. */
-  heightMetricLabel?: string;
+  /** The benchmark score behind benchmark-assisted heights, when any is on the Pad. */
+  heightMetric?: ModelPadMetric;
 }
 
 export function ModelPickerPad({
@@ -163,7 +166,7 @@ export function ModelPickerPad({
   onPreview,
   onCommit,
   onTypeToSearch,
-  heightMetricLabel,
+  heightMetric,
 }: ModelPickerPadProps) {
   const helpId = React.useId();
   const rectRef = React.useRef<DOMRect | null>(null);
@@ -385,7 +388,7 @@ export function ModelPickerPad({
             tag render above them. */}
         <span aria-hidden="true" className="model-pad-axis-captions">
           <span data-axis="capability">
-            More capable{heightMetricLabel ? ` · Height: ${heightMetricLabel}` : ""}
+            More capable{heightMetric ? ` · ${modelPadHeightCaption(heightMetric)}` : ""}
           </span>
           <span data-axis="faster">Faster</span>
           <span data-axis="deliberate">More deliberate</span>
@@ -465,8 +468,8 @@ export function ModelPickerPad({
       <p id={helpId} className="sr-only">
         Drag or point to preview the nearest model. Use the arrow keys to move between models, then
         press Enter or Space to select. Type to search the list.
-        {heightMetricLabel
-          ? ` Benchmark-assisted heights follow the ${heightMetricLabel} score.`
+        {heightMetric
+          ? ` Benchmark-assisted heights follow the ${MODEL_PAD_METRIC_LABELS[heightMetric]} score.`
           : ""}
       </p>
     </>

@@ -49,7 +49,7 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
-import type { ModelPadPlacements } from "../shared/model-pad-preferences";
+import type { ModelPadMetric, ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -544,7 +544,8 @@ export interface ModelRanking {
   measuredAt?: string;
 }
 
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 export interface ModelBenchmarkScores {
   source: "openrouter";

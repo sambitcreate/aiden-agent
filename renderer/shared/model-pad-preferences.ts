@@ -16,7 +16,11 @@ export interface ModelPadPlacement {
 
 export type ModelPadPlacements = Record<string, ModelPadPlacement>;
 
-/** The benchmark score that sets height for benchmark-assisted placements. */
+/**
+ * A benchmark score (General, Coding, Agentic). `ModelBenchmarkMetric` in the
+ * main and renderer types is this type; here it also sets the height of
+ * benchmark-assisted Pad placements.
+ */
 export type ModelPadMetric = "intelligence" | "coding" | "agentic";
 
 export const DEFAULT_MODEL_PAD_METRIC: ModelPadMetric = "coding";

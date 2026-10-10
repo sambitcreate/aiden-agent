@@ -35,7 +35,6 @@ import { useProvidersModelInfo } from "../lib/queries";
 import {
   BASE_MODEL_PAD_GRID_SIZE,
   MODEL_PAD_INSET_PERCENT,
-  MODEL_PAD_METRIC_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   addModelPadPlacement,
   modelPadGridSizeForPlacements,
@@ -536,13 +535,13 @@ export function ModelPicker({
   );
   const hasPadModels = positioned.length > 0;
   // Named only while some model on the Pad takes its height from a benchmark.
-  const heightMetricLabel = React.useMemo(
+  const heightMetric = React.useMemo(
     () =>
       modelPadHasBenchmarkHeight(
         modelPadPlacements,
         positioned.map((entry) => entry.value),
       )
-        ? MODEL_PAD_METRIC_LABELS[modelPadMetric]
+        ? modelPadMetric
         : undefined,
     [modelPadPlacements, positioned, modelPadMetric],
   );
@@ -923,7 +922,7 @@ export function ModelPicker({
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
                 onCommit={commitFromPad}
-                heightMetricLabel={heightMetricLabel}
+                heightMetric={heightMetric}
                 onTypeToSearch={(character) => {
                   // A model was just chosen and the picker is about to close.
                   if (padCloseTimerRef.current !== null) return;

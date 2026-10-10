@@ -604,13 +604,18 @@ export function ModelPadSettings() {
   );
   // Sized by the placed, visible models (never the catalog), exactly as the
   // composer Pad sizes them, so both surfaces snap saved placements identically.
+  const placedGridSize = React.useMemo(
+    () => modelPadGridSizeForPlacements(placements, visibleValues),
+    [placements, visibleValues],
+  );
+  // The preview's spots are only valid on its own grid. Models placed from
+  // elsewhere (the composer, another window) can outgrow it; that ends the preview.
+  const previewFits = Boolean(suggestionPreview && placedGridSize <= suggestionPreview.gridSize);
   // While suggestions are previewed, the Pad shows the grid they were placed on.
-  const gridSize = React.useMemo(() => {
-    const placedGridSize = modelPadGridSizeForPlacements(placements, visibleValues);
-    return suggestionPreview && pendingSuggestions.length > 0
-      ? Math.max(placedGridSize, suggestionPreview.gridSize)
+  const gridSize =
+    suggestionPreview && previewFits && pendingSuggestions.length > 0
+      ? suggestionPreview.gridSize
       : placedGridSize;
-  }, [placements, visibleValues, suggestionPreview, pendingSuggestions.length]);
   const snappedPlacements = React.useMemo(() => {
     const snapped = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
     // A move waiting for its save is shown at once.
@@ -649,9 +654,10 @@ export function ModelPadSettings() {
     () => new Set(shownSuggestions.map(({ placement }) => padCellKey(placement, gridSize))),
     [shownSuggestions, gridSize],
   );
-  const previewActive = shownSuggestions.length > 0;
+  const previewActive = previewFits && shownSuggestions.length > 0;
   React.useEffect(() => {
-    // Every suggestion was accepted or placed some other way: the preview is done.
+    // Every suggestion is on the Pad now (the saved layout holds it), or the Pad
+    // outgrew the preview grid: the preview is done.
     if (suggestionPreview && !previewActive) setSuggestionPreview(undefined);
   }, [suggestionPreview, previewActive]);
   // The first visit to an empty Pad starts with the model list open. This is
@@ -1037,8 +1043,14 @@ export function ModelPadSettings() {
     });
   };
 
-  /** Show up to eight suggestions for `percentiles` as ghosts on the Pad, saving nothing. */
-  const previewSuggestions = (percentiles = benchmarkPercentiles) => {
+  /**
+   * Show up to eight suggestions for `percentiles` as ghosts on the Pad, saving
+   * nothing. Focus moves to the first one only when asked (the Preview button).
+   */
+  const previewSuggestions = ({
+    percentiles = benchmarkPercentiles,
+    focus = true,
+  }: { percentiles?: ReadonlyMap<string, number>; focus?: boolean } = {}) => {
     flushPendingMove();
     const chosen = previewBenchmarkSuggestions(entries, percentiles, {
       placements,
@@ -1054,7 +1066,7 @@ export function ModelPadSettings() {
     setSuggestionPreview(
       layout && suggestions.length > 0 ? { gridSize: layout.gridSize, suggestions } : undefined,
     );
-    focusValueRef.current = suggestions[0]?.value;
+    if (focus) focusValueRef.current = suggestions[0]?.value;
     setAnnouncement(
       suggestions.length > 0
         ? `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} shown on the Pad. Accept one at a time, or accept all.`
@@ -1066,9 +1078,13 @@ export function ModelPadSettings() {
     if (metric === benchmarkMetric) return;
     savePadPreferences({ modelPadMetric: metric }).catch(() => {
       toast.error(SAVE_ERROR_MESSAGE);
+      // The ghosts were laid out for the score that didn't save.
+      setSuggestionPreview(undefined);
     });
-    // An open preview follows the new score.
-    if (suggestionPreview) previewSuggestions(modelBenchmarkPercentiles(entries, metric));
+    // An open preview follows the new score; focus stays on the metric buttons.
+    if (suggestionPreview) {
+      previewSuggestions({ percentiles: modelBenchmarkPercentiles(entries, metric), focus: false });
+    }
   };
 
   /** Keep focus near the suggestions once the one that had it goes away. */
@@ -1079,23 +1095,24 @@ export function ModelPadSettings() {
     focusValueRef.current = (remaining[index] ?? remaining[index - 1])?.value ?? value;
   };
 
+  // An accepted ghost stays in the preview: it leaves the Pad as a ghost once the
+  // saved layout holds it (pendingSuggestions skips placed models), and comes
+  // back if the save fails.
   const acceptSuggestion = (suggestion: ModelPadSuggestion, entry: ModelEntry) => {
     const preview = suggestionPreview;
     if (!preview) return;
     flushPendingMove();
     focusAfterAccepting(suggestion.value);
-    setSuggestionPreview((current) =>
-      current && {
-        ...current,
-        suggestions: current.suggestions.filter(({ value }) => value !== suggestion.value),
-      },
-    );
+    const focusTarget = focusValueRef.current;
     void persistAction((current) => {
       if (current[suggestion.value]) return null;
       // The Pad already shows its models on the preview grid; save them there.
       const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
       next[suggestion.value] = suggestion.placement;
       return { placements: next, message: `Added ${placementLabel(entry)}` };
+    }).then((saved) => {
+      // Never leave focus armed for a marker that will not appear.
+      if (!saved && focusValueRef.current === focusTarget) focusValueRef.current = undefined;
     });
   };
 
@@ -1104,7 +1121,8 @@ export function ModelPadSettings() {
     if (!preview) return;
     const accepted = shownSuggestions;
     flushPendingMove();
-    setSuggestionPreview(undefined);
+    // The preview ends once the saved layout holds every suggestion; a failed
+    // save leaves the ghosts in place.
     runQuickStart(() =>
       persistAction((current) => {
         const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);

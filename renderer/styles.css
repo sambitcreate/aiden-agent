@@ -1009,7 +1009,8 @@ textarea {
 }
 
 .model-pad-marker[data-placement-source="suggestion"]:hover .model-pad-marker-visual,
-.model-pad-marker[data-placement-source="suggestion"]:focus-visible .model-pad-marker-visual {
+.model-pad-marker[data-placement-source="suggestion"]:focus-visible .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:active .model-pad-marker-visual {
   box-shadow: none;
   opacity: 1;
 }

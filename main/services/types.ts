@@ -21,7 +21,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
-import type { ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
+import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -345,7 +345,8 @@ export interface ModelRanking {
   measuredAt?: string;
 }
 
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 /** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
 export interface ModelBenchmarkScores {
