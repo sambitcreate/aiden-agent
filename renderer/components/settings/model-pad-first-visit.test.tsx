@@ -57,6 +57,8 @@ function editorServer(
     /** Add a loopback provider (label "Ollama") serving these unscored models. */
     localModels?: readonly string[];
     skippedAmbiguousCount?: number;
+    /** When the cached benchmark snapshot was fetched. */
+    fetchedAt?: string;
     /** Keep the provider list loading forever. */
     providersPending?: boolean;
     /** Reject every settings write. */
@@ -114,6 +116,7 @@ function editorServer(
       ready: Boolean(options.insightsReady),
       cachedModelCount: options.insightsReady ? MODELS.length : 0,
       skippedAmbiguousCount: options.skippedAmbiguousCount ?? 0,
+      ...(options.fetchedAt ? { fetchedAt: options.fetchedAt } : {}),
     }),
     "settings:get": () => structuredClone(current),
     "settings:set": async (patch: unknown) => {
@@ -689,14 +692,75 @@ test("benchmark coverage omits the unmatched list and skipped rows when there ar
   fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
 
   const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText("1 of 1 Pad models matched");
-  assert.equal(within(panel).queryByText(/Unmatched Pad models/u), null);
-  assert.equal(within(panel).queryByText(/ambiguous benchmark rows skipped/u), null);
+  await within(panel).findByText("1 of 1 Pad model matched");
+  assert.ok(!within(panel).queryByText(/Unmatched Pad models/u));
+  assert.ok(!within(panel).queryByText(/ambiguous benchmark rows skipped/u));
+  assert.ok(!within(panel).queryByText(/have no .+ score|has no .+ score/u));
 });
 
 test("benchmark coverage stays hidden until insights are ready", async () => {
   editorServer({ scored: true });
   mountEditor();
   await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
-  assert.equal(screen.queryByText(/Pad models matched/u), null);
+  assert.ok(!screen.queryByText(/Pad models? matched/u));
+});
+
+test("benchmark coverage waits for the model list instead of counting nothing", async () => {
+  editorServer({ insightsReady: true, providersPending: true });
+  mountEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("Benchmark insights ready");
+  assert.ok(!within(panel).queryByText("Coverage"));
+  assert.ok(!within(panel).queryByText(/visible models?$/u));
+});
+
+test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
+  editorServer({ insightsReady: true });
+  mountEditor();
+  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("No models on the Pad yet");
+  within(panel).getByText("10 of 10 visible models");
+  assert.ok(!within(panel).queryByText(/Pad models? matched/u));
+});
+
+test("benchmark coverage counts matched Pad models without a score for the chosen metric", async () => {
+  editorServer({
+    insightsReady: true,
+    metric: "agentic",
+    placements: { "test::m0": userPlacement, "test::m1": { ...userPlacement, x: 0 } },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 2));
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("2 of 2 Pad models matched");
+  within(panel).getByText("2 matched models have no Agentic score");
+
+  fireEvent.click(within(panel).getByRole("button", { name: "Coding" }));
+  await waitFor(() => assert.ok(!within(panel).queryByText(/matched models? ha(?:s|ve) no/u)));
+});
+
+test("the benchmark connection suggests fetching again once the snapshot is over 60 days old", async () => {
+  editorServer({
+    insightsReady: true,
+    fetchedAt: new Date(Date.now() - 61 * 24 * 60 * 60 * 1_000).toISOString(),
+  });
+  mountEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("Benchmarks are over 60 days old. Fetch latest to update.");
+});
+
+test("a recent benchmark snapshot shows no staleness hint", async () => {
+  editorServer({ insightsReady: true, fetchedAt: new Date(Date.now() - 3_600_000).toISOString() });
+  mountEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText(/Fetched /u);
+  assert.ok(!within(panel).queryByText(/over 60 days old/u));
 });

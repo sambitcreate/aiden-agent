@@ -80,6 +80,7 @@ import {
   useSettings,
 } from "../../lib/queries";
 import type { ModelInfo } from "../../lib/types";
+import { isOlderThanDays } from "../../lib/model-details";
 import { cn } from "../../lib/ui-utils";
 
 function pointFromPointer(event: React.PointerEvent, rect: DOMRect): ModelPadPoint {
@@ -126,6 +127,9 @@ function modelInsightsDate(value: string | undefined): string | null {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? MODEL_INSIGHTS_DATE_FORMATTER.format(date) : null;
 }
+
+/** A cached benchmark snapshot older than this gets a gentle Fetch latest hint. */
+const BENCHMARK_STALE_DAYS = 60;
 
 function ModelPadBenchmarkConnection() {
   const queryClient = useQueryClient();
@@ -276,6 +280,11 @@ function ModelPadBenchmarkConnection() {
                           ? "The key is stored securely; fetch when you want a new benchmark snapshot."
                           : "Paste a key below to validate it and fetch the first benchmark snapshot.")}
                 </Text>
+                {!error && status?.ready && isOlderThanDays(status.fetchedAt, BENCHMARK_STALE_DAYS) ? (
+                  <Text as="p" variant="small" color="secondary" className="mt-1">
+                    {`Benchmarks are over ${BENCHMARK_STALE_DAYS} days old. Fetch latest to update.`}
+                  </Text>
+                ) : null}
               </div>
             </div>
             {status?.hasKey ? (
@@ -743,6 +752,9 @@ export function ModelPadSettings() {
     () => modelBenchmarkPercentiles(entries, benchmarkMetric),
     [entries, benchmarkMetric],
   );
+  // Pad models with some benchmark score but none for the chosen metric.
+  const matchedWithoutMetric =
+    coverage.pad.matched - placed.filter((entry) => benchmarkPercentiles.has(entry.value)).length;
   const suggestionCount = React.useMemo(
     () =>
       topBenchmarkSuggestions(entries, benchmarkPercentiles, {
@@ -1803,14 +1815,23 @@ export function ModelPadSettings() {
               Preview suggestions
             </Button>
           </div>
-          {modelInsights.data?.ready ? (
+          {modelInsights.data?.ready && !loading ? (
             <div className="mt-2 rounded-control bg-background/45 px-3 py-2.5">
               <Text as="h3" variant="small-strong">
                 Coverage
               </Text>
               <ul className="mt-0.5 grid gap-0.5 text-small text-secondary">
-                <li>{`${coverage.pad.matched} of ${coverage.pad.total} Pad models matched`}</li>
-                <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible models`}</li>
+                <li>
+                  {coverage.pad.total === 0
+                    ? "No models on the Pad yet"
+                    : `${coverage.pad.matched} of ${coverage.pad.total} Pad model${coverage.pad.total === 1 ? "" : "s"} matched`}
+                </li>
+                <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible model${coverage.visible.total === 1 ? "" : "s"}`}</li>
+                {matchedWithoutMetric > 0 ? (
+                  <li>
+                    {`${matchedWithoutMetric} matched model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`}
+                  </li>
+                ) : null}
                 {modelInsights.data.skippedAmbiguousCount > 0 ? (
                   <li>
                     {`${modelInsights.data.skippedAmbiguousCount} ambiguous benchmark rows skipped`}

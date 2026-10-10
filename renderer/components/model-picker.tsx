@@ -33,7 +33,10 @@ import {
   visibleModelEntries,
   type ModelEntry,
 } from "../lib/model-picker-data";
-import { useProvidersModelInfo } from "../lib/queries";
+import { useModelPaceSummaries, useProvidersModelInfo } from "../lib/queries";
+import { formatListPrice, isOlderThanDays, showsListPrice } from "../lib/model-details";
+import { formatModelPace } from "../lib/model-pad-pace";
+import type { ModelPaceSummary } from "../shared/model-pace";
 import {
   BASE_MODEL_PAD_GRID_SIZE,
   MODEL_PAD_INSET_PERCENT,
@@ -61,6 +64,8 @@ interface ModelPickerProps {
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+/** Benchmark snapshots older than this are flagged in the detail card. */
+const BENCHMARK_STALE_DAYS = 60;
 
 function formatTokens(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
@@ -332,14 +337,17 @@ function ModelListRow({
   );
 }
 
-function ModelHoverDetails({
+export function ModelHoverDetails({
   model,
   alsoVia,
+  pace,
   metadataLoading,
 }: {
   model: ModelEntry | undefined;
   /** Other providers serving the same model, such as "Also via OpenRouter". */
   alsoVia?: string;
+  /** Device-local speed measured from this model's chat responses. */
+  pace?: ModelPaceSummary;
   metadataLoading: boolean;
 }) {
   if (!model) return null;
@@ -348,7 +356,16 @@ function ModelHoverDetails({
   const context = formatTokens(info?.contextLength);
   const output = formatTokens(info?.outputLimit);
   const inputs = formatInputs(info);
-  const benchmarkAsOf = formatBenchmarkDate(info?.benchmark?.asOf);
+  const listPrice = showsListPrice(model) ? formatListPrice(info?.cost) : undefined;
+  const speed =
+    pace && pace.sampleCount >= 1
+      ? `${formatModelPace(pace)} (${pace.sampleCount} run${pace.sampleCount === 1 ? "" : "s"})`
+      : undefined;
+  const benchmarkDate = formatBenchmarkDate(info?.benchmark?.asOf);
+  const benchmarkAsOf =
+    benchmarkDate && isOlderThanDays(info?.benchmark?.asOf, BENCHMARK_STALE_DAYS)
+      ? `${benchmarkDate} (over ${BENCHMARK_STALE_DAYS} days old)`
+      : benchmarkDate;
   const attributionUrl =
     info?.benchmark?.sourceUrl ??
     model.ranking?.sourceUrl ??
@@ -364,6 +381,8 @@ function ModelHoverDetails({
     info?.parameterCount ? ["Parameters", info.parameterCount] : null,
     context ? ["Context", context] : null,
     output ? ["Max output", output] : null,
+    listPrice ? ["List price", listPrice] : null,
+    speed ? ["Your speed", speed] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
     info?.knowledge ? ["Knowledge", info.knowledge] : null,
     info?.benchmark?.intelligence !== undefined
@@ -404,7 +423,7 @@ function ModelHoverDetails({
         </div>
       </div>
 
-      {info?.matched || info?.benchmark ? (
+      {capabilities.length > 0 || detailRows.length > 0 ? (
         <>
           {capabilities.length > 0 ? (
             <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
@@ -413,8 +432,11 @@ function ModelHoverDetails({
             <dl className="mt-2 grid gap-1 border-t border-separator pt-2 text-small">
               {detailRows.map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-3">
-                  <dt className="text-tertiary">{label}</dt>
-                  <dd className="min-w-0 truncate text-right text-secondary tabular-nums">
+                  <dt className="shrink-0 text-tertiary">{label}</dt>
+                  <dd
+                    className="min-w-0 truncate text-right text-secondary tabular-nums"
+                    title={value}
+                  >
                     {value}
                   </dd>
                 </div>
@@ -500,6 +522,8 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
+  // Device-local measured speed for the detail card; display-only.
+  const paceSummaries = useModelPaceSummaries().data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.
@@ -1008,6 +1032,7 @@ export function ModelPicker({
             alsoVia={
               activePosition ? alsoViaLabel(siblingsByValue.get(activePosition.value)) : undefined
             }
+            pace={activePosition ? paceSummaries?.[activePosition.value] : undefined}
             metadataLoading={metadataLoading}
           />
         ) : null}

@@ -5,6 +5,7 @@ import {
 } from "./artificial-analysis-catalog-core.js";
 import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
+import { catalogProviderSlug } from "../../renderer/shared/model-catalog-provider.js";
 import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 import {
   openRouterBenchmarkForModel,
@@ -216,22 +217,6 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
   return value as ModelCatalog;
 }
 
-const PROVIDER_SLUG: Record<string, string> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  gemini: "google",
-  google: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "xai",
-  mistral: "mistral",
-  minimax: "minimax",
-  zai: "zai",
-  nvidia: "nvidia",
-};
-
 const OPENROUTER_DIRECT_AUTHOR: Readonly<Record<string, string>> = {
   openai: "openai",
   "openai-codex": "openai",
@@ -260,10 +245,7 @@ const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   moonshot: "Moonshot AI",
 };
 
-/** Map Aiden's stored provider IDs to the shared Pi/models.dev provider IDs. */
-export function catalogProviderSlug(providerId: string): string | undefined {
-  return PROVIDER_SLUG[providerId];
-}
+export { catalogProviderSlug };
 
 function normalizeId(id: string): string {
   const slash = id.lastIndexOf("/");

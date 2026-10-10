@@ -6,6 +6,7 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import { mountWithBotRouter } from "../main/bots/test-providers";
 import { modelOptionId } from "../lib/model-picker-data";
 import type { AppSettings, Provider } from "../lib/types";
+import type { ModelPaceSummary } from "../shared/model-pace";
 import { ModelPicker } from "./model-picker";
 import { Toaster } from "./ui";
 
@@ -23,7 +24,10 @@ const provider: Provider = {
   hasKey: true,
 };
 
-function settingsServer(initial: AppSettings, options: { failWrites?: boolean } = {}) {
+function settingsServer(
+  initial: AppSettings,
+  options: { failWrites?: boolean; pace?: Record<string, ModelPaceSummary> } = {},
+) {
   let current = structuredClone(initial);
   const calls = installBotTestIpc({
     "settings:get": () => structuredClone(current),
@@ -33,6 +37,7 @@ function settingsServer(initial: AppSettings, options: { failWrites?: boolean } 
       return structuredClone(current);
     },
     "models:info": () => ({}),
+    "modelPace:summaries": () => options.pace ?? {},
   });
   return { calls, current: () => current };
 }
@@ -145,6 +150,24 @@ test("the side card and knob tag name the other providers that serve the same mo
   assert.match(card.textContent ?? "", /Also via Relay Hub/u);
   const tag = pad.querySelector<HTMLElement>("[data-model-pad-knob-tag]");
   assert.match(tag?.textContent ?? "", /Also via Relay Hub/u);
+});
+
+test("the side card shows the speed measured from the user's own chats", async () => {
+  const server = settingsServer(placedSettings, {
+    pace: {
+      "acme::current-model": {
+        medianTtftMs: 1_250,
+        medianTokensPerSecond: 48,
+        sampleCount: 7,
+        lastSampledAt: 1,
+      },
+    },
+  });
+  await openPicker(server);
+
+  const card = screen.getByRole("complementary");
+  await within(card).findByText("1.3 s first token · 48 tok/s (7 runs)");
+  within(card).getByText("Your speed");
 });
 
 test("a current model hidden from the picker is not offered for the Pad", async () => {
