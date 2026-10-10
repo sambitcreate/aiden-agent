@@ -1,6 +1,7 @@
 import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
 import { configStore } from "./config-store.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
+import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
 import { deleteEveryCredential, performOnboardingReset } from "./onboarding-reset-core.js";
 import { piCredentialStore } from "./pi-credential-store.js";
@@ -19,6 +20,7 @@ export function resetOnboardingData(): Promise<void> {
   return performOnboardingReset({
     disconnectArtificialAnalysis: () => artificialAnalysisRuntime.disconnect(),
     clearModelInsights: () => openRouterBenchmarkRuntime.disconnect(),
+    clearModelPace: () => modelPaceRecorder.clear(),
     resetConfiguration: () => configStore.resetUserSetup(),
     clearLegacySecrets: () => secrets.clearAll(),
     clearPiCredentials,

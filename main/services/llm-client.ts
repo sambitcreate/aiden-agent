@@ -1,6 +1,8 @@
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { ModelPaceTimer } from "./model-pace-core.js";
+import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -2887,7 +2889,15 @@ export const llmClient = {
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
-      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      const warmedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      // Device-local pace: Pi calls the stream function once per model
+      // response, right before the provider request, so this marks each
+      // response's request start (see ModelPaceTimer for what TTFT covers).
+      const paceTimer = new ModelPaceTimer();
+      const observedStream: typeof realStream = (requestModel, context, streamOptions) => {
+        paceTimer.requestStarted(`${runtime.provider.id}::${requestModel.id}`);
+        return warmedStream(requestModel, context, streamOptions);
+      };
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3496,6 +3506,12 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
+        try {
+          const measured = paceTimer.observe(event);
+          if (measured) modelPaceRecorder.record(measured.key, measured.sample);
+        } catch (error) {
+          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error);
+        }
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();

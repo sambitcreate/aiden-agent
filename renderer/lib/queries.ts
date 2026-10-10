@@ -22,6 +22,7 @@ import {
   localVoiceApi,
   mcpApi,
   modelInsightsApi,
+  modelPaceApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -71,6 +72,7 @@ export const queryKeys = {
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
+  modelPaceSummaries: ["modelPaceSummaries"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
@@ -608,6 +610,28 @@ export function useModelInsightsStatus() {
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
+}
+
+/** Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a Pad surface mounts. */
+export function useModelPaceSummaries() {
+  return useQuery({
+    queryKey: queryKeys.modelPaceSummaries,
+    queryFn: modelPaceApi.summaries,
+    retry: false,
+    staleTime: 30_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Forget every measured speed, then drop the cached summaries so every Pad re-reads. */
+export async function clearModelPaceSummaries(
+  queryClient: QueryClient,
+  clear: () => Promise<void> = modelPaceApi.clear,
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: queryKeys.modelPaceSummaries });
+  await clear();
+  await queryClient.invalidateQueries({ queryKey: queryKeys.modelPaceSummaries });
 }
 
 export function useComputerUseStatus(enabled = true) {

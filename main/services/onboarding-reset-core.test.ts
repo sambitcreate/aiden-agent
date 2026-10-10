@@ -31,6 +31,7 @@ function operations(
   return {
     disconnectArtificialAnalysis: () => run("disconnectArtificialAnalysis"),
     clearModelInsights: () => run("clearModelInsights"),
+    clearModelPace: () => run("clearModelPace"),
     resetConfiguration: () => run("resetConfiguration"),
     clearLegacySecrets: () => run("clearLegacySecrets"),
     clearPiCredentials: () => run("clearPiCredentials"),
@@ -44,11 +45,11 @@ test("reset disconnects model data before clearing every setup-owned store", asy
   await performOnboardingReset(operations(events));
 
   assert.deepEqual(
-    new Set(events.slice(0, 2)),
-    new Set(["disconnectArtificialAnalysis", "clearModelInsights"]),
+    new Set(events.slice(0, 3)),
+    new Set(["disconnectArtificialAnalysis", "clearModelInsights", "clearModelPace"]),
   );
   assert.deepEqual(
-    new Set(events.slice(2)),
+    new Set(events.slice(3)),
     new Set(["resetConfiguration", "clearLegacySecrets", "clearPiCredentials", "clearMcpOAuth"]),
   );
 });
@@ -79,6 +80,7 @@ test("reset attempts every cleanup and returns a retryable aggregate failure", a
     new Set([
       "disconnectArtificialAnalysis",
       "clearModelInsights",
+      "clearModelPace",
       "resetConfiguration",
       "clearLegacySecrets",
       "clearPiCredentials",

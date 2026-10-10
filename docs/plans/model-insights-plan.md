@@ -19,9 +19,9 @@ Give Aiden's Personal Model Pad trustworthy, source-aware benchmark evidence wit
 - The settings view is canvas-first: browsing models and benchmark insights are mutually exclusive one-click disclosures, with interruptible reduced-motion-aware transitions, source-accurate OpenRouter branding, and quiet outline-free benchmark framing; destructive and unavailable-model management stays collapsed by default.
 - Saved Pad layouts migrate from one provenance flag to independent X/Y provenance, so personal edits and benchmark-derived axes remain distinguishable.
 - Hover details show the underlying scores and Artificial Analysis-via-OpenRouter attribution without attributing unrelated models.
+- A device-local pace signal is measured from the user's own chat responses: per model response, time to first text or thinking token (from the moment Pi issues that model request) and output tokens per second (from the first delta to the response end). Only completed responses with at least 16 output tokens and 250 ms of generation count. The last 20 samples per `provider::model` (500 models at most) live in `userData/model-pace.json` (`0600`, invalid files read as empty, writes debounced and flushed on quit); medians are exposed over `modelPace:summaries` / `modelPace:clear`, onboarding reset deletes the file, and nothing is transmitted or used for routing.
 - The legacy direct Artificial Analysis settings and renderer IPC surface are retired, and ordinary production model reads no longer load its historical cache. Its local runtime remains only for historical credential/cache cleanup during onboarding reset.
 
 ## Remaining
 
-- Add an optional device-local pace signal based on the user's own observed sessions; do not infer speed from the capability-only benchmark endpoint.
 - Consider additional benchmark sources only when they can preserve exact model identity, explicit provenance, licensing, and metric-specific semantics.

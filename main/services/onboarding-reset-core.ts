@@ -1,6 +1,7 @@
 export interface OnboardingResetOperations {
   disconnectArtificialAnalysis(): Promise<unknown>;
   clearModelInsights(): Promise<unknown>;
+  clearModelPace(): Promise<void>;
   resetConfiguration(): Promise<void>;
   clearLegacySecrets(): Promise<void>;
   clearPiCredentials(): Promise<void>;
@@ -55,6 +56,7 @@ export async function performOnboardingReset(operations: OnboardingResetOperatio
   await Promise.all([
     captureFailure(failures, operations.disconnectArtificialAnalysis),
     captureFailure(failures, operations.clearModelInsights),
+    captureFailure(failures, operations.clearModelPace),
   ]);
 
   await Promise.all([
