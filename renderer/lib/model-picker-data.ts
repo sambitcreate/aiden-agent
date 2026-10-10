@@ -253,6 +253,51 @@ export function visibleModelEntries(
   return entries.filter((entry) => !isModelHidden(hidden, entry.providerId, entry.model));
 }
 
+/**
+ * The model behind an entry, independent of the provider that serves it: the catalog's
+ * canonical id when known, otherwise the id's last path segment (date stamp kept).
+ * Display-only: it links duplicate routes visually and never changes routing.
+ */
+export function modelIdentityKey(entry: Pick<ModelEntry, "model" | "info">): string {
+  const canonical = entry.info?.canonicalModelId?.trim();
+  if (canonical) return canonical.toLowerCase();
+  return entry.model.slice(entry.model.lastIndexOf("/") + 1).toLowerCase();
+}
+
+/**
+ * Other routes to the same model, keyed by entry value. Pass visible entries only;
+ * an entry never links to itself, and entries without a sibling are absent.
+ */
+export function modelSiblings(entries: readonly ModelEntry[]): Map<string, ModelEntry[]> {
+  const groups = new Map<string, ModelEntry[]>();
+  for (const entry of entries) {
+    const key = modelIdentityKey(entry);
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
+  }
+  const siblings = new Map<string, ModelEntry[]>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const entry of group) {
+      siblings.set(
+        entry.value,
+        group.filter((other) => other.value !== entry.value),
+      );
+    }
+  }
+  return siblings;
+}
+
+/** "Also via A", "Also via A, B" or "Also via A, B +n" for an entry's sibling routes. */
+export function alsoViaLabel(siblings: readonly ModelEntry[] | undefined): string | undefined {
+  const providers = [...new Set((siblings ?? []).map((entry) => entry.providerLabel))];
+  if (providers.length === 0) return undefined;
+  const named = providers.slice(0, 2).join(", ");
+  const rest = providers.length - 2;
+  return `Also via ${named}${rest > 0 ? ` +${rest}` : ""}`;
+}
+
 /** Group only text-generating models while preserving the configured provider order. */
 export function createChatModelProviders(
   providers: Provider[],

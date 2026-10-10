@@ -345,7 +345,9 @@ test("the knob tag stays inside the Pad gutters on every side and size", () => {
   const gutter = MODEL_PAD_KNOB_TAG_GUTTER_PX;
   const epsilon = 1e-9;
   for (const padSize of [160, 216, 300]) {
-    for (const tagHeight of [38, 46, 60]) {
+    // 90px is a three-line tag (name, provider, "Also via") that fits on neither side
+    // of a mid-height knob on the smallest Pad, so it is clamped inside the gutters.
+    for (const tagHeight of [38, 46, 60, 90]) {
       for (const x of [0, 0.1, 0.1599, 0.16, 0.3, 0.5, 0.7, 0.84, 0.8401, 0.9, 1]) {
         for (const y of [0, 1 / 6, 0.5, 0.75, 0.8, 5 / 6, 1]) {
           const layout = modelPadKnobTagLayout({

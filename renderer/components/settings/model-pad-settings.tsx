@@ -20,10 +20,12 @@ import { modelInsightsApi } from "../../lib/ipc";
 import { ProviderIcon } from "../provider-icon";
 import { ModelPadLegend } from "./model-pad-legend";
 import {
+  alsoViaLabel,
   benchmarkCoverage,
   createModelEntries,
   encodeSelection,
   modelBenchmarkPercentiles,
+  modelSiblings,
   MODEL_PAD_QUICK_START_LIMIT,
   pinnedAndRecentQuickStart,
   previewBenchmarkSuggestions,
@@ -507,6 +509,7 @@ export function ModelPadSettings() {
   const browseButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const [filter, setFilter] = React.useState("");
   const [activeValue, setActiveValue] = React.useState<string>();
+  const [hoveredValue, setHoveredValue] = React.useState<string>();
   const benchmarkMetric = padPreferences.metric;
   const [suggestionPreview, setSuggestionPreview] = React.useState<ModelPadSuggestionPreview>();
   // Accept saves still in flight. Their optimistic layout already holds the
@@ -595,6 +598,8 @@ export function ModelPadSettings() {
     return visibleModelEntries(createModelEntries(providers, infoByValue), hiddenModelsByProvider);
   }, [providers, catalog.data, hiddenModelsByProvider]);
   const visibleValues = React.useMemo(() => entries.map((entry) => entry.value), [entries]);
+  // Other visible routes to the same model ("Also via …"); placements stay per provider.
+  const siblingsByValue = React.useMemo(() => modelSiblings(entries), [entries]);
   const entriesByValue = React.useMemo(
     () => new Map(entries.map((entry) => [entry.value, entry])),
     [entries],
@@ -633,6 +638,14 @@ export function ModelPadSettings() {
     [entries, snappedPlacements],
   );
   const placedCount = placed.length;
+  // The hovered, else focused or selected, marker's siblings share its highlight.
+  const linkedValues = React.useMemo(
+    () =>
+      new Set(
+        siblingsByValue.get(hoveredValue ?? activeValue ?? "")?.map((entry) => entry.value) ?? [],
+      ),
+    [siblingsByValue, hoveredValue, activeValue],
+  );
   const occupiedCells = React.useMemo(
     () =>
       new Set(
@@ -1339,6 +1352,7 @@ export function ModelPadSettings() {
                   sourcePlacement.xSource === "neutral"
                     ? "Pace unmeasured; horizontal spread is for readability"
                     : gridLocation(placement, gridSize);
+                const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
                 return (
                   <button
                     key={entry.value}
@@ -1348,6 +1362,7 @@ export function ModelPadSettings() {
                     data-value={entry.value}
                     data-placement-source={placementKind}
                     data-selected={selected ? "true" : "false"}
+                    data-linked={linkedValues.has(entry.value) ? "true" : undefined}
                     data-label-align={labelPlacement.align}
                     data-label-side={labelPlacement.side}
                     className={cn(
@@ -1361,6 +1376,10 @@ export function ModelPadSettings() {
                     }}
                     onFocus={() => setActiveValue(entry.value)}
                     onBlur={flushPendingMove}
+                    onPointerEnter={() => setHoveredValue(entry.value)}
+                    onPointerLeave={() =>
+                      setHoveredValue((current) => (current === entry.value ? undefined : current))
+                    }
                     onPointerDown={(event) => {
                       if (event.button !== 0) return;
                       event.preventDefault();
@@ -1440,6 +1459,11 @@ export function ModelPadSettings() {
                       <span className="mt-0.5 block truncate text-mini font-normal text-secondary">
                         {entry.providerLabel} · {paceDescription}
                       </span>
+                      {alsoVia ? (
+                        <span className="block truncate text-mini font-normal text-secondary">
+                          {alsoVia}
+                        </span>
+                      ) : null}
                     </span>
                   </button>
                 );
@@ -1579,6 +1603,7 @@ export function ModelPadSettings() {
                 ) : (
                   filteredEntries.map((entry) => {
                     const onPad = Boolean(placements[entry.value]);
+                    const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
                     return (
                       <div
                         key={entry.value}
@@ -1598,6 +1623,7 @@ export function ModelPadSettings() {
                           <span className="block truncate text-mini text-tertiary">
                             {entry.providerLabel}
                             {entry.isLocal ? " · Local" : " · Hosted"}
+                            {alsoVia ? ` · ${alsoVia}` : ""}
                           </span>
                         </span>
                         <Button

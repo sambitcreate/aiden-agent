@@ -1,10 +1,12 @@
 import * as React from "react";
 import {
+  alsoViaLabel,
   findDirectionalModel,
   MODEL_PAD_CAPTURE_RADIUS,
   modelOptionId,
   nearestModel,
   type ModelDirection,
+  type ModelEntry,
   type ModelPoint,
   type PositionedModel,
 } from "../lib/model-picker-data";
@@ -156,6 +158,8 @@ interface ModelPickerPadProps {
   onTypeToSearch?: (character: string) => void;
   /** The benchmark score behind benchmark-assisted heights, when any is on the Pad. */
   heightMetric?: ModelPadMetric;
+  /** Other visible routes to the same model, by entry value (see `modelSiblings`). */
+  siblingsByValue?: ReadonlyMap<string, readonly ModelEntry[]>;
 }
 
 export function ModelPickerPad({
@@ -167,6 +171,7 @@ export function ModelPickerPad({
   onCommit,
   onTypeToSearch,
   heightMetric,
+  siblingsByValue,
 }: ModelPickerPadProps) {
   const helpId = React.useId();
   const rectRef = React.useRef<DOMRect | null>(null);
@@ -462,6 +467,7 @@ export function ModelPickerPad({
             point={puckPoint}
             label={puckPoint.label}
             providerLabel={puckPoint.providerLabel}
+            secondary={alsoViaLabel(siblingsByValue?.get(puckPoint.value))}
           />
         ) : null}
       </div>

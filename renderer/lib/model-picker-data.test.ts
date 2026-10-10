@@ -22,6 +22,9 @@ import {
   topBenchmarkSuggestions,
   visibleModelEntries,
   resolveExplicitModelSelection,
+  alsoViaLabel,
+  modelIdentityKey,
+  modelSiblings,
   type ModelEntry,
 } from "./model-picker-data";
 import {
@@ -979,4 +982,93 @@ test("benchmark coverage of an empty Pad has nothing unmatched", () => {
     visible: { matched: 0, total: 1 },
     unmatchedPad: [],
   });
+});
+
+function routeEntry(
+  providerId: string,
+  providerLabel: string,
+  model: string,
+  canonicalModelId?: string,
+): ModelEntry {
+  return {
+    value: encodeSelection(providerId, model),
+    providerId,
+    model,
+    label: model,
+    format: null,
+    providerLabel,
+    isLocal: false,
+    ...(canonicalModelId
+      ? { info: { id: model, metadataSource: "models-dev", matched: true, canonicalModelId } }
+      : {}),
+  };
+}
+
+test("model identity prefers the catalog's canonical id and falls back to the id leaf", () => {
+  assert.equal(
+    modelIdentityKey(routeEntry("openrouter", "OpenRouter", "openai/GPT-4o", "OpenAI/gpt-4o")),
+    "openai/gpt-4o",
+  );
+  // Without a canonical id the text after the last slash is the identity, date stamp kept.
+  assert.equal(
+    modelIdentityKey(routeEntry("router", "Router", "vendor/Claude-Sonnet-4-20250514")),
+    "claude-sonnet-4-20250514",
+  );
+  assert.equal(modelIdentityKey(routeEntry("openai", "OpenAI", "gpt-4o")), "gpt-4o");
+});
+
+test("model siblings link other routes to the same model, never the entry itself", () => {
+  const direct = routeEntry("openai", "OpenAI", "gpt-4o");
+  const routed = routeEntry("openrouter", "OpenRouter", "openai/GPT-4o");
+  const dated = routeEntry("azure", "Azure", "gpt-4o-2024-08-06");
+  const loner = routeEntry("anthropic", "Anthropic", "claude-sonnet-4");
+  const siblings = modelSiblings([direct, routed, dated, loner]);
+
+  assert.deepEqual(
+    siblings.get(direct.value)?.map((entry) => entry.value),
+    [routed.value],
+  );
+  assert.deepEqual(
+    siblings.get(routed.value)?.map((entry) => entry.value),
+    [direct.value],
+  );
+  // A different date stamp is a different model, and entries without a sibling are absent.
+  assert.equal(siblings.has(dated.value), false);
+  assert.equal(siblings.has(loner.value), false);
+});
+
+test("a canonical id links routes whose ids differ, and an unmatched leaf stays apart", () => {
+  const vendor = routeEntry("acme", "Acme", "acme-large-v2", "acme/large-2");
+  const router = routeEntry("openrouter", "OpenRouter", "acme/large-2-preview", "acme/large-2");
+  // No catalog row: its leaf ("large-2") is not the canonical "acme/large-2".
+  const custom = routeEntry("custom", "Custom", "acme/large-2");
+  const siblings = modelSiblings([vendor, router, custom]);
+  assert.deepEqual(siblings.get(vendor.value)?.map((entry) => entry.providerLabel), [
+    "OpenRouter",
+  ]);
+  assert.equal(siblings.has(custom.value), false);
+});
+
+test("three-way groups list every other route, and only the entries passed in count", () => {
+  const a = routeEntry("openai", "OpenAI", "gpt-4o");
+  const b = routeEntry("openrouter", "OpenRouter", "openai/gpt-4o");
+  const c = routeEntry("azure", "Azure", "GPT-4o");
+  const all = modelSiblings([a, b, c]);
+  assert.deepEqual(all.get(a.value)?.map((entry) => entry.providerLabel), ["OpenRouter", "Azure"]);
+  assert.deepEqual(all.get(c.value)?.map((entry) => entry.providerLabel), ["OpenAI", "OpenRouter"]);
+
+  // Callers pass visible entries only, so a hidden route links nothing.
+  const visible = visibleModelEntries([a, b, c], { openrouter: ["openai/gpt-4o"], azure: ["GPT-4o"] });
+  assert.equal(modelSiblings(visible).size, 0);
+});
+
+test("the also-via label names one or two providers and counts the rest", () => {
+  const one = [routeEntry("openrouter", "OpenRouter", "x")];
+  const two = [...one, routeEntry("azure", "Azure", "x")];
+  const four = [...two, routeEntry("groq", "Groq", "x"), routeEntry("vertex", "Vertex", "x")];
+  assert.equal(alsoViaLabel(undefined), undefined);
+  assert.equal(alsoViaLabel([]), undefined);
+  assert.equal(alsoViaLabel(one), "Also via OpenRouter");
+  assert.equal(alsoViaLabel(two), "Also via OpenRouter, Azure");
+  assert.equal(alsoViaLabel(four), "Also via OpenRouter, Azure +2");
 });

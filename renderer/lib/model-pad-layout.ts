@@ -197,8 +197,8 @@ export function modelPadKnobTagSide(input: {
 /**
  * Pixel layout for the composer knob's name tag inside a measured Pad. `x` is the
  * tag's left edge (start), center (center) or right edge (end); `y` is its bottom edge
- * (top side) or top edge (bottom side). `maxWidth` keeps it inside the Pad's gutters,
- * because the Pad clips its content.
+ * (top side) or top edge (bottom side), clamped inside the gutters. `maxWidth` keeps it
+ * inside the Pad's gutters, because the Pad clips its content.
  */
 export interface ModelPadKnobTagLayout extends ModelPadLabelPlacement {
   x: number;
@@ -231,11 +231,18 @@ export function modelPadKnobTagLayout(input: {
     x = knobLeft;
     room = 2 * Math.min(knobLeft - gutter, padWidth - gutter - knobLeft);
   }
+  // When the tag fits on its side these clamps change nothing; when it fits on neither
+  // side (a tall, multi-line tag on a short Pad) they keep it inside the gutters,
+  // overlapping the knob rather than being clipped by the Pad.
+  const y =
+    side === "top"
+      ? Math.min(padHeight - gutter, Math.max(gutter + input.tagHeight, knobTop - offset))
+      : Math.max(gutter, Math.min(padHeight - gutter - input.tagHeight, knobTop + offset));
   return {
     align,
     side,
     x,
-    y: side === "top" ? knobTop - offset : knobTop + offset,
+    y,
     maxWidth: Math.max(0, Math.min(MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX, room)),
   };
 }

@@ -21,9 +21,11 @@ import {
 import { ModelPickerPad } from "./model-picker-pad";
 import { cn } from "../lib/ui-utils";
 import {
+  alsoViaLabel,
   createModelEntries,
   encodeSelection,
   modelInfoByValue,
+  modelSiblings,
   orderModelEntries,
   positionSavedModels,
   positionModels,
@@ -332,9 +334,12 @@ function ModelListRow({
 
 function ModelHoverDetails({
   model,
+  alsoVia,
   metadataLoading,
 }: {
   model: ModelEntry | undefined;
+  /** Other providers serving the same model, such as "Also via OpenRouter". */
+  alsoVia?: string;
   metadataLoading: boolean;
 }) {
   if (!model) return null;
@@ -391,6 +396,11 @@ function ModelHoverDetails({
             {deploymentSuffix(model)}
             {model.format ? ` · ${model.format}` : ""}
           </Text>
+          {alsoVia ? (
+            <Text variant="small" color="tertiary" as="p" truncate>
+              {alsoVia}
+            </Text>
+          ) : null}
         </div>
       </div>
 
@@ -505,6 +515,11 @@ export function ModelPicker({
   const positioned = React.useMemo(
     () => positionSavedModels(entries, modelPadPlacements),
     [entries, modelPadPlacements],
+  );
+  // Other visible routes to the same model, linked visually on the Pad and side card.
+  const siblingsByValue = React.useMemo(
+    () => (open ? modelSiblings(entries) : new Map<string, ModelEntry[]>()),
+    [open, entries],
   );
   const orderedEntries = React.useMemo(
     () => (open ? orderModelEntries(entries, pinned) : []),
@@ -923,6 +938,7 @@ export function ModelPicker({
                 onPreview={setPreviewValue}
                 onCommit={commitFromPad}
                 heightMetric={heightMetric}
+                siblingsByValue={siblingsByValue}
                 onTypeToSearch={(character) => {
                   // A model was just chosen and the picker is about to close.
                   if (padCloseTimerRef.current !== null) return;
@@ -987,7 +1003,13 @@ export function ModelPicker({
         ) : null}
         </div>
         {showExternalDetails && (view === "list" || hasPadModels) ? (
-          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
+          <ModelHoverDetails
+            model={activePosition}
+            alsoVia={
+              activePosition ? alsoViaLabel(siblingsByValue.get(activePosition.value)) : undefined
+            }
+            metadataLoading={metadataLoading}
+          />
         ) : null}
       </PopoverContent>
     </Popover>

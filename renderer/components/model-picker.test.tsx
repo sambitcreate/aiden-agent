@@ -50,12 +50,13 @@ async function mountPicker(
     hidden?: string[];
     onChange?: (providerId: string, model: string) => void;
     settingsBlockedReason?: string;
+    providers?: Provider[];
   } = {},
 ) {
   const { router } = await mountWithBotRouter(
     <>
       <ModelPicker
-        providers={[provider]}
+        providers={options.providers ?? [provider]}
         providerId="acme"
         model="current-model"
         onChange={options.onChange ?? (() => {})}
@@ -121,6 +122,29 @@ test("a current model that is not on the Pad is not shown as selected and can be
       .getAttribute("aria-selected"),
     "true",
   );
+});
+
+test("the side card and knob tag name the other providers that serve the same model", async () => {
+  const relay: Provider = {
+    ...provider,
+    id: "relay",
+    label: "Relay Hub",
+    baseUrl: "https://relay.invalid/v1",
+    models: ["acme/current-model", "acme/placed-one"],
+  };
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": { x: 0.5, y: 0.5, ...user },
+    },
+  });
+  const pad = await openPicker(server, { providers: [provider, relay] });
+
+  const card = screen.getByRole("complementary");
+  assert.match(card.textContent ?? "", /Current Model/u);
+  assert.match(card.textContent ?? "", /Also via Relay Hub/u);
+  const tag = pad.querySelector<HTMLElement>("[data-model-pad-knob-tag]");
+  assert.match(tag?.textContent ?? "", /Also via Relay Hub/u);
 });
 
 test("a current model hidden from the picker is not offered for the Pad", async () => {

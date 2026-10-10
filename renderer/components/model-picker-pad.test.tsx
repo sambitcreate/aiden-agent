@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { modelOptionId, positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
+import {
+  modelOptionId,
+  modelSiblings,
+  positionSavedModels,
+  type ModelEntry,
+} from "../lib/model-picker-data";
 import { ModelPickerPad } from "./model-picker-pad";
 
 afterEach(cleanup);
@@ -72,6 +77,42 @@ test("the knob tag names the previewed model and its provider", () => {
   assert.doesNotMatch(tag.textContent ?? "", /Middle Model/u);
   // The listbox already announces the active option; the tag is visual only.
   assert.equal(tag.getAttribute("aria-hidden"), "true");
+});
+
+test("the knob tag says which other providers also serve the previewed model", () => {
+  const direct: ModelEntry = { ...entry("openai::gpt-4o", "GPT-4o", "OpenAI"), model: "gpt-4o" };
+  const routed: ModelEntry = {
+    ...entry("openrouter::openai/gpt-4o", "GPT-4o", "OpenRouter"),
+    providerId: "openrouter",
+    model: "openai/gpt-4o",
+  };
+  const loner = entry("solo", "Solo Model", "Acme Cloud");
+  const linked = positionSavedModels([direct, routed, loner], {
+    [direct.value]: { x: 0.2, y: 0.5, xSource: "user", ySource: "user" },
+    [routed.value]: { x: 0.8, y: 0.5, xSource: "user", ySource: "user" },
+    [loner.value]: { x: 0.5, y: 0.2, xSource: "user", ySource: "user" },
+  });
+  const siblingsByValue = modelSiblings([direct, routed, loner]);
+  const renderPreview = (previewValue: string) =>
+    render(
+      <ModelPickerPad
+        models={linked}
+        gridSize={7}
+        previewValue={previewValue}
+        siblingsByValue={siblingsByValue}
+        onPreview={() => {}}
+        onCommit={() => {}}
+      />,
+    );
+
+  const first = renderPreview(direct.value);
+  assert.match(knobTag(first.container).textContent ?? "", /Also via OpenRouter/u);
+  first.unmount();
+  const second = renderPreview(routed.value);
+  assert.match(knobTag(second.container).textContent ?? "", /Also via OpenAI/u);
+  second.unmount();
+  const third = renderPreview(loner.value);
+  assert.doesNotMatch(knobTag(third.container).textContent ?? "", /Also via/u);
 });
 
 test("the knob tag rests on the selected model and follows arrow-key preview", () => {
