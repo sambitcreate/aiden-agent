@@ -57,6 +57,8 @@ function editorServer(
     /** Add a loopback provider (label "Ollama") serving these unscored models. */
     localModels?: readonly string[];
     skippedAmbiguousCount?: number;
+    /** Serve only these models from the Test provider instead of all of MODELS. */
+    models?: readonly string[];
     /** When the cached benchmark snapshot was fetched. */
     fetchedAt?: string;
     /** Fail every model-details read. */
@@ -99,7 +101,7 @@ function editorServer(
       options.providersPending
         ? new Promise<Provider[]>(() => {})
         : [
-            provider,
+            options.models ? { ...provider, models: [...options.models] } : provider,
             ...(options.localModels
               ? [
                   {
@@ -216,6 +218,19 @@ test("an empty Pad opens Browse models once loading finishes", async () => {
   assert.equal(panel.hidden, false);
   const rows = await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
   assert.equal(rows.length, MODELS.length);
+});
+
+test("Browse models counts the available models in the singular and plural", async () => {
+  editorServer();
+  mountEditor();
+  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
+  assert.ok(await screen.findByLabelText("10 models available"));
+  cleanup();
+
+  editorServer({ models: ["m0"] });
+  mountEditor();
+  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
+  assert.ok(await screen.findByLabelText("1 model available"));
 });
 
 test("a Pad with models opens with Browse models closed", async () => {

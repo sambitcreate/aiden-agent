@@ -72,7 +72,6 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
   assert.match(source, />\s*Pad management\s*</u);
   assert.match(source, /model-pad-catalog/u);
   assert.match(source, /model-pad-browser-count/u);
-  assert.match(source, />\{entries\.length\} models</u);
   assert.match(source, /catalogScrollState\.hasMoreBelow/u);
   assert.match(source, /Scroll down to more available models/u);
   assert.match(source, /More models below/u);
