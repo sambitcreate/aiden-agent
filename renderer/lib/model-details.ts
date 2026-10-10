@@ -7,6 +7,12 @@ import type { ModelCost } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+/** Benchmark snapshots older than this are flagged as stale. */
+export const BENCHMARK_STALE_DAYS = 60;
+
+/** Signed in with a ChatGPT plan rather than billed per token. */
+const SUBSCRIPTION_PROVIDER_IDS = new Set(["openai-codex"]);
+
 /** Whether an ISO date lies more than `days` days before `now`; false when missing or invalid. */
 export function isOlderThanDays(
   iso: string | undefined,
@@ -18,8 +24,12 @@ export function isOlderThanDays(
   return Number.isFinite(time) && now - time > days * DAY_MS;
 }
 
-/** "$0.15" under a dollar; otherwise at most two decimals, trimmed ("$3", "$2.5"). */
+/**
+ * "$0.004" below a cent (three significant digits), "$0.15" under a dollar,
+ * otherwise at most two decimals, trimmed ("$3", "$2.5").
+ */
 function formatDollars(value: number): string {
+  if (value > 0 && value < 0.01) return `$${Number(value.toPrecision(3))}`;
   if (value < 1) return `$${value.toFixed(2)}`;
   return `$${Number(value.toFixed(2))}`;
 }
@@ -33,16 +43,20 @@ export function formatListPrice(cost: ModelCost | undefined): string | undefined
   if (input !== undefined && output !== undefined) {
     return `${formatDollars(input)} / ${formatDollars(output)} per 1M`;
   }
-  return input !== undefined
-    ? `${formatDollars(input)} in per 1M`
-    : `${formatDollars(output as number)} out per 1M`;
+  const [side, value] = input !== undefined ? ["in", input] : ["out", output as number];
+  return value === 0 ? `Free ${side}` : `${formatDollars(value)} ${side} per 1M`;
 }
 
 /**
- * A list price applies only to hosted providers that models.dev lists. Local
- * deployments and custom or private endpoints can inherit a public row's price
- * through the catalog fallback, and that price isn't what they cost.
+ * A list price applies only to hosted, per-token providers that models.dev
+ * lists. Local deployments and custom or private endpoints can inherit a public
+ * row's price through the catalog fallback, and subscription sign-ins aren't
+ * billed per token, so the price isn't what they cost.
  */
 export function showsListPrice(entry: { providerId: string; isLocal: boolean }): boolean {
-  return !entry.isLocal && catalogProviderSlug(entry.providerId) !== undefined;
+  return (
+    !entry.isLocal &&
+    !SUBSCRIPTION_PROVIDER_IDS.has(entry.providerId) &&
+    catalogProviderSlug(entry.providerId) !== undefined
+  );
 }

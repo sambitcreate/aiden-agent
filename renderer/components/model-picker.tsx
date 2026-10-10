@@ -34,7 +34,12 @@ import {
   type ModelEntry,
 } from "../lib/model-picker-data";
 import { useModelPaceSummaries, useProvidersModelInfo } from "../lib/queries";
-import { formatListPrice, isOlderThanDays, showsListPrice } from "../lib/model-details";
+import {
+  BENCHMARK_STALE_DAYS,
+  formatListPrice,
+  isOlderThanDays,
+  showsListPrice,
+} from "../lib/model-details";
 import { formatModelPace } from "../lib/model-pad-pace";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import {
@@ -64,8 +69,6 @@ interface ModelPickerProps {
 }
 
 const BENCHMARK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-/** Benchmark snapshots older than this are flagged in the detail card. */
-const BENCHMARK_STALE_DAYS = 60;
 
 function formatTokens(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
@@ -433,10 +436,9 @@ export function ModelHoverDetails({
               {detailRows.map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-3">
                   <dt className="shrink-0 text-tertiary">{label}</dt>
-                  <dd
-                    className="min-w-0 truncate text-right text-secondary tabular-nums"
-                    title={value}
-                  >
+                  {/* Values wrap rather than truncate: the tail of a long value
+                      (run count, staleness) is the part that matters. */}
+                  <dd className="min-w-0 break-words text-right text-secondary tabular-nums">
                     {value}
                   </dd>
                 </div>
@@ -522,8 +524,9 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
-  // Device-local measured speed for the detail card; display-only.
-  const paceSummaries = useModelPaceSummaries().data;
+  // Device-local measured speed for the detail card; display-only. Read afresh
+  // each time the picker opens so new chats show up without a remount.
+  const paceSummaries = useModelPaceSummaries({ enabled: open, staleTime: 0 }).data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive list order and detail positions only
   // while the popover is open.

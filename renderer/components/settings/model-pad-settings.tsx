@@ -80,7 +80,7 @@ import {
   useSettings,
 } from "../../lib/queries";
 import type { ModelInfo } from "../../lib/types";
-import { isOlderThanDays } from "../../lib/model-details";
+import { BENCHMARK_STALE_DAYS, isOlderThanDays } from "../../lib/model-details";
 import { cn } from "../../lib/ui-utils";
 
 function pointFromPointer(event: React.PointerEvent, rect: DOMRect): ModelPadPoint {
@@ -127,9 +127,6 @@ function modelInsightsDate(value: string | undefined): string | null {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? MODEL_INSIGHTS_DATE_FORMATTER.format(date) : null;
 }
-
-/** A cached benchmark snapshot older than this gets a gentle Fetch latest hint. */
-const BENCHMARK_STALE_DAYS = 60;
 
 function ModelPadBenchmarkConnection() {
   const queryClient = useQueryClient();
@@ -752,9 +749,10 @@ export function ModelPadSettings() {
     () => modelBenchmarkPercentiles(entries, benchmarkMetric),
     [entries, benchmarkMetric],
   );
-  // Pad models with some benchmark score but none for the chosen metric.
-  const matchedWithoutMetric =
-    coverage.pad.matched - placed.filter((entry) => benchmarkPercentiles.has(entry.value)).length;
+  // Visible models with some benchmark score but none for the chosen metric.
+  const matchedWithoutMetric = coverage.visible.matched - benchmarkPercentiles.size;
+  // Coverage counts are only meaningful once every model and its details have loaded.
+  const coverageReady = !loading && !providersQuery.isError && !catalog.isError;
   const suggestionCount = React.useMemo(
     () =>
       topBenchmarkSuggestions(entries, benchmarkPercentiles, {
@@ -1815,7 +1813,7 @@ export function ModelPadSettings() {
               Preview suggestions
             </Button>
           </div>
-          {modelInsights.data?.ready && !loading ? (
+          {modelInsights.data?.ready && coverageReady ? (
             <div className="mt-2 rounded-control bg-background/45 px-3 py-2.5">
               <Text as="h3" variant="small-strong">
                 Coverage
@@ -1829,7 +1827,7 @@ export function ModelPadSettings() {
                 <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible model${coverage.visible.total === 1 ? "" : "s"}`}</li>
                 {matchedWithoutMetric > 0 ? (
                   <li>
-                    {`${matchedWithoutMetric} matched model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`}
+                    {`${matchedWithoutMetric} matched visible model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`}
                   </li>
                 ) : null}
                 {modelInsights.data.skippedAmbiguousCount > 0 ? (

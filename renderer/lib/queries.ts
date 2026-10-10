@@ -385,6 +385,7 @@ export function useProvidersModelInfo(providers: Provider[]) {
       return {
         data,
         isLoading: results.some((result) => result.isLoading),
+        isError: results.some((result) => result.isError),
       };
     },
   });
@@ -612,13 +613,18 @@ export function useModelInsightsStatus() {
   });
 }
 
-/** Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a Pad surface mounts. */
-export function useModelPaceSummaries() {
+/**
+ * Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a
+ * Pad surface mounts. A surface that stays mounted can pass `enabled` (only read
+ * while visible) and `staleTime: 0` to read again each time it is shown.
+ */
+export function useModelPaceSummaries(options: { enabled?: boolean; staleTime?: number } = {}) {
   return useQuery({
     queryKey: queryKeys.modelPaceSummaries,
     queryFn: modelPaceApi.summaries,
+    enabled: options.enabled ?? true,
     retry: false,
-    staleTime: 30_000,
+    staleTime: options.staleTime ?? 30_000,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
   });

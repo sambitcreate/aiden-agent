@@ -59,6 +59,8 @@ function editorServer(
     skippedAmbiguousCount?: number;
     /** When the cached benchmark snapshot was fetched. */
     fetchedAt?: string;
+    /** Fail every model-details read. */
+    infoFails?: boolean;
     /** Keep the provider list loading forever. */
     providersPending?: boolean;
     /** Reject every settings write. */
@@ -110,7 +112,10 @@ function editorServer(
                 ]
               : []),
           ],
-    "models:info": () => info,
+    "models:info": () => {
+      if (options.infoFails) throw new Error("catalog unreadable");
+      return info;
+    },
     "modelInsights:status": () => ({
       hasKey: Boolean(options.insightsReady),
       ready: Boolean(options.insightsReady),
@@ -695,7 +700,7 @@ test("benchmark coverage omits the unmatched list and skipped rows when there ar
   await within(panel).findByText("1 of 1 Pad model matched");
   assert.ok(!within(panel).queryByText(/Unmatched Pad models/u));
   assert.ok(!within(panel).queryByText(/ambiguous benchmark rows skipped/u));
-  assert.ok(!within(panel).queryByText(/have no .+ score|has no .+ score/u));
+  assert.ok(!within(panel).queryByText(/ha(?:s|ve) no .+ score/u));
 });
 
 test("benchmark coverage stays hidden until insights are ready", async () => {
@@ -715,6 +720,17 @@ test("benchmark coverage waits for the model list instead of counting nothing", 
   assert.ok(!within(panel).queryByText(/visible models?$/u));
 });
 
+test("benchmark coverage stays hidden when model details can't be read", async () => {
+  editorServer({ insightsReady: true, infoFails: true });
+  mountEditor();
+  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("Benchmark insights ready");
+  assert.ok(!within(panel).queryByText("Coverage"));
+  assert.ok(!within(panel).queryByText(/visible models?$/u));
+});
+
 test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
   editorServer({ insightsReady: true });
   mountEditor();
@@ -727,19 +743,20 @@ test("benchmark coverage on an empty Pad says there is nothing to match yet", as
   assert.ok(!within(panel).queryByText(/Pad models? matched/u));
 });
 
-test("benchmark coverage counts matched Pad models without a score for the chosen metric", async () => {
+test("benchmark coverage counts matched visible models without a score for the chosen metric", async () => {
   editorServer({
     insightsReady: true,
     metric: "agentic",
-    placements: { "test::m0": userPlacement, "test::m1": { ...userPlacement, x: 0 } },
+    scoredModels: ["m0", "m1", "m2"],
+    placements: { "test::m0": userPlacement },
   });
   mountEditor();
-  await waitFor(() => assert.equal(markerCount(), 2));
+  await waitFor(() => assert.equal(markerCount(), 1));
   fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
 
   const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText("2 of 2 Pad models matched");
-  within(panel).getByText("2 matched models have no Agentic score");
+  await within(panel).findByText("1 of 1 Pad model matched");
+  within(panel).getByText("3 matched visible models have no Agentic score");
 
   fireEvent.click(within(panel).getByRole("button", { name: "Coding" }));
   await waitFor(() => assert.ok(!within(panel).queryByText(/matched models? ha(?:s|ve) no/u)));
