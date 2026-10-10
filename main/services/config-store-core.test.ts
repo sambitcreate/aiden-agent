@@ -726,7 +726,7 @@ test("released onboarding local identity migration re-homes cache and remembered
 test("provider identity migration re-homes Model Pad placements, pins and recent models with canonical precedence", async (t) => {
   const releasedId = "custom:onboarding-lmstudio";
   const canonicalId = "custom:lmstudio";
-  const legacyPlacement = { x: 0.1, y: 0.2, xSource: "user", ySource: "user" } as const;
+  const legacyPlacement = { x: 0.1, y: 0.2, xSource: "measured", ySource: "user" } as const;
   const canonicalPlacement = { x: 0.9, y: 0.8, xSource: "benchmark", ySource: "benchmark" } as const;
   const h = await harness(t, {
     providers: [{ ...provider, id: releasedId, defaultModel: "qwen3-8b" }],

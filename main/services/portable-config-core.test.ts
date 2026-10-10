@@ -1376,12 +1376,15 @@ test("settings persistence preserves future assistant fields and values", async 
 test("Model Pad placements, pins, recent models and metric survive a settings round trip with invalid entries dropped", async (t) => {
   const r = await roots(t);
   const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark" };
+  const measured = { x: 0, y: 0.5, xSource: "measured", ySource: "user" };
   await fs.writeFile(
     r.settingsFile,
     JSON.stringify({
       settings: {
         modelPadPlacements: {
           "openai::gpt": placement,
+          "openai::fast": measured,
+          "openai::measured-height": { ...placement, ySource: "measured" },
           "openai::out-of-range": { ...placement, x: 1.5 },
           "openai::legacy": { x: 0.5, y: 0.5, source: "user" },
           "not-a-model-key": placement,
@@ -1395,7 +1398,10 @@ test("Model Pad placements, pins, recent models and metric survive a settings ro
   );
 
   const exported = await stores(r).settings.load();
-  assert.deepEqual(exported.settings.modelPadPlacements, { "openai::gpt": placement });
+  assert.deepEqual(exported.settings.modelPadPlacements, {
+    "openai::gpt": placement,
+    "openai::fast": measured,
+  });
   assert.deepEqual(exported.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(exported.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
   assert.equal(exported.settings.modelPadMetric, "agentic");
@@ -1404,7 +1410,10 @@ test("Model Pad placements, pins, recent models and metric survive a settings ro
   const target = await roots(t);
   await fs.writeFile(target.settingsFile, JSON.stringify(exported), "utf-8");
   const imported = runtimeSettingsFrom((await stores(target).settings.load()).settings);
-  assert.deepEqual(imported.modelPadPlacements, { "openai::gpt": placement });
+  assert.deepEqual(imported.modelPadPlacements, {
+    "openai::gpt": placement,
+    "openai::fast": measured,
+  });
   assert.deepEqual(imported.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(imported.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
   assert.equal(imported.modelPadMetric, "agentic");

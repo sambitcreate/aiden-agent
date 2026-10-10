@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ExternalLink,
+  Gauge,
   KeyRound,
   Layers3,
   Loader2,
@@ -60,13 +61,16 @@ import {
   type ModelPadMetric,
   type ModelPadPoint,
 } from "../../lib/model-pad-layout";
+import { formatModelPace, measuredPacePlacements } from "../../lib/model-pad-pace";
 import { useModelPadPreferences } from "../../lib/model-pad-preferences";
 import type { ModelPadPlacement, ModelPadPlacements } from "../../shared/model-pad-preferences";
 import {
   beginModelInsightsAction,
+  clearModelPaceSummaries,
   commitModelInsightsState,
   refreshModelInsightsState,
   useModelInsightsStatus,
+  useModelPaceSummaries,
   useProviders,
   useProvidersModelInfo,
   useSettings,
@@ -404,6 +408,13 @@ function addedSuggestionsMessage(count: number): string {
   return `Added ${count} suggestion${count === 1 ? "" : "s"}`;
 }
 
+const MEASURED_PACE_UNAVAILABLE_REASON = "Use a few models in chat first to measure their speed";
+
+function measuredPaceMessage(updated: number, lacking: number): string {
+  const set = `Set pace for ${updated} model${updated === 1 ? "" : "s"}`;
+  return lacking > 0 ? `${set} · ${lacking} need${lacking === 1 ? "s" : ""} more chats` : set;
+}
+
 /**
  * Where benchmark suggestions land: existing models reflowed onto the grid the
  * Pad has once the suggestions join it, and the suggestions packed into its
@@ -445,18 +456,21 @@ interface ModelPadSuggestionPreview {
 }
 
 /**
- * One of the empty Pad's quick starts. When it can't run it stays focusable
- * (aria-disabled) so keyboard and screen reader users hear why.
+ * A Pad action that can be unavailable: an empty-Pad quick start, or Set pace
+ * from measured speed. When it can't run it stays focusable (aria-disabled) so
+ * keyboard and screen reader users hear why.
  */
-function ModelPadQuickStart({
+function ModelPadActionButton({
   icon,
   label,
   disabledReason,
+  variant,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   disabledReason?: string;
+  variant?: React.ComponentProps<typeof Button>["variant"];
   onClick: () => void;
 }) {
   const reasonId = React.useId();
@@ -464,6 +478,7 @@ function ModelPadQuickStart({
     <>
       <Button
         size="small"
+        variant={variant}
         // Wraps instead of clipping on a small Pad.
         className={cn(
           "h-auto min-h-7 max-w-full whitespace-normal py-1 text-center",
@@ -489,6 +504,7 @@ function ModelPadQuickStart({
 }
 
 export function ModelPadSettings() {
+  const queryClient = useQueryClient();
   const providersQuery = useProviders();
   const providers = React.useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
   const catalog = useProvidersModelInfo(providers);
@@ -497,6 +513,13 @@ export function ModelPadSettings() {
   const hiddenModelsByProvider = settings.data?.hiddenModelsByProvider;
   const padPreferences = useModelPadPreferences();
   const savePadPreferences = padPreferences.save;
+  // Device-local speed measured from the user's own chats; display-only until
+  // the user chooses Set pace from measured speed.
+  const paceQuery = useModelPaceSummaries();
+  const paceSummaries = paceQuery.data;
+  const [confirmClearPace, setConfirmClearPace] = React.useState(false);
+  const [clearingPace, setClearingPace] = React.useState(false);
+  const clearPaceButtonRef = React.useRef<HTMLButtonElement | null>(null);
   // The settings query is the only copy of the layout: every action saves
   // straight away, the save updates the query optimistically, and a failed
   // save rolls it back. Only in-progress gestures live in local state.
@@ -733,6 +756,14 @@ export function ModelPadSettings() {
       limit: 1,
     }).length > 0;
   const quickStartsLoading = loading || !preferencesReady || modelInsights.isLoading;
+  const hasPaceSamples = Object.values(paceSummaries ?? {}).some(
+    (summary) => summary.sampleCount > 0,
+  );
+  const canSetMeasuredPace = React.useMemo(
+    () =>
+      measuredPacePlacements(placements, visibleValues, paceSummaries ?? {}).updated.length > 0,
+    [placements, visibleValues, paceSummaries],
+  );
 
   const toggleSupportingPanel = (panel: Exclude<typeof activePanel, null>, animate: boolean) => {
     browseAutoOpenSettledRef.current = true;
@@ -1103,6 +1134,37 @@ export function ModelPadSettings() {
     );
   };
 
+  /** Set the pace of every placed model with enough measured chats from its speed. */
+  const setPaceFromMeasuredSpeed = () => {
+    const summaries = paceSummaries;
+    if (!summaries) return;
+    flushPendingMove();
+    // Previewed spots assume the current Pad; moving models invalidates them.
+    setSuggestionPreview(undefined);
+    void persistAction((current) => {
+      const result = measuredPacePlacements(current, visibleValues, summaries);
+      if (result.updated.length === 0) return null;
+      return {
+        placements: result.placements,
+        message: measuredPaceMessage(result.updated.length, result.lacking.length),
+      };
+    });
+  };
+
+  const clearMeasuredSpeeds = async () => {
+    if (clearingPace) return;
+    setClearingPace(true);
+    try {
+      await clearModelPaceSummaries(queryClient);
+      toast.success("Measured speeds cleared.");
+    } catch {
+      toast.error("Aiden couldn’t clear measured speeds.");
+    } finally {
+      setConfirmClearPace(false);
+      setClearingPace(false);
+    }
+  };
+
   const changeMetric = (metric: ModelPadMetric) => {
     if (metric === benchmarkMetric) return;
     savePadPreferences({ modelPadMetric: metric }).catch(() => {
@@ -1231,6 +1293,21 @@ export function ModelPadSettings() {
               <ProviderIcon providerId="openrouter" providerLabel="OpenRouter" className="size-4" />
               Benchmark insights
             </Button>
+            {placedCount > 0 ? (
+              <ModelPadActionButton
+                icon={<Gauge />}
+                label="Set pace from measured speed"
+                variant="transparent"
+                disabledReason={
+                  paceQuery.isLoading
+                    ? "Loading measured speeds…"
+                    : canSetMeasuredPace
+                      ? undefined
+                      : MEASURED_PACE_UNAVAILABLE_REASON
+                }
+                onClick={setPaceFromMeasuredSpeed}
+              />
+            ) : null}
           </div>
         </div>
 
@@ -1305,7 +1382,7 @@ export function ModelPadSettings() {
                       Add a few models from the list, then drag them into place.
                     </Text>
                     <div className="pointer-events-auto flex max-w-full flex-wrap justify-center gap-2">
-                      <ModelPadQuickStart
+                      <ModelPadActionButton
                         icon={<Pin />}
                         label="Add pinned & recent"
                         disabledReason={
@@ -1317,7 +1394,7 @@ export function ModelPadSettings() {
                         }
                         onClick={() => runQuickStart(addPinnedAndRecent)}
                       />
-                      <ModelPadQuickStart
+                      <ModelPadActionButton
                         icon={
                           <ProviderIcon
                             providerId="openrouter"
@@ -1355,13 +1432,18 @@ export function ModelPadSettings() {
                 const paceDescription =
                   sourcePlacement.xSource === "neutral"
                     ? "Pace unmeasured; horizontal spread is for readability"
-                    : gridLocation(placement, gridSize);
+                    : sourcePlacement.xSource === "measured" && !dragging
+                      ? "Pace from your chats"
+                      : gridLocation(placement, gridSize);
+                const paceSummary = paceSummaries?.[entry.value];
+                const measuredSpeed =
+                  paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
                 const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
                 return (
                   <button
                     key={entry.value}
                     type="button"
-                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
+                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
                     aria-pressed={selected}
                     data-value={entry.value}
                     data-placement-source={placementKind}
@@ -1463,6 +1545,11 @@ export function ModelPadSettings() {
                       <span className="mt-0.5 block truncate text-mini font-normal text-secondary">
                         {entry.providerLabel} · {paceDescription}
                       </span>
+                      {measuredSpeed ? (
+                        <span className="block truncate text-mini font-normal text-secondary">
+                          {measuredSpeed}
+                        </span>
+                      ) : null}
                       {alsoVia ? (
                         <span className="block truncate text-mini font-normal text-secondary">
                           {alsoVia}
@@ -1760,7 +1847,7 @@ export function ModelPadSettings() {
           <ModelPadBenchmarkConnection />
         </section>
 
-        {(placedCount > 0 || hasUnavailablePlacements) && (
+        {(placedCount > 0 || hasUnavailablePlacements || hasPaceSamples) && (
           <details id={managementId} className="model-pad-management group rounded-control">
             <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection">
               Pad management
@@ -1782,9 +1869,35 @@ export function ModelPadSettings() {
                   Remove all models from Pad
                 </Button>
               ) : null}
+              {hasPaceSamples ? (
+                <Button
+                  ref={clearPaceButtonRef}
+                  size="small"
+                  variant="transparent"
+                  className="w-fit text-secondary"
+                  onClick={() => setConfirmClearPace(true)}
+                >
+                  Clear measured speeds
+                </Button>
+              ) : null}
             </div>
           </details>
         )}
+        <AlertDialog
+          open={confirmClearPace}
+          onOpenChange={setConfirmClearPace}
+          title="Clear measured speeds?"
+          description="Aiden will forget the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
+          confirmLabel="Clear speeds"
+          confirmVariant="destructive"
+          busy={clearingPace}
+          keepOpenOnConfirm
+          returnFocus={() => {
+            const button = clearPaceButtonRef.current;
+            return button?.isConnected ? button : browseButtonRef.current;
+          }}
+          onConfirm={clearMeasuredSpeeds}
+        />
       </Field>
     </FieldSet>
   );

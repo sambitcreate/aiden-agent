@@ -28,6 +28,9 @@ test("placements keep only bounded provider::model keys with in-range coordinate
     normalizeModelPadPlacements({
       "openai::gpt": { x: 0.2, y: 0.8, ...user },
       "anthropic::claude": { x: 1, y: 0, xSource: "neutral", ySource: "benchmark" },
+      "google::gemini": { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
+      // Measured speed sets pace only; a height is never "measured".
+      "bad::measured-height": { x: 0.2, y: 0.2, xSource: "user", ySource: "measured" },
       "bad::range": { x: 4, y: 0.2, ...user },
       "bad::nan": { x: Number.NaN, y: 0.2, ...user },
       "bad::source": { x: 0.2, y: 0.2, xSource: "generated", ySource: "user" },
@@ -40,6 +43,7 @@ test("placements keep only bounded provider::model keys with in-range coordinate
     {
       "openai::gpt": { x: 0.2, y: 0.8, ...user },
       "anthropic::claude": { x: 1, y: 0, xSource: "neutral", ySource: "benchmark" },
+      "google::gemini": { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
     },
   );
 });

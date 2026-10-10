@@ -7,6 +7,7 @@ import {
 
 export type {
   ModelPadMetric,
+  ModelPadPaceSource,
   ModelPadPlacement,
   ModelPadPlacementSource,
 } from "../shared/model-pad-preferences";

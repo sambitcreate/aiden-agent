@@ -3,14 +3,18 @@
 // patch validation) and the renderer (reading the settings query). Every entry
 // is keyed `${providerId}::${modelId}`; anything else is dropped fail-closed.
 
+/** Where a height (Y) comes from: the user, a benchmark score, or neither (spread for readability). */
 export type ModelPadPlacementSource = "user" | "benchmark" | "neutral";
+
+/** Pace (X) can also come from speed measured in the user's own chats on this device. */
+export type ModelPadPaceSource = ModelPadPlacementSource | "measured";
 
 export interface ModelPadPlacement {
   /** 0 = fastest pace, 1 = most deliberate. */
   x: number;
   /** 0 = least capable, 1 = most capable. */
   y: number;
-  xSource: ModelPadPlacementSource;
+  xSource: ModelPadPaceSource;
   ySource: ModelPadPlacementSource;
 }
 
@@ -54,11 +58,15 @@ function isSource(value: unknown): value is ModelPadPlacementSource {
   return value === "user" || value === "benchmark" || value === "neutral";
 }
 
+function isPaceSource(value: unknown): value is ModelPadPaceSource {
+  return value === "measured" || isSource(value);
+}
+
 function placement(value: unknown): ModelPadPlacement | null {
   if (!isRecord(value)) return null;
   const x = coordinate(value.x);
   const y = coordinate(value.y);
-  if (x === null || y === null || !isSource(value.xSource) || !isSource(value.ySource)) {
+  if (x === null || y === null || !isPaceSource(value.xSource) || !isSource(value.ySource)) {
     return null;
   }
   return { x, y, xSource: value.xSource, ySource: value.ySource };
