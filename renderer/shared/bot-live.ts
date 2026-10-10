@@ -9,6 +9,8 @@
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
+import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
+import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
 
 export type { BotSessionState };
 
@@ -127,6 +129,17 @@ export type BotTranscriptEntry =
       retryText: string | null;
       /** The model's error, for the Mac only; never sent to phones. */
       errorMessage?: string;
+      at?: number;
+    }
+  /** A quiet "Memory updated" line after the Bot saved something. */
+  | { id: string; type: "memory_update"; targets: BotMemoryTarget[]; source: BotMemorySource; at?: number }
+  /** A routine the Bot suggested; the person approves or dismisses it. */
+  | {
+      id: string;
+      type: "routine_proposal";
+      proposal: BotRoutineProposalEntryData;
+      status: BotRoutineProposalStatus;
+      routineId?: string;
       at?: number;
     };
 

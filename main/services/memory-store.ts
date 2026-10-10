@@ -4,9 +4,13 @@ import { chmod, mkdir, open, stat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type MemoryScope =
-  | { kind: "bot"; id: string }
-  | { kind: "workspace"; id: string };
+/**
+ * Workspace memory. Bots no longer use this store: each Bot keeps its own
+ * memory files (`bot-memory/`), and legacy `scope_kind = 'bot'` rows are
+ * purged whenever the database opens. The schema's CHECK constraint still
+ * names 'bot' (no table rebuild before 1.0).
+ */
+export type MemoryScope = { kind: "workspace"; id: string };
 
 export type MemoryProvenance =
   | { kind: "user_edit"; sourceId: string }
@@ -120,9 +124,17 @@ function ftsQuery(value: string): string | undefined {
   return [...new Set(terms)].map((term) => `"${term.replace(/"/gu, '""')}"`).join(" OR ");
 }
 
+/** Bot memory moved to per-Bot files; drop any rows the old Bot scope left behind. */
+function purgeLegacyBotRows(database: DatabaseSync): void {
+  database.exec(`
+    DELETE FROM memory_facts WHERE scope_kind = 'bot';
+    DELETE FROM memory_documents WHERE scope_kind = 'bot';
+  `);
+}
+
 interface FactRow {
   id: string;
-  scope_kind: "bot" | "workspace";
+  scope_kind: "workspace";
   scope_id: string;
   normalized_text: string;
   provenance_kind: "user_edit" | "chat_message";
@@ -322,6 +334,7 @@ export class MemoryStore {
     await this.repairPrivateModes();
     try {
       await this.applyMigrations(database);
+      purgeLegacyBotRows(database);
     } catch (error) {
       // Don't cache an unmigrated handle — the next db() call must retry.
       database.close();
@@ -472,7 +485,7 @@ export class MemoryStore {
               source_chat_id, source_id, updated_at
             FROM memory_documents
           `).all() as unknown as Array<{
-            id: string; scope_kind: "bot" | "workspace"; scope_id: string;
+            id: string; scope_kind: string; scope_id: string;
             kind: "transcript" | "artifact"; normalized_text: string;
             source_chat_id: string; source_id: string; updated_at: number;
           }>
@@ -499,7 +512,8 @@ export class MemoryStore {
         const separator = scopeKey.indexOf(":");
         const kind = scopeKey.slice(0, separator) as MemoryScope["kind"];
         const sourceId = scopeKey.slice(separator + 1);
-        if (kind !== "bot" && kind !== "workspace") continue;
+        // Legacy Bot rows are never imported: Bot memory lives in its own files now.
+        if (kind !== "workspace") continue;
         const destinationId = remap[sourceId] ?? sourceId;
         if (!SAFE_ID.test(destinationId)) continue;
         // Keyed by destination so a scope first imported unmapped can be

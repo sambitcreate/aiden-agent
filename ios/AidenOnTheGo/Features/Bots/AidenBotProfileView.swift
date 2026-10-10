@@ -33,6 +33,8 @@ struct AidenBotProfileView: View {
     /// Called after the Bot is deleted, so the caller can leave its chat.
     var onDeleted: () -> Void = { }
     var showsDismissButton = true
+    /// Opens Profile → Memory once it is ready (the chat's "Memory updated").
+    var opensMemory = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -55,6 +57,9 @@ struct AidenBotProfileView: View {
     @State private var isConfirmingPhotoRemoval = false
     @State private var isConfirmingDelete = false
     @State private var isShowingAdvanced = false
+    @State private var memoryModel: AidenBotMemoryModel?
+    @State private var isShowingMemory = false
+    @State private var hasOpenedMemory = false
     @FocusState private var focusedField: AidenBotProfileField?
 
     private var botID: String { initialSummary.id }
@@ -96,6 +101,11 @@ struct AidenBotProfileView: View {
                     AidenBotAdvancedView(coordinator: coordinator, botID: botID) { updated in
                         apply(updated)
                         onChanged()
+                    }
+                }
+                .navigationDestination(isPresented: $isShowingMemory) {
+                    if let memoryModel {
+                        AidenBotMemoryView(model: memoryModel, canWrite: canWrite)
                     }
                 }
         }
@@ -229,6 +239,16 @@ struct AidenBotProfileView: View {
                     .padding(.bottom, 16)
 
                 instructionsRow(detail)
+
+                if let memoryModel {
+                    Button {
+                        isShowingMemory = true
+                    } label: {
+                        AidenBotMemoryRow(summary: memoryModel.countSummary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
 
                 if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.routines, coordinator: coordinator) {
                     AidenBotRoutinesSection(coordinator: coordinator, botID: detail.id, canWrite: canWrite)
@@ -397,6 +417,8 @@ struct AidenBotProfileView: View {
         mutationError = nil
         isSaving = false
         character = nil
+        memoryModel = nil
+        isShowingMemory = false
         avatarModel?.clearForDismissal()
         avatarModel = nil
     }
@@ -407,6 +429,22 @@ struct AidenBotProfileView: View {
         if focusedField != .name { nameText = loaded.name }
         if focusedField != .subtitle { subtitleText = loaded.purpose }
         character = AidenBotCharacterDraft(avatar: loaded.avatar.semantic)
+        memoryModel?.rename(loaded.name)
+    }
+
+    /// Profile → Memory, only on a Mac that serves `bot-memory-v1`.
+    @MainActor
+    private func prepareMemory(context: AidenRemoteRequestContext, botName: String) async {
+        guard memoryModel == nil,
+              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        let model = AidenBotMemoryModel(botID: botID, botName: botName, transport: client)
+        memoryModel = model
+        if opensMemory, !hasOpenedMemory {
+            hasOpenedMemory = true
+            isShowingMemory = true
+        }
+        await model.load()
     }
 
     @MainActor
@@ -433,6 +471,11 @@ struct AidenBotProfileView: View {
             apply(loaded)
             capturedContext = context
             loadError = nil
+            if memoryModel == nil {
+                Task { await prepareMemory(context: context, botName: loaded.name) }
+            } else {
+                Task { await memoryModel?.load() }
+            }
             if avatarModel == nil {
                 avatarModel = AidenBotGeneratedAvatarModel(coordinator: coordinator, botID: botID) { updated in
                     apply(updated)

@@ -251,3 +251,119 @@ data class AidenBotPresetCreateResult(
     @Serializable(with = AidenStrictBooleanSerializer::class) val created: Boolean,
     val bot: AidenBotSummary
 )
+
+// --- Contract revision 27 (`bot-proactive-v1`) ---
+
+/** A Bot's suggested routine: the person adds it or says Not now. */
+@Serializable
+enum class AidenBotRoutineProposalDecision {
+    @SerialName("accept") ACCEPT,
+    @SerialName("dismiss") DISMISS
+}
+
+/** `POST /bots/{botId}/routine-proposals/{proposalId}/respond` body; sent with an `Idempotency-Key`. */
+@Serializable
+data class AidenBotRoutineProposalRespondRequest(val decision: AidenBotRoutineProposalDecision)
+
+@Serializable
+enum class AidenBotRoutineProposalOutcome {
+    @SerialName("accepted") ACCEPTED,
+    @SerialName("dismissed") DISMISSED
+}
+
+/** The settled answer. Only an accepted proposal, and always one, names the routine it made. */
+@Serializable
+data class AidenBotRoutineProposalRespondResult(
+    val status: AidenBotRoutineProposalOutcome,
+    val routineId: String? = null
+) {
+    init {
+        if ((routineId != null) != (status == AidenBotRoutineProposalOutcome.ACCEPTED)) {
+            throw AidenBotContractException.InvalidCombination("routine proposal result")
+        }
+        routineId?.let { AidenBotWire.validateString(it, "routineId", AidenBotRoutineWire.MAX_ID_LENGTH) }
+    }
+}
+
+/** A starter routine the editor opens prefilled (the daily check-in); nothing is made until Save. */
+@Serializable
+data class AidenBotRoutineSuggestion(
+    val id: String,
+    val name: String,
+    val prompt: String,
+    val schedule: AidenBotRoutineSchedule,
+    /** Host-formatted friendly schedule; display it as-is. */
+    val label: String
+) {
+    init {
+        AidenBotSessionWire.validatePluginId(id, "suggestion.id")
+        AidenBotWire.validateString(name, "suggestion.name", AidenBotRoutineWire.MAX_NAME_LENGTH)
+        AidenBotWire.validateString(prompt, "suggestion.prompt", AidenBotRoutineWire.MAX_MESSAGE_LENGTH)
+        AidenBotWire.validateString(label, "suggestion.label", AidenBotSessionWire.MAX_LABEL_LENGTH)
+    }
+}
+
+/** `GET /bots/{botId}/routine-suggestions`: empty once the Bot has any routine. */
+@Serializable
+data class AidenBotRoutineSuggestionList(val suggestions: List<AidenBotRoutineSuggestion>) {
+    init {
+        if (suggestions.size > MAX_SUGGESTIONS || suggestions.map { it.id }.toSet().size != suggestions.size) {
+            throw AidenBotContractException.InvalidField("suggestions")
+        }
+    }
+
+    companion object {
+        const val MAX_SUGGESTIONS = 8
+    }
+}
+
+@Serializable
+enum class AidenBotRoutineNotificationStatus {
+    @SerialName("succeeded") SUCCEEDED,
+    @SerialName("failed") FAILED
+}
+
+/** One finished Bot routine run the phone may post once, as `aiden.bot-routine.<id>`. */
+@Serializable
+data class AidenBotRoutineNotification(
+    /** The routine run id. */
+    val id: String,
+    val botId: String,
+    val botName: String,
+    val routineId: String,
+    val routineName: String,
+    val status: AidenBotRoutineNotificationStatus,
+    @Serializable(with = InstantIso8601Serializer::class) val finishedAt: Instant,
+    /** First 160 characters of the reply (redacted), or a fixed failure line. */
+    val preview: String
+) {
+    init {
+        AidenBotWire.validateString(id, "notification.id", AidenBotRoutineWire.MAX_ID_LENGTH)
+        AidenBotWire.validateIdentifier(botId, "notification.botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotWire.validateString(botName, "notification.botName", AidenBotWire.MAX_NAME_LENGTH)
+        AidenBotWire.validateString(routineId, "notification.routineId", AidenBotRoutineWire.MAX_ID_LENGTH)
+        AidenBotWire.validateString(routineName, "notification.routineName", AidenBotRoutineWire.MAX_NAME_LENGTH)
+        AidenBotWire.validateString(preview, "notification.preview", MAX_PREVIEW_LENGTH, allowEmpty = true)
+    }
+
+    companion object {
+        const val MAX_PREVIEW_LENGTH = 160
+    }
+}
+
+/** `GET /bots/routine-notifications?since=`: newest first, at most 100. Pass [now] as the next `since`. */
+@Serializable
+data class AidenBotRoutineNotificationList(
+    val notifications: List<AidenBotRoutineNotification>,
+    @Serializable(with = InstantIso8601Serializer::class) val now: Instant
+) {
+    init {
+        if (notifications.size > MAX_NOTIFICATIONS || notifications.map { it.id }.toSet().size != notifications.size) {
+            throw AidenBotContractException.InvalidField("notifications")
+        }
+    }
+
+    companion object {
+        const val MAX_NOTIFICATIONS = 100
+    }
+}

@@ -74,6 +74,7 @@ import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js"
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
+import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -542,14 +543,14 @@ export function registerProviderHandlers(): void {
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
-    if (p.voiceProvider === "openai" || p.voiceProvider === "gemini" || p.voiceProvider === "local")
-      next.voiceProvider = p.voiceProvider;
+    Object.assign(next, parseVoiceProviderPatch(p));
     if (typeof p.voiceModel === "string") next.voiceModel = p.voiceModel;
     if (typeof p.localVoiceModel === "string") next.localVoiceModel = p.localVoiceModel;
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
     Object.assign(next, parseDictationPreferencePatch(p));
+    Object.assign(next, parseVoicePreferencePatch(p));
     if (p.dictationDictionary !== undefined)
       next.dictationDictionary = parseDictationDictionary(p.dictationDictionary);
     if (typeof p.dictationSilenceStop === "boolean")
@@ -568,6 +569,11 @@ export function registerProviderHandlers(): void {
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
+      if (p[key] === undefined) continue;
+      if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
+      next[key] = p[key];
+    }
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
       next.skillsEnabled = p.skillsEnabled;
@@ -587,9 +593,14 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
+    if (next.aidenLiveEnabled === false) {
+      // A disabled feature must not keep an attended session running in any window.
+      const { geminiLiveService } = await import("../services/gemini-live/service-main.js");
+      geminiLiveService.stopAllSessions();
+    }
     if (next.localVoiceIdleUnloadMinutes !== undefined) {
-      const { reconfigureParakeetIdleUnload } = await import("../services/parakeet.js");
-      void reconfigureParakeetIdleUnload();
+      const { reconfigureLocalSpeechIdleUnload } = await import("../services/local-speech.js");
+      void reconfigureLocalSpeechIdleUnload();
     }
     if (next.skillsEnabled !== undefined) {
       skillRegistry.invalidate();

@@ -10,6 +10,7 @@ import {
   type BotTranscriptEntry,
 } from "../../shared/bot-live";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
+import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import { resolveBotReplyProjection } from "./bot-reply-projection";
 
 export type BotTranscriptRow =
@@ -23,7 +24,16 @@ export type BotTranscriptRow =
   | { kind: "notice"; id: string; notice: "interrupted" | "session_reset" }
   | { kind: "connect"; id: string; card: ConnectCardEntry }
   /** `retryText` is set only on the newest failed turn, when Retry applies. */
-  | { kind: "failed"; id: string; retryText: string | null; errorMessage?: string };
+  | { kind: "failed"; id: string; retryText: string | null; errorMessage?: string }
+  /** A quiet "Memory updated" caption; never folded into Updates. */
+  | { kind: "memory_update"; id: string }
+  | {
+      kind: "routine_proposal";
+      id: string;
+      proposal: BotRoutineProposalEntryData;
+      status: BotRoutineProposalStatus;
+      routineId?: string;
+    };
 
 type UpdatesRow = Extract<BotTranscriptRow, { kind: "updates" }>;
 
@@ -90,6 +100,19 @@ export function botTranscriptRows(
           id: entry.id,
           retryText: retryable?.id === entry.id ? entry.retryText : null,
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
+        });
+        break;
+      case "memory_update":
+        // Back-to-back saves read as one update.
+        if (rows[rows.length - 1]?.kind !== "memory_update") rows.push({ kind: "memory_update", id: entry.id });
+        break;
+      case "routine_proposal":
+        rows.push({
+          kind: "routine_proposal",
+          id: entry.id,
+          proposal: entry.proposal,
+          status: entry.status,
+          ...(entry.routineId ? { routineId: entry.routineId } : {}),
         });
         break;
       case "tool_result":

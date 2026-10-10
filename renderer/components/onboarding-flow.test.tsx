@@ -383,7 +383,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.match(featurePresentation, /explicitly choose an image-understanding companion/u);
   assert.match(featurePresentation, /workspace agent show raster images inline/u);
-  assert.match(featurePresentation, /Each Bot keeps one chat, remembers its instructions, and can run on a schedule/u);
+  assert.match(featurePresentation, /Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule/u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -394,7 +394,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
   assert.match(featurePresentation, /ordinary browsing stays offline/u);
-  assert.match(featurePresentation, /Keep audio on-device with Parakeet/u);
+  assert.match(featurePresentation, /On-device models keep audio on this computer/u);
   assert.match(featurePresentation, /explicitly connect cloud transcription/u);
   assert.match(featurePresentation, /Browser & Annotations/u);
   assert.match(featurePresentation, /Browser profiles keep their own local sign-ins/u);

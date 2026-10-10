@@ -475,3 +475,196 @@ struct AidenBotPresetCreateResult: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case created, bot }
 }
+
+// MARK: - Contract revision 27: proactivity (`bot-proactive-v1`)
+
+enum AidenBotProactiveWire {
+    static let maxRoutineIDLength = 160
+    static let maxSuggestions = 8
+    static let maxSuggestionPromptLength = 32_000
+    static let maxNotifications = 100
+    static let maxNotificationPreviewLength = 160
+    static let maxRunIDLength = 160
+
+    /// A proposal id is a lowercase UUID minted by the Mac.
+    static func validateProposalID(_ value: String) throws {
+        let scalars = Array(value.unicodeScalars)
+        let dashes: Set<Int> = [8, 13, 18, 23]
+        guard scalars.count == 36,
+              scalars.enumerated().allSatisfy({ index, scalar in
+                  if dashes.contains(index) { return scalar == "-" }
+                  return (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+              }) else {
+            throw AidenBotContractError.invalidField("proposalId")
+        }
+    }
+}
+
+enum AidenBotRoutineProposalDecision: String, Codable, Sendable {
+    case accept, dismiss
+}
+
+/// `POST /bots/{botId}/routine-proposals/{proposalId}/respond` body.
+struct AidenBotRoutineProposalRespondRequest: Codable, Equatable, Sendable {
+    let decision: AidenBotRoutineProposalDecision
+
+    init(decision: AidenBotRoutineProposalDecision) {
+        self.decision = decision
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["decision"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        decision = try values.decode(AidenBotRoutineProposalDecision.self, forKey: .decision)
+    }
+
+    private enum CodingKeys: String, CodingKey { case decision }
+}
+
+/// The settled answer, the same on every repeat and from any device. An
+/// accepted proposal, and only one, names the routine it created.
+struct AidenBotRoutineProposalRespondResult: Codable, Equatable, Sendable {
+    let status: AidenBotRoutineProposalStatus
+    let routineId: String?
+
+    init(status: AidenBotRoutineProposalStatus, routineId: String? = nil) throws {
+        guard status != .pending, (routineId != nil) == (status == .accepted) else {
+            throw AidenBotContractError.invalidCombination("routine proposal result")
+        }
+        if let routineId {
+            try AidenBotWire.validateIdentifier(
+                routineId,
+                field: "routineId",
+                maxLength: AidenBotProactiveWire.maxRoutineIDLength
+            )
+        }
+        self.status = status
+        self.routineId = routineId
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["status", "routineId"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            status: try values.decode(AidenBotRoutineProposalStatus.self, forKey: .status),
+            routineId: try AidenBotWire.optional(String.self, from: values, forKey: .routineId)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey { case status, routineId }
+}
+
+/// A routine the Mac suggests for a Bot with no routines yet. Nothing is
+/// created until the person saves it in the routine editor.
+struct AidenBotRoutineSuggestion: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let prompt: String
+    let schedule: AidenBotRoutineSchedule
+    /// The host's friendly schedule text; shown as-is.
+    let label: String
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["id", "name", "prompt", "schedule", "label"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        try AidenBotSessionWire.validatePluginID(id, field: "suggestion.id")
+        name = try AidenBotWire.requiredString(values, forKey: .name, maxLength: AidenBotRoutineWire.maxNameLength)
+        prompt = try AidenBotWire.requiredString(
+            values,
+            forKey: .prompt,
+            maxLength: AidenBotProactiveWire.maxSuggestionPromptLength
+        )
+        schedule = try values.decode(AidenBotRoutineSchedule.self, forKey: .schedule)
+        label = try AidenBotWire.requiredString(values, forKey: .label, maxLength: AidenBotRoutineWire.maxLabelLength)
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, prompt, schedule, label }
+}
+
+/// `GET /bots/{botId}/routine-suggestions`: empty once the Bot has any routine.
+struct AidenBotRoutineSuggestionList: Codable, Equatable, Sendable {
+    let suggestions: [AidenBotRoutineSuggestion]
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["suggestions"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        suggestions = try values.decode([AidenBotRoutineSuggestion].self, forKey: .suggestions)
+        guard suggestions.count <= AidenBotProactiveWire.maxSuggestions,
+              Set(suggestions.map(\.id)).count == suggestions.count else {
+            throw AidenBotContractError.invalidField("suggestions")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case suggestions }
+}
+
+enum AidenBotRoutineNotificationStatus: String, Codable, Sendable {
+    case succeeded, failed
+}
+
+/// One finished Bot routine run the person asked to be told about.
+struct AidenBotRoutineNotification: Codable, Equatable, Identifiable, Sendable {
+    /// The routine run id; posted once as `aiden.bot-routine.<id>`.
+    let id: String
+    let botId: String
+    let botName: String
+    let routineId: String
+    let routineName: String
+    let status: AidenBotRoutineNotificationStatus
+    let finishedAt: AidenRemoteTimestamp
+    /// The start of the reply (redacted on the Mac), or a fixed failure line.
+    let preview: String
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: [
+            "id", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview",
+        ])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try AidenBotWire.identifier(values, forKey: .id, maxLength: AidenBotProactiveWire.maxRunIDLength)
+        botId = try AidenBotWire.identifier(values, forKey: .botId, maxLength: AidenRemoteProtocol.maxBotIdentifierLength)
+        botName = try AidenBotWire.requiredString(values, forKey: .botName, maxLength: AidenBotWire.maxNameLength)
+        routineId = try AidenBotWire.identifier(
+            values,
+            forKey: .routineId,
+            maxLength: AidenBotProactiveWire.maxRoutineIDLength
+        )
+        routineName = try AidenBotWire.requiredString(
+            values,
+            forKey: .routineName,
+            maxLength: AidenBotRoutineWire.maxNameLength
+        )
+        status = try values.decode(AidenBotRoutineNotificationStatus.self, forKey: .status)
+        finishedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .finishedAt)
+        preview = try AidenBotWire.requiredString(
+            values,
+            forKey: .preview,
+            maxLength: AidenBotProactiveWire.maxNotificationPreviewLength,
+            allowEmpty: true
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, botId, botName, routineId, routineName, status, finishedAt, preview
+    }
+}
+
+/// `GET /bots/routine-notifications?since=`: newest first, at most 100.
+/// `now` is the Mac's clock, passed back as the next `since`.
+struct AidenBotRoutineNotificationFeed: Codable, Equatable, Sendable {
+    let notifications: [AidenBotRoutineNotification]
+    let now: AidenRemoteTimestamp
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["notifications", "now"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        notifications = try values.decode([AidenBotRoutineNotification].self, forKey: .notifications)
+        now = try values.decode(AidenRemoteTimestamp.self, forKey: .now)
+        guard notifications.count <= AidenBotProactiveWire.maxNotifications,
+              Set(notifications.map(\.id)).count == notifications.count else {
+            throw AidenBotContractError.invalidField("notifications")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case notifications, now }
+}

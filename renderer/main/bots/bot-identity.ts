@@ -7,7 +7,6 @@ export type BotIdentityPatch = Partial<{
   name: string;
   description: string;
   instructions: string;
-  openingGreeting: string;
   avatar: BotAvatar;
 }>;
 
@@ -24,14 +23,12 @@ export async function updateBotIdentity(
   if (!latest) throw new Error("This Bot no longer exists.");
   const next = { ...latest, ...patch };
   const description = next.description?.trim();
-  const openingGreeting = next.openingGreeting?.trim();
   const saved = await botsApi.update({
     id: latest.id,
     expectedRevision: latest.revision,
     name: next.name.trim(),
     ...(description ? { description } : {}),
     instructions: next.instructions,
-    ...(openingGreeting ? { openingGreeting } : {}),
     avatar: next.avatar,
   });
   qc.setQueryData(queryKeys.bot(saved.id), saved);

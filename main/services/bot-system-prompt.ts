@@ -21,11 +21,17 @@ export async function resolveBotForGeneration(
   return bot;
 }
 
-function escapePromptText(value: string): string {
+/** Escape text placed inside a prompt's XML-style tags (persona, memory entries). */
+export function escapePromptText(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }
 
-/** Compose user-authored persona instructions without changing Pi's capability inventory. */
+/**
+ * Compose the Bot's soul: its name, description and person-authored
+ * `instructions` from the Bot record, without changing Pi's capability
+ * inventory. The soul lives in the record, not a file, so nothing the Bot can
+ * write rewrites its identity; it is framed as unable to grant authority.
+ */
 export function withBotPersona(baseSystemPrompt: string, bot: BotDefinition): string {
   const description = bot.description
     ? `\n<description>${escapePromptText(bot.description)}</description>`

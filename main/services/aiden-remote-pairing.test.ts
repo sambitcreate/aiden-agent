@@ -15,6 +15,7 @@ import {
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 
 const endpoint = "https://aiden.example.test/api/aiden/v1";
@@ -312,7 +313,9 @@ test("pairing grants progress authority only to clients that explicitly accept i
       (capability) =>
         !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
         !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
-        !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
+        !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) &&
+        // bot:cards (revision 27) is negotiated after pairing, never issued by it.
+        !(AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability),
     ),
   );
   assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);

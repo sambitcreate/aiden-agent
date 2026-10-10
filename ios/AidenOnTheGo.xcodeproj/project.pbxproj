@@ -21,6 +21,9 @@
 		B0E300000000000000000001 /* AidenBotSessionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E300000000000000000011 /* AidenBotSessionModel.swift */; };
 		B0E200000000000000000001 /* AidenBotRoutine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E200000000000000000011 /* AidenBotRoutine.swift */; };
 		B0E100000000000000000001 /* AidenBotSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E100000000000000000011 /* AidenBotSession.swift */; };
+		B0E900000000000000000001 /* AidenBotMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E900000000000000000011 /* AidenBotMemory.swift */; };
+		B0EA00000000000000000001 /* AidenBotMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0EA00000000000000000011 /* AidenBotMemoryView.swift */; };
+		B0EB00000000000000000001 /* AidenBotMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0EB00000000000000000011 /* AidenBotMemoryTests.swift */; };
 		B0D500000000000000000001 /* AidenBotHomeProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D500000000000000000011 /* AidenBotHomeProfileTests.swift */; };
 		B0D400000000000000000001 /* AidenBotCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D400000000000000000011 /* AidenBotCreateView.swift */; };
 		B0D300000000000000000001 /* AidenBotAdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D300000000000000000011 /* AidenBotAdvancedView.swift */; };
@@ -160,6 +163,9 @@
 		B0E300000000000000000011 /* AidenBotSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSessionModel.swift; sourceTree = "<group>"; };
 		B0E200000000000000000011 /* AidenBotRoutine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotRoutine.swift; sourceTree = "<group>"; };
 		B0E100000000000000000011 /* AidenBotSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSession.swift; sourceTree = "<group>"; };
+		B0E900000000000000000011 /* AidenBotMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotMemory.swift; sourceTree = "<group>"; };
+		B0EA00000000000000000011 /* AidenBotMemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotMemoryView.swift; sourceTree = "<group>"; };
+		B0EB00000000000000000011 /* AidenBotMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotMemoryTests.swift; sourceTree = "<group>"; };
 		B0D500000000000000000011 /* AidenBotHomeProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotHomeProfileTests.swift; sourceTree = "<group>"; };
 		B0D400000000000000000011 /* AidenBotCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCreateView.swift; sourceTree = "<group>"; };
 		B0D300000000000000000011 /* AidenBotAdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotAdvancedView.swift; sourceTree = "<group>"; };
@@ -340,6 +346,7 @@
 			children = (
 				B0D500000000000000000011 /* AidenBotHomeProfileTests.swift */,
 				B0E800000000000000000011 /* AidenBotSessionTests.swift */,
+				B0EB00000000000000000011 /* AidenBotMemoryTests.swift */,
 				B0E700000000000000000011 /* AidenRemoteContractFixture.swift */,
 				B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */,
 				B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */,
@@ -392,6 +399,7 @@
 				B07300000000000000000011 /* AidenBot.swift */,
 				B0E200000000000000000011 /* AidenBotRoutine.swift */,
 				B0E100000000000000000011 /* AidenBotSession.swift */,
+				B0E900000000000000000011 /* AidenBotMemory.swift */,
 				A0DA00000000000000000011 /* AidenScheduledTask.swift */,
 				A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */,
 				A0D600000000000000000012 /* AidenInstallation.swift */,
@@ -429,6 +437,7 @@
 				B0E500000000000000000011 /* AidenBotRoutinesView.swift */,
 				B0E400000000000000000011 /* AidenBotSessionChatView.swift */,
 				B0E300000000000000000011 /* AidenBotSessionModel.swift */,
+				B0EA00000000000000000011 /* AidenBotMemoryView.swift */,
 				B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */,
 				B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */,
 				B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */,
@@ -773,12 +782,14 @@
 				B0E500000000000000000001 /* AidenBotRoutinesView.swift in Sources */,
 				B0E400000000000000000001 /* AidenBotSessionChatView.swift in Sources */,
 				B0E300000000000000000001 /* AidenBotSessionModel.swift in Sources */,
+				B0EA00000000000000000001 /* AidenBotMemoryView.swift in Sources */,
 				B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */,
 				B0D00000000000000000A001 /* AidenModelPreferenceStore.swift in Sources */,
 				B07400000000000000000001 /* AidenProductShellView.swift in Sources */,
 				B07300000000000000000001 /* AidenBot.swift in Sources */,
 				B0E200000000000000000001 /* AidenBotRoutine.swift in Sources */,
 				B0E100000000000000000001 /* AidenBotSession.swift in Sources */,
+				B0E900000000000000000001 /* AidenBotMemory.swift in Sources */,
 				AC7100000000000000000001 /* AidenActivityMarkSpec.swift in Sources */,
 				AC7100000000000000000002 /* AidenActivityMarkEvaluator.swift in Sources */,
 				AC7100000000000000000003 /* AidenActivityMarkView.swift in Sources */,
@@ -842,6 +853,7 @@
 				B07300000000000000000002 /* AidenBotContractTests.swift in Sources */,
 				B0D500000000000000000001 /* AidenBotHomeProfileTests.swift in Sources */,
 				B0E800000000000000000001 /* AidenBotSessionTests.swift in Sources */,
+				B0EB00000000000000000001 /* AidenBotMemoryTests.swift in Sources */,
 				B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */,
 				A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */,
 				A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */,

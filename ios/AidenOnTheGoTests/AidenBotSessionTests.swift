@@ -16,6 +16,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _connectionKeys: [UUID] = []
     private var _resumeResults: [Result<AidenBotSessionStateView, Error>] = []
     private var _connectionError: Error?
+    private var _proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] = []
+    private var _proposalResults: [Result<AidenBotRoutineProposalRespondResult, Error>] = []
     private var resumeGate: CheckedContinuation<Void, Never>?
     var holdResume = false
 
@@ -30,6 +32,12 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     func queueResume(_ result: Result<AidenBotSessionStateView, Error>) { locked { _resumeResults.append(result) } }
     func failConnections(with error: Error) { locked { _connectionError = error } }
     func failNextSend(with error: Error) { locked { _sendErrors.append(error) } }
+    func queueProposalResult(_ result: Result<AidenBotRoutineProposalRespondResult, Error>) {
+        locked { _proposalResults.append(result) }
+    }
+    var proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] {
+        locked { _proposalRequests }
+    }
 
     var sessionRequests: Int { locked { _sessionRequests } }
     var streamRequests: Int { locked { _streamRequests } }
@@ -138,6 +146,20 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             AidenBotConnectionRequestReceipt.self,
             from: Data(#"{"pluginId":"\#(request.pluginId)","name":"Gmail","status":"sent"}"#.utf8)
         )
+    }
+
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult {
+        let next = locked { () -> Result<AidenBotRoutineProposalRespondResult, Error>? in
+            _proposalRequests.append((proposalId, request.decision, idempotencyKey))
+            return _proposalResults.isEmpty ? nil : _proposalResults.removeFirst()
+        }
+        guard let next else { throw URLError(.notConnectedToInternet) }
+        return try next.get()
     }
 }
 
@@ -723,7 +745,38 @@ final class AidenBotSessionTests: XCTestCase {
         emptyLabel["label"] = ""
         rejectsEntry("empty routine label", emptyLabel)
         rejectsEntry("unknown notice", ["type": "notice", "id": "n1", "notice": "deleted"])
-        rejectsEntry("unknown entry type", ["type": "tool", "id": "t1"])
+        // Revision 27: an entry type this client does not know is skipped,
+        // and the known entries around it still decode.
+        let futureEntry: [String: Any] = ["type": "tool", "id": "t1", "anything": ["nested": true]]
+        let mixedEntries: [[String: Any]] = [futureEntry, userMessage]
+        let skipped = try AidenRemoteJSONDecoder.decode(
+            AidenBotSession.self,
+            from: JSONSerialization.data(withJSONObject: base.merging(["entries": mixedEntries]) { $1 })
+        )
+        XCTAssertEqual(skipped.entries.map(\.id), [try XCTUnwrap(userMessage["id"] as? String)])
+        rejects("an unknown entry still needs a string type") { session in
+            session["entries"] = [["id": "t1"]]
+        }
+
+        let proposal: [String: Any] = [
+            "type": "routine_proposal", "id": "p1", "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
+            "name": "Daily check-in", "prompt": "Check in briefly.", "label": "Every day at 9:00 AM",
+            "status": "pending",
+        ]
+        XCTAssertTrue(decodes(AidenBotSession.self, base.merging(["entries": [proposal]]) { $1 }))
+        rejectsEntry("proposal id grammar", proposal.merging(["proposalId": "proposal_1"]) { $1 })
+        rejectsEntry("uppercase proposal id", proposal.merging(["proposalId": "7D0C5C8E-2F0B-4C4E-9A59-3B6F1F0E9A11"]) { $1 })
+        rejectsEntry("only an accepted proposal names a routine", proposal.merging(["routineId": "task_1"]) { $1 })
+        rejectsEntry("proposal status", proposal.merging(["status": "expired"]) { $1 })
+        rejectsEntry("empty proposal prompt", proposal.merging(["prompt": ""]) { $1 })
+        rejectsEntry("proposal extra key", proposal.merging(["schedule": ["kind": "daily", "time": "09:00"]]) { $1 })
+        XCTAssertTrue(decodes(AidenBotSession.self, base.merging(["entries": [
+            proposal.merging(["status": "accepted", "routineId": "task_fixture_routine_02"]) { $1 },
+        ]]) { $1 }))
+        let memoryUpdate: [String: Any] = ["type": "memory_update", "id": "mu1", "createdAt": "2026-08-19T15:02:00.000Z"]
+        XCTAssertTrue(decodes(AidenBotSession.self, base.merging(["entries": [memoryUpdate]]) { $1 }))
+        rejectsEntry("memory update extra key", memoryUpdate.merging(["text": "Prefers tea"]) { $1 })
+        rejectsEntry("memory update id grammar", memoryUpdate.merging(["id": "mu 1"]) { $1 })
         let card: [String: Any] = [
             "type": "connect_card", "id": "c1", "pluginId": "gmail", "name": "Gmail",
             "iconId": "gmail", "reason": "Mail", "status": "pending",
@@ -884,6 +937,146 @@ final class AidenBotSessionTests: XCTestCase {
         olderAvatar["avatar"] = ["semantic": ["version": 1, "shape": "orb", "color": "sky", "eyes": "sleepy", "detail": "none"]]
         XCTAssertTrue(decodes(AidenBotSummary.self, olderAvatar), "Retired eyes and detail are ignored")
         XCTAssertFalse(decodes(AidenBotSummary.self, summary.merging(["sessionState": "paused"]) { $1 }))
+    }
+
+    // MARK: Revision 27 cards
+
+    private let proposalID = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11"
+
+    private func proposal(_ id: String = "p1", status: AidenBotRoutineProposalStatus = .pending) throws -> AidenBotSessionEntry {
+        var json: [String: Any] = [
+            "type": "routine_proposal", "id": id, "proposalId": proposalID, "name": "Daily check-in",
+            "prompt": "Check in briefly.", "label": "Every day at 9:00 AM", "status": status.rawValue,
+        ]
+        if status == .accepted { json["routineId"] = "task_9" }
+        return try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    private func card(_ entry: AidenBotSessionEntry?) -> AidenBotRoutineProposalCard? {
+        if case let .routineProposal(card)? = entry { return card }
+        return nil
+    }
+
+    func testUnknownEntryFrameAdvancesTheSequenceWithoutChangingTheTranscript() async throws {
+        let fixture = try sharedFixture()
+        let frames = try XCTUnwrap(fixture["botSessionEvents"] as? [[String: Any]])
+        let partial = try XCTUnwrap(frames.first { $0["type"] as? String == "partial" })
+        var frame = partial
+        frame["type"] = "entry"
+        let pollCard: [String: Any] = ["type": "poll_card", "id": "x1", "options": ["a", "b"]]
+        frame["payload"] = ["entry": pollCard]
+        let decoded = try AidenRemoteJSONDecoder.decode(
+            AidenBotSessionEvent.self,
+            from: JSONSerialization.data(withJSONObject: frame)
+        )
+        XCTAssertEqual(decoded.kind, .unknownEntry(type: "poll_card"))
+        XCTAssertEqual(decoded.wireType, "entry")
+        var malformedKnown = frame
+        malformedKnown["payload"] = ["entry": ["type": "memory_update", "id": "x1", "text": "secret"]]
+        XCTAssertFalse(decodes(AidenBotSessionEvent.self, malformedKnown), "known types still fail closed")
+
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 4, entries: [message("m1", .user, "Hi")]))
+        let unknown = await model.apply(event(seq: 5, .unknownEntry(type: "poll_card")))
+        XCTAssertEqual(unknown, .applied)
+        XCTAssertEqual(model.seq, 5)
+        XCTAssertEqual(model.entries.map(\.id), ["m1"])
+        let next = await model.apply(event(seq: 6, .entry(message("m2", .assistant, "Hello"))))
+        XCTAssertEqual(next, .applied, "the following frame is not a gap")
+        XCTAssertEqual(model.entries.map(\.id), ["m1", "m2"])
+        XCTAssertEqual(transport.sessionRequests, 1, "an unknown entry never refetches")
+    }
+
+    func testConsecutiveMemoryUpdatesRenderAsOneCaption() throws {
+        let entries: [AidenBotSessionEntry] = [
+            message("m1", .user, "I'm vegetarian"),
+            .memoryUpdate(id: "u1", createdAt: nil),
+            .memoryUpdate(id: "u2", createdAt: nil),
+            message("m2", .assistant, "Noted."),
+            .memoryUpdate(id: "u3", createdAt: nil),
+        ]
+        let rows = AidenBotTranscriptRow.rows(for: entries)
+        XCTAssertEqual(rows.map(\.id), ["m1", "u1", "m2", "u3"])
+        XCTAssertEqual(rows[1], .memoryUpdated(id: "u1"))
+        XCTAssertEqual(rows[3], .memoryUpdated(id: "u3"))
+        XCTAssertEqual(AidenBotSessionCopy.memoryUpdated, "Memory updated")
+    }
+
+    func testAcceptingAProposalShowsTheSettledCardFromTheResponse() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 3, entries: [message("m1", .user, "Hi"), try proposal()]))
+        transport.queueProposalResult(.success(try AidenBotRoutineProposalRespondResult(status: .accepted, routineId: "task_9")))
+
+        let settled = await model.respondToProposal(proposalID, decision: .accept)
+
+        XCTAssertTrue(settled)
+        XCTAssertEqual(transport.proposalRequests.map(\.decision), [.accept])
+        let card = try XCTUnwrap(card(model.entries.last))
+        XCTAssertEqual(card.status, .accepted)
+        XCTAssertEqual(card.routineId, "task_9")
+        XCTAssertEqual(AidenBotSessionCopy.proposalAdded(label: card.label), "Added ✓ · Every day at 9:00 AM")
+        XCTAssertTrue(model.respondingProposals.isEmpty)
+        let again = await model.respondToProposal(proposalID, decision: .accept)
+        XCTAssertFalse(again, "a settled card has no actions")
+        XCTAssertEqual(transport.proposalRequests.count, 1)
+    }
+
+    func testNotNowShowsWhateverTheMacSettled() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 3, entries: [try proposal()]))
+        // Already accepted from the Mac: the repeat returns that answer.
+        transport.queueProposalResult(.success(try AidenBotRoutineProposalRespondResult(status: .accepted, routineId: "task_9")))
+
+        await model.respondToProposal(proposalID, decision: .dismiss)
+
+        XCTAssertEqual(card(model.entries.first)?.status, .accepted)
+        XCTAssertEqual(card(model.entries.first)?.routineId, "task_9")
+    }
+
+    func testDismissSettlesTheCardAsNotAdded() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 3, entries: [try proposal()]))
+        transport.queueProposalResult(.success(try AidenBotRoutineProposalRespondResult(status: .dismissed)))
+
+        await model.respondToProposal(proposalID, decision: .dismiss)
+
+        let card = try XCTUnwrap(card(model.entries.first))
+        XCTAssertEqual(card.status, .dismissed)
+        XCTAssertNil(card.routineId)
+        XCTAssertEqual(transport.proposalRequests.map(\.decision), [.dismiss])
+    }
+
+    func testAFailedAnswerKeepsTheProposalPendingAndRetriesUnderTheSameKey() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 3, entries: [try proposal()]))
+        transport.queueProposalResult(.failure(URLError(.networkConnectionLost)))
+
+        let first = await model.respondToProposal(proposalID, decision: .accept)
+
+        XCTAssertFalse(first)
+        XCTAssertEqual(card(model.entries.first)?.status, .pending, "the actions stay")
+        XCTAssertNotNil(model.errorMessage)
+        transport.queueProposalResult(.success(try AidenBotRoutineProposalRespondResult(status: .accepted, routineId: "task_9")))
+        await model.respondToProposal(proposalID, decision: .accept)
+        XCTAssertEqual(card(model.entries.first)?.status, .accepted)
+        let keys = transport.proposalRequests.map(\.key)
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertEqual(keys[0], keys[1], "a lost response is retried under the same key, so the Mac adds one routine")
+    }
+
+    func testAMissingProposalRefetchesTheSession() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 3, entries: [try proposal()]))
+        transport.queueProposalResult(.failure(try serverError(
+            status: 404, code: "routine_proposal_not_found", message: "That suggestion is gone."
+        )))
+        transport.queueSession(.success(try session(seq: 4, entries: [try proposal(status: .dismissed)])))
+
+        await model.respondToProposal(proposalID, decision: .accept)
+
+        XCTAssertEqual(transport.sessionRequests, 2)
+        XCTAssertEqual(card(model.entries.first)?.status, .dismissed)
+        XCTAssertNotNil(model.errorMessage)
     }
 
     // MARK: Routine conflicts
@@ -1181,6 +1374,15 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
         request: AidenBotConnectionRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotConnectionRequestReceipt {
+        throw URLError(.unsupportedURL)
+    }
+
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult {
         throw URLError(.unsupportedURL)
     }
 }

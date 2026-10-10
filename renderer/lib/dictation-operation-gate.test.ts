@@ -43,10 +43,25 @@ test("one deadline budget is shared across sequential operations", async () => {
   await assert.rejects(deadline.run(Promise.resolve("late")), /took too long/u);
 });
 
-test("on-device transcription keeps headroom around Parakeet's process deadline", () => {
+test("on-device transcription keeps headroom around the worker's minimum deadline", () => {
   assert.equal(transcriptionBudgetMs("gemini"), 45_000);
   assert.equal(transcriptionBudgetMs("openai"), 45_000);
   assert.equal(transcriptionBudgetMs("local"), 125_000);
+});
+
+test("a budget beyond the timer range still waits instead of expiring at once", async () => {
+  const deadline = new DictationDeadline(transcriptionBudgetMs("local", 10_000_000));
+  const settled = await deadline.run(
+    new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
+  );
+  assert.equal(settled, "done");
+});
+
+test("on-device budgets scale with the recording length; cloud budgets do not", () => {
+  assert.equal(transcriptionBudgetMs("local", 5), 125_000);
+  assert.equal(transcriptionBudgetMs("local", 600), 12_015_000);
+  assert.equal(transcriptionBudgetMs("openai", 600), 45_000);
+  assert.equal(transcriptionBudgetMs("gemini", 600), 45_000);
 });
 
 test("a stuck cancellation request cannot extend the transcription deadline", async () => {
@@ -90,7 +105,32 @@ test("voice errors hide Electron wrappers and provide actionable setup copy", ()
   );
 });
 
+test("an on-device worker that crashed twice asks for a retry, not a model download", () => {
+  const message = voiceErrorMessage(
+    new Error(
+      "Error invoking remote method 'voice:transcribeLocal': Error: On-device transcription couldn't finish (decode-failed). Try again.",
+    ),
+  );
+  assert.doesNotMatch(message, /Download/u);
+  assert.match(message, /couldn.t finish/u);
+  assert.match(
+    voiceErrorMessage(new Error("The selected voice model isn't downloaded. Download it in Settings → Voice.")),
+    /Download/u,
+  );
+});
+
 test("committed live text survives an empty or failed final handshake", () => {
   assert.equal(recoverCommittedLiveTranscript("", " already visible "), "already visible");
   assert.equal(recoverCommittedLiveTranscript(" final ", "older"), "final");
+});
+
+test("an on-device engine that can't start advises a restart, not a model download", () => {
+  const message = voiceErrorMessage(
+    new Error(
+      "Error invoking remote method 'voice:transcribeLocal': Error: On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice.",
+    ),
+  );
+  assert.match(message, /couldn.t start/u);
+  assert.match(message, /Restart Aiden/u);
+  assert.doesNotMatch(message, /Download/u);
 });

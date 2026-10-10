@@ -80,7 +80,11 @@ import {
 import { createTelegramBotBindingValidator } from "./telegram-bot-binding-validation.js";
 import { telegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { createTelegramBotIngress, type TelegramBotIngress } from "./bot-reply-outbox.js";
+import {
+  createTelegramBotIngress,
+  type TelegramBotIngress,
+  type TelegramBotRoutineDelivery,
+} from "./bot-reply-outbox.js";
 import { isAcpHarnessProvider, unattendedFallbackProviderId } from "../../../renderer/shared/acp-harness.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
@@ -367,6 +371,18 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           for (const chunk of chunkForTelegram(markdownToTelegramHtml(text))) {
             await api.sendMessage({ chatId, threadId, text: chunk, parseMode: "HTML", disablePreview: true });
           }
+        },
+        // A routine result goes out only while the Bot is still bound, on, to that chat.
+        routineTargetEnabled: async ({ botId, chatId, threadId }) => {
+          const binding = await telegramBotBindings.get(botId);
+          return (
+            binding !== undefined &&
+            binding !== null &&
+            binding.enabled &&
+            binding.profile === profile &&
+            binding.chatId === chatId &&
+            binding.threadId === threadId
+          );
         },
         onError: (message, cause) => logger.error("telegram", `[${profile}] ${message}`, cause),
       })
@@ -760,6 +776,9 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
 
   return Object.assign(core, {
     profile,
+    /** Queue a routine result for this profile's bound chat (no-op without Bot support). */
+    enqueueBotRoutineDelivery: async (delivery: TelegramBotRoutineDelivery) =>
+      botIngress ? botIngress.enqueueRoutineDelivery(delivery) : { queued: false },
     listTargets: () => threadStore.list(),
     async sendDirectMessage(input: { text: string; thread?: string | number }) {
       const target = await resolveDirectTarget(input.thread);
@@ -1015,6 +1034,21 @@ export function createTelegramProfileManager() {
         await telegramBotBindingAuthority.disableProfile(profile);
         await revokeTelegramBotNoticeForCurrentOwner(profile);
         await serviceFor(profile).resetPairing();
+      });
+    },
+    /**
+     * A finished routine's visible reply or failure, for the Bot's bound
+     * Telegram chat. Nothing is queued when the Bot has no enabled binding;
+     * the binding is checked again right before the send.
+     */
+    async deliverBotRoutineResult(input: { botId: string; requestId: string; routineName: string; text: string }): Promise<void> {
+      const binding = await telegramBotBindings.get(input.botId);
+      if (!binding?.enabled) return;
+      await serviceFor(binding.profile).enqueueBotRoutineDelivery({
+        ...input,
+        chatId: binding.chatId,
+        ...(binding.threadId === undefined ? {} : { threadId: binding.threadId }),
+        ownerUserId: binding.ownerUserId,
       });
     },
     ensureActiveThreads: () => serviceFor(activeProfile).ensureThreads(),

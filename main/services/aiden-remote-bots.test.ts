@@ -10,6 +10,7 @@ import {
 import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../../renderer/shared/bots.js";
 import { BotCapabilityRevisionConflictError } from "./bot-capability-store-core.js";
 import { BotIdentityRevisionConflictError } from "./bot-store-core.js";
+import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import {
   AidenRemoteBotService,
   projectAidenRemoteBotSummary,
@@ -72,7 +73,6 @@ function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition 
     name: "Planner",
     description: "Keeps projects moving",
     instructions: "Help plan projects.",
-    openingGreeting: "What should we plan?",
     avatar: { version: 1, shape: "orb", color: "sky" },
     createdAt: 1_000,
     updatedAt: 2_000,
@@ -92,6 +92,7 @@ function fixture(
       AidenRemoteBotServiceOptions["application"]["withBotMutation"]
     >;
     updateBotAccessError?: unknown;
+    createBotError?: unknown;
     capabilityCatalog?: (
       audienceId: string,
       botId?: string,
@@ -122,6 +123,7 @@ function fixture(
       access?: BotAccessUpdate;
     }) {
       createCalls += 1;
+      if (options.createBotError) throw options.createBotError;
       botSequence += 1;
       const created = bot(`bot_${botSequence}`, {
         ...input.bot,
@@ -143,7 +145,6 @@ function fixture(
       const updated = bot(existing.id, {
         ...input,
         description: input.description,
-        openingGreeting: input.openingGreeting,
         revision: `${existing.revision}_next`,
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt + 1,
@@ -435,12 +436,23 @@ test("complete Remote Bot flow is exact, idempotent, revisioned, and Bot-classif
   assert.equal(app.createCalls(), 1);
   assert.equal(created.instructions, "Research carefully.");
 
+  // Older phones still send the retired greeting: it is accepted, ignored and never emitted.
+  assert.equal("openingGreeting" in created, false);
   const updated = await app.service.updateIdentity(created.id, created.revision, {
     purpose: "Researches selected topics",
     openingGreeting: "",
   });
   assert.equal(updated.purpose, "Researches selected topics");
-  assert.equal(updated.openingGreeting, undefined);
+  assert.equal("openingGreeting" in updated, false);
+  const greetingOnly = await app.service.updateIdentity(created.id, updated.revision, {
+    openingGreeting: "Hi there!",
+  });
+  assert.equal(greetingOnly.revision, updated.revision, "a greeting-only patch changes nothing");
+  assert.equal("openingGreeting" in greetingOnly, false);
+  await assert.rejects(
+    app.service.updateIdentity(created.id, updated.revision, { openingGreeting: 42 }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
 
   const chat = await app.service.createChat(
     "device_1",
@@ -663,6 +675,24 @@ test("stale capability validation maps to a retryable operation conflict", async
       error.status === 409 &&
       error.retryable === true &&
       !error.message.includes("Internal inventory details"),
+  );
+});
+
+test("a Bot create that loses every inventory race asks the phone to retry, not to review choices", async () => {
+  const app = fixture([], { createBotError: new BotRuntimeInventoryLeaseInvalidError() });
+
+  await assert.rejects(
+    app.service.create("device_1", "bot-create-key-0003", {
+      name: "Chief",
+      purpose: "",
+      instructions: "Keep my week on track.",
+      avatar: { version: 1, shape: "orb", color: "sky" },
+    }),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      error.code === "operation_stale" &&
+      error.retryable === true &&
+      error.message === "Aiden couldn't create this Bot. Try again.",
   );
 });
 

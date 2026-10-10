@@ -136,6 +136,18 @@ data class AidenServer(
     val supportsMobileSimulators: Boolean
         get() = features.contains(AidenRemoteProtocol.MOBILE_SIMULATORS_FEATURE)
 
+    /** A Bot's memory can be read and edited from this phone (revision 27). */
+    val supportsBotMemory: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_MEMORY_FEATURE)
+
+    /** Routine proposals, the daily check-in suggestion and the routine notification feed (revision 27). */
+    val supportsBotProactive: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_PROACTIVE_FEATURE)
+
+    /** Only a Mac that can send memory or proposal cards is asked for `bot:cards`. */
+    val offersBotCards: Boolean
+        get() = supportsBotMemory || supportsBotProactive
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }

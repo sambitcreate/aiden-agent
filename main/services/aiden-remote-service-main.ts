@@ -113,7 +113,10 @@ import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
-import { systemTimezone } from "./schedule-store.js";
+import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { botMemoryService } from "./bot-memory/bot-memory-main.js";
+import { botRoutineProposals } from "./bot-routine-proposals-main.js";
+import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
 import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
@@ -148,7 +151,10 @@ import {
   mergeBotInboxActivityPreviews,
 } from "./bot-inbox-projection.js";
 import { createMainBotAvatarApplicationAdapter } from "./bot-avatar-store-main.js";
-import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
+import {
+  botRuntimeInventoryLeases,
+  readUnderFreshBotRuntimeInventoryLease,
+} from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import {
@@ -777,18 +783,22 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               providerId,
               modelId,
             }) => {
-              const inventoryLease = botRuntimeInventoryLeases.acquire();
-              try {
-                const defaultSelection = providerId === undefined || modelId === undefined
-                  ? await models.resolve()
-                  : undefined;
-                const retained = await botCapabilityStore.getBotBinding(botId);
-                const snapshot = await botCapabilityCatalog.snapshot({
-                  audienceId,
-                  botId,
-                  ...(retained ? { retainedBindings: [retained] } : {}),
+              // A routine credential write during the snapshot must not fail
+              // the phone's send; read again under a fresh lease instead.
+              const { lease: inventoryLease, value: { defaultSelection, snapshot } } =
+                await readUnderFreshBotRuntimeInventoryLease(botRuntimeInventoryLeases, async () => {
+                  const defaultSelection = providerId === undefined || modelId === undefined
+                    ? await models.resolve()
+                    : undefined;
+                  const retained = await botCapabilityStore.getBotBinding(botId);
+                  const snapshot = await botCapabilityCatalog.snapshot({
+                    audienceId,
+                    botId,
+                    ...(retained ? { retainedBindings: [retained] } : {}),
+                  });
+                  return { defaultSelection, snapshot };
                 });
-                inventoryLease.assertCurrent();
+              try {
                 const provider = snapshot.resources.providers.find((candidate) =>
                   providerId !== undefined
                     ? candidate.option.id === providerId
@@ -887,6 +897,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 },
                 defaultTimezone: systemTimezone,
                 notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
+                // Contract revision 27: the desktop's own memory and proposal services.
+                memory: botMemoryService,
+                proposals: botRoutineProposals,
+                routineNotifications: createBotRoutineNotificationFeed({
+                  store: scheduleStore,
+                  botName: async (botId) => (await botStore.get(botId))?.name,
+                }),
               })
             : undefined;
           activeBotSessions = botSessions;

@@ -5,9 +5,12 @@ import {
   DictationCoordinator,
   HOLD_RELEASE_GRACE_MS,
   TRANSCRIPTION_WATCHDOG_MS,
+  transcriptionWatchdogMs,
+  VOICE_CHECK_FAILED_MESSAGE,
   type DictationCoordinatorDeps,
 } from "./dictation-coordinator.js";
 import { HYBRID_TAP_THRESHOLD_MS } from "../../renderer/shared/dictation-preferences.js";
+import { MAX_TIMER_DELAY_MS } from "../../renderer/lib/dictation-operation-gate.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -674,4 +677,136 @@ test("hybrid unmappable shortcut latches toggle and ignores release", async () =
   assert.ok(subject.events.some((event) => event.message?.toLowerCase().includes("again to stop")));
   await subject.coordinator.press();
   assert.equal(subject.coordinator.currentStage, "transcribing");
+});
+
+const SETUP_MESSAGE = "Download a voice model in Settings → Voice.";
+
+test("needs-setup never starts recording and shows the setup message", async () => {
+  let shows = 0;
+  let warmups = 0;
+  let setupReady = false;
+  const subject = harness({
+    showPill: async () => {
+      shows += 1;
+      return false;
+    },
+    warmUp: () => {
+      warmups += 1;
+    },
+    resolveVoice: async () =>
+      setupReady ? { ok: true } : { ok: false, message: SETUP_MESSAGE },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(shows, 1);
+  assert.deepEqual(
+    subject.events.map((event) => ({ state: event.state, message: event.message })),
+    [{ state: "error", message: SETUP_MESSAGE }],
+  );
+  assert.equal(warmups, 0);
+  assert.equal(subject.coordinator.currentStage, "idle");
+  assert.equal(subject.coordinator.currentOperationId, null);
+
+  // Once a model is available, the next press records normally.
+  setupReady = true;
+  await subject.coordinator.press();
+  assert.equal(subject.coordinator.currentStage, "recording");
+  assert.equal(warmups, 1);
+  assert.equal(subject.events[subject.events.length - 1]?.state, "recording");
+});
+
+test("a freshly created pill still receives the setup message once it is ready", async () => {
+  const subject = harness({
+    showPill: async () => true,
+    resolveVoice: async () => ({ ok: false, message: SETUP_MESSAGE }),
+  });
+  await subject.coordinator.press();
+  const beforeReady = subject.events.length;
+  await subject.coordinator.ready();
+  const afterReady = subject.events.slice(beforeReady);
+  assert.deepEqual(
+    afterReady.map((event) => ({ state: event.state, message: event.message })),
+    [{ state: "error", message: SETUP_MESSAGE }],
+    "the cold pill missed the first broadcast, so ready() replays it",
+  );
+  assert.equal(subject.events.some((event) => event.state === "recording"), false);
+  assert.equal(subject.coordinator.currentStage, "idle");
+  // The replay happens once.
+  const afterReplay = subject.events.length;
+  await subject.coordinator.ready();
+  assert.equal(subject.events.length, afterReplay);
+});
+
+test("a failed provider check is shown as an error and never records", async () => {
+  let warmups = 0;
+  const subject = harness({
+    resolveVoice: async () => {
+      throw new Error("keychain unavailable");
+    },
+    warmUp: () => {
+      warmups += 1;
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.deepEqual(
+    subject.events.map((event) => ({ state: event.state, message: event.message })),
+    [{ state: "error", message: VOICE_CHECK_FAILED_MESSAGE }],
+  );
+  assert.equal(warmups, 0);
+  assert.equal(subject.coordinator.currentStage, "idle");
+});
+
+test("a hybrid tap during a slow provider check still latches recording on", async () => {
+  const resolved = deferred<{ ok: true }>();
+  const subject = hybridHarness({ resolveVoice: () => resolved.promise });
+  await subject.coordinator.ready();
+  const pressed = subject.coordinator.press();
+  await new Promise((resolve) => setImmediate(resolve));
+  // Key-up 100 ms after key-down, while resolution takes 600 ms.
+  subject.advance(100);
+  assert.equal(subject.watches.length, 1, "the key is watched before the check finishes");
+  subject.watches[0]?.onRelease();
+  subject.advance(500);
+  resolved.resolve({ ok: true });
+  await pressed;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(subject.coordinator.currentStage, "recording", "the quick tap latched on");
+  assert.equal(subject.events.some((event) => event.state === "stopping"), false);
+});
+
+test("a hybrid setup failure stops watching the key", async () => {
+  const subject = hybridHarness({ resolveVoice: async () => ({ ok: false, message: SETUP_MESSAGE }) });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  assert.equal(subject.watches[0]?.stopped, true);
+  assert.equal(subject.coordinator.currentStage, "idle");
+});
+
+test("the watchdog grows with long recordings so it never preempts the worker", async () => {
+  const fences: number[] = [];
+  const subject = harness({
+    setTimer: (_callback, delayMs) => {
+      fences.push(delayMs);
+      return dormantTimer();
+    },
+  });
+  await subject.coordinator.ready();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
+  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+  const operationId = subject.coordinator.currentOperationId!;
+  // Ten minutes of audio: the on-device worker may take 20× real time.
+  await subject.coordinator.progress("finalizing", operationId, 600);
+  const fence = fences[fences.length - 1]!;
+  assert.ok(fence > 20_000 * 600, `fence ${fence} must outlast the worker's 20× real-time deadline`);
+  // A short clip keeps the floor.
+  await subject.coordinator.progress("finalizing", operationId, 3);
+  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+});
+
+test("an absurd recording length cannot overflow the watchdog timer", () => {
+  const fence = transcriptionWatchdogMs(10_000_000);
+  assert.ok(fence <= MAX_TIMER_DELAY_MS, "Node fires a too-large delay immediately");
+  assert.ok(fence > TRANSCRIPTION_WATCHDOG_MS);
 });

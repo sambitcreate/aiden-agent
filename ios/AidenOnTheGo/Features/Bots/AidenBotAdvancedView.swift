@@ -10,7 +10,7 @@ private struct AidenBotAdvancedSaveAttempt: Equatable {
 }
 
 /// One page for the settings most people never need: the AI model, the image
-/// model, what the Bot can use, and its opening greeting. Name, subtitle,
+/// model, and what the Bot can use. Name, subtitle,
 /// character, and instructions live on the Profile.
 struct AidenBotAdvancedView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
@@ -150,12 +150,6 @@ struct AidenBotAdvancedView: View {
                 filesAndCommandsSection(catalog)
                 optionSection(title: "Other", options: catalog.otherCapabilities, keyPath: \.otherCapabilityIDs)
             }
-            Section {
-                TextField("Say hello when a chat starts (optional)", text: textBinding(\.openingGreeting), axis: .vertical)
-                    .lineLimit(2...6)
-            } header: {
-                Text("Opening greeting")
-            }
         }
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
@@ -266,17 +260,6 @@ struct AidenBotAdvancedView: View {
     }
 
     // MARK: Bindings
-
-    private func textBinding(_ keyPath: WritableKeyPath<AidenBotEditorDraft, String>) -> Binding<String> {
-        Binding(
-            get: { draft?[keyPath: keyPath] ?? "" },
-            set: { value in
-                guard var next = draft else { return }
-                next[keyPath: keyPath] = value
-                draft = next
-            }
-        )
-    }
 
     private func fullAccessBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<Bool> {
         Binding(

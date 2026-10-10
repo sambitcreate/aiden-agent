@@ -44,7 +44,7 @@ test("a row shows the Bot's subtitle, last-message preview, and relative time", 
   renderList([
     { bot: bot("b1", "SLMob", "Meal prepping"), preview: "Told them: every Sunday 8:41", updatedAt: today },
   ]);
-  const row = screen.getByRole("button", { name: /SLMob/u });
+  const row = screen.getByRole("button", { name: /^SLMob/u });
   assert.ok(within(row).getByText("Meal prepping"));
   assert.ok(within(row).getByText("Told them: every Sunday 8:41"));
   assert.equal(within(row).getByText(formatBotRowTime(today, NOW)).tagName, "TIME");
@@ -59,42 +59,67 @@ test("an interrupted Bot says it is paused instead of showing its preview", () =
       state: { kind: "interrupted", submissionId: "s1" },
     },
   ]);
-  const row = screen.getByRole("button", { name: /Chief of Staff/u });
+  const row = screen.getByRole("button", { name: /^Chief of Staff/u });
   assert.ok(within(row).getByText("Paused — tap to resume"));
   assert.equal(within(row).queryByText("Reading your calendar"), null);
 });
 
 test("a Bot without a model says so in its row", () => {
   renderList([{ bot: bot("b1", "Researcher"), state: { kind: "needs_model" } }]);
-  assert.ok(within(screen.getByRole("button", { name: /Researcher/u })).getByText("Needs an AI model"));
+  assert.ok(within(screen.getByRole("button", { name: /^Researcher/u })).getByText("Needs an AI model"));
 });
 
-test("tapping a row opens that Bot, and its context menu offers Profile and Delete", async () => {
+test("tapping a row opens that Bot, and its context menu offers Profile and Delete Bot", async () => {
   const calls = renderList([{ bot: bot("b1", "Planner") }, { bot: bot("b2", "Inbox") }]);
-  fireEvent.click(screen.getByRole("button", { name: /Inbox/u }));
+  fireEvent.click(screen.getByRole("button", { name: /^Inbox/u }));
   assert.deepEqual(calls, ["open:b2"]);
 
-  fireEvent.contextMenu(screen.getByRole("button", { name: /Planner/u }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^Planner/u }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Profile" }));
-  fireEvent.contextMenu(screen.getByRole("button", { name: /Planner/u }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^Planner/u }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
   assert.deepEqual(calls, ["open:b2", "profile:b1", "delete:b1"]);
 });
 
-test("search narrows the list by name or subtitle and the + button starts a new Bot", () => {
-  const calls = renderList([
+test("each row's ••• button reaches Profile and Delete Bot without a right-click", async () => {
+  const calls = renderList([{ bot: bot("b1", "Planner") }]);
+  const more = screen.getByRole("button", { name: "More for Planner" });
+  fireEvent.keyDown(more, { key: "Enter" });
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Bot" }));
+  assert.deepEqual(calls, ["delete:b1"], "the menu acts on its Bot without opening the chat");
+});
+
+test("search narrows the list by name or subtitle, and Clear brings everything back", () => {
+  renderList([
     { bot: bot("b1", "Planner", "Trips") },
     { bot: bot("b2", "Inbox Helper", "Email") },
   ]);
-  fireEvent.click(screen.getByRole("button", { name: "Search Bots" }));
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search Bots" }), {
-    target: { value: "email" },
-  });
-  assert.ok(screen.getByRole("button", { name: /Inbox Helper/u }));
-  assert.equal(screen.queryByRole("button", { name: /Planner/u }), null);
+  const search = screen.getByRole("searchbox", { name: "Search Bots" });
+  fireEvent.change(search, { target: { value: "email" } });
+  assert.ok(screen.getByRole("button", { name: /^Inbox Helper/u }));
+  assert.equal(screen.queryByRole("button", { name: /^Planner/u }), null);
 
-  fireEvent.click(screen.getByRole("button", { name: "New Bot" }));
-  assert.deepEqual(calls, ["create"]);
+  fireEvent.change(search, { target: { value: "zebra" } });
+  assert.ok(within(screen.getByRole("status")).getByText("No matching Bots"));
+
+  fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+  assert.ok(screen.getByRole("button", { name: /^Planner/u }));
+  assert.ok(screen.getByRole("button", { name: /^Inbox Helper/u }));
+});
+
+test("while the Bots load the list shows placeholders, and a failed load offers Try again", () => {
+  renderList([], { loading: true });
+  assert.ok(screen.getByRole("status", { name: "Loading Bots" }));
+  assert.equal(screen.queryByRole("searchbox"), null);
+  cleanup();
+
+  let retried = 0;
+  renderList([], { error: true, onRetry: () => (retried += 1) });
+  const alert = screen.getByRole("alert");
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  assert.equal(retried, 1);
 });
 
 test("the list uses plain language only", () => {

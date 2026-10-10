@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { normalizeTelegramInbound } from "./telegram-inbound.js";
+import { createTranscribeRouter } from "../transcription-core.js";
 
 const privateChat = { id: 1, type: "private" as const };
 
@@ -99,4 +100,64 @@ test("stores PDFs and videos as inspectable local files", async () => {
     },
   );
   assert.deepEqual(result.localFiles.map(({ name }) => name), ["paper.pdf", "clip.mp4"]);
+});
+
+function onDeviceRouter(onDevice: string[]) {
+  return createTranscribeRouter({
+    resolve: async () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }),
+    local: {
+      async oggOpus(bytes, modelId) {
+        onDevice.push(`${modelId}:${bytes.byteLength}`);
+        return "  spoken on this Mac ";
+      },
+    },
+    openai: async () => assert.fail("cloud must not be called"),
+    gemini: async () => assert.fail("cloud must not be called"),
+  });
+}
+
+test("an on-device resolution transcribes a Telegram voice note locally", async () => {
+  const onDevice: string[] = [];
+  const result = await normalizeTelegramInbound(
+    {
+      api: {
+        async downloadFile() {
+          return { file: { file_id: "v", file_unique_id: "u" }, bytes: Uint8Array.from([79, 103, 103, 83]) };
+        },
+      },
+      transcribeAudio: onDeviceRouter(onDevice),
+    },
+    {
+      message_id: 7,
+      chat: privateChat,
+      date: 0,
+      voice: { file_id: "v", file_unique_id: "u", duration: 1, mime_type: "audio/ogg" },
+    },
+  );
+  assert.equal(result.text, "[Voice transcript]\nspoken on this Mac");
+  assert.deepEqual(onDevice, ["parakeet-v3:4"]);
+  assert.deepEqual(result.notices, []);
+});
+
+test("audio the on-device path cannot decode gets a cloud-provider notice", async () => {
+  const onDevice: string[] = [];
+  const result = await normalizeTelegramInbound(
+    {
+      api: {
+        async downloadFile() {
+          return { file: { file_id: "a", file_unique_id: "u" }, bytes: Uint8Array.from([1, 2]) };
+        },
+      },
+      transcribeAudio: onDeviceRouter(onDevice),
+    },
+    {
+      message_id: 8,
+      chat: privateChat,
+      date: 0,
+      audio: { file_id: "a", file_unique_id: "u", duration: 1, mime_type: "audio/mpeg", file_name: "song.mp3" },
+    },
+  );
+  assert.deepEqual(onDevice, []);
+  assert.equal(result.text, "");
+  assert.deepEqual(result.notices, ["song.mp3 was not transcribed: This audio format needs a cloud voice provider."]);
 });

@@ -280,7 +280,7 @@ export function VoiceDictationArt() {
           <Bar width={26} tone="soft" className="oa-anim-type" style={{ animationDelay: "0.9s" }} />
         </div>
         <div className="oa-composer-bar">
-          <ArtChip icon={Cpu}>Parakeet · On-device</ArtChip>
+          <ArtChip icon={Cpu}>On-device</ArtChip>
           <span className="oa-grow" />
           <span className="oa-voice-mic">
             <ArtIcon icon={Mic} />

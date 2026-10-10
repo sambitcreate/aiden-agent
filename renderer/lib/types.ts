@@ -920,6 +920,9 @@ export interface AppSettings {
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;
   localVoiceModel?: string;
+  voiceLanguage?: string;
+  voiceTranslateToEnglish?: boolean;
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
@@ -940,6 +943,10 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
@@ -1106,6 +1113,15 @@ export interface LocalVoiceModel {
   speed: number; // 0..1
   recommended: boolean;
   installed: boolean;
+  /** ISO 639 codes the model can transcribe. */
+  languages: string[];
+  capabilities: {
+    autoDetect: boolean;
+    languageHint: boolean;
+    translateToEnglish: boolean;
+    maxWindowSeconds: number | null;
+  };
+  license: { name: string; url: string; attribution?: string };
 }
 
 /** State of the bundled on-device (sherpa-onnx) engine. */

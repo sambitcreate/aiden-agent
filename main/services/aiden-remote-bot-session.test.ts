@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import type { BotMemoryEditInput, BotMemoryEditResult, BotMemoryView } from "../../renderer/shared/bot-memory.js";
+import type { BotRoutineProposalRespondInput } from "../../renderer/shared/bot-routine-proposals.js";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as os from "node:os";
@@ -11,6 +14,7 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
+  projectAidenRemoteBotMemory,
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
@@ -34,6 +38,8 @@ import { spawnHarnessChild } from "./bot-runtime/test-support/child.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./bot-runtime/test-support/faux.js";
 import { countingTool, recordingDeps } from "./bot-runtime/test-support/fixtures.js";
 import { BOT_ROUTINE_SILENT_INSTRUCTION, type BotRoutine } from "./scheduled-bot-routines.js";
+import { botMemoryDirectory, botMemoryFile } from "./bot-memory/files.js";
+import { createBotMemoryStore, memoryView as memoryStoreView } from "./bot-memory/store.js";
 
 const BOT_ID = "bot_session_1";
 const DEVICE_ID = "device_1";
@@ -899,4 +905,290 @@ test("a phone can deny a Bot approval but only the Mac can allow Computer Use", 
     await service.close();
     await runtime.shutdown();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 27: memory, routine proposals and suggestions, `bot:cards`
+// ---------------------------------------------------------------------------
+
+async function contractFixture(): Promise<Record<string, any>> {
+  return JSON.parse(await readFile(path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"));
+}
+
+const memoryReview = (id: number): RawEntry => ({
+  id, kind: "aiden.memory-review", data: { source: "review", added: 1, targets: ["user"] },
+});
+const proposal = (id: number, proposalId: string, name: string, prompt: string, label: string): RawEntry => ({
+  id,
+  kind: "aiden.routine-proposal",
+  data: { proposalId, name, prompt, schedule: { kind: "daily", time: "09:00" }, timezone: "UTC", label },
+});
+const proposalStatus = (id: number, proposalId: string, status: string, routineId?: string): RawEntry => ({
+  id, kind: "aiden.routine-proposal-status", data: { proposalId, status, ...(routineId ? { routineId } : {}) },
+});
+
+/** The conversation behind the shared `botSessionCards` fixture. */
+function cardEntries(): RawEntry[] {
+  return [
+    user(1, "Plan my meals, please."),
+    assistant(2, "Done. I'll remember you're vegetarian."),
+    memoryReview(20),
+    proposal(21, "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11", "Daily check-in", "Check in briefly…", "Every day at 9:00 AM"),
+    proposal(22, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "Weekly meal plan", "Plan this week's meals.", "Every Sunday at 9:00 AM"),
+    proposalStatus(23, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "accepted", "task_fixture_routine_02"),
+  ];
+}
+
+const withoutCreatedAt = (entries: Array<Record<string, unknown>>) =>
+  entries.map(({ createdAt: _createdAt, ...entry }) => entry);
+
+test("only a device holding bot:cards sees memory and routine proposal cards, as the shared fixture shows them", async () => {
+  const fixture = await contractFixture();
+  const driven = drivenConversation(cardEntries());
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const cards = await service.session(BOT_ID, { cards: true });
+    const shown = cards.entries.filter((entry) => entry.type === "memory_update" || entry.type === "routine_proposal");
+    // Custom entries carry no timestamp, so createdAt appears only when the host knows it.
+    assert.deepEqual(withoutCreatedAt(shown as never), withoutCreatedAt(fixture.botSessionCards.entries));
+
+    const legacy = await service.session(BOT_ID);
+    assert.deepEqual(legacy.entries.map((entry) => entry.type), ["message", "message"]);
+    assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
+  } finally {
+    await service.close();
+  }
+});
+
+/** Serve one Bot's SSE stream for a device with or without `bot:cards`. */
+async function openCardStream(service: AidenRemoteBotSessionService, cards: boolean) {
+  const server = createServer((_request, response) => {
+    void service.openEvents("device_1", BOT_ID, response, () => {}, { cards }).catch(() => response.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  const frames: Frame[] = [];
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const reading = (async () => {
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let index: number;
+      while ((index = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        const data = block.split("\n").find((line) => line.startsWith("data: "));
+        // Every frame must parse with the revision-27 parser; legacy devices also
+        // must never see a card type.
+        if (data) frames.push(parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame);
+      }
+    }
+  })();
+  return {
+    frames,
+    async until(predicate: () => boolean, what: string) {
+      const deadline = Date.now() + 10_000;
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    },
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await reading.catch(() => undefined);
+    },
+  };
+}
+
+test("a new card reaches bot:cards streams as an entry and other streams as a no-op at the same seq", async () => {
+  const driven = drivenConversation([user(1, "Hi"), assistant(2, "Hello!")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const cards = await openCardStream(service, true);
+  const legacy = await openCardStream(service, false);
+  try {
+    await cards.until(() => cards.frames.length >= 1, "the cards snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), memoryReview(3)]);
+    await driven.emit([user(1, "Hi"), assistant(2, "Hello!"), memoryReview(3), assistant(4, "Anything else?")]);
+    await cards.until(() => cards.frames.length >= 3, "two frames after the snapshot");
+    await legacy.until(() => legacy.frames.length >= 3, "two frames after the snapshot");
+
+    assert.deepEqual(cards.frames.map((frame) => frame.type), ["snapshot", "entry", "entry"]);
+    assert.equal(cards.frames[1]!.payload.entry.type, "memory_update");
+    assert.deepEqual(legacy.frames.map((frame) => frame.type), ["snapshot", "state", "entry"]);
+    assert.deepEqual(legacy.frames[1]!.payload, { state: "idle", interrupted: false }, "the state it already had");
+    assert.equal(legacy.frames[2]!.payload.entry.text, "Anything else?");
+    for (const stream of [cards, legacy]) {
+      const seqs = stream.frames.map((frame) => frame.seq);
+      assert.deepEqual(seqs, seqs.map((_, index) => seqs[0]! + index), "gapless for every device");
+    }
+  } finally {
+    await cards.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+function memoryView(overrides: Partial<BotMemoryView> = {}): BotMemoryView {
+  return {
+    botId: BOT_ID,
+    revision: "9f2c1a0b7d3e4f51",
+    readable: true,
+    memory: { entries: [{ id: "a1b2c3d4e5f60718", text: "Weekly meal plan is vegetarian except Fridays." }], usedChars: 46, limitChars: 2_200, overBudget: false },
+    user: { entries: [{ id: "0f1e2d3c4b5a6978", text: "Prefers short answers." }], usedChars: 22, limitChars: 1_375, overBudget: false },
+    updatedAt: Date.parse("2026-08-19T15:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function memorySession(edit: (input: BotMemoryEditInput) => Promise<BotMemoryEditResult>) {
+  const edits: BotMemoryEditInput[] = [];
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fake.runtime,
+    memory: {
+      view: async (botId) => memoryView({ botId }),
+      edit: async (input) => {
+        edits.push(input);
+        return edit(input);
+      },
+    },
+  });
+  return { service, edits };
+}
+
+test("phones read memory in the shared fixture's shape", async () => {
+  const fixture = await contractFixture();
+  const { service } = memorySession(async () => assert.fail("no edit"));
+  const memory = await service.memory(BOT_ID);
+  assert.equal(memory.updatedAt, "2026-08-19T15:00:00.000Z");
+  assert.deepEqual(memory.memory, fixture.botMemory.memory);
+  // A Bot that never saved anything reports null, and the fixture view round-trips.
+  const fresh = projectAidenRemoteBotMemory(memoryView({ updatedAt: null }));
+  assert.equal(fresh.updatedAt, null);
+  assert.deepEqual(
+    projectAidenRemoteBotMemory({ ...fixture.botMemory, updatedAt: Date.parse(fixture.botMemory.updatedAt) }),
+    fixture.botMemory,
+  );
+  await assert.rejects(service.memory("bot_missing"), (error: { code?: string }) => error.code === "not_found");
+});
+
+test("every memory view the store can load is one phones accept", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-memory-"));
+  try {
+    // The Bot's session directory exists once its harness has opened.
+    mkdirSync(path.dirname(botMemoryDirectory(root, BOT_ID)), { recursive: true });
+    const store = createBotMemoryStore({ profileDir: root });
+    // 65 short, individually valid facts fit the 1,375-character budget many times over.
+    const facts = Array.from({ length: 65 }, (_, index) => `Likes tea ${index + 1}.`);
+    assert.ok(facts.join("\n§\n").length < 1_375);
+    for (const fact of facts) await store.apply(BOT_ID, "user", [{ action: "add", content: fact }]);
+    const saved = memoryStoreView(await store.load(BOT_ID));
+    assert.equal(saved.user.entries.length, 64, "the 65th save is refused");
+    assert.equal(projectAidenRemoteBotMemory(saved).user.entries.length, 64);
+
+    // A shell edit can plant any number of entries: the view stays loadable and holds what the Bot reads.
+    writeFileSync(botMemoryFile(root, BOT_ID, "user"), Array.from({ length: 90 }, (_, index) => `Planted ${index + 1}.`).join("\n§\n"));
+    const planted = projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID)));
+    assert.equal(planted.user.entries.length, 64);
+    assert.equal(planted.user.entries[0]!.text, "Planted 1.");
+    // The person can still erase from the phone view.
+    const erased = await store.edit(BOT_ID, { kind: "remove", target: "user", entryId: planted.user.entries[0]!.id });
+    assert.equal(erased.ok, true);
+    assert.equal(projectAidenRemoteBotMemory(memoryStoreView(await store.load(BOT_ID))).user.entries[0]!.text, "Planted 2.");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a memory edit is idempotent per request key and its failures carry the documented codes", async () => {
+  const fixture = await contractFixture();
+  const results: BotMemoryEditResult[] = [
+    { ok: true, view: memoryView({ revision: "7a7a7a7a7a7a7a7a" }) },
+    { ok: false, code: "entry_not_found", message: "Not found.", view: memoryView() },
+    { ok: false, code: "over_budget", message: "Too long for About you.", view: memoryView() },
+    { ok: false, code: "blocked", message: "Blocked.", view: memoryView() },
+    { ok: false, code: "invalid", message: "Write 1 to 500 characters.", view: memoryView() },
+  ];
+  const { service, edits } = memorySession(async () => results.shift()!);
+  const request = fixture.botMemoryEdit.request;
+
+  const applied = await service.editMemory(DEVICE_ID, BOT_ID, "memory-edit-key-0001", request);
+  const replay = await service.editMemory(DEVICE_ID, BOT_ID, "memory-edit-key-0001", request);
+  assert.equal(applied.ok, true);
+  assert.equal(applied.view.revision, "7a7a7a7a7a7a7a7a");
+  assert.deepEqual(replay, applied);
+  assert.deepEqual(edits, [{ botId: BOT_ID, edit: request.edit }], "a replay never edits twice");
+
+  const documented = fixture.botMemoryEdit.errors as Array<{ status: number; code: string }>;
+  for (const [index, expected] of [...documented, { status: 422, code: "invalid_request" }].entries()) {
+    await assert.rejects(
+      service.editMemory(DEVICE_ID, BOT_ID, `memory-edit-key-01${index}0`, request),
+      (error: { status?: number; code?: string }) => error.status === expected.status && error.code === expected.code,
+      expected.code,
+    );
+  }
+  for (const body of [{ edit: { kind: "replace", target: "user", entryId: "bad", text: "x" } }, { edit: { kind: "rewrite" } }, {}]) {
+    await assert.rejects(
+      service.editMemory(DEVICE_ID, BOT_ID, "memory-edit-key-0900", body),
+      (error: { status?: number; code?: string }) => error.status === 400 && error.code === "invalid_request",
+    );
+  }
+});
+
+test("answering a proposal from a phone is idempotent and an unknown proposal is not found", async () => {
+  const fixture = await contractFixture();
+  const answers: BotRoutineProposalRespondInput[] = [];
+  const fake = fakeRuntime({ kind: "idle" });
+  const routines: BotRoutine[] = [];
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => fake.runtime,
+    routines: {
+      list: async () => routines,
+      create: async () => assert.fail("phones never create through this path"),
+      update: async () => assert.fail("no update"),
+      delete: async () => assert.fail("no delete"),
+    },
+    proposals: {
+      respond: async (input) => {
+        answers.push(input);
+        if (input.proposalId !== "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11") {
+          throw Object.assign(new Error("gone"), { code: "routine_proposal_not_found" });
+        }
+        return { status: "accepted", routineId: "task_fixture_routine_03" };
+      },
+    },
+    routineNotifications: { list: async () => ({ notifications: [], now: new Date(0).toISOString() }) },
+    defaultTimezone: () => "UTC",
+    now: () => Date.parse("2026-08-19T15:00:00.000Z"),
+  });
+  const proposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11";
+  const first = await service.respondRoutineProposal(DEVICE_ID, BOT_ID, proposalId, "proposal-key-00001", fixture.botRoutineProposalRespond.request);
+  const replay = await service.respondRoutineProposal(DEVICE_ID, BOT_ID, proposalId, "proposal-key-00001", fixture.botRoutineProposalRespond.request);
+  assert.deepEqual(first, fixture.botRoutineProposalRespond.response);
+  assert.deepEqual(replay, first);
+  assert.equal(answers.length, 1);
+  assert.deepEqual(answers[0], { botId: BOT_ID, proposalId, decision: "accept" });
+
+  await assert.rejects(
+    service.respondRoutineProposal(DEVICE_ID, BOT_ID, "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22", "proposal-key-00002", { decision: "dismiss" }),
+    (error: { status?: number; code?: string }) => error.status === 404 && error.code === "routine_proposal_not_found",
+  );
+  for (const [id, body] of [["not-a-uuid", { decision: "accept" }], [proposalId, { decision: "later" }]] as const) {
+    await assert.rejects(
+      service.respondRoutineProposal(DEVICE_ID, BOT_ID, id, "proposal-key-00003", body),
+      (error: { code?: string }) => error.code === "invalid_request",
+    );
+  }
+
+  // The Daily check-in suggestion matches the fixture until the Bot has a routine.
+  assert.deepEqual(await service.routineSuggestions(BOT_ID), fixture.botRoutineSuggestions);
+  routines.push({ id: "routine_1" } as BotRoutine);
+  assert.deepEqual(await service.routineSuggestions(BOT_ID), { suggestions: [] });
 });
