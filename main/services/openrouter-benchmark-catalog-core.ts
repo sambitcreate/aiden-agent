@@ -1,10 +1,10 @@
 import type { ModelBenchmarkScores } from "./types.js";
 
 export const OPENROUTER_BENCHMARK_ENDPOINT =
-  "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=100";
+  "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=500";
 export const OPENROUTER_BENCHMARK_SOURCE_URL = "https://artificialanalysis.ai";
 export const OPENROUTER_BENCHMARK_LICENSE = "CC BY 4.0" as const;
-export const MAX_OPENROUTER_BENCHMARK_MODELS = 100;
+export const MAX_OPENROUTER_BENCHMARK_MODELS = 500;
 
 export interface OpenRouterBenchmarkModel {
   modelPermaslug: string;
@@ -117,16 +117,9 @@ function parseModel(value: unknown, index: number): OpenRouterBenchmarkModel {
   return parsed;
 }
 
-const MODEL_COUNT_ERROR = "OpenRouter benchmark data must contain between 1 and 100 models.";
+const MODEL_COUNT_ERROR = `OpenRouter benchmark data must contain between 1 and ${MAX_OPENROUTER_BENCHMARK_MODELS} models.`;
 
-/**
- * Parse every row, then drop all rows whose permaslug appears more than once:
- * a shared permaslug cannot say which row belongs to the model, so none does.
- */
-function parseModels(value: unknown): {
-  models: OpenRouterBenchmarkModel[];
-  skippedAmbiguous: number;
-} {
+function parseRows(value: unknown): OpenRouterBenchmarkModel[] {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
@@ -134,17 +127,42 @@ function parseModels(value: unknown): {
   ) {
     throw new Error(MODEL_COUNT_ERROR);
   }
-  const parsed = value.map(parseModel);
+  return value.map(parseModel);
+}
+
+function permaslugOccurrences(models: readonly OpenRouterBenchmarkModel[]): Map<string, number> {
   const occurrences = new Map<string, number>();
-  for (const model of parsed) {
+  for (const model of models) {
     const key = model.modelPermaslug.toLowerCase();
     occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
   }
+  return occurrences;
+}
+
+/**
+ * Parse every response row, then drop all rows whose permaslug appears more than
+ * once: a shared permaslug cannot say which row belongs to the model, so none does.
+ */
+function parseResponseModels(value: unknown): {
+  models: OpenRouterBenchmarkModel[];
+  skippedAmbiguous: number;
+} {
+  const parsed = parseRows(value);
+  const occurrences = permaslugOccurrences(parsed);
   const models = parsed.filter(
     (model) => occurrences.get(model.modelPermaslug.toLowerCase()) === 1,
   );
   if (models.length === 0) throw new Error(MODEL_COUNT_ERROR);
   return { models, skippedAmbiguous: parsed.length - models.length };
+}
+
+/** A cache Aiden wrote already dropped ambiguous rows, so a duplicate means it is corrupt. */
+function parseCachedModels(value: unknown): OpenRouterBenchmarkModel[] {
+  const models = parseRows(value);
+  for (const count of permaslugOccurrences(models).values()) {
+    if (count > 1) throw new Error("OpenRouter benchmark cache contains duplicate permaslugs.");
+  }
+  return models;
 }
 
 function skippedCount(value: unknown): number {
@@ -172,7 +190,9 @@ export function buildOpenRouterBenchmarkCache(
   if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark response has an invalid citation.");
   }
-  const { models, skippedAmbiguous } = parseModels(response.data);
+  const { models, skippedAmbiguous } = parseResponseModels(response.data);
+  // model_count is the source's total, so it must cover every returned row,
+  // including ambiguous rows that were dropped above.
   if (
     typeof meta.model_count !== "number" ||
     !Number.isSafeInteger(meta.model_count) ||
@@ -234,7 +254,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
       // Caches written before this count existed read as none skipped.
       skippedAmbiguous: skippedCount(source.skippedAmbiguous),
     },
-    models: parseModels(
+    models: parseCachedModels(
       Array.isArray(cache.models)
         ? cache.models.map((value) => {
             const model = record(value);
@@ -248,7 +268,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
             };
           })
         : cache.models,
-    ).models,
+    ),
   };
 }
 

@@ -10,6 +10,7 @@ Give Aiden's Personal Model Pad trustworthy, source-aware benchmark evidence wit
 
 - A manual-only OpenRouter Data API integration uses its own encrypted Model Pad credential. It never creates an inference provider, discovers OpenRouter's catalog, or adds OpenRouter models to the user's list.
 - The fixed Artificial Analysis benchmark query is timeout-bound, response-size-bound, schema-validated, and published atomically to a device-local `0600` cache.
+- The fixed query is `/api/v1/benchmarks?source=artificial-analysis&max_results=500`. The cap was raised from 100 to 500 because the endpoint has no paging (no offset, page, or cursor parameter), so one request must return every row; the 2 MB response limit still leaves a realistic 500-row response at about 20% of the budget. Duplicate permaslugs in a response are dropped and counted; a stored cache that contains them is treated as invalid.
 - Connect & fetch validates a candidate key before publishing it, failed fetches leave the last known good public cache untouched, and disconnect removes both the dedicated key and cache.
 - Ordinary model reads remain offline and attach source-aware benchmark evidence separately from Pi/provider/models.dev capability metadata.
 - Version-stamped and vendor-reordered benchmark identities normalize through the bundled models.dev provider ID/name authority. Catalog-backed gateways may inherit only a unique underlying identity; ambiguous aliases and unrecognized custom providers fail closed.

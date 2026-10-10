@@ -153,8 +153,62 @@ test("a response whose rows are all ambiguous is still rejected", () => {
           benchmarkRow("OPENAI/GPT", "GPT duplicate", 2),
         ]),
       ),
-    /between 1 and 100/u,
+    /between 1 and 500/u,
   );
+});
+
+function rows(count: number) {
+  return Array.from({ length: count }, (_, index) =>
+    benchmarkRow(`vendor/model-${index}`, `Model ${index}`, index % 100),
+  );
+}
+
+test("accepts every row up to the 500-row cap and rejects a 501-row response", () => {
+  for (const count of [101, 500]) {
+    const cache = buildOpenRouterBenchmarkCache(responsePayload(rows(count)));
+    assert.equal(cache.models.length, count);
+    assert.equal(parseOpenRouterBenchmarkCache(JSON.parse(JSON.stringify(cache))).models.length, count);
+  }
+  assert.throws(
+    () => buildOpenRouterBenchmarkCache(responsePayload(rows(501))),
+    /between 1 and 500/u,
+  );
+});
+
+test("a stored cache with duplicate permaslugs is rejected instead of pruned", () => {
+  const cache = buildOpenRouterBenchmarkCache(
+    responsePayload([
+      benchmarkRow("openai/gpt-5.4", "GPT-5.4", 81.4),
+      benchmarkRow("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", 61),
+    ]),
+  );
+  const tampered = JSON.parse(JSON.stringify(cache)) as { models: Array<Record<string, unknown>> };
+  tampered.models[1].modelPermaslug = "OpenAI/GPT-5.4";
+  assert.throws(() => parseOpenRouterBenchmarkCache(tampered), /duplicate/u);
+});
+
+test("a stored cache with an invalid skipped-row count is rejected", () => {
+  const cache = buildOpenRouterBenchmarkCache(responsePayload());
+  for (const skippedAmbiguous of [-1, 1.5, "2", null]) {
+    const stored = JSON.parse(JSON.stringify(cache)) as { source: Record<string, unknown> };
+    stored.source.skippedAmbiguous = skippedAmbiguous;
+    assert.throws(() => parseOpenRouterBenchmarkCache(stored), /skipped-row count/u);
+  }
+});
+
+test("model_count must cover every returned row, including ambiguous rows that were dropped", () => {
+  const payload = responsePayload([
+    benchmarkRow("openai/gpt", "GPT", 1),
+    benchmarkRow("OPENAI/GPT", "GPT duplicate", 2),
+    benchmarkRow("openai/gpt-5.4", "GPT-5.4", 81.4),
+  ]);
+  // model_count is the source's total, so it can never be below the rows actually returned.
+  payload.meta.model_count = 2;
+  assert.throws(() => buildOpenRouterBenchmarkCache(payload), /model count/u);
+  payload.meta.model_count = 3;
+  const cache = buildOpenRouterBenchmarkCache(payload);
+  assert.equal(cache.models.length, 1);
+  assert.equal(cache.source.skippedAmbiguous, 2);
 });
 
 test("a cache stored before skipped rows were recorded reports none skipped", async () => {
@@ -267,7 +321,7 @@ test("fetch sends the dedicated key only to the fixed endpoint and maps auth fai
     fetch: async (input, init) => {
       assert.equal(
         String(input),
-        "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=100",
+        "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=500",
       );
       observedAuthorization = new Headers(init?.headers).get("authorization") ?? "";
       assert.equal(init?.redirect, "error");
@@ -276,6 +330,31 @@ test("fetch sends the dedicated key only to the fixed endpoint and maps auth fai
   });
   assert.equal(observedAuthorization, "Bearer or-secret");
   assert.equal(cache.models.length, 1);
+
+  // A full 500-row response with the API's extra fields fits the default response size limit.
+  const full = responsePayload(
+    rows(500).map((row, index) => ({
+      ...row,
+      model_permaslug: `vendor/some-fairly-long-model-name-${index}-instruct-preview-20260101`,
+      display_name: `Some Fairly Long Model Name ${index} Instruct Preview (Reasoning, Max Effort)`,
+      intelligence_index: 72.123456,
+      agentic_index: 69.333333,
+      pricing: {
+        prompt: "0.00000125",
+        completion: "0.00001",
+        request: "0",
+        image: "0",
+        web_search: "0",
+        internal_reasoning: "0",
+        input_cache_read: "0.000000125",
+        input_cache_write: "0.0000015625",
+      },
+    })),
+  );
+  const fullCache = await fetchOpenRouterBenchmarkCache("or-secret", {
+    fetch: async () => new Response(JSON.stringify(full, null, 2)),
+  });
+  assert.equal(fullCache.models.length, 500);
 
   await assert.rejects(
     () =>
