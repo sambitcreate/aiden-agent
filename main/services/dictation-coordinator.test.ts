@@ -800,9 +800,9 @@ test("the watchdog grows with long recordings so it never preempts the worker", 
   await subject.coordinator.progress("finalizing", operationId, 600);
   const fence = fences[fences.length - 1]!;
   assert.ok(fence > 20_000 * 600, `fence ${fence} must outlast the worker's 20× real-time deadline`);
-  // A short clip keeps the floor.
+  // A three-second clip: the supervised on-device budget (615 s) plus 10 s.
   await subject.coordinator.progress("finalizing", operationId, 3);
-  assert.equal(fences[fences.length - 1], TRANSCRIPTION_WATCHDOG_MS);
+  assert.equal(fences[fences.length - 1], 625_000);
 });
 
 test("an absurd recording length cannot overflow the watchdog timer", () => {

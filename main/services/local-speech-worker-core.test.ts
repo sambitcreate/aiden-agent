@@ -4,7 +4,8 @@ import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
 import { ModelMissingError, type EngineTranscribeRequest } from "./local-speech-engine.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
 import { readFile } from "node:fs/promises";
-import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
+import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
+import { MAX_PCM_SAMPLES } from "./local-speech-protocol.js";
 import {
   createLocalSpeechMessageHandler,
   replyToWorkerFrame,
@@ -16,12 +17,12 @@ const canary = speechModel("canary-180m-flash")!;
 
 function fakeEngine(overrides: Partial<LocalSpeechWorkerEngine> = {}) {
   const requests: EngineTranscribeRequest[] = [];
-  const loads: Array<{ spec: SpeechModelSpec; dir: string }> = [];
+  const loads: Array<{ spec: SpeechModelSpec; dir: string; language: string | null | undefined }> = [];
   let releases = 0;
   const engine: LocalSpeechWorkerEngine = {
     status: () => ({ ready: true, error: null }),
-    load: (spec, dir) => {
-      loads.push({ spec, dir });
+    load: (spec, dir, language) => {
+      loads.push({ spec, dir, language });
       return { loadMs: 42 };
     },
     transcribe: (request) => {
@@ -99,6 +100,50 @@ test("missing model files reply with a model-missing failure", async () => {
   assert.match(reply.kind === "failure" ? reply.message : "", /isn't downloaded/);
 });
 
+test("a load carries the requested language into the engine, so warm-up matches the transcription", async () => {
+  const fake = fakeEngine();
+  const handle = createLocalSpeechMessageHandler(fake.engine);
+  const reply = await handle({
+    version: 2,
+    kind: "load",
+    requestId: "l-de",
+    modelId: parakeet.id,
+    modelDirectory: "/models/x",
+    spec: parakeet,
+    language: "de",
+  });
+  assert.equal(reply.kind, "result");
+  assert.equal(fake.loads[0]!.language, "de");
+});
+
+test("a load without a language builds the recognizer with no language, as before", async () => {
+  const fake = fakeEngine();
+  await createLocalSpeechMessageHandler(fake.engine)({
+    version: 2,
+    kind: "load",
+    requestId: "l-none",
+    modelId: parakeet.id,
+    modelDirectory: "/models/x",
+    spec: parakeet,
+  });
+  assert.equal(fake.loads[0]!.language, null);
+});
+
+test("a load with a malformed language is refused before reaching the engine", async () => {
+  const fake = fakeEngine();
+  const reply = await replyToWorkerFrame({
+    version: 2,
+    kind: "load",
+    requestId: "l-bad",
+    modelId: parakeet.id,
+    modelDirectory: "/models/x",
+    spec: parakeet,
+    language: "not a language!",
+  }, createLocalSpeechMessageHandler(fake.engine));
+  assert.equal(reply?.kind === "failure" && reply.code, "invalid-request");
+  assert.equal(fake.loads.length, 0);
+});
+
 test("an engine that cannot load replies engine-unavailable", async () => {
   const fake = fakeEngine({
     status: () => ({ ready: false, error: "On-device engine failed to load: dlopen" }),
@@ -134,6 +179,21 @@ test("ogg-opus audio is decoded when a decoder is provided", async () => {
   );
   assert.equal(reply.kind, "result");
   assert.equal(fake.requests[0]!.samples, decoded);
+});
+
+test("the decoder is given the 30-minute cap and its too-long rejection maps to unsupported audio", async () => {
+  const fake = fakeEngine();
+  const caps: Array<number | undefined> = [];
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: async (_bytes, options) => {
+      caps.push(options?.maxSamples);
+      throw new OggOpusTooLongError();
+    },
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
+  assert.deepEqual(caps, [MAX_PCM_SAMPLES]);
+  assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
+  assert.equal(reply.kind === "failure" && reply.message, "This voice note is too long for on-device transcription.");
+  assert.equal(fake.requests.length, 0);
 });
 
 test("an Ogg/Opus note that decodes past 30 minutes fails cleanly without reaching the engine", async () => {

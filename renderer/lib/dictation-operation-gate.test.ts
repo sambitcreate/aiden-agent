@@ -43,10 +43,12 @@ test("one deadline budget is shared across sequential operations", async () => {
   await assert.rejects(deadline.run(Promise.resolve("late")), /took too long/u);
 });
 
-test("on-device transcription keeps headroom around the worker's minimum deadline", () => {
+test("on-device transcription covers a supervised load, a retry and the transcribe deadline", () => {
   assert.equal(transcriptionBudgetMs("gemini"), 45_000);
   assert.equal(transcriptionBudgetMs("openai"), 45_000);
-  assert.equal(transcriptionBudgetMs("local"), 125_000);
+  // Three seconds: 2 × (180 s load + 120 s transcribe) + 15 s headroom.
+  assert.equal(transcriptionBudgetMs("local"), 615_000);
+  assert.equal(transcriptionBudgetMs("local", 3), 615_000);
 });
 
 test("a budget beyond the timer range still waits instead of expiring at once", async () => {
@@ -58,8 +60,8 @@ test("a budget beyond the timer range still waits instead of expiring at once", 
 });
 
 test("on-device budgets scale with the recording length; cloud budgets do not", () => {
-  assert.equal(transcriptionBudgetMs("local", 5), 125_000);
-  assert.equal(transcriptionBudgetMs("local", 600), 12_015_000);
+  // Six hundred seconds: 2 × (180 s load + 12,000 s transcribe) + 15 s headroom.
+  assert.equal(transcriptionBudgetMs("local", 600), 24_375_000);
   assert.equal(transcriptionBudgetMs("openai", 600), 45_000);
   assert.equal(transcriptionBudgetMs("gemini", 600), 45_000);
 });

@@ -10,6 +10,7 @@ import {
   type LocalSpeechProcessPort,
 } from "./local-speech-process-core.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
+import { transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
 import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
 
 const spec = speechModel("parakeet-v3")!;
@@ -299,4 +300,42 @@ test("two crashes fail one request clearly; the next request on the lane gets a 
   assert.deepEqual(crashes, [1, 2]);
   assert.equal(await transcribeOnLane(), "worker 2");
   assert.equal(forks.length, 3);
+});
+
+test("a hung first worker that retries in a fresh worker still finishes inside the renderer's budget", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seconds = 3;
+  // The first worker never answers; the fresh one answers ten seconds after it is asked.
+  const hung = fakePort();
+  const fresh = fakePort();
+  const pending = runWithCrashRetry(
+    (attempt) => {
+      const fake = attempt === 1 ? hung : fresh;
+      const client: LocalSpeechProcessClient = new LocalSpeechProcessClient(fake.port, {
+        onHang: () => client.dispose(),
+      });
+      return client.transcribe(transcribeInput(new Int16Array(seconds * 16_000)));
+    },
+    { isCancelled: () => false, isCrash: (error) => error instanceof WorkerCrashError, onCrash: () => {} },
+  );
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  // The first request times out at the transcribe deadline for three seconds of audio.
+  t.mock.timers.tick(120_000);
+  await settle();
+  assert.equal(fresh.sent.length, 1, "the retry is sent to a fresh worker");
+  t.mock.timers.tick(10_000);
+  fresh.reply({
+    version: LOCAL_SPEECH_PROTOCOL_VERSION,
+    kind: "result",
+    requestId: fresh.sent[0]!.requestId,
+    text: "hallo welt",
+    language: "de",
+    decodeMs: 5,
+  });
+  const result = await pending;
+
+  assert.equal(result.text, "hallo welt");
+  // Hang at 120 s plus the retry at 10 s is 130 s of supervised work.
+  assert.ok(130_000 < transcriptionBudgetMs("local", seconds), "the renderer must not cancel the retry");
 });

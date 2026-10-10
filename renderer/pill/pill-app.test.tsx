@@ -82,8 +82,13 @@ function installCapture() {
   return { getUserMediaCalls: () => getUserMediaCalls };
 }
 
-function mount(resolution: VoiceProviderResolution, transcribeLocal: () => Promise<string>) {
+function mount(
+  resolution: VoiceProviderResolution,
+  transcribeLocal: () => Promise<string>,
+  extraHandlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
+    ...extraHandlers,
     "settings:get": () => ({}),
     "settings:getAppearance": () => {
       throw new Error("unavailable in tests");
@@ -146,4 +151,23 @@ test("a slow on-device model load shows Loading model… while transcription wai
   await act(async () => finish("hello"));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
   assert.equal(screen.queryByText("Loading model…"), null);
+});
+
+test("a cloud transcription reports no recording length, so the coordinator keeps its cloud fence", async () => {
+  const { calls } = mount(
+    { kind: "ready", provider: "openai", automatic: false },
+    async () => "",
+    { "voice:transcribe": () => "hello" },
+  );
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:ready")));
+  act(() => emitBotTestNotification("dictation:state", { state: "recording", operationId: "op-3" }));
+  await screen.findByRole("button", { name: "Cancel dictation" });
+  act(() => emitBotTestNotification("dictation:state", { state: "stopping", operationId: "op-3" }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === "dictation:result")));
+
+  const progress = calls.find((call) => call.channel === "dictation:progress");
+  assert.equal(progress?.args[1], "finalizing");
+  // Only the on-device budget scales with the recording; a cloud fence stays at its floor.
+  assert.equal(progress?.args[2], undefined);
+  assert.equal(calls.find((call) => call.channel === "dictation:result")?.args[1], "hello");
 });
