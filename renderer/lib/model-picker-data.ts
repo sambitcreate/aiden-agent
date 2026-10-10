@@ -133,7 +133,8 @@ export interface PositionedModel extends ModelEntry {
   /** How the marker announces its placement source (see `modelPadPlacementSourceLabel`). */
   placementSourceLabel: string;
   capabilityLabel: "Everyday" | "Capable" | "Advanced";
-  paceLabel: "Faster" | "Balanced" | "Deliberate";
+  /** "Pace unmeasured" when the horizontal spot is neutral spread, not a pace. */
+  paceLabel: "Faster" | "Balanced" | "Deliberate" | "Pace unmeasured";
 }
 
 export interface ModelPoint {
@@ -466,10 +467,21 @@ export function previewBenchmarkSuggestions(
   );
 }
 
-function labelsFor(x: number, y: number): Pick<PositionedModel, "capabilityLabel" | "paceLabel"> {
+function labelsFor(
+  x: number,
+  y: number,
+  xSource: ModelPadPlacement["xSource"],
+): Pick<PositionedModel, "capabilityLabel" | "paceLabel"> {
   return {
     capabilityLabel: y >= 0.68 ? "Advanced" : y >= 0.4 ? "Capable" : "Everyday",
-    paceLabel: x <= 0.34 ? "Faster" : x <= 0.66 ? "Balanced" : "Deliberate",
+    paceLabel:
+      xSource === "neutral"
+        ? "Pace unmeasured"
+        : x <= 0.34
+          ? "Faster"
+          : x <= 0.66
+            ? "Balanced"
+            : "Deliberate",
   };
 }
 
@@ -497,7 +509,7 @@ export function positionSavedModels(
         y,
         placementKind,
         placementSourceLabel: modelPadPlacementSourceLabel(placement),
-        ...labelsFor(x, y),
+        ...labelsFor(x, y, placement.xSource),
       },
     ];
   });

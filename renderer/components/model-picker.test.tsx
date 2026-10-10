@@ -125,7 +125,7 @@ test("a current model that is not on the Pad is not shown as selected and can be
   ]);
   assert.equal(saved["acme::current-model"].xSource, "user");
   assert.equal(saved["acme::current-model"].ySource, "user");
-  assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
+  assert.ok(!screen.queryByRole("button", { name: "Add to Pad" }));
   // Focus stays on the Pad when the Add button goes away.
   await waitFor(() => assert.equal(document.activeElement, pad));
   assert.equal(
@@ -199,7 +199,7 @@ test("a current model hidden from the picker is not offered for the Pad", async 
   const pad = await openPicker(server, { hidden: ["current-model"] });
 
   assert.equal(pad.getAttribute("aria-activedescendant"), null);
-  assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
+  assert.ok(!screen.queryByRole("button", { name: "Add to Pad" }));
   assert.doesNotMatch(screen.getByRole("tabpanel").textContent ?? "", /isn’t on your Pad/u);
 });
 
@@ -212,7 +212,7 @@ test("an empty Pad offers the current model and shows it on the Pad once added",
   const panel = screen.getByRole("tabpanel");
   assert.match(panel.textContent ?? "", /Current Model\sisn’t on your Pad/u);
   assert.ok(screen.getByRole("button", { name: "Customize Model Pad" }));
-  assert.equal(screen.queryByRole("listbox", { name: /Model pad/u }), null);
+  assert.ok(!screen.queryByRole("listbox", { name: /Model pad/u }));
 
   fireEvent.click(screen.getByRole("button", { name: "Add to Pad" }));
 
@@ -225,7 +225,7 @@ test("an empty Pad offers the current model and shows it on the Pad once added",
   assert.deepEqual(Object.keys((writes[0].args[0] as AppSettings).modelPadPlacements ?? {}), [
     "acme::current-model",
   ]);
-  assert.equal(screen.queryByRole("button", { name: "Add to Pad" }), null);
+  assert.ok(!screen.queryByRole("button", { name: "Add to Pad" }));
   // The empty-state call to action is replaced by the Pad's own Customize button.
   assert.equal(screen.getAllByRole("button", { name: "Customize Model Pad" }).length, 1);
   assert.ok(!screen.queryByText("Your Model Pad is empty"));
@@ -278,13 +278,11 @@ test("list rows say whether each model is on the Pad", async () => {
   const server = settingsServer(placedSettings);
   await openList(server);
 
-  const remove = screen.getByRole("button", {
-    name: "Remove Placed One from Pad",
-  });
-  assert.equal(remove.getAttribute("aria-pressed"), "true");
+  // The action names say what each button will do; no toggle state is announced.
+  assert.ok(screen.getByRole("button", { name: "Remove Placed One from Pad" }));
   assert.ok(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
-  const add = screen.getByRole("button", { name: "Add Current Model to Pad" });
-  assert.equal(add.getAttribute("aria-pressed"), "false");
+  assert.ok(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+  assert.ok(screen.getByRole("button", { name: "Pin Placed One" }));
 });
 
 test("adding a model from its list row places it on the Pad without choosing it", async () => {
@@ -330,6 +328,34 @@ test("removing a model from its list row takes it off the Pad and keeps the othe
   assert.deepEqual(writes[0], {
     "acme::placed-one": placedSettings.modelPadPlacements?.["acme::placed-one"],
   });
+});
+
+test("a list-row removal says so and Undo puts the model back where it was", async () => {
+  const server = settingsServer(placedSettings);
+  await openList(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove Placed Two from Pad" }));
+
+  await screen.findByText("Removed Placed Two from your Pad");
+  fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: "Remove Placed Two from Pad" })));
+  assert.deepEqual(server.current().modelPadPlacements, placedSettings.modelPadPlacements);
+});
+
+test("adding a model from its list row shows no toast", async () => {
+  const server = settingsServer(placedSettings);
+  await openList(server);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add Current Model to Pad" }));
+
+  await waitFor(() =>
+    assert.ok(screen.getByRole("button", { name: "Remove Current Model from Pad" })),
+  );
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.ok(!screen.queryByRole("button", { name: "Undo" }));
 });
 
 test("a failed Pad toggle says why and leaves the row unchanged", async () => {
@@ -619,6 +645,22 @@ test("re-choosing the current model on the Pad moves it to the front of the rece
   await waitFor(() =>
     assert.deepEqual(savedRecents(server), [["acme::current-model", "acme::placed-one"]]),
   );
+});
+
+test("choosing the newest recent model again writes nothing", async () => {
+  const server = settingsServer({ ...placedSettings, recentModels: ["acme::placed-two"] });
+  const changes: string[] = [];
+  await openList(server, {
+    onChange: (providerId: string, model: string) => changes.push(`${providerId}::${model}`),
+  });
+
+  fireEvent.click(screen.getByRole("option", { name: /Placed Two/u }));
+
+  assert.deepEqual(changes, ["acme::placed-two"]);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.equal(server.calls.filter((call) => call.channel === "settings:set").length, 0);
 });
 
 test("a failed recents write neither blocks the choice nor shows an error", async (t) => {

@@ -49,6 +49,7 @@ import {
   addModelPadPlacement,
   modelPadGridSizeForPlacements,
   modelPadHasBenchmarkHeight,
+  type ModelPadPlacement,
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import { recordRecentModel } from "../shared/model-pad-preferences";
@@ -228,12 +229,13 @@ function EmptyModelPad({
  */
 function ModelRowAction({
   label,
-  pressed,
+  active,
   onToggle,
   children,
 }: {
   label: string;
-  pressed: boolean;
+  /** Pinned or on the Pad: the action stays visible instead of appearing on hover. */
+  active: boolean;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
@@ -241,7 +243,6 @@ function ModelRowAction({
     <button
       type="button"
       aria-label={label}
-      aria-pressed={pressed}
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -255,7 +256,7 @@ function ModelRowAction({
       }}
       className={cn(
         "shrink-0 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
-        pressed ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+        active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
       )}
     >
       {children}
@@ -316,14 +317,14 @@ function ModelListRow({
       {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
       <ModelRowAction
         label={isPinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
-        pressed={isPinned}
+        active={isPinned}
         onToggle={() => onTogglePin(entry.value)}
       >
         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
       </ModelRowAction>
       <ModelRowAction
         label={isOnPad ? `Remove ${entry.label} from Pad` : `Add ${entry.label} to Pad`}
-        pressed={isOnPad}
+        active={isOnPad}
         onToggle={() => onTogglePad(entry.value)}
       >
         {isOnPad ? (
@@ -475,6 +476,8 @@ export function ModelHoverDetails({
 
 /** Matches the knob's 250ms confirm transition closely enough to read as one beat. */
 const PAD_COMMIT_CLOSE_DELAY_MS = 200;
+/** One toast for list-row removals, so only the latest removal offers Undo. */
+const REMOVE_FROM_PAD_TOAST_ID = "model-picker-remove-from-pad";
 
 export function ModelPicker({
   providers,
@@ -627,20 +630,47 @@ export function ModelPicker({
     [saveModelPadPreferences],
   );
 
-  const toggleOnPad = React.useCallback(
-    (value: string) => {
-      const visibleValues = entries.map((entry) => entry.value);
-      void saveModelPadPreferences(({ placements }) => {
-        if (!placements[value]) {
-          return { modelPadPlacements: addModelPadPlacement(placements, visibleValues, value) };
-        }
-        const { [value]: _removed, ...rest } = placements;
-        return { modelPadPlacements: rest };
-      }).catch((error: unknown) => {
+  const restoreOnPad = React.useCallback(
+    (value: string, placement: ModelPadPlacement) => {
+      void saveModelPadPreferences(({ placements }) =>
+        // Placed again meanwhile (another window): keep that placement.
+        placements[value] ? {} : { modelPadPlacements: { ...placements, [value]: placement } },
+      ).catch((error: unknown) => {
         toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
       });
     },
-    [entries, saveModelPadPreferences],
+    [saveModelPadPreferences],
+  );
+
+  const toggleOnPad = React.useCallback(
+    (value: string) => {
+      const visibleValues = entries.map((entry) => entry.value);
+      const label = entries.find((entry) => entry.value === value)?.label ?? value;
+      let removed: ModelPadPlacement | undefined;
+      void saveModelPadPreferences(({ placements }) => {
+        removed = undefined;
+        if (!placements[value]) {
+          return { modelPadPlacements: addModelPadPlacement(placements, visibleValues, value) };
+        }
+        const { [value]: placement, ...rest } = placements;
+        removed = placement;
+        return { modelPadPlacements: rest };
+      }).then(
+        () => {
+          // Adding stays quiet; a removal can be undone from its toast.
+          const placement = removed;
+          if (!placement) return;
+          toast(`Removed ${label} from your Pad`, {
+            id: REMOVE_FROM_PAD_TOAST_ID,
+            action: { label: "Undo", onClick: () => restoreOnPad(value, placement) },
+          });
+        },
+        (error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn’t update your Pad.");
+        },
+      );
+    },
+    [entries, saveModelPadPreferences, restoreOnPad],
   );
 
   const focusPad = React.useCallback(() => {
@@ -679,9 +709,13 @@ export function ModelPicker({
       if (close) setOpen(false);
       // Recents are history: the choice already happened, so a failed write is
       // not worth interrupting anyone for.
-      void saveModelPadPreferences(({ recentModels: recent }) => ({
-        recentModels: recordRecentModel(recent, entry.value),
-      })).catch((error: unknown) => {
+      void saveModelPadPreferences(({ recentModels: recent }) => {
+        const next = recordRecentModel(recent, entry.value);
+        // Already the newest recent: nothing to write.
+        const unchanged =
+          next.length === recent.length && next.every((value, index) => value === recent[index]);
+        return unchanged ? {} : { recentModels: next };
+      }).catch((error: unknown) => {
         console.warn("Couldn’t record the recent model.", error);
       });
     },

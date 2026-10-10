@@ -342,3 +342,30 @@ test("a pointer release near a model commits it", () => {
   fireEvent.pointerUp(listbox, { button: 0, pointerId: 1, ...padPixel({ x: 0.55, y: 0.93 }) });
   assert.deepEqual(commits, ["north"]);
 });
+
+test("an option names its pace only when the horizontal spot measures one", () => {
+  const placed = positionSavedModels(
+    [
+      entry("spread", "Spread Model", "Acme Cloud"),
+      entry("measured", "Measured Model", "Acme Cloud"),
+      entry("chosen", "Chosen Model", "Acme Cloud"),
+    ],
+    {
+      // Neutral spread sits on the left, where a measured pace would read "Faster".
+      spread: { x: 0, y: 1, xSource: "neutral", ySource: "benchmark" },
+      measured: { x: 0, y: 0, xSource: "measured", ySource: "benchmark" },
+      chosen: { x: 1, y: 0.5, xSource: "user", ySource: "user" },
+    },
+  );
+  render(
+    <ModelPickerPad models={placed} gridSize={7} onPreview={() => {}} onCommit={() => {}} />,
+  );
+
+  const name = (label: string) =>
+    screen.getByRole("option", { name: new RegExp(`^${label},`, "u") }).getAttribute("aria-label") ??
+    "";
+  assert.match(name("Spread Model"), /, Pace unmeasured,/u);
+  assert.doesNotMatch(name("Spread Model"), /Faster|Balanced|Deliberate/u);
+  assert.match(name("Measured Model"), /, Faster,/u);
+  assert.match(name("Chosen Model"), /, Deliberate,/u);
+});
