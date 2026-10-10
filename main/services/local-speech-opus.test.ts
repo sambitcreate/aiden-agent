@@ -163,15 +163,58 @@ function silenceOggOpus({ packetCount, serial = 1, declareGranules = true }: { p
   return concatBytes(pages);
 }
 
-test("a note declared past the cap is rejected before its PCM is allocated", async () => {
-  // 90,001 packets is 1,800.02 s, just over the 30-minute cap. A 384 KB-class
-  // compressed note of this length previously allocated the full PCM first.
+/**
+ * Re-stamps every audio page of an existing Ogg file with its granule position
+ * moved forward by `offset`, recomputing each page CRC. This is how a cropped or
+ * live-joined stream looks when it starts its granule count above zero (RFC 7845
+ * section 4.5). The two header pages (sequence 0 and 1) and unknown (-1) granules
+ * are left as they are.
+ */
+function shiftOggGranules(bytes: Uint8Array, offset: bigint): Uint8Array {
+  const out = bytes.slice();
+  const view = new DataView(out.buffer);
+  let at = 0;
+  while (at + 27 <= out.length) {
+    if (String.fromCharCode(...out.subarray(at, at + 4)) !== "OggS") throw new Error(`no Ogg page at ${at}`);
+    const segmentCount = out[at + 26]!;
+    let bodyLength = 0;
+    for (let index = 0; index < segmentCount; index += 1) bodyLength += out[at + 27 + index]!;
+    const pageEnd = at + 27 + segmentCount + bodyLength;
+    const sequence = view.getUint32(at + 18, true);
+    const granule = view.getBigInt64(at + 6, true);
+    if (sequence >= 2 && granule !== -1n) {
+      view.setBigInt64(at + 6, granule + offset, true);
+      view.setUint32(at + 22, 0, true);
+      view.setUint32(at + 22, oggCrc(out.subarray(at, pageEnd)), true);
+    }
+    at = pageEnd;
+  }
+  return out;
+}
+
+test("a note whose granules start at a positive offset still decodes to its real length", async () => {
+  // Shift the one-second fixture's audio pages 30 minutes plus 1,000 samples forward.
+  // The declared length is now past the cap, but the audio is still one second.
+  const original = new Uint8Array(await readFile(fixture));
+  const shifted = shiftOggGranules(original, BigInt(30 * 60 * 48_000 + 1_000));
+  const reference = await decodeOggOpusToPcm16k(original);
+  const samples = await decodeOggOpusToPcm16k(shifted);
+  assert.equal(reference.length, 16_000);
+  assert.ok(samples.length >= 15_000 && samples.length <= 17_000, `shifted length ${samples.length}`);
+  // The offset may leave end padding untrimmed, but it must never cut real audio.
+  assert.deepEqual(samples.subarray(0, reference.length), reference);
+});
+
+test("a note declared past the cap is rejected by the streaming length checks", async () => {
+  // 90,001 packets is 1,800.02 s, just over the 30-minute cap. The running guard
+  // lets it through (it is under the cap plus slack), so the exact check on the
+  // trimmed total rejects it after the decoded samples are held.
   const bytes = silenceOggOpus({ packetCount: 90_001 });
   const before = process.memoryUsage().arrayBuffers;
   await assert.rejects(decodeOggOpusToPcm16k(bytes, { maxSamples: 16_000 * 60 * 30 }), /too long/);
   const growth = process.memoryUsage().arrayBuffers - before;
-  // The full decoded stream would be about 115 MB of Float32 samples.
-  assert.ok(growth < 64 * 1024 * 1024, `arrayBuffers grew by ${growth} bytes`);
+  // Decoded samples are held once and then concatenated, about 230 MB in total.
+  assert.ok(growth < 400 * 1024 * 1024, `arrayBuffers grew by ${growth} bytes`);
 });
 
 test("decoding stops once the running total passes the cap, even without declared granules", async () => {

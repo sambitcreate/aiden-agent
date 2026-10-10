@@ -72,46 +72,10 @@ const DECODE_BATCH_FRAMES = 256;
  * enforced on the trimmed total before returning.
  */
 const RUNNING_SLACK_SAMPLES = (OUTPUT_RATE * 120) / 1000;
-const OGG_CAPTURE_PATTERN = [0x4f, 0x67, 0x67, 0x53]; // "OggS"
-const OPUS_HEAD_PATTERN = [0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64]; // "OpusHead"
-const OGG_HEADER_BYTES = 27;
-const OGG_END_OF_STREAM = 0x04;
 
 /** 16 kHz samples a stream keeps when its final granule is `granule` (pre-skip removed). */
 function trimmedLength(granule: number, preSkip: number): number {
   return Math.round(((granule - preSkip) * OUTPUT_RATE) / OPUS_GRANULE_RATE);
-}
-
-/**
- * The declared length of the file, read from Ogg page headers alone. No packets
- * are touched, so a note that declares an over-long stream is refused without
- * any decoding. It is only a fast path: the streaming decoder enforces the cap
- * whatever the headers say.
- */
-function declaredSamplesFromHeaders(bytes: Uint8Array): number {
-  let total = 0;
-  let preSkip: number | null = null;
-  let offset = 0;
-  const matches = (at: number, pattern: readonly number[]) => pattern.every((byte, index) => bytes[at + index] === byte);
-  while (offset + OGG_HEADER_BYTES <= bytes.length && matches(offset, OGG_CAPTURE_PATTERN)) {
-    const segmentCount = bytes[offset + 26]!;
-    const bodyStart = offset + OGG_HEADER_BYTES + segmentCount;
-    if (bodyStart > bytes.length) break;
-    let bodyLength = 0;
-    for (let index = 0; index < segmentCount; index += 1) bodyLength += bytes[offset + OGG_HEADER_BYTES + index]!;
-    const bodyEnd = bodyStart + bodyLength;
-    if (bodyEnd > bytes.length) break;
-    if (preSkip === null && bodyLength >= 12 && matches(bodyStart, OPUS_HEAD_PATTERN)) {
-      preSkip = bytes[bodyStart + 10]! | (bytes[bodyStart + 11]! << 8);
-    }
-    if ((bytes[offset + 5]! & OGG_END_OF_STREAM) !== 0) {
-      const granule = Number(new DataView(bytes.buffer, bytes.byteOffset + offset + 6, 8).getBigInt64(0, true));
-      if (preSkip !== null && granule >= preSkip) total += trimmedLength(granule, preSkip);
-      preSkip = null;
-    }
-    offset = bodyEnd;
-  }
-  return total;
 }
 
 /** Drops `count` samples from the end of a stream's chunks, across chunk boundaries. */
@@ -173,9 +137,6 @@ export async function decodeOggOpusToPcm16k(bytes: Uint8Array, options: DecodeOg
     throw new Error(INVALID);
   }
 
-  const declared = declaredSamplesFromHeaders(bytes);
-  if (declared > maxSamples) throw new OggOpusTooLongError();
-
   const output: Float32Array[] = [];
   // Untrimmed decoded samples held across finished and in-flight streams.
   let retained = 0;
@@ -215,7 +176,11 @@ export async function decodeOggOpusToPcm16k(bytes: Uint8Array, options: DecodeOg
       decodeBatch(stream);
       if (granule !== undefined && Number(granule) >= stream.preSkip) {
         // Ogg Opus: the final granule minus pre-skip is the stream's true length at
-        // 48 kHz. The decoder already dropped pre-skip; drop the end padding.
+        // 48 kHz. The decoder already dropped pre-skip; drop the end padding. A
+        // positive initial granule offset (cropped or joined streams) only raises
+        // the trimmed length, so it shrinks the excess and trims less, never more.
+        // A negative excess means the granule claims more audio than was decoded,
+        // and nothing is cut.
         const excess = stream.decoded - trimmedLength(Number(granule), stream.preSkip);
         if (excess > 0) {
           trimTail(stream.chunks, excess);
