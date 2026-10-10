@@ -52,6 +52,7 @@ import {
   normalizeModelPadPlacements,
   normalizePinnedModels,
   normalizeRecentModels,
+  normalizeModelPadMetric,
 } from "../../renderer/shared/model-pad-preferences.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
@@ -570,12 +571,13 @@ type ModelPadPreferenceFields = {
   modelPadPlacements?: unknown;
   pinnedModels?: unknown;
   recentModels?: unknown;
+  modelPadMetric?: unknown;
 };
 
 /**
- * Model Pad placements, pins and recent models: invalid entries are dropped,
- * wrong shapes removed. All three live in machine-local settings.json, never in
- * the portable config.json.
+ * Model Pad placements, pins, recent models and the benchmark metric: invalid
+ * entries are dropped, wrong shapes removed. All of them live in machine-local
+ * settings.json, never in the portable config.json.
  */
 function applyModelPadPreferences(
   source: ModelPadPreferenceFields,
@@ -590,6 +592,9 @@ function applyModelPadPreferences(
   const recents = normalizeRecentModels(source.recentModels);
   if (recents) target.recentModels = recents;
   else delete target.recentModels;
+  const metric = normalizeModelPadMetric(source.modelPadMetric);
+  if (metric) target.modelPadMetric = metric;
+  else delete target.modelPadMetric;
 }
 
 function normalizeSettingsShape(value: unknown): SettingsShape {

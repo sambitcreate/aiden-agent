@@ -1,5 +1,5 @@
 // The single renderer read/save path for Model Pad preferences (layout, picker
-// pins and recent models). They live in main-process AppSettings; reads come from the
+// pins, recent models and the benchmark metric). They live in main-process AppSettings; reads come from the
 // shared settings query, so every surface (and window) stays in step with it.
 
 import * as React from "react";
@@ -8,8 +8,11 @@ import { settingsApi } from "./ipc";
 import { queryKeys, useSettings } from "./queries";
 import { parseModelPadLayout, type ModelPadLayout } from "./model-pad-layout";
 import {
+  DEFAULT_MODEL_PAD_METRIC,
+  normalizeModelPadMetric,
   normalizePinnedModels,
   normalizeRecentModels,
+  type ModelPadMetric,
   type ModelPadPlacements,
   type ModelPadPreferencesPatch,
 } from "../shared/model-pad-preferences";
@@ -23,6 +26,8 @@ export interface ModelPadPreferences {
   pinnedModels: string[];
   /** Newest first. */
   recentModels: string[];
+  /** The benchmark score that sets suggestion height ("coding" when unset). */
+  metric: ModelPadMetric;
 }
 
 export type ModelPadPreferencesUpdate =
@@ -34,6 +39,7 @@ export function modelPadPreferencesFrom(settings: AppSettings | undefined): Mode
     placements: parseModelPadLayout({ placements: settings?.modelPadPlacements }).placements,
     pinnedModels: normalizePinnedModels(settings?.pinnedModels) ?? [],
     recentModels: normalizeRecentModels(settings?.recentModels) ?? [],
+    metric: normalizeModelPadMetric(settings?.modelPadMetric) ?? DEFAULT_MODEL_PAD_METRIC,
   };
 }
 
@@ -113,14 +119,16 @@ export function useModelPadPreferences(): ModelPadPreferences & {
   const placements = settings.data?.modelPadPlacements;
   const pins = settings.data?.pinnedModels;
   const recents = settings.data?.recentModels;
+  const metric = settings.data?.modelPadMetric;
   const preferences = React.useMemo(
     () =>
       modelPadPreferencesFrom({
         modelPadPlacements: placements,
         pinnedModels: pins,
         recentModels: recents,
+        modelPadMetric: metric,
       }),
-    [placements, pins, recents],
+    [placements, pins, recents, metric],
   );
   const save = React.useCallback(
     (update: ModelPadPreferencesUpdate) => saveModelPadPreferences(queryClient, update),

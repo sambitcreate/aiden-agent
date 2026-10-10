@@ -330,6 +330,44 @@ export function topBenchmarkSuggestions(
     .slice(0, limit);
 }
 
+/**
+ * Models to preview as benchmark suggestions: visible, unplaced models with a
+ * percentile for the current metric. Scored pinned models come first, then
+ * scored recent ones, then the most capable of the rest; each once, up to `limit`.
+ */
+export function previewBenchmarkSuggestions(
+  entries: readonly ModelEntry[],
+  percentiles: ReadonlyMap<string, number>,
+  {
+    placements,
+    pinned,
+    recent,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    pinned: readonly string[];
+    recent: readonly string[];
+    limit?: number;
+  },
+): ModelPadCapabilitySuggestion[] {
+  const scored = topBenchmarkSuggestions(entries, percentiles, {
+    placements,
+    limit: Number.POSITIVE_INFINITY,
+  });
+  const scoredByValue = new Map(scored.map((suggestion) => [suggestion.value, suggestion]));
+  const preferred = pinnedAndRecentQuickStart(entries, {
+    pinned,
+    recent,
+    placements,
+    limit: Number.POSITIVE_INFINITY,
+  }).flatMap((entry) => scoredByValue.get(entry.value) ?? []);
+  const chosen = new Set(preferred.map((suggestion) => suggestion.value));
+  return [...preferred, ...scored.filter((suggestion) => !chosen.has(suggestion.value))].slice(
+    0,
+    limit,
+  );
+}
+
 function clamp(value: number, min = 0.08, max = 0.92): number {
   return Math.min(max, Math.max(min, value));
 }

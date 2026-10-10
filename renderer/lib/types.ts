@@ -904,6 +904,8 @@ export interface AppSettings {
    * first (at most 5). Machine-local; never part of the portable config.
    */
   recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

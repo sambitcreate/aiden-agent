@@ -151,6 +151,8 @@ interface ModelPickerPadProps {
   onCommit: (model: PositionedModel) => void;
   /** Called with a printable character typed on the Pad, so the picker can search for it. */
   onTypeToSearch?: (character: string) => void;
+  /** Label of the benchmark score behind benchmark-assisted heights, when any is on the Pad. */
+  heightMetricLabel?: string;
 }
 
 export function ModelPickerPad({
@@ -161,6 +163,7 @@ export function ModelPickerPad({
   onPreview,
   onCommit,
   onTypeToSearch,
+  heightMetricLabel,
 }: ModelPickerPadProps) {
   const helpId = React.useId();
   const rectRef = React.useRef<DOMRect | null>(null);
@@ -381,7 +384,9 @@ export function ModelPickerPad({
         {/* Axis captions sit in the inset margin outside the lattice; the knob and its
             tag render above them. */}
         <span aria-hidden="true" className="model-pad-axis-captions">
-          <span data-axis="capability">More capable</span>
+          <span data-axis="capability">
+            More capable{heightMetricLabel ? ` · Height: ${heightMetricLabel}` : ""}
+          </span>
           <span data-axis="faster">Faster</span>
           <span data-axis="deliberate">More deliberate</span>
         </span>
@@ -460,6 +465,9 @@ export function ModelPickerPad({
       <p id={helpId} className="sr-only">
         Drag or point to preview the nearest model. Use the arrow keys to move between models, then
         press Enter or Space to select. Type to search the list.
+        {heightMetricLabel
+          ? ` Benchmark-assisted heights follow the ${heightMetricLabel} score.`
+          : ""}
       </p>
     </>
   );

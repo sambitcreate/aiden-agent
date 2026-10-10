@@ -982,7 +982,8 @@ textarea {
 /*
  * One marker language on both Pad surfaces (composer picker, settings editor, legend):
  * a personal placement is a solid accent dot; any data-assisted placement is a hollow
- * accent ring. The kinds differ by shape, not only by color.
+ * accent ring; a previewed suggestion (settings only, not saved yet) is a faint dashed
+ * ring. The kinds differ by shape, not only by color.
  */
 .model-pad-model[data-placement-source="personal"],
 .model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual,
@@ -996,6 +997,21 @@ textarea {
 .model-pad-legend-marker[data-placement-source="benchmark"] {
   border-color: var(--accent);
   background: transparent;
+}
+
+.model-pad-marker[data-placement-source="suggestion"] .model-pad-marker-visual,
+.model-pad-legend-marker[data-placement-source="suggestion"] {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+.model-pad-marker[data-placement-source="suggestion"]:hover .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:focus-visible .model-pad-marker-visual {
+  box-shadow: none;
+  opacity: 1;
 }
 
 .model-pad-marker:hover,

@@ -567,3 +567,41 @@ test("a failed recents write neither blocks the choice nor shows an error", asyn
   });
   assert.ok(!screen.queryByText(/disk full/u), "no error toast for history");
 });
+
+function padHelp(pad: HTMLElement): string {
+  return document.getElementById(pad.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+}
+
+test("the Pad names the height metric only while a benchmark-height model is on it", async () => {
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": { x: 0.5, y: 0.5, xSource: "neutral", ySource: "benchmark" },
+    },
+    modelPadMetric: "agentic",
+  });
+  const pad = await openPicker(server);
+
+  assert.match(pad.textContent ?? "", /Height: Agentic/u);
+  assert.match(padHelp(pad), /Agentic/u);
+});
+
+test("the Pad names no metric when every height is the user's own", async () => {
+  const server = settingsServer({ ...placedSettings, modelPadMetric: "agentic" });
+  const pad = await openPicker(server);
+
+  assert.doesNotMatch(pad.textContent ?? "", /Height:/u);
+  assert.doesNotMatch(padHelp(pad), /Agentic/u);
+});
+
+test("a hidden benchmark-height model does not name the metric", async () => {
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": { x: 0.5, y: 0.5, xSource: "neutral", ySource: "benchmark" },
+    },
+  });
+  const pad = await openPicker(server, { hidden: ["current-model"] });
+
+  assert.doesNotMatch(pad.textContent ?? "", /Height:/u);
+});

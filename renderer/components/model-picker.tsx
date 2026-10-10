@@ -35,9 +35,11 @@ import { useProvidersModelInfo } from "../lib/queries";
 import {
   BASE_MODEL_PAD_GRID_SIZE,
   MODEL_PAD_INSET_PERCENT,
+  MODEL_PAD_METRIC_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   addModelPadPlacement,
   modelPadGridSizeForPlacements,
+  modelPadHasBenchmarkHeight,
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import { recordRecentModel } from "../shared/model-pad-preferences";
@@ -479,6 +481,7 @@ export function ModelPicker({
     placements: modelPadPlacements,
     pinnedModels: pinned,
     recentModels,
+    metric: modelPadMetric,
     save: saveModelPadPreferences,
   } = useModelPadPreferences();
   const pickerId = React.useId();
@@ -532,6 +535,17 @@ export function ModelPicker({
     [open, entries],
   );
   const hasPadModels = positioned.length > 0;
+  // Named only while some model on the Pad takes its height from a benchmark.
+  const heightMetricLabel = React.useMemo(
+    () =>
+      modelPadHasBenchmarkHeight(
+        modelPadPlacements,
+        positioned.map((entry) => entry.value),
+      )
+        ? MODEL_PAD_METRIC_LABELS[modelPadMetric]
+        : undefined,
+    [modelPadPlacements, positioned, modelPadMetric],
+  );
   // Same sizing as positionSavedModels and the settings editor: placed, visible
   // models only. The empty Pad shows the base grid.
   const padGridSize = React.useMemo(
@@ -909,6 +923,7 @@ export function ModelPicker({
                 previewValue={previewValue}
                 onPreview={setPreviewValue}
                 onCommit={commitFromPad}
+                heightMetricLabel={heightMetricLabel}
                 onTypeToSearch={(character) => {
                   // A model was just chosen and the picker is about to close.
                   if (padCloseTimerRef.current !== null) return;

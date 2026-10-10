@@ -1373,7 +1373,7 @@ test("settings persistence preserves future assistant fields and values", async 
   assert.equal(saved.settings.profileName, "After");
 });
 
-test("Model Pad placements, pins and recent models survive a settings round trip with invalid entries dropped", async (t) => {
+test("Model Pad placements, pins, recent models and metric survive a settings round trip with invalid entries dropped", async (t) => {
   const r = await roots(t);
   const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark" };
   await fs.writeFile(
@@ -1388,6 +1388,7 @@ test("Model Pad placements, pins and recent models survive a settings round trip
         },
         pinnedModels: ["openai::gpt", "openai::gpt", 42, "bare-model", "google::gemini"],
         recentModels: ["google::gemini", "bare-model", "google::gemini", "p::1", "p::2", "p::3", "p::4"],
+        modelPadMetric: "agentic",
       },
     }),
     "utf-8",
@@ -1397,6 +1398,7 @@ test("Model Pad placements, pins and recent models survive a settings round trip
   assert.deepEqual(exported.settings.modelPadPlacements, { "openai::gpt": placement });
   assert.deepEqual(exported.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(exported.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(exported.settings.modelPadMetric, "agentic");
 
   // Import the exported document into a fresh store and read it back from disk.
   const target = await roots(t);
@@ -1405,15 +1407,18 @@ test("Model Pad placements, pins and recent models survive a settings round trip
   assert.deepEqual(imported.modelPadPlacements, { "openai::gpt": placement });
   assert.deepEqual(imported.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(imported.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(imported.modelPadMetric, "agentic");
 
   const wrongShapes = runtimeSettingsFrom({
     modelPadPlacements: ["openai::gpt"],
     pinnedModels: { "openai::gpt": true },
     recentModels: "openai::gpt",
+    modelPadMetric: "speed",
   } as never);
   assert.equal(wrongShapes.modelPadPlacements, undefined);
   assert.equal(wrongShapes.pinnedModels, undefined);
   assert.equal(wrongShapes.recentModels, undefined);
+  assert.equal(wrongShapes.modelPadMetric, undefined);
 });
 
 test("a post-startup unsafe local edit cannot be erased by a workspace write", async (t) => {

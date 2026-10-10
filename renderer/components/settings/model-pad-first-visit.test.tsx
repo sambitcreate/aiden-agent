@@ -6,7 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import type { AppSettings, ModelBenchmarkScores, ModelInfo, Provider } from "../../lib/types";
-import type { ModelPadPlacements } from "../../shared/model-pad-preferences";
+import type { ModelPadMetric, ModelPadPlacements } from "../../shared/model-pad-preferences";
 import { Toaster, toast } from "../ui";
 import { ModelPadSettings } from "./model-pad-settings";
 
@@ -15,7 +15,8 @@ afterEach(() => {
   cleanup();
 });
 
-// m0 is the least capable model and m9 the most capable one.
+// For coding, m0 is the least capable model and m9 the most capable one;
+// the General (intelligence) score runs the other way.
 const MODELS = Array.from({ length: 10 }, (_, index) => `m${index}`);
 
 const provider: Provider = {
@@ -28,7 +29,7 @@ const provider: Provider = {
   hasKey: true,
 };
 
-function benchmark(coding: number): ModelBenchmarkScores {
+function benchmark(coding: number, intelligence: number): ModelBenchmarkScores {
   return {
     source: "openrouter",
     datasetSource: "artificial-analysis",
@@ -38,6 +39,7 @@ function benchmark(coding: number): ModelBenchmarkScores {
     asOf: "2026-10-01",
     license: "CC BY 4.0",
     coding,
+    intelligence,
   };
 }
 
@@ -46,6 +48,7 @@ function editorServer(
     placements?: ModelPadPlacements;
     pinnedModels?: string[];
     recentModels?: string[];
+    metric?: ModelPadMetric;
     insightsReady?: boolean;
     /** Whether models carry benchmark scores; defaults to `insightsReady`. */
     scored?: boolean;
@@ -57,6 +60,7 @@ function editorServer(
     modelPadPlacements: options.placements ?? {},
     pinnedModels: options.pinnedModels ?? [],
     recentModels: options.recentModels ?? [],
+    ...(options.metric ? { modelPadMetric: options.metric } : {}),
   } as AppSettings;
   const info: Record<string, ModelInfo> = (options.scored ?? options.insightsReady)
     ? Object.fromEntries(
@@ -66,7 +70,7 @@ function editorServer(
             id: model,
             metadataSource: "fallback",
             matched: false,
-            benchmark: benchmark(10 + index),
+            benchmark: benchmark(10 + index, 50 - index),
           },
         ]),
       )
@@ -89,6 +93,7 @@ function editorServer(
   return {
     writes: () => calls.filter((call) => call.channel === "settings:set").length,
     stored: () => current.modelPadPlacements ?? {},
+    settings: () => current,
   };
 }
 
@@ -118,10 +123,46 @@ function disabledReason(button: HTMLElement): string {
   return document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
 }
 
+function pad(): HTMLElement {
+  return screen.getByRole("group", { name: "Personal Model Pad arrangement" });
+}
+
+/** Placed models only; previewed suggestions are not on the Pad yet. */
 function markerCount(): number {
-  return screen
-    .getByRole("group", { name: "Personal Model Pad arrangement" })
-    .querySelectorAll("[data-placement-source]").length;
+  return pad().querySelectorAll('[data-placement-source]:not([data-placement-source="suggestion"])')
+    .length;
+}
+
+function suggestions(): HTMLElement[] {
+  return screen.queryAllByRole("button", { name: /^Accept suggestion: / });
+}
+
+function suggestionNames(): string[] {
+  return suggestions().map((ghost) =>
+    (ghost.getAttribute("aria-label") ?? "").replace(/^Accept suggestion: (\S+) from Test$/u, "$1"),
+  );
+}
+
+function position(element: HTMLElement): string {
+  return `${element.style.left} ${element.style.top}`;
+}
+
+function marker(model: string): HTMLElement {
+  const found = [...pad().querySelectorAll<HTMLElement>("[data-placement-source]")].find(
+    (element) =>
+      element.dataset.placementSource !== "suggestion" &&
+      element.getAttribute("aria-label")?.startsWith(`${model} from Test,`),
+  );
+  assert.ok(found, `${model} is on the Pad`);
+  return found;
+}
+
+async function openPreview(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const preview = screen.getByRole("button", { name: "Preview suggestions" });
+  await waitFor(() => assert.equal((preview as HTMLButtonElement).disabled, false));
+  fireEvent.click(preview);
+  await waitFor(() => assert.ok(suggestions().length > 0));
 }
 
 test("an empty Pad opens Browse models once loading finishes", async () => {
@@ -290,18 +331,142 @@ test("while models are loading, both quick starts say so", async () => {
   }
 });
 
-test("Suggest unplaced still places every scored model, beyond the quick-start limit", async () => {
+const userPlacement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } as const;
+
+test("Preview suggestions shows pinned and recent models first, then the most capable, without saving", async () => {
   const server = editorServer({
     insightsReady: true,
-    placements: { "test::m0": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
+    placements: { "test::m0": userPlacement },
+    pinnedModels: ["test::m2"],
+    recentModels: ["test::m1"],
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const suggest = screen.getByRole("button", { name: "Suggest unplaced" });
-  await waitFor(() => assert.equal((suggest as HTMLButtonElement).disabled, false));
-  fireEvent.click(suggest);
+  await openPreview();
 
-  await screen.findByText("Added 9 suggestions");
-  assert.equal(Object.keys(server.stored()).length, 10);
+  assert.deepEqual(suggestionNames(), ["M2", "M1", "M9", "M8", "M7", "M6", "M5", "M4"]);
+  assert.equal(server.writes(), 0);
+  assert.equal(markerCount(), 1);
+  // The canvas offers both choices while the insights panel is closed again.
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  assert.ok(screen.getByRole("button", { name: "Accept all (8)" }));
+  assert.ok(screen.getByRole("button", { name: "Dismiss" }));
+});
+
+test("accepting one suggestion saves only that model where it was previewed, with Undo", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const before = new Map(
+    suggestions().map((ghost) => [ghost.getAttribute("aria-label"), position(ghost)]),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept suggestion: M5 from Test" }));
+
+  await screen.findByText("Added M5 from Test");
+  const stored = server.stored();
+  assert.deepEqual(Object.keys(stored).sort(), ["test::m0", "test::m5"]);
+  assert.equal(stored["test::m5"].xSource, "neutral");
+  assert.equal(stored["test::m5"].ySource, "benchmark");
+  await waitFor(() => assert.equal(markerCount(), 2));
+  assert.equal(position(marker("M5")), before.get("Accept suggestion: M5 from Test"));
+  // The other suggestions stay where they were.
+  assert.equal(suggestions().length, 7);
+  for (const ghost of suggestions()) {
+    assert.equal(position(ghost), before.get(ghost.getAttribute("aria-label")));
+  }
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => assert.deepEqual(Object.keys(server.stored()), ["test::m0"]));
+});
+
+test("Accept all places every suggestion where it was previewed", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const previewed = new Map(
+    suggestions().map((ghost) => [
+      (ghost.getAttribute("aria-label") ?? "").replace(/^Accept suggestion: (\S+) from Test$/u, "$1"),
+      position(ghost),
+    ]),
+  );
+  previewed.set("M0", position(marker("M0")));
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+
+  await screen.findByText("Added 8 suggestions");
+  assert.equal(Object.keys(server.stored()).length, 9);
+  await waitFor(() => assert.equal(markerCount(), 9));
+  assert.equal(suggestions().length, 0);
+  for (const [model, spot] of previewed) assert.equal(position(marker(model)), spot, model);
+  assert.ok(!screen.queryByRole("button", { name: /^Accept all/u }));
+});
+
+test("Dismiss clears the suggestions without saving", async () => {
+  const server = editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+  assert.equal(suggestions().length, 0);
+  assert.ok(!screen.queryByRole("button", { name: /^Accept all/u }));
+  assert.equal(server.writes(), 0);
+});
+
+test("changing the metric saves it and previews again for the new score", async () => {
+  const server = editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  assert.deepEqual(suggestionNames().slice(0, 2), ["M9", "M8"]);
+  assert.equal(
+    screen.getByRole("button", { name: "Coding" }).getAttribute("aria-pressed"),
+    "true",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+  await waitFor(() => assert.equal(server.settings().modelPadMetric, "intelligence"));
+  // m0 is placed, so the most capable unplaced General models are m1 onwards.
+  await waitFor(() =>
+    assert.deepEqual(suggestionNames(), ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]),
+  );
+  assert.equal(
+    screen.getByRole("button", { name: "General" }).getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
+});
+
+test("Start from benchmarks uses the saved metric and the legend names it", async () => {
+  const server = editorServer({ insightsReady: true, metric: "intelligence" });
+  mountEditor();
+  const start = await screen.findByRole("button", { name: "Start from benchmarks" });
+  await waitFor(() => assert.notEqual(start.getAttribute("aria-disabled"), "true"));
+  assert.ok(!screen.queryByText(/^Height:/u));
+  fireEvent.click(start);
+
+  await screen.findByText("Added 8 suggestions");
+  assert.deepEqual(
+    Object.keys(server.stored()).sort(),
+    ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"].map((model) => `test::${model}`),
+  );
+  await screen.findByText("Height: General");
+});
+
+test("the legend names no metric while every height is the user's own", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  assert.ok(!screen.queryByText(/^Height:/u));
 });

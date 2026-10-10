@@ -1,4 +1,4 @@
-// Model Pad layout, model-picker pins and recent models, persisted in main-process AppSettings.
+// Model Pad layout, model-picker pins, recent models and the benchmark metric, persisted in main-process AppSettings.
 // Shared by the main process (normalization, provider remap/removal, settings
 // patch validation) and the renderer (reading the settings query). Every entry
 // is keyed `${providerId}::${modelId}`; anything else is dropped fail-closed.
@@ -15,6 +15,11 @@ export interface ModelPadPlacement {
 }
 
 export type ModelPadPlacements = Record<string, ModelPadPlacement>;
+
+/** The benchmark score that sets height for benchmark-assisted placements. */
+export type ModelPadMetric = "intelligence" | "coding" | "agentic";
+
+export const DEFAULT_MODEL_PAD_METRIC: ModelPadMetric = "coding";
 
 export const MAX_MODEL_PAD_PLACEMENTS = 2_000;
 export const MAX_MODEL_PAD_KEY_LENGTH = 1_024;
@@ -89,10 +94,16 @@ export function recordRecentModel(recent: readonly string[], value: string): str
   return normalizeRecentModels([value, ...history]) ?? [];
 }
 
+/** A known metric, or undefined (the caller then uses {@link DEFAULT_MODEL_PAD_METRIC}). */
+export function normalizeModelPadMetric(value: unknown): ModelPadMetric | undefined {
+  return value === "intelligence" || value === "coding" || value === "agentic" ? value : undefined;
+}
+
 export interface ModelPadPreferencesPatch {
   modelPadPlacements?: ModelPadPlacements;
   pinnedModels?: string[];
   recentModels?: string[];
+  modelPadMetric?: ModelPadMetric;
 }
 
 /**
@@ -124,6 +135,11 @@ export function parseModelPadPreferencesPatch(
       throw new Error(`At most ${MAX_RECENT_MODELS} recent models are kept.`);
     }
     result.recentModels = normalizeRecentModels(patch.recentModels);
+  }
+  if (patch.modelPadMetric !== undefined) {
+    const metric = normalizeModelPadMetric(patch.modelPadMetric);
+    if (!metric) throw new Error("Invalid Model Pad benchmark metric.");
+    result.modelPadMetric = metric;
   }
   return result;
 }

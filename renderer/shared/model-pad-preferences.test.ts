@@ -4,6 +4,8 @@ import {
   MAX_MODEL_PAD_PLACEMENTS,
   MAX_PINNED_MODELS,
   MAX_RECENT_MODELS,
+  DEFAULT_MODEL_PAD_METRIC,
+  normalizeModelPadMetric,
   normalizeModelPadPlacements,
   normalizePinnedModels,
   normalizeRecentModels,
@@ -89,6 +91,21 @@ test("recording a recent model moves it to the front and keeps the newest five",
   assert.deepEqual(recordRecentModel(["a::1", "b::2"], "a::1"), ["a::1", "b::2"]);
   // Something that is not a model key is never recorded.
   assert.deepEqual(recordRecentModel(["a::1"], "not-a-model"), ["a::1"]);
+});
+
+test("the Pad benchmark metric is one of the three scores, coding by default", () => {
+  assert.equal(DEFAULT_MODEL_PAD_METRIC, "coding");
+  for (const metric of ["intelligence", "coding", "agentic"]) {
+    assert.equal(normalizeModelPadMetric(metric), metric);
+  }
+  for (const invalid of ["speed", "Coding", "", 1, null, undefined, { metric: "coding" }]) {
+    assert.equal(normalizeModelPadMetric(invalid), undefined);
+  }
+  assert.deepEqual(parseModelPadPreferencesPatch({ modelPadMetric: "agentic" }), {
+    modelPadMetric: "agentic",
+  });
+  assert.throws(() => parseModelPadPreferencesPatch({ modelPadMetric: "speed" }));
+  assert.throws(() => parseModelPadPreferencesPatch({ modelPadMetric: null }));
 });
 
 test("a settings patch accepts valid Pad fields and rejects malformed or oversized ones", () => {

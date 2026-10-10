@@ -16,6 +16,7 @@ import {
   pinnedAndRecentQuickStart,
   positionSavedModels,
   positionModels,
+  previewBenchmarkSuggestions,
   recentModelsForList,
   topBenchmarkSuggestions,
   visibleModelEntries,
@@ -323,6 +324,55 @@ test("benchmark quick-start candidates are the most capable unplaced models firs
   // Scores for models that are not visible never become candidates.
   assert.deepEqual(
     topBenchmarkSuggestions([], percentiles, { placements: {} }),
+    [],
+  );
+});
+
+test("previewed suggestions put scored pinned then recent models first, then the most capable, at most eight", () => {
+  const entries = Array.from({ length: 14 }, (_, index) => entry(`p::m${index}`));
+  // m0 is least capable, m13 most; m3 has no score for the metric.
+  const percentiles = new Map(
+    entries.flatMap((model, index) => (index === 3 ? [] : [[model.value, index / 13] as const])),
+  );
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::m13": { x: 0.5, y: 1, xSource: "user", ySource: "user" },
+  };
+  const values = (rows: { value: string }[]) => rows.map((row) => row.value);
+
+  const preview = previewBenchmarkSuggestions(entries, percentiles, {
+    placements,
+    // m3 is unscored, m13 is already placed and m99 is not visible: none is previewed.
+    pinned: ["p::m1", "p::m3", "p::m13", "p::m99"],
+    // m1 is pinned too and appears once, in its pinned slot.
+    recent: ["p::m0", "p::m1"],
+  });
+  assert.deepEqual(values(preview), [
+    "p::m1",
+    "p::m0",
+    "p::m12",
+    "p::m11",
+    "p::m10",
+    "p::m9",
+    "p::m8",
+    "p::m7",
+  ]);
+  // Each suggestion carries its percentile, which sets its height.
+  assert.equal(preview[1].capabilityPercentile, 0);
+  assert.equal(preview[2].capabilityPercentile, 12 / 13);
+
+  assert.deepEqual(
+    values(
+      previewBenchmarkSuggestions(entries, percentiles, {
+        placements,
+        pinned: [],
+        recent: ["p::m2"],
+        limit: 3,
+      }),
+    ),
+    ["p::m2", "p::m12", "p::m11"],
+  );
+  assert.deepEqual(
+    previewBenchmarkSuggestions(entries, new Map(), { placements: {}, pinned: ["p::m1"], recent: [] }),
     [],
   );
 });

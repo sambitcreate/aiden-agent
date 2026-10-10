@@ -1,10 +1,12 @@
 import {
   normalizeModelPadPlacements,
+  type ModelPadMetric,
   type ModelPadPlacement,
   type ModelPadPlacements,
 } from "../shared/model-pad-preferences";
 
 export type {
+  ModelPadMetric,
   ModelPadPlacement,
   ModelPadPlacementSource,
 } from "../shared/model-pad-preferences";
@@ -22,6 +24,26 @@ export function modelPadPlacementKind(
   placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
 ): ModelPadPlacementKind {
   return placement.xSource === "user" && placement.ySource === "user" ? "personal" : "benchmark";
+}
+
+/** What each benchmark metric is called wherever the Pad names it. */
+export const MODEL_PAD_METRIC_LABELS: Record<ModelPadMetric, string> = {
+  intelligence: "General",
+  coding: "Coding",
+  agentic: "Agentic",
+};
+
+/** The caption that names the score behind benchmark-assisted heights. */
+export function modelPadHeightCaption(metric: ModelPadMetric): string {
+  return `Height: ${MODEL_PAD_METRIC_LABELS[metric]}`;
+}
+
+/** Whether any placed, visible model takes its height from a benchmark score. */
+export function modelPadHasBenchmarkHeight(
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+  visibleValues: readonly string[],
+): boolean {
+  return visibleValues.some((value) => placements[value]?.ySource === "benchmark");
 }
 
 /** Where a marker or knob label sits so it stays inside the Pad square. */
