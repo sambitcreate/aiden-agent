@@ -46,6 +46,7 @@ import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
@@ -131,6 +132,93 @@ class AidenChatTest {
                 assertEquals("reply-two", json.parseToJsonElement(second!!).jsonObject["throughMessageId"]!!.jsonPrimitive.content)
                 model.setChatForegrounded(true)
                 assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun snapshotStoredAfterTheReplySettlesAppearsWithoutUserAction() = assertLateSnapshotRefresh(snapshotArrives = true)
+
+    @Test
+    fun snapshotThatNeverArrivesStopsRefetchingAfterThreeTries() = assertLateSnapshotRefresh(snapshotArrives = false)
+
+    private fun assertLateSnapshotRefresh(snapshotArrives: Boolean) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-late-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"4".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-visual", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The Mac settles the reply before its snapshot capture finishes.
+        val settled = AidenChat(
+            id = "chat-visual", workspaceId = "workspace-visual", title = "Plans", messages = listOf(reply),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val captured = settled.copy(revision = "r2", messages = listOf(reply.copy(attachments = listOf(snapshot))))
+        val fetches = java.util.concurrent.atomic.AtomicInteger(0)
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-visual","name":"Visual Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-visuals-v1"],"connectionMode":"lan","serverTime":"2026-09-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-visual" -> {
+                    // The first read lands before the snapshot is stored; later reads see it when it exists.
+                    val served = if (fetches.incrementAndGet() > 1 && snapshotArrives) captured else settled
+                    MockResponse().setBody(wireJson.encodeToString(served))
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-visual", deviceId = "device-visual", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(
+                    settled.id, coordinator, cache, drafts, settled,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(50L, 50L, 50L))
+                )
+                viewModels.put("visual", model)
+                if (snapshotArrives) {
+                    val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                    val message = shown.messages.single()
+                    assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                    val afterSnapshot = fetches.get()
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("refetching stops once every visual has its snapshot", afterSnapshot, fetches.get())
+                } else {
+                    withTimeout(5_000) { while (fetches.get() < 4) kotlinx.coroutines.delay(20) }
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("the initial read plus three bounded retries", 4, fetches.get())
+                    assertEquals("r1", model.chat.value?.revision)
+                }
                 viewModels.clearAndJoin()
             }
         } finally {
@@ -641,6 +729,40 @@ class AidenChatTest {
             noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots)
         )!!
         assertEquals(listOf(ui.id), rows.mapNotNull { it.visual?.id })
+    }
+
+    @Test
+    fun lateSnapshotRefreshRetriesBrieflyForTheNewestReplyStillMissingOne() {
+        val policy = AidenVisualSnapshotRefreshPolicy()
+        val settled = fixtureVisualMessage()
+        val pending = settled.copy(attachments = emptyList())
+        val soon = pending.createdAt.plusSeconds(5)
+
+        // Every visual already has its snapshot: nothing to wait for.
+        assertNull(policy.nextDelayMillis(settled, attempt = 0, now = soon))
+        // Missing snapshots: three bounded tries, then stop.
+        assertEquals(listOf(4_000L, 10_000L, 20_000L, null), (0..3).map { policy.nextDelayMillis(pending, it, soon) })
+        // One visual still missing its snapshot is enough to retry.
+        val partial = settled.copy(attachments = settled.attachments.orEmpty().take(1))
+        assertEquals(4_000L, policy.nextDelayMillis(partial, 0, soon))
+        // An old reply is not polled for.
+        assertNull(policy.nextDelayMillis(pending, 0, pending.createdAt.plusSeconds(180)))
+        // A long turn counts from when it finished, not from when it started.
+        val finishedRecently = pending.copy(
+            createdAt = pending.createdAt.minusSeconds(600),
+            timeline = pending.timeline!!.copy(finishedAt = soon.minusSeconds(10).toEpochMilli().toDouble())
+        )
+        assertEquals(4_000L, policy.nextDelayMillis(finishedRecently, 0, soon))
+        // No visuals, a user message, or no message: nothing to do.
+        assertNull(policy.nextDelayMillis(pending.copy(visuals = null), 0, soon))
+        assertNull(policy.nextDelayMillis(pending.copy(role = AidenChatRole.USER), 0, soon))
+        assertNull(policy.nextDelayMillis(null, 0, soon))
+
+        // Only the newest assistant reply is watched.
+        val later = AidenChatMessage("reply-later", AidenChatRole.ASSISTANT, "No visuals", createdAt = soon)
+        val question = AidenChatMessage("question", AidenChatRole.USER, "Thanks", createdAt = soon)
+        assertEquals(pending.id, policy.watchedMessage(listOf(pending, question))?.id)
+        assertEquals(later.id, policy.watchedMessage(listOf(pending, question, later))?.id)
     }
 
     @Test
