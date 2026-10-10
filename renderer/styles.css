@@ -1332,6 +1332,36 @@ textarea {
   }
 }
 
+/* Settings empty Pad: hint plus quick starts. The hint is dropped on a small
+   Pad so both quick starts stay fully visible down to the 160px minimum. */
+.model-pad-empty-state {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-empty-state-content {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding-inline: 2.5rem;
+  text-align: center;
+}
+
+@container (max-width: 255px) {
+  .model-pad-empty-state-content {
+    padding-inline: 0.75rem;
+  }
+
+  .model-pad-empty-hint {
+    display: none;
+  }
+}
+
 .model-pad-knob {
   color: var(--model-pad-knob-foreground);
   transition:

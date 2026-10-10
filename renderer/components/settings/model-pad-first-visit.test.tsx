@@ -47,6 +47,10 @@ function editorServer(
     pinnedModels?: string[];
     recentModels?: string[];
     insightsReady?: boolean;
+    /** Whether models carry benchmark scores; defaults to `insightsReady`. */
+    scored?: boolean;
+    /** Keep the provider list loading forever. */
+    providersPending?: boolean;
   } = {},
 ) {
   let current = {
@@ -54,7 +58,7 @@ function editorServer(
     pinnedModels: options.pinnedModels ?? [],
     recentModels: options.recentModels ?? [],
   } as AppSettings;
-  const info: Record<string, ModelInfo> = options.insightsReady
+  const info: Record<string, ModelInfo> = (options.scored ?? options.insightsReady)
     ? Object.fromEntries(
         MODELS.map((model, index): [string, ModelInfo] => [
           model,
@@ -68,7 +72,8 @@ function editorServer(
       )
     : {};
   const calls = installBotTestIpc({
-    "providers:list": () => [provider],
+    "providers:list": () =>
+      options.providersPending ? new Promise<Provider[]>(() => {}) : [provider],
     "models:info": () => info,
     "modelInsights:status": () => ({
       hasKey: Boolean(options.insightsReady),
@@ -100,6 +105,19 @@ function browseButton(): HTMLElement {
   return screen.getByRole("button", { name: "Browse models" });
 }
 
+function assertFocusOnMarker() {
+  const focused = document.activeElement as HTMLElement | null;
+  assert.ok(
+    focused?.dataset.placementSource,
+    `focus is on a placed marker, not ${focused?.getAttribute("aria-label") ?? focused?.textContent}`,
+  );
+}
+
+function disabledReason(button: HTMLElement): string {
+  assert.equal(button.getAttribute("aria-disabled"), "true");
+  return document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+}
+
 function markerCount(): number {
   return screen
     .getByRole("group", { name: "Personal Model Pad arrangement" })
@@ -127,7 +145,7 @@ test("a Pad with models opens with Browse models closed", async () => {
   assert.equal(browseButton().getAttribute("aria-expanded"), "false");
 });
 
-test("Browse models is not reopened after the user closes it or the Pad empties", async () => {
+test("Browse models is not reopened after the Pad empties", async () => {
   const server = editorServer({
     placements: { "test::m1": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
   });
@@ -138,6 +156,24 @@ test("Browse models is not reopened after the user closes it or the Pad empties"
   fireEvent.click(screen.getByRole("button", { name: "Remove all models from Pad" }));
   await waitFor(() => assert.deepEqual(server.stored(), {}));
   await screen.findByText("Cleared the Pad");
+  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
+});
+
+test("Browse models stays closed once the user closes it, even when the Pad empties again", async () => {
+  const server = editorServer({ pinnedModels: ["test::m3"] });
+  mountEditor();
+  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
+
+  fireEvent.click(browseButton());
+  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
+
+  const add = screen.getByRole("button", { name: "Add pinned & recent" });
+  await waitFor(() => assert.notEqual(add.getAttribute("aria-disabled"), "true"));
+  fireEvent.click(add);
+  await screen.findByText("Added 1 model");
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => assert.deepEqual(server.stored(), {}));
+  await waitFor(() => assert.equal(markerCount(), 0));
   assert.equal(browseButton().getAttribute("aria-expanded"), "false");
 });
 
@@ -162,6 +198,8 @@ test("Add pinned & recent places pinned then recent models on the empty Pad, wit
   const [first, second] = Object.values(stored);
   assert.ok(first.x !== second.x || first.y !== second.y, "models take different cells");
   await waitFor(() => assert.equal(markerCount(), 2));
+  // The quick start's overlay is gone; focus moves to a placed model to arrange.
+  await waitFor(assertFocusOnMarker);
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), {}));
@@ -226,7 +264,44 @@ test("Start from benchmarks places the eight most capable models as benchmark su
   // Height follows capability.
   assert.ok(stored["test::m9"].y > stored["test::m2"].y);
   await waitFor(() => assert.equal(markerCount(), 8));
+  await waitFor(assertFocusOnMarker);
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), {}));
+});
+
+test("Start from benchmarks explains when no visible model has a score for the metric", async () => {
+  editorServer({ insightsReady: true, scored: false, pinnedModels: ["test::m1"] });
+  mountEditor();
+  const add = await screen.findByRole("button", { name: "Add pinned & recent" });
+  await waitFor(() => assert.notEqual(add.getAttribute("aria-disabled"), "true"));
+  assert.match(
+    disabledReason(screen.getByRole("button", { name: "Start from benchmarks" })),
+    /None of your visible models has a score for this benchmark yet/u,
+  );
+});
+
+test("while models are loading, both quick starts say so", async () => {
+  editorServer({ providersPending: true, insightsReady: true, pinnedModels: ["test::m1"] });
+  mountEditor();
+  for (const name of ["Add pinned & recent", "Start from benchmarks"]) {
+    const button = await screen.findByRole("button", { name });
+    assert.match(disabledReason(button), /Loading your models…/u);
+  }
+});
+
+test("Suggest unplaced still places every scored model, beyond the quick-start limit", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+  const suggest = screen.getByRole("button", { name: "Suggest unplaced" });
+  await waitFor(() => assert.equal((suggest as HTMLButtonElement).disabled, false));
+  fireEvent.click(suggest);
+
+  await screen.findByText("Added 9 suggestions");
+  assert.equal(Object.keys(server.stored()).length, 10);
 });
