@@ -17,7 +17,7 @@ export type ModelPadPlacementKind = "personal" | "benchmark";
 
 export const MODEL_PAD_PLACEMENT_KIND_LABELS: Record<ModelPadPlacementKind, string> = {
   personal: "Placed by you",
-  benchmark: "Benchmark-assisted",
+  benchmark: "Data-assisted",
 };
 
 /** A placement is personal only when the user owns both axes; any data-derived axis makes it data-assisted. */
@@ -25,6 +25,20 @@ export function modelPadPlacementKind(
   placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
 ): ModelPadPlacementKind {
   return placement.xSource === "user" && placement.ySource === "user" ? "personal" : "benchmark";
+}
+
+/**
+ * What a marker announces about where its position came from. Finer than the
+ * kind: measured pace is data from the user's own chats, not a benchmark.
+ */
+export function modelPadPlacementSourceLabel(
+  placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
+): string {
+  if (modelPadPlacementKind(placement) === "personal") return MODEL_PAD_PLACEMENT_KIND_LABELS.personal;
+  if (placement.xSource === "measured") {
+    return placement.ySource === "benchmark" ? "Benchmark height, measured pace" : "Measured pace";
+  }
+  return "Benchmark-assisted";
 }
 
 /** What each benchmark metric is called wherever the Pad names it. */

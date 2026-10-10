@@ -71,8 +71,59 @@ test("models without enough samples are listed as lacking, and nothing moves whe
     "p::b": pace(300, 0, 9),
   });
   assert.deepEqual(result.updated, []);
-  assert.deepEqual(result.lacking.sort(), ["p::a", "p::b"]);
+  assert.deepEqual(result.lacking, ["p::a"]);
+  // Enough chats, but no usable token rate: not a matter of chatting more.
+  assert.deepEqual(result.unscored, ["p::b"]);
   assert.equal(result.placements, placements);
+});
+
+test("setting pace again on an already measured layout changes nothing", () => {
+  const placements: ModelPadPlacements = {
+    "p::a": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+    "p::b": { x: 0.5, y: 1, xSource: "user", ySource: "benchmark" },
+  };
+  const summaries = { "p::a": pace(100, 200), "p::b": pace(4_000, 20) };
+  const first = measuredPacePlacements(placements, ["p::a", "p::b"], summaries);
+  assert.notEqual(first.placements, placements);
+  const again = measuredPacePlacements(first.placements, ["p::a", "p::b"], summaries);
+  assert.equal(again.placements, first.placements);
+  assert.deepEqual(again.updated.sort(), ["p::a", "p::b"]);
+});
+
+test("in a row with a taken dot, a faster model never lands right of a slower one", () => {
+  // Thirteen placed models: a 9 × 9 grid (eight divisions). Twelve are measured,
+  // so ranks 1 and 2 both target column 1, which a placed-by-you model holds.
+  const placements: ModelPadPlacements = {
+    "p::held": { x: 1 / 8, y: 0, xSource: "user", ySource: "user" },
+    "p::rank1": { x: 3 / 8, y: 0, xSource: "user", ySource: "user" },
+    "p::rank2": { x: 4 / 8, y: 0, xSource: "user", ySource: "user" },
+  };
+  const summaries: Record<string, ModelPaceSummary> = {
+    "p::rank1": pace(1_000, 100),
+    "p::rank2": pace(1_100, 100),
+  };
+  for (let index = 0; index < 10; index += 1) {
+    const value = `p::other${index}`;
+    // Rows 1–8 of the left edge, then rows 1–2 of the right edge.
+    placements[value] =
+      index < 8
+        ? { x: 0, y: (index + 1) / 8, xSource: "user", ySource: "user" }
+        : { x: 1, y: (index - 7) / 8, xSource: "user", ySource: "user" };
+    // other0 is the fastest; the rest are slower than rank 1 and rank 2.
+    summaries[value] = index === 0 ? pace(10, 1_000) : pace(5_000 + index * 100, 10);
+  }
+  const visible = Object.keys(placements);
+  const result = measuredPacePlacements(placements, visible, summaries);
+
+  assert.equal(result.updated.length, 12);
+  const rank1 = result.placements["p::rank1"];
+  const rank2 = result.placements["p::rank2"];
+  assert.equal(rank1.y, 0);
+  assert.equal(rank2.y, 0);
+  assert.ok(rank1.x < rank2.x, `faster at ${rank1.x}, slower at ${rank2.x}`);
+  assert.deepEqual([rank1.x, rank2.x], [0, 2 / 8]);
+  const keys = visible.map((value) => modelPadPointKey(result.placements[value], 9));
+  assert.equal(new Set(keys).size, keys.length);
 });
 
 test("one measured model sits in the middle; tied scores share the average rank", () => {

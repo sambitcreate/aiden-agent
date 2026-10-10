@@ -5,6 +5,8 @@ import {
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   modelPadPlacementKind,
+  modelPadPlacementSourceLabel,
+  MODEL_PAD_PLACEMENT_KIND_LABELS,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   type ModelPadCapabilitySuggestion,
@@ -145,6 +147,8 @@ export interface PositionedModel extends ModelEntry {
   confidence: PositionConfidence;
   /** Marker kind shared by every Pad surface. */
   placementKind: ModelPadPlacementKind;
+  /** How the marker announces its placement source (see `modelPadPlacementSourceLabel`). */
+  placementSourceLabel: string;
   positionSource: string;
   capabilityLabel: "Everyday" | "Capable" | "Advanced";
   paceLabel: "Faster" | "Balanced" | "Deliberate";
@@ -500,7 +504,10 @@ function labelsFor(x: number, y: number): Pick<PositionedModel, "capabilityLabel
 
 function estimatePosition(
   entry: ModelEntry,
-): Omit<PositionedModel, keyof ModelEntry | "capabilityLabel" | "paceLabel" | "placementKind"> {
+): Omit<
+  PositionedModel,
+  keyof ModelEntry | "capabilityLabel" | "paceLabel" | "placementKind" | "placementSourceLabel"
+> {
   const ranking = entry.ranking;
   if (
     ranking &&
@@ -584,6 +591,7 @@ export function positionModels(entries: ModelEntry[]): PositionedModel[] {
     ...entry,
     ...estimatePosition(entry),
     placementKind: "benchmark" as const,
+    placementSourceLabel: MODEL_PAD_PLACEMENT_KIND_LABELS.benchmark,
   }));
   const gridSize = modelPadGridSize(models.length);
   const availableCells = modelPadGridPoints(gridSize);
@@ -645,12 +653,17 @@ export function positionSavedModels(
         y,
         confidence: placementKind === "personal" ? ("personal" as const) : ("suggested" as const),
         placementKind,
+        placementSourceLabel: modelPadPlacementSourceLabel(placement),
         positionSource:
           placementKind === "personal"
             ? "Personal placement"
-            : placement.xSource === "neutral" && placement.ySource === "benchmark"
-              ? "Benchmark capability · pace unmeasured"
-              : "Benchmark suggestion",
+            : placement.xSource === "measured"
+              ? placement.ySource === "benchmark"
+                ? "Benchmark capability · pace measured in your chats"
+                : "Pace measured in your chats"
+              : placement.xSource === "neutral" && placement.ySource === "benchmark"
+                ? "Benchmark capability · pace unmeasured"
+                : "Benchmark suggestion",
         ...labelsFor(x, y),
       },
     ];

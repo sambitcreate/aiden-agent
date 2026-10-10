@@ -123,10 +123,26 @@ test("Set pace from measured speed saves measured X for well-sampled models and 
     "test::plain": initialPlacements["test::plain"],
   });
   await screen.findByText("Set pace for 2 models · 2 need more chats");
-  // Measured pace is data-assisted, like a benchmark height.
+  // Drawn as data-assisted, announced as measured, and still located on the grid.
   await waitFor(() =>
     assert.equal(marker(pad, "test::fast").dataset.placementSource, "benchmark"),
   );
+  assert.match(
+    marker(pad, "test::fast").getAttribute("aria-label") ?? "",
+    /^Fast from Test, Measured pace, row 1, column 1, /u,
+  );
+  assert.match(
+    marker(pad, "test::slow").getAttribute("aria-label") ?? "",
+    /^Slow from Test, Benchmark height, measured pace, row 7, column 7, /u,
+  );
+
+  // Once the Pad shows the measured pace, setting it again has nothing to do.
+  await waitFor(() => assert.equal(action.getAttribute("aria-disabled"), "true"));
+  assert.match(action.getAttribute("title") ?? "", /Pace is already up to date/u);
+  toast.dismiss();
+  fireEvent.click(action);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.equal(server.writes(), 1);
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), initialPlacements));
@@ -166,6 +182,27 @@ test("without three samples for any placed model the action explains itself and 
   fireEvent.click(action);
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(server.writes(), 0);
+});
+
+test("when measured speeds can't be read the action says so", async () => {
+  const calls = installBotTestIpc({
+    "providers:list": () => [provider],
+    "models:info": () => ({}),
+    "modelInsights:status": () => ({ connected: false }),
+    "modelPace:summaries": () => {
+      throw new Error("unreadable");
+    },
+    "settings:get": () => ({ modelPadPlacements: initialPlacements, pinnedModels: [] }),
+  });
+  await mountEditor();
+  const action = await screen.findByRole("button", { name: "Set pace from measured speed" });
+  await waitFor(() =>
+    assert.match(action.getAttribute("title") ?? "", /Couldn’t read measured speeds/u),
+  );
+  assert.equal(action.getAttribute("aria-disabled"), "true");
+  fireEvent.click(action);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  assert.ok(!calls.some((call) => call.channel === "settings:set"));
 });
 
 test("Clear measured speeds asks first, forgets the speeds, and leaves the Pad as it is", async () => {

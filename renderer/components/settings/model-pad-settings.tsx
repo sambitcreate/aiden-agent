@@ -52,16 +52,20 @@ import {
   measureModelPadAvailableSize,
   modelPadLabelPlacement,
   modelPadPlacementKind,
+  modelPadPlacementSourceLabel,
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_METRIC_LABELS,
-  MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   type ModelPadCapabilitySuggestion,
   type ModelPadDirection,
   type ModelPadMetric,
   type ModelPadPoint,
 } from "../../lib/model-pad-layout";
-import { formatModelPace, measuredPacePlacements } from "../../lib/model-pad-pace";
+import {
+  formatModelPace,
+  measuredPacePlacements,
+  type MeasuredPaceResult,
+} from "../../lib/model-pad-pace";
 import { useModelPadPreferences } from "../../lib/model-pad-preferences";
 import type { ModelPadPlacement, ModelPadPlacements } from "../../shared/model-pad-preferences";
 import {
@@ -410,9 +414,15 @@ function addedSuggestionsMessage(count: number): string {
 
 const MEASURED_PACE_UNAVAILABLE_REASON = "Use a few models in chat first to measure their speed";
 
-function measuredPaceMessage(updated: number, lacking: number): string {
-  const set = `Set pace for ${updated} model${updated === 1 ? "" : "s"}`;
-  return lacking > 0 ? `${set} · ${lacking} need${lacking === 1 ? "s" : ""} more chats` : set;
+function measuredPaceMessage({ updated, lacking, unscored }: MeasuredPaceResult): string {
+  const parts = [`Set pace for ${updated.length} model${updated.length === 1 ? "" : "s"}`];
+  if (lacking.length > 0) {
+    parts.push(`${lacking.length} need${lacking.length === 1 ? "s" : ""} more chats`);
+  }
+  if (unscored.length > 0) {
+    parts.push(`${unscored.length} ha${unscored.length === 1 ? "s" : "ve"} no usable speed`);
+  }
+  return parts.join(" · ");
 }
 
 /**
@@ -759,11 +769,13 @@ export function ModelPadSettings() {
   const hasPaceSamples = Object.values(paceSummaries ?? {}).some(
     (summary) => summary.sampleCount > 0,
   );
-  const canSetMeasuredPace = React.useMemo(
-    () =>
-      measuredPacePlacements(placements, visibleValues, paceSummaries ?? {}).updated.length > 0,
-    [placements, visibleValues, paceSummaries],
-  );
+  const measuredPaceUnavailableReason = React.useMemo(() => {
+    if (paceQuery.isLoading) return "Loading measured speeds…";
+    if (paceQuery.isError) return "Couldn’t read measured speeds";
+    const result = measuredPacePlacements(placements, visibleValues, paceSummaries ?? {});
+    if (result.updated.length === 0) return MEASURED_PACE_UNAVAILABLE_REASON;
+    return result.placements === placements ? "Pace is already up to date" : undefined;
+  }, [paceQuery.isLoading, paceQuery.isError, placements, visibleValues, paceSummaries]);
 
   const toggleSupportingPanel = (panel: Exclude<typeof activePanel, null>, animate: boolean) => {
     browseAutoOpenSettledRef.current = true;
@@ -1143,11 +1155,9 @@ export function ModelPadSettings() {
     setSuggestionPreview(undefined);
     void persistAction((current) => {
       const result = measuredPacePlacements(current, visibleValues, summaries);
-      if (result.updated.length === 0) return null;
-      return {
-        placements: result.placements,
-        message: measuredPaceMessage(result.updated.length, result.lacking.length),
-      };
+      // Nothing to measure, or the Pad already shows the measured pace.
+      if (result.placements === current) return null;
+      return { placements: result.placements, message: measuredPaceMessage(result) };
     });
   };
 
@@ -1298,13 +1308,7 @@ export function ModelPadSettings() {
                 icon={<Gauge />}
                 label="Set pace from measured speed"
                 variant="transparent"
-                disabledReason={
-                  paceQuery.isLoading
-                    ? "Loading measured speeds…"
-                    : canSetMeasuredPace
-                      ? undefined
-                      : MEASURED_PACE_UNAVAILABLE_REASON
-                }
+                disabledReason={measuredPaceUnavailableReason}
                 onClick={setPaceFromMeasuredSpeed}
               />
             ) : null}
@@ -1432,9 +1436,7 @@ export function ModelPadSettings() {
                 const paceDescription =
                   sourcePlacement.xSource === "neutral"
                     ? "Pace unmeasured; horizontal spread is for readability"
-                    : sourcePlacement.xSource === "measured" && !dragging
-                      ? "Pace from your chats"
-                      : gridLocation(placement, gridSize);
+                    : gridLocation(placement, gridSize);
                 const paceSummary = paceSummaries?.[entry.value];
                 const measuredSpeed =
                   paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
@@ -1443,7 +1445,7 @@ export function ModelPadSettings() {
                   <button
                     key={entry.value}
                     type="button"
-                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
+                    aria-label={`${placementLabel(entry)}, ${modelPadPlacementSourceLabel(sourcePlacement)}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
                     aria-pressed={selected}
                     data-value={entry.value}
                     data-placement-source={placementKind}

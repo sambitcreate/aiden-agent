@@ -61,6 +61,23 @@ test("picker options announce placement source in the settings wording", () => {
   assert.match(option("assisted").getAttribute("aria-label") ?? "", /Benchmark-assisted$/u);
 });
 
+test("measured pace is announced as measured, not as a benchmark, and still drawn as data-assisted", () => {
+  const models = positionSavedModels([entry("paced"), entry("both")], {
+    paced: { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
+    both: { x: 1, y: 1, xSource: "measured", ySource: "benchmark" },
+  });
+  render(
+    <ModelPickerPad models={models} gridSize={7} onPreview={() => {}} onCommit={() => {}} />,
+  );
+  assert.match(option("paced").getAttribute("aria-label") ?? "", /, Measured pace$/u);
+  assert.match(
+    option("both").getAttribute("aria-label") ?? "",
+    /, Benchmark height, measured pace$/u,
+  );
+  assert.equal(option("paced").dataset.placementSource, "benchmark");
+  assert.equal(option("both").dataset.placementSource, "benchmark");
+});
+
 test("selected and previewed options keep their source and expose a separate state", () => {
   renderPad("mine", "assisted");
   const selected = option("mine");
@@ -81,7 +98,7 @@ test("the settings legend shows one marker per placement source, with matching w
     markers.map((marker) => [marker.dataset.placementSource, marker.parentElement?.textContent]),
     [
       ["personal", "Placed by you"],
-      ["benchmark", "Benchmark-assisted"],
+      ["benchmark", "Data-assisted"],
     ],
   );
   for (const marker of markers) assert.equal(marker.getAttribute("aria-hidden"), "true");

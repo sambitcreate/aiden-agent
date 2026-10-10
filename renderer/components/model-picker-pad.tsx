@@ -14,7 +14,6 @@ import {
   MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_KNOB_TAG_MAX_WIDTH_PX,
   MODEL_PAD_METRIC_LABELS,
-  MODEL_PAD_PLACEMENT_KIND_LABELS,
   MODEL_PAD_RANGE_PERCENT,
   modelPadHeightCaption,
   modelPadKnobTagLayout,
@@ -432,7 +431,7 @@ export function ModelPickerPad({
               id={modelOptionId(model.value)}
               role="option"
               aria-selected={isSelected}
-              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[model.placementKind]}${alsoVia ? `, ${alsoVia}` : ""}`}
+              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${model.placementSourceLabel}${alsoVia ? `, ${alsoVia}` : ""}`}
               data-placement-source={model.placementKind}
               data-state={isSelected ? "selected" : isPreview ? "preview" : "resting"}
               className="model-pad-model absolute -translate-x-1/2 -translate-y-1/2 rounded-full"

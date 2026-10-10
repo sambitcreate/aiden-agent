@@ -565,6 +565,13 @@ test("OpenRouter benchmark percentiles average ties and axis-aware suggestions d
   });
   assert.equal(suggested.confidence, "suggested");
   assert.equal(suggested.positionSource, "Benchmark capability · pace unmeasured");
+
+  const [paced, both] = positionSavedModels(models, {
+    low: { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
+    high: { x: 1, y: 1, xSource: "measured", ySource: "benchmark" },
+  });
+  assert.equal(paced.positionSource, "Pace measured in your chats");
+  assert.equal(both.positionSource, "Benchmark capability · pace measured in your chats");
 });
 
 test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {
