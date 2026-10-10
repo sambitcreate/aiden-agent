@@ -32,6 +32,19 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
   const pad = page.getByRole("group", { name: "Personal Model Pad arrangement", exact: true });
   const browse = page.getByRole("button", { name: "Browse models", exact: true });
   const insights = page.getByRole("button", { name: "Benchmark insights", exact: true });
+  // A fresh profile opens Browse models on its own, so set each panel state
+  // explicitly instead of toggling from an assumed starting point.
+  const setExpanded = async (button: typeof browse, expanded: boolean) => {
+    if ((await button.getAttribute("aria-expanded")) !== String(expanded)) await button.click();
+    await expect(button).toHaveAttribute("aria-expanded", String(expanded));
+  };
+  const showPanel = async (panel: "closed" | "models" | "insights") => {
+    if (panel === "models") await setExpanded(browse, true);
+    if (panel === "insights") await setExpanded(insights, true);
+    // The panels are mutually exclusive: opening one closes the other.
+    if (panel !== "models") await setExpanded(browse, false);
+    if (panel !== "insights") await setExpanded(insights, false);
+  };
   await page.evaluate(() => {
     const sentinel = document.createElement("span");
     sentinel.style.cssText = "position:fixed;width:1px;height:1px;pointer-events:none;opacity:0";
@@ -62,8 +75,7 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     );
 
     for (const panel of ["closed", "models", "insights"] as const) {
-      if (panel === "models") await browse.click();
-      if (panel === "insights") await insights.click();
+      await showPanel(panel);
       await page.evaluate(async (settleTimeoutMs) => {
         const animations = (document.getAnimations?.() ?? []).filter((animation) => {
           const endTime = animation.effect?.getComputedTiming().endTime;
@@ -154,7 +166,6 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
       const legend = page.locator(".model-pad-legend");
       await legend.scrollIntoViewIfNeeded();
       await expect(legend).toBeInViewport();
-      if (panel === "insights") await insights.click();
     }
   }
 
@@ -163,7 +174,7 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     window.setSize(1280, 800);
     window.webContents.setZoomFactor(1);
   });
-  await browse.click();
+  await showPanel("models");
   await page
     .getByRole("button", { name: new RegExp(`^Add ${E2E_MODEL_DISPLAY_NAME} .* to Pad$`, "u") })
     .click();
