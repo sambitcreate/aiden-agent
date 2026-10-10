@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -226,26 +225,37 @@ function realSherpa(): SherpaModule | string {
   }
 }
 
-/** "hello world" from macOS `say`, as 16 kHz mono float PCM. */
-function spokenHelloWorld(): Float32Array | string {
-  if (process.platform !== "darwin") return "needs macOS `say` to synthesize speech";
-  const dir = mkdtempSync(path.join(tmpdir(), "aiden-vad-"));
-  try {
-    const aiff = path.join(dir, "x.aiff");
-    const wav = path.join(dir, "x.wav");
-    execFileSync("say", ["-o", aiff, "hello world"]);
-    execFileSync("afconvert", ["-f", "WAVE", "-d", "LEI16@16000", "-c", "1", aiff, wav]);
-    const bytes = readFileSync(wav);
-    const dataAt = bytes.indexOf("data");
-    if (dataAt < 0) return "afconvert produced no data chunk";
-    const pcm = new Float32Array(bytes.readUInt32LE(dataAt + 4) / 2);
-    for (let i = 0; i < pcm.length; i++) pcm[i] = bytes.readInt16LE(dataAt + 8 + i * 2) / 32768;
-    return pcm;
-  } catch (error) {
-    return `say/afconvert unavailable: ${error instanceof Error ? error.message : String(error)}`;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+/**
+ * Two seconds of recorded human speech ("After early nightfall…"), 16 kHz mono
+ * PCM16: LibriSpeech test-clean 1089-134686-0000, CC BY 4.0 (see fixtures/README.md).
+ * A committed recording keeps the real-VAD test deterministic on every runner;
+ * speech synthesized at test time varied by host voice and could come back silent.
+ */
+function recordedSpeech(): Float32Array {
+  const bytes = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/speech-librispeech-1089-134686-0000-2s.wav"));
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const id = bytes.toString("ascii", offset, offset + 4);
+    const size = bytes.readUInt32LE(offset + 4);
+    if (id === "data") {
+      const pcm = new Float32Array(size / 2);
+      for (let i = 0; i < pcm.length; i++) pcm[i] = bytes.readInt16LE(offset + 8 + i * 2) / 32768;
+      return pcm;
+    }
+    offset += 8 + size + (size & 1);
   }
+  throw new Error("speech fixture has no data chunk");
+}
+
+/** First sample whose 10 ms frame RMS clearly rises above the noise floor: an energy oracle independent of Silero. */
+function energyOnset(samples: Float32Array, sampleRate: number): number {
+  const frame = sampleRate / 100;
+  for (let start = 0; start + frame <= samples.length; start += frame) {
+    let sum = 0;
+    for (let i = start; i < start + frame; i++) sum += samples[i]! * samples[i]!;
+    if (Math.sqrt(sum / frame) > 0.02) return start;
+  }
+  throw new Error("no speech energy in fixture");
 }
 
 /** Real Silero VAD plus a recorder recognizer that notes which sample range each decode received. */
@@ -272,8 +282,7 @@ function withRealVad(real: SherpaModule, decoded: SampleRange[]): SherpaModule {
 test("real Silero VAD finds speech after a second of silence and ignores pure silence", (t) => {
   const real = realSherpa();
   if (typeof real === "string") return t.skip(real);
-  const speech = spokenHelloWorld();
-  if (typeof speech === "string") return t.skip(speech);
+  const speech = recordedSpeech();
   const sr = 16_000;
   const samples = new Float32Array(sr + speech.length + sr);
   samples.set(speech, sr);
@@ -281,8 +290,12 @@ test("real Silero VAD finds speech after a second of silence and ignores pure si
   const result = createSpeechEngine(() => withRealVad(real, decoded), { exists: () => true }).transcribe({ ...req(whisper, { trimSilence: true, samples }), vadModelPath: VAD_MODEL });
   assert.equal(result.text, "speech");
   assert.equal(decoded.length, 1);
+  // The detected region must start where the recording's speech energy starts
+  // (after the 1 s of leading silence), not in the silence before it.
+  const expectedStart = (sr + energyOnset(speech, sr)) / sr;
   const regionStart = (decoded[0]!.start + VAD_PAD_SAMPLES) / sr;
-  assert.ok(regionStart >= 0.8 && regionStart <= 1.3, `speech region starts at ${regionStart}s`);
+  assert.ok(Math.abs(regionStart - expectedStart) <= 0.25, `speech region starts at ${regionStart}s; speech energy starts at ${expectedStart}s`);
+  assert.ok(decoded[0]!.end >= sr + speech.length - sr / 2, "the decoded range keeps the end of the speech");
 
   const silent: SampleRange[] = [];
   const quiet = createSpeechEngine(() => withRealVad(real, silent), { exists: () => true }).transcribe({ ...req(whisper, { trimSilence: true, samples: new Float32Array(sr * 3) }), vadModelPath: VAD_MODEL });
