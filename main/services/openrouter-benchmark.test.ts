@@ -64,7 +64,7 @@ test("normalizes source-aware OpenRouter benchmarks and matches exact permaslugs
   assert.equal(openRouterBenchmarkForModel(cache, "openrouter", "openai/gpt-5.4:free"), undefined);
 });
 
-test("rejects unsafe scores, duplicate identities, and invalid citation metadata", () => {
+test("rejects unsafe scores and invalid citation metadata", () => {
   assert.throws(
     () =>
       buildOpenRouterBenchmarkCache(
@@ -79,24 +79,160 @@ test("rejects unsafe scores, duplicate identities, and invalid citation metadata
       ),
     /between 0 and 100/u,
   );
-  const duplicate = responsePayload([
-    {
-      source: "artificial-analysis",
-      model_permaslug: "openai/gpt",
-      display_name: "GPT",
-      coding_index: 1,
-    },
-    {
-      source: "artificial-analysis",
-      model_permaslug: "OPENAI/GPT",
-      display_name: "GPT duplicate",
-      coding_index: 2,
-    },
-  ]);
-  assert.throws(() => buildOpenRouterBenchmarkCache(duplicate), /duplicate/u);
   const badCitation = responsePayload() as ReturnType<typeof responsePayload>;
   badCitation.meta.citation = "Unknown source";
   assert.throws(() => buildOpenRouterBenchmarkCache(badCitation), /citation/u);
+});
+
+function benchmarkRow(permaslug: string, displayName: string, coding: number) {
+  return {
+    source: "artificial-analysis",
+    model_permaslug: permaslug,
+    display_name: displayName,
+    coding_index: coding,
+  };
+}
+
+function runtimeWith(fetched: OpenRouterBenchmarkCache, initial: OpenRouterBenchmarkCache | null) {
+  let key: string | null = initial ? "pad-key" : null;
+  let stored = initial;
+  return new OpenRouterBenchmarkRuntime({
+    credentials: {
+      read: async () => key,
+      write: async (next) => {
+        key = next;
+      },
+      deleteKey: async () => {
+        key = null;
+      },
+    },
+    cache: {
+      read: async () => stored,
+      write: async (next) => {
+        stored = parseOpenRouterBenchmarkCache(JSON.parse(JSON.stringify(next)));
+      },
+      clear: async () => {
+        stored = null;
+      },
+    },
+    fetchCatalog: async () => fetched,
+  });
+}
+
+test("drops rows that share a permaslug, keeps the rest, and reports how many were skipped", async () => {
+  const cache = buildOpenRouterBenchmarkCache(
+    responsePayload([
+      benchmarkRow("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5 (Reasoning)", 61),
+      benchmarkRow("openai/gpt-5.4", "GPT-5.4", 81.4),
+      benchmarkRow("Anthropic/Claude-Sonnet-4.5", "Claude Sonnet 4.5 (Non-reasoning)", 49),
+    ]),
+  );
+  assert.deepEqual(
+    cache.models.map((model) => model.modelPermaslug),
+    ["openai/gpt-5.4"],
+  );
+  assert.equal(cache.source.skippedAmbiguous, 2);
+  assert.equal(openRouterBenchmarkForModel(cache, "anthropic", "claude-sonnet-4.5"), undefined);
+  assert.equal(openRouterBenchmarkForModel(cache, "openai", "gpt-5.4")?.coding, 81.4);
+  assert.deepEqual(parseOpenRouterBenchmarkCache(JSON.parse(JSON.stringify(cache))), cache);
+
+  const runtime = runtimeWith(cache, null);
+  const connected = await runtime.connect("pad-key");
+  assert.equal(connected.cachedModelCount, 1);
+  assert.equal(connected.skippedAmbiguousCount, 2);
+  assert.equal((await runtime.status()).skippedAmbiguousCount, 2);
+  assert.equal((await runtime.disconnect()).skippedAmbiguousCount, 0);
+});
+
+test("a response whose rows are all ambiguous is still rejected", () => {
+  assert.throws(
+    () =>
+      buildOpenRouterBenchmarkCache(
+        responsePayload([
+          benchmarkRow("openai/gpt", "GPT", 1),
+          benchmarkRow("OPENAI/GPT", "GPT duplicate", 2),
+        ]),
+      ),
+    /between 1 and 100/u,
+  );
+});
+
+test("a cache stored before skipped rows were recorded reports none skipped", async () => {
+  const current = buildOpenRouterBenchmarkCache(responsePayload());
+  const legacy = JSON.parse(JSON.stringify(current)) as {
+    source: Record<string, unknown>;
+  };
+  delete legacy.source.skippedAmbiguous;
+  const parsed = parseOpenRouterBenchmarkCache(legacy);
+  assert.equal(parsed.source.skippedAmbiguous, 0);
+  const status = await runtimeWith(parsed, parsed).status();
+  assert.equal(status.ready, true);
+  assert.equal(status.skippedAmbiguousCount, 0);
+});
+
+test("reasoning variants keep separate identities when matching models.dev rows", () => {
+  const cache = buildOpenRouterBenchmarkCache(
+    responsePayload([
+      benchmarkRow("anthropic/claude-4.5-sonnet-reasoning", "Claude Sonnet 4.5 (Reasoning)", 61),
+      benchmarkRow("anthropic/claude-4.5-sonnet", "Claude Sonnet 4.5 (Non-reasoning)", 49),
+      benchmarkRow("x-ai/grok-4", "Grok 4", 55),
+      benchmarkRow("x-ai/grok-4-thinking-variant", "Grok 4 Thinking", 66),
+    ]),
+  );
+  const coding = (identity: {
+    author?: string;
+    modelId: string;
+    name: string;
+    reasoning?: boolean;
+  }) => openRouterBenchmarkForModelsDevIdentity(cache, identity)?.coding;
+
+  // No base row: the models.dev reasoning flag picks the variant.
+  const sonnet = { author: "anthropic", modelId: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" };
+  assert.equal(coding({ ...sonnet, reasoning: true }), 61);
+  assert.equal(coding({ ...sonnet, reasoning: false }), 49);
+  assert.equal(coding(sonnet), undefined);
+  // An explicit variant in the name or ID wins over the flag.
+  assert.equal(coding({ ...sonnet, name: "Claude Sonnet 4.5 (Thinking)", reasoning: false }), 61);
+  assert.equal(coding({ ...sonnet, modelId: "claude-sonnet-4-5-thinking", reasoning: false }), 61);
+  assert.equal(
+    coding({ ...sonnet, modelId: "claude-sonnet-4-5-no-thinking", reasoning: true }),
+    49,
+  );
+  assert.equal(coding({ ...sonnet, name: "Claude Sonnet 4.5 Non-Reasoning" }), 49);
+  // A base row exists, so an unmarked model takes it whatever its flag says.
+  const grok = { author: "x-ai", modelId: "grok-4-0709", name: "Grok 4" };
+  assert.equal(coding({ ...grok, reasoning: true }), 55);
+  assert.equal(coding({ ...grok, modelId: "grok-4-thinking" }), 66);
+  // There is no non-reasoning Grok row, and conflicting markers never guess.
+  assert.equal(coding({ ...grok, name: "Grok 4 (Non-reasoning)" }), undefined);
+  assert.equal(
+    coding({ ...sonnet, name: "Claude Sonnet 4.5 (Reasoning)", modelId: "x-no-thinking" }),
+    undefined,
+  );
+});
+
+test("variant matching still fails closed when several rows share an identity", () => {
+  const cache = buildOpenRouterBenchmarkCache(
+    responsePayload([
+      benchmarkRow("anthropic/claude-a", "Claude Sonnet 4.5 (Reasoning)", 61),
+      benchmarkRow("anthropic/claude-b", "Claude Sonnet 4.5 (Thinking)", 62),
+      benchmarkRow("anthropic/claude-c", "Claude Haiku 4.5", 40),
+      benchmarkRow("anthropic/claude-d", "Claude Haiku 4.5 (max)", 41),
+      benchmarkRow("anthropic/claude-e", "Claude Haiku 4.5 (Reasoning)", 42),
+    ]),
+  );
+  const coding = (name: string, reasoning?: boolean) =>
+    openRouterBenchmarkForModelsDevIdentity(cache, {
+      author: "anthropic",
+      modelId: "unmatched",
+      name,
+      ...(reasoning === undefined ? {} : { reasoning }),
+    })?.coding;
+  assert.equal(coding("Claude Sonnet 4.5", true), undefined);
+  assert.equal(coding("Claude Sonnet 4.5 (Reasoning)"), undefined);
+  // Two base rows are ambiguous; the flag does not fall through to the variant row.
+  assert.equal(coding("Claude Haiku 4.5", true), undefined);
+  assert.equal(coding("Claude Haiku 4.5 (Reasoning)"), 42);
 });
 
 test("accepts a capped benchmark response when model_count reports a larger total", () => {
@@ -188,6 +324,7 @@ test("models.dev identities normalize publication stamps and reordered vendor ID
       author: "anthropic",
       modelId: "claude-opus-4-8",
       name: "Claude Opus 4.8",
+      reasoning: true,
     })?.coding,
     74.3,
   );
@@ -224,6 +361,7 @@ test("models.dev normalization rejects ambiguous aliases instead of guessing", (
       author: "deepseek",
       modelId: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
+      reasoning: true,
     })?.coding,
     59.4,
   );
@@ -323,6 +461,7 @@ test("connect owns a separate credential lifecycle and publishes cache only afte
     hasKey: false,
     ready: false,
     cachedModelCount: 0,
+    skippedAmbiguousCount: 0,
     fetchedAt: undefined,
     asOf: undefined,
     citation: undefined,
@@ -454,7 +593,7 @@ test("models.dev name fallback scopes ambiguity to the requested author", () => 
       {
         source: "artificial-analysis",
         model_permaslug: "alpha/shared-20260101",
-        display_name: "Shared Model (Reasoning)",
+        display_name: "Shared Model (max)",
         coding_index: 11,
       },
       {

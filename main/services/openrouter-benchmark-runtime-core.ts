@@ -152,6 +152,7 @@ function statusFrom(
     hasKey: key !== null,
     ready,
     cachedModelCount: ready ? cache.models.length : 0,
+    skippedAmbiguousCount: ready ? cache.source.skippedAmbiguous : 0,
     fetchedAt: ready ? cache.source.fetchedAt : undefined,
     asOf: ready ? cache.source.asOf : undefined,
     citation: ready ? cache.source.citation : undefined,

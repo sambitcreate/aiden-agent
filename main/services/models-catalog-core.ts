@@ -413,6 +413,7 @@ function modelsDevBenchmark(
     ...(directAuthor === undefined ? {} : { author: directAuthor }),
     modelId,
     name: raw.name,
+    ...(typeof raw.reasoning === "boolean" ? { reasoning: raw.reasoning } : {}),
   });
 }
 

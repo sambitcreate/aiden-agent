@@ -26,6 +26,8 @@ export interface OpenRouterBenchmarkCache {
     license: typeof OPENROUTER_BENCHMARK_LICENSE;
     asOf: string;
     fetchedAt: string;
+    /** Response rows dropped because they shared a permaslug with another row. */
+    skippedAmbiguous: number;
   };
   models: OpenRouterBenchmarkModel[];
 }
@@ -37,6 +39,8 @@ export interface ModelsDevBenchmarkIdentity {
   modelId: string;
   /** Exact display name from the same bundled models.dev record. */
   name: string;
+  /** models.dev `reasoning` flag; picks a reasoning variant when no base row exists. */
+  reasoning?: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -113,21 +117,42 @@ function parseModel(value: unknown, index: number): OpenRouterBenchmarkModel {
   return parsed;
 }
 
-function parseModels(value: unknown): OpenRouterBenchmarkModel[] {
+const MODEL_COUNT_ERROR = "OpenRouter benchmark data must contain between 1 and 100 models.";
+
+/**
+ * Parse every row, then drop all rows whose permaslug appears more than once:
+ * a shared permaslug cannot say which row belongs to the model, so none does.
+ */
+function parseModels(value: unknown): {
+  models: OpenRouterBenchmarkModel[];
+  skippedAmbiguous: number;
+} {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
     value.length > MAX_OPENROUTER_BENCHMARK_MODELS
   ) {
-    throw new Error("OpenRouter benchmark data must contain between 1 and 100 models.");
+    throw new Error(MODEL_COUNT_ERROR);
   }
-  const models = value.map(parseModel);
-  if (
-    new Set(models.map((model) => model.modelPermaslug.toLocaleLowerCase())).size !== models.length
-  ) {
-    throw new Error("OpenRouter benchmark data contains duplicate model identifiers.");
+  const parsed = value.map(parseModel);
+  const occurrences = new Map<string, number>();
+  for (const model of parsed) {
+    const key = model.modelPermaslug.toLowerCase();
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
   }
-  return models;
+  const models = parsed.filter(
+    (model) => occurrences.get(model.modelPermaslug.toLowerCase()) === 1,
+  );
+  if (models.length === 0) throw new Error(MODEL_COUNT_ERROR);
+  return { models, skippedAmbiguous: parsed.length - models.length };
+}
+
+function skippedCount(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("OpenRouter benchmark cache skipped-row count is invalid.");
+  }
+  return value;
 }
 
 /** Normalize one authenticated OpenRouter Data API response for durable device-local use. */
@@ -147,11 +172,11 @@ export function buildOpenRouterBenchmarkCache(
   if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark response has an invalid citation.");
   }
-  const models = parseModels(response.data);
+  const { models, skippedAmbiguous } = parseModels(response.data);
   if (
     typeof meta.model_count !== "number" ||
     !Number.isSafeInteger(meta.model_count) ||
-    meta.model_count < models.length
+    meta.model_count < models.length + skippedAmbiguous
   ) {
     throw new Error("OpenRouter benchmark response model count is invalid.");
   }
@@ -167,6 +192,7 @@ export function buildOpenRouterBenchmarkCache(
       license: OPENROUTER_BENCHMARK_LICENSE,
       asOf: timestamp(meta.as_of, "meta.as_of"),
       fetchedAt: timestamp(fetchedAt, "fetchedAt"),
+      skippedAmbiguous,
     },
     models,
   };
@@ -205,6 +231,8 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
       license: OPENROUTER_BENCHMARK_LICENSE,
       asOf: timestamp(source.asOf, "source.asOf"),
       fetchedAt: timestamp(source.fetchedAt, "source.fetchedAt"),
+      // Caches written before this count existed read as none skipped.
+      skippedAmbiguous: skippedCount(source.skippedAmbiguous),
     },
     models: parseModels(
       Array.isArray(cache.models)
@@ -220,7 +248,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
             };
           })
         : cache.models,
-    ),
+    ).models,
   };
 }
 
@@ -278,15 +306,82 @@ function withoutBenchmarkReleaseStamp(value: string): string {
   return value.replace(/-(?:19|20)\d{6}$/u, "");
 }
 
-function normalizedCatalogName(value: string): string {
-  let name = value.trim();
-  while (/\s*\([^()]*\)\s*$/u.test(name)) {
-    name = name.replace(/\s*\([^()]*\)\s*$/u, "").trim();
-  }
-  return name
+type BenchmarkVariant = "reasoning" | "non-reasoning";
+
+const VARIANT_WORDS: ReadonlyMap<string, BenchmarkVariant> = new Map([
+  ["reasoning", "reasoning"],
+  ["thinking", "reasoning"],
+  ["nonreasoning", "non-reasoning"],
+  ["nonthinking", "non-reasoning"],
+  ["nothinking", "non-reasoning"],
+]);
+const NEGATING_WORDS = new Set(["no", "non"]);
+
+function catalogWords(value: string): string[] {
+  return value
     .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/gu, "");
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter(Boolean);
+}
+
+/** Remove reasoning-variant words ("Thinking", "non-reasoning", "no thinking"). */
+function withoutVariantWords(
+  words: readonly string[],
+  variants: Set<BenchmarkVariant>,
+): string[] {
+  const rest: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const next = words[index + 1];
+    const variant = VARIANT_WORDS.get(word);
+    if (NEGATING_WORDS.has(word) && next !== undefined && VARIANT_WORDS.get(next) === "reasoning") {
+      variants.add("non-reasoning");
+      index += 1;
+    } else if (variant) {
+      variants.add(variant);
+    } else {
+      rest.push(word);
+    }
+  }
+  return rest;
+}
+
+interface CatalogIdentity {
+  base: string;
+  variant: BenchmarkVariant | null;
+}
+
+function identityFrom(
+  base: string,
+  variants: ReadonlySet<BenchmarkVariant>,
+): CatalogIdentity | null {
+  // Conflicting markers cannot name one variant, so the name matches nothing.
+  if (!base || variants.size > 1) return null;
+  return { base, variant: variants.values().next().value ?? null };
+}
+
+/**
+ * Normalize a display name to its base name plus reasoning variant. Trailing
+ * parentheticals ("(max)", "(Reasoning, Max Effort)") are dropped from the base
+ * but still contribute their variant, so "X (Reasoning)" and "X (Non-reasoning)"
+ * stay distinct.
+ */
+function catalogNameIdentity(
+  value: string,
+  variants = new Set<BenchmarkVariant>(),
+): CatalogIdentity | null {
+  let name = value.trim();
+  let match: RegExpMatchArray | null;
+  while ((match = name.match(/\s*\(([^()]*)\)\s*$/u))) {
+    withoutVariantWords(catalogWords(match[1]), variants);
+    name = name.slice(0, match.index).trim();
+  }
+  return identityFrom(withoutVariantWords(catalogWords(name), variants).join(""), variants);
+}
+
+function catalogIdentityKey(identity: CatalogIdentity): string {
+  return `${identity.variant ?? "base"}:${identity.base}`;
 }
 
 interface IndexedBenchmark {
@@ -321,18 +416,18 @@ function benchmarkIndex(cache: OpenRouterBenchmarkCache): BenchmarkIndex {
     const entry: IndexedBenchmark = { model, position, author: parsed?.author ?? null };
     pushIndexed(index.byPermaslug, model.modelPermaslug.toLowerCase(), entry);
     if (parsed === null) return;
-    pushIndexed(index.byName, normalizedCatalogName(model.displayName), entry);
+    const name = catalogNameIdentity(model.displayName);
+    if (name) pushIndexed(index.byName, catalogIdentityKey(name), entry);
     pushIndexed(index.byStampedLeaf, withoutBenchmarkReleaseStamp(parsed.modelId), entry);
   });
   benchmarkIndexes.set(cache, index);
   return index;
 }
 
-/** Exactly one eligible record across the candidate lists, or nothing. */
-function uniqueBenchmark(
+function eligibleBenchmarks(
   candidates: ReadonlyArray<readonly IndexedBenchmark[] | undefined>,
   author: string | undefined,
-): OpenRouterBenchmarkModel | undefined {
+): Set<IndexedBenchmark> {
   const matches = new Set<IndexedBenchmark>();
   for (const list of candidates) {
     for (const entry of list ?? []) {
@@ -341,8 +436,42 @@ function uniqueBenchmark(
       }
     }
   }
-  if (matches.size !== 1) return undefined;
-  return matches.values().next().value?.model;
+  return matches;
+}
+
+function onlyBenchmark(matches: Set<IndexedBenchmark>): OpenRouterBenchmarkModel | undefined {
+  return matches.size === 1 ? matches.values().next().value?.model : undefined;
+}
+
+/** Exactly one eligible record across the candidate lists, or nothing. */
+function uniqueBenchmark(
+  candidates: ReadonlyArray<readonly IndexedBenchmark[] | undefined>,
+  author: string | undefined,
+): OpenRouterBenchmarkModel | undefined {
+  return onlyBenchmark(eligibleBenchmarks(candidates, author));
+}
+
+/**
+ * Match by normalized display name. A model whose name or ID carries a variant
+ * marker matches only that variant; an unmarked model takes the base row, or,
+ * when the source lists only variants, the one its models.dev reasoning flag
+ * names. Every step needs exactly one eligible row.
+ */
+function benchmarkByCatalogName(
+  index: BenchmarkIndex,
+  identity: ModelsDevBenchmarkIdentity,
+  author: string | undefined,
+): OpenRouterBenchmarkModel | undefined {
+  const variants = new Set<BenchmarkVariant>();
+  withoutVariantWords(catalogWords(modelIdLeaf(identity.modelId)), variants);
+  const name = catalogNameIdentity(identity.name, variants);
+  if (!name) return undefined;
+  if (name.variant) return uniqueBenchmark([index.byName.get(catalogIdentityKey(name))], author);
+
+  const baseRows = eligibleBenchmarks([index.byName.get(catalogIdentityKey(name))], author);
+  if (baseRows.size > 0 || identity.reasoning === undefined) return onlyBenchmark(baseRows);
+  const variant: BenchmarkVariant = identity.reasoning ? "reasoning" : "non-reasoning";
+  return uniqueBenchmark([index.byName.get(catalogIdentityKey({ ...name, variant }))], author);
 }
 
 /**
@@ -370,8 +499,7 @@ export function openRouterBenchmarkForModelsDevIdentity(
   );
   if (exact) return benchmarkScores(cache, exact);
 
-  const catalogName = normalizedCatalogName(identity.name);
-  const byName = catalogName ? uniqueBenchmark([index.byName.get(catalogName)], author) : undefined;
+  const byName = benchmarkByCatalogName(index, identity, author);
   if (byName) return benchmarkScores(cache, byName);
 
   const byStampedId = uniqueBenchmark([index.byStampedLeaf.get(leaf)], author);

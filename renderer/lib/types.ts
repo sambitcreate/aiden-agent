@@ -596,6 +596,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
