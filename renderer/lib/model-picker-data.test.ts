@@ -1004,10 +1004,10 @@ function routeEntry(
   };
 }
 
-test("model identity prefers the catalog's canonical id and falls back to the id leaf", () => {
+test("model identity is the leaf of the catalog's canonical id, else of the model id", () => {
   assert.equal(
-    modelIdentityKey(routeEntry("openrouter", "OpenRouter", "openai/GPT-4o", "OpenAI/gpt-4o")),
-    "openai/gpt-4o",
+    modelIdentityKey(routeEntry("openrouter", "OpenRouter", "openai/gpt-4o-latest", "OpenAI/GPT-4o")),
+    "gpt-4o",
   );
   // Without a canonical id the text after the last slash is the identity, date stamp kept.
   assert.equal(
@@ -1037,16 +1037,64 @@ test("model siblings link other routes to the same model, never the entry itself
   assert.equal(siblings.has(loner.value), false);
 });
 
-test("a canonical id links routes whose ids differ, and an unmatched leaf stays apart", () => {
+test("a canonical id links routes whose ids differ, including an uncatalogued route", () => {
   const vendor = routeEntry("acme", "Acme", "acme-large-v2", "acme/large-2");
   const router = routeEntry("openrouter", "OpenRouter", "acme/large-2-preview", "acme/large-2");
-  // No catalog row: its leaf ("large-2") is not the canonical "acme/large-2".
+  // No catalog row: its leaf ("large-2") matches the canonical id's leaf.
   const custom = routeEntry("custom", "Custom", "acme/large-2");
   const siblings = modelSiblings([vendor, router, custom]);
   assert.deepEqual(siblings.get(vendor.value)?.map((entry) => entry.providerLabel), [
     "OpenRouter",
+    "Custom",
   ]);
-  assert.equal(siblings.has(custom.value), false);
+  assert.deepEqual(siblings.get(custom.value)?.map((entry) => entry.providerLabel), [
+    "Acme",
+    "OpenRouter",
+  ]);
+});
+
+test("a direct route without catalog data links to catalogued routers of the same model", () => {
+  const direct = routeEntry("openai", "OpenAI", "gpt-4o");
+  const router = routeEntry("openrouter", "OpenRouter", "openai/gpt-4o", "openai/gpt-4o");
+  const azure = routeEntry("azure", "Azure", "gpt-4o", "openai/gpt-4o");
+  const siblings = modelSiblings([direct, router, azure]);
+  assert.deepEqual(siblings.get(direct.value)?.map((entry) => entry.providerLabel), [
+    "OpenRouter",
+    "Azure",
+  ]);
+  assert.deepEqual(siblings.get(azure.value)?.map((entry) => entry.providerLabel), [
+    "OpenAI",
+    "OpenRouter",
+  ]);
+});
+
+test("two different canonical ids that share a leaf stay apart", () => {
+  const first = routeEntry("acme", "Acme", "large", "acme/large");
+  const second = routeEntry("globex", "Globex", "large", "globex/large");
+  assert.equal(modelSiblings([first, second]).size, 0);
+  // An uncatalogued route with that leaf links to both; they still do not link to each other.
+  const custom = routeEntry("custom", "Custom", "large");
+  const siblings = modelSiblings([first, second, custom]);
+  assert.deepEqual(siblings.get(first.value)?.map((entry) => entry.providerLabel), ["Custom"]);
+  assert.deepEqual(siblings.get(custom.value)?.map((entry) => entry.providerLabel), [
+    "Acme",
+    "Globex",
+  ]);
+});
+
+test("models from the same provider are never siblings of each other", () => {
+  const flash = routeEntry("zai", "Z.AI", "glm-5.3-flash", "zai/glm-5.3-flash");
+  const flashx = routeEntry("zai", "Z.AI", "vendor/glm-5.3-flash", "zai/glm-5.3-flash");
+  const router = routeEntry("openrouter", "OpenRouter", "zai/glm-5.3-flash", "zai/glm-5.3-flash");
+  const alone = modelSiblings([flash, flashx]);
+  assert.equal(alone.size, 0);
+  const siblings = modelSiblings([flash, flashx, router]);
+  assert.deepEqual(siblings.get(flash.value)?.map((entry) => entry.providerLabel), ["OpenRouter"]);
+  assert.deepEqual(siblings.get(router.value)?.map((entry) => entry.value), [
+    flash.value,
+    flashx.value,
+  ]);
+  assert.equal(alsoViaLabel(siblings.get(router.value)), "Also via Z.AI");
 });
 
 test("three-way groups list every other route, and only the entries passed in count", () => {

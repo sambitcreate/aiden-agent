@@ -1040,13 +1040,13 @@ textarea {
 /*
  * Another route to the hovered, focused or selected model (the same model through a
  * different provider) shares its state with a soft accent halo: no border or outline,
- * and the button's own focus-visible ring is untouched.
+ * no scale (hover, focus and selection own that), and the button's focus-visible ring
+ * and a selected marker's own styling are untouched.
  */
-.model-pad-marker[data-linked="true"] .model-pad-marker-visual {
+.model-pad-marker[data-linked="true"]:not([data-selected="true"]) .model-pad-marker-visual {
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
     var(--elevation-control);
-  transform: scale(1.08);
 }
 
 .model-pad-marker-label {

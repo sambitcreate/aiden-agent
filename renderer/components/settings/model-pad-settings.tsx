@@ -638,13 +638,17 @@ export function ModelPadSettings() {
     [entries, snappedPlacements],
   );
   const placedCount = placed.length;
-  // The hovered, else focused or selected, marker's siblings share its highlight.
+  // The hovered, else focused or selected, marker's siblings share its highlight. A
+  // hovered marker that has since left the Pad (removed from the keyboard with the
+  // pointer resting on it) no longer counts.
+  const hoveredPlaced = hoveredValue && snappedPlacements[hoveredValue] ? hoveredValue : undefined;
+  const linkSource = hoveredPlaced ?? activeValue;
   const linkedValues = React.useMemo(
     () =>
       new Set(
-        siblingsByValue.get(hoveredValue ?? activeValue ?? "")?.map((entry) => entry.value) ?? [],
+        siblingsByValue.get(linkSource ?? "")?.map((entry) => entry.value) ?? [],
       ),
-    [siblingsByValue, hoveredValue, activeValue],
+    [siblingsByValue, linkSource],
   );
   const occupiedCells = React.useMemo(
     () =>
@@ -1357,7 +1361,7 @@ export function ModelPadSettings() {
                   <button
                     key={entry.value}
                     type="button"
-                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}. Drag to another dot; use arrow keys to move one dot.`}
+                    aria-label={`${placementLabel(entry)}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[placementKind]}, ${paceDescription}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
                     aria-pressed={selected}
                     data-value={entry.value}
                     data-placement-source={placementKind}

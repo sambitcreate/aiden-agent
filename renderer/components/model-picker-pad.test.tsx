@@ -107,6 +107,13 @@ test("the knob tag says which other providers also serve the previewed model", (
 
   const first = renderPreview(direct.value);
   assert.match(knobTag(first.container).textContent ?? "", /Also via OpenRouter/u);
+  // The tag is aria-hidden, so each option's accessible name carries the other routes.
+  assert.ok(screen.getByRole("option", { name: /^GPT-4o, OpenAI, .*, Also via OpenRouter$/u }));
+  assert.ok(screen.getByRole("option", { name: /^GPT-4o, OpenRouter, .*, Also via OpenAI$/u }));
+  assert.doesNotMatch(
+    screen.getByRole("option", { name: /^Solo Model,/u }).getAttribute("aria-label") ?? "",
+    /Also via/u,
+  );
   first.unmount();
   const second = renderPreview(routed.value);
   assert.match(knobTag(second.container).textContent ?? "", /Also via OpenAI/u);

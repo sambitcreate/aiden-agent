@@ -49,7 +49,7 @@ const placements: ModelPadPlacements = {
 };
 
 function installServer() {
-  const current = {
+  let current = {
     modelPadPlacements: placements,
     pinnedModels: [],
   } as AppSettings;
@@ -58,7 +58,10 @@ function installServer() {
     "models:info": () => ({}),
     "modelInsights:status": () => ({ connected: false }),
     "settings:get": () => structuredClone(current),
-    "settings:set": () => structuredClone(current),
+    "settings:set": (patch: unknown) => {
+      current = { ...current, ...(patch as Partial<AppSettings>) };
+      return structuredClone(current);
+    },
   });
 }
 
@@ -102,6 +105,34 @@ test("marker labels name the other providers that serve the same model", async (
   // A sibling that is visible but not placed still counts as another route.
   assert.match(label("test::unplaced"), /Also via Relay Hub/u);
   assert.doesNotMatch(label("test::solo"), /Also via/u);
+  // The label is aria-hidden; the marker's accessible name carries the other routes.
+  assert.match(
+    marker(pad, "test::gpt-4o").getAttribute("aria-label") ?? "",
+    /, Also via Relay Hub\. Drag to another dot/u,
+  );
+  assert.doesNotMatch(
+    marker(pad, "test::solo").getAttribute("aria-label") ?? "",
+    /Also via/u,
+  );
+});
+
+test("a hovered marker removed from the Pad stops highlighting its siblings", async () => {
+  const pad = await mountEditor();
+  fireEvent.pointerEnter(marker(pad, "relay::openai/gpt-4o"));
+  await waitFor(() => assert.deepEqual(linkedValues(pad), ["test::gpt-4o"]));
+
+  // Removed while the pointer still rests on it, so no pointer leave arrives.
+  fireEvent.click(screen.getByRole("button", { name: "Browse models" }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: /^Remove .* from Relay Hub from Pad$/u,
+    }),
+  );
+  // assert.ok, not assert.equal: a failing message would try to print the element.
+  await waitFor(() =>
+    assert.ok(!pad.querySelector('[data-value="relay::openai/gpt-4o"]')),
+  );
+  assert.deepEqual(linkedValues(pad), []);
 });
 
 test("focusing or hovering a marker links its placed siblings and nothing else", async () => {

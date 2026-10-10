@@ -254,19 +254,31 @@ export function visibleModelEntries(
 }
 
 /**
- * The model behind an entry, independent of the provider that serves it: the catalog's
- * canonical id when known, otherwise the id's last path segment (date stamp kept).
- * Display-only: it links duplicate routes visually and never changes routing.
+ * The model behind an entry, independent of the provider that serves it: the last path
+ * segment (date stamp kept) of the catalog's canonical id when known, else of the model
+ * id, lowercased. Display-only: it links duplicate routes visually and never changes routing.
  */
 export function modelIdentityKey(entry: Pick<ModelEntry, "model" | "info">): string {
-  const canonical = entry.info?.canonicalModelId?.trim();
-  if (canonical) return canonical.toLowerCase();
-  return entry.model.slice(entry.model.lastIndexOf("/") + 1).toLowerCase();
+  const id = canonicalModelId(entry) ?? entry.model;
+  return id.slice(id.lastIndexOf("/") + 1).toLowerCase();
+}
+
+function canonicalModelId(entry: Pick<ModelEntry, "info">): string | undefined {
+  return entry.info?.canonicalModelId?.trim().toLowerCase() || undefined;
+}
+
+/** Same identity, from different providers, and never two different canonical ids. */
+function isSiblingRoute(entry: ModelEntry, other: ModelEntry): boolean {
+  if (other.value === entry.value || other.providerId === entry.providerId) return false;
+  const a = canonicalModelId(entry);
+  const b = canonicalModelId(other);
+  return !(a && b && a !== b);
 }
 
 /**
- * Other routes to the same model, keyed by entry value. Pass visible entries only;
- * an entry never links to itself, and entries without a sibling are absent.
+ * Other providers' routes to the same model, keyed by entry value. Pass visible entries
+ * only; an entry never links to itself or to another model of its own provider, and
+ * entries without a sibling are absent.
  */
 export function modelSiblings(entries: readonly ModelEntry[]): Map<string, ModelEntry[]> {
   const groups = new Map<string, ModelEntry[]>();
@@ -280,10 +292,8 @@ export function modelSiblings(entries: readonly ModelEntry[]): Map<string, Model
   for (const group of groups.values()) {
     if (group.length < 2) continue;
     for (const entry of group) {
-      siblings.set(
-        entry.value,
-        group.filter((other) => other.value !== entry.value),
-      );
+      const others = group.filter((other) => isSiblingRoute(entry, other));
+      if (others.length > 0) siblings.set(entry.value, others);
     }
   }
   return siblings;

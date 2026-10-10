@@ -63,7 +63,8 @@ interface KnobTagMeasurements {
 
 /**
  * The previewed model's name beside the knob. Visual only: the listbox announces the
- * active option through `aria-activedescendant`, so the tag stays `aria-hidden`.
+ * active option through `aria-activedescendant`, and that option's name already carries
+ * the provider and any "Also via" routes, so the tag stays `aria-hidden`.
  * It is laid out from the measured Pad and tag so it never leaves the clipped square,
  * and stays hidden until it has been measured.
  */
@@ -424,13 +425,14 @@ export function ModelPickerPad({
         {models.map((model) => {
           const isSelected = model.value === selectedValue;
           const isPreview = model.value === active?.value;
+          const alsoVia = alsoViaLabel(siblingsByValue?.get(model.value));
           return (
             <span
               key={model.value}
               id={modelOptionId(model.value)}
               role="option"
               aria-selected={isSelected}
-              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[model.placementKind]}`}
+              aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${MODEL_PAD_PLACEMENT_KIND_LABELS[model.placementKind]}${alsoVia ? `, ${alsoVia}` : ""}`}
               data-placement-source={model.placementKind}
               data-state={isSelected ? "selected" : isPreview ? "preview" : "resting"}
               className="model-pad-model absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
