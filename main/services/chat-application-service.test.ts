@@ -180,6 +180,8 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   const events: string[] = [];
   const application = fixture({
     toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
+    // Queued snapshots of the chat's visuals stop before anything is removed.
+    visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
     subagentRunStore: {
       deleteChat: async () => { events.push("tombstone"); },
       completeChatDeletion: async () => { events.push("complete"); },
@@ -208,7 +210,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {

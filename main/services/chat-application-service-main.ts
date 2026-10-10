@@ -15,6 +15,7 @@ import { forgetChatContextProfile } from "./context-pressure.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
+import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -28,6 +29,7 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   chatPullRequestStore,
+  visualSnapshots: { cancelChat: cancelVisualSnapshots },
   memoryStore,
   releaseChatContext: forgetChatContextProfile,
   attachments: remoteAttachmentStore,

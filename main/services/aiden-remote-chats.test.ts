@@ -1767,6 +1767,12 @@ test("a remote turn draws visuals by the Mac's Appearance setting and knows they
   const automatic = fixture(chat(), { inlineVisuals: async () => "automatic" });
   await automatic.service.startTurn("device-1", "chat-1", "visuals-turn-002", { text: "chart this" });
   assert.equal(automatic.lastParams()?.inlineVisuals, "automatic");
+
+  // An unreadable setting never costs the phone its turn; it gets the default.
+  const unreadable = fixture(chat(), { inlineVisuals: async () => { throw new Error("settings unreadable"); } });
+  await unreadable.service.startTurn("device-1", "chat-1", "visuals-turn-003", { text: "chart this" });
+  assert.equal(unreadable.starts(), 1);
+  assert.equal(unreadable.lastParams()?.inlineVisuals, undefined);
 });
 
 test("question tool is exposed only to devices granted the question capability", async () => {

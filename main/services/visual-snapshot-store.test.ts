@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { createChatStore } from "./chat-store-core.js";
+import { projectAidenRemoteChat } from "./aiden-remote-chats.js";
 import { VISUAL_SNAPSHOT_ID_PREFIX } from "../../renderer/shared/visual-snapshots.js";
 import { displayedAssistantImageUsage } from "./display-image-extension.js";
 import type { Attachment } from "./types.js";
@@ -86,4 +87,10 @@ test("copies keep each snapshot pointing at the copied visual", async (t) => {
     { visualId: copiedMedia, attachmentId: snapshotId("b") },
   ]);
   assert.deepEqual(copied?.attachments?.map((attachment) => attachment.id).sort(), [snapshotId("a"), snapshotId("b")]);
+  // Phones reading the copy still get each visual with its own snapshot.
+  const projected = projectAidenRemoteChat(clone).messages[1]?.visuals;
+  assert.deepEqual(projected?.map((visual) => [visual.id, visual.snapshotAttachmentId]), [
+    [copiedMedia, snapshotId("b")],
+    ["ui-1", snapshotId("a")],
+  ]);
 });

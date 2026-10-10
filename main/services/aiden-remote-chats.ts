@@ -2047,7 +2047,8 @@ export class AidenRemoteChatService {
               400,
             );
           }
-          const inlineVisuals = await this.options.inlineVisuals?.();
+          // An unreadable setting falls back to the default rather than failing the turn.
+          const inlineVisuals = await this.options.inlineVisuals?.().catch(() => undefined);
           const turnId = `turn_${randomUUID()}`;
           const streamId = `stream_${randomUUID()}`;
           const owner = this.options.streams.create(deviceId, streamId, chatId, turnId);
