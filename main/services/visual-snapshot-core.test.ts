@@ -34,30 +34,47 @@ function image(id: string, overrides: Partial<Attachment> = {}): Attachment {
   return { id, name: `${id}.png`, mimeType: "image/png", kind: "image", size: PNG.length, data: PNG.toString("base64"), ...overrides };
 }
 
-test("a snapshot draws only the message images its visual mentions, in message order", () => {
-  const snapshotId = visualSnapshotAttachmentId("chat-1", "m-1", "ui-1");
+const MESSAGE_IMAGES: Attachment[] = [
+  image("photo-1"),
+  image("photo-2"),
+  image("photo-4"),
+  { id: "notes", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 4, text: "text" },
+  image("vector", { mimeType: "image/svg+xml" }),
+  image("empty", { data: undefined }),
+  image("huge", { size: MAX_ATTACHMENT_INLINE_BYTES + 1 }),
+  image(visualSnapshotAttachmentId("chat-1", "m-1", "ui-1")),
+];
+
+test("a literal image reference draws only that message image, in message order", () => {
   const visual = visualReferencing(
-    `<Visual><Data name="pic">"photo-4"</Data>` +
-      `<Image attachment="photo-1" alt="A" /><Image attachment={$pic} alt="B" />` +
+    `<Visual><Image attachment="photo-4" alt="A" /><Image attachment="photo-1" alt="B" />` +
       `<Image attachment="notes" alt="C" /><Image attachment="vector" alt="D" />` +
-      `<Image attachment="empty" alt="E" /><Image attachment="huge" alt="F" />` +
-      `<Image attachment="${snapshotId}" alt="G" /></Visual>`,
+      `<Image attachment="empty" alt="E" /><Image attachment="huge" alt="F" /></Visual>`,
   );
-  const attachments: Attachment[] = [
-    image("photo-1"),
-    image("photo-2"),
-    image("photo-4"),
-    { id: "notes", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 4, text: "text" },
-    image("vector", { mimeType: "image/svg+xml" }),
-    image("empty", { data: undefined }),
-    image("huge", { size: MAX_ATTACHMENT_INLINE_BYTES + 1 }),
-    image(snapshotId),
-  ];
   assert.deepEqual(
-    visualSnapshotImages(visual, attachments).map((attachment) => attachment.id),
+    visualSnapshotImages(visual, MESSAGE_IMAGES).map((attachment) => attachment.id),
     ["photo-1", "photo-4"],
   );
   assert.deepEqual(visualSnapshotImages(visual, undefined), []);
+});
+
+test("a snapshot never includes snapshot pictures, even when the visual names one", () => {
+  const snapshotId = visualSnapshotAttachmentId("chat-1", "m-1", "ui-1");
+  const visual = visualReferencing(`<Visual><Image attachment="${snapshotId}" alt="G" /></Visual>`);
+  assert.deepEqual(visualSnapshotImages(visual, MESSAGE_IMAGES), []);
+});
+
+test("a computed image reference draws every eligible message image, since its id is only known on the desktop", () => {
+  // Concatenation and an Each-scoped id both need evaluation, so the capture carries every eligible image.
+  const visual = visualReferencing(
+    `<Visual><Data name="ids">["photo-4"]</Data>` +
+      `<Image attachment={"photo-" + 1} alt="A" />` +
+      `<Each in={$ids}><Image attachment={$item} alt="B" /></Each></Visual>`,
+  );
+  assert.deepEqual(
+    visualSnapshotImages(visual, MESSAGE_IMAGES).map((attachment) => attachment.id),
+    ["photo-1", "photo-2", "photo-4"],
+  );
 });
 
 function job(chatId: string, visualIds: string[]): VisualSnapshotJob {

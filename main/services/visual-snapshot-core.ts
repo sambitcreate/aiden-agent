@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-contract.js";
 import { VISUAL_SNAPSHOT_ID_PREFIX, withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import type { Attachment } from "./types.js";
@@ -24,44 +24,43 @@ export type SnapshotVisual =
 
 const SNAPSHOT_IMAGE_MIME_TYPE = /^image\/(png|jpeg|gif|webp)$/u;
 
-function parseDataJson(dataJson: string | undefined): unknown {
-  if (!dataJson) return undefined;
-  try {
-    return JSON.parse(dataJson) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Every string value in a visual's tree, data, and state: an `<Image>` id can only come from one of them. */
-function mentionedStrings(visual: ChatUiVisualV1): Set<string> {
-  const found = new Set<string>();
-  const pending: unknown[] = [visual.tree, visual.state, parseDataJson(visual.dataJson)];
+/**
+ * The attachment ids a visual's `<Image>` nodes name literally. Returns `null`
+ * when any `<Image>` takes its id from an expression (concatenation, data, or an
+ * `<Each>` local): only the desktop's own evaluation can resolve those.
+ */
+function literalImageReferences(tree: AidenUiNodeV1): Set<string> | null {
+  const ids = new Set<string>();
+  const pending: AidenUiNodeV1[] = [tree];
   while (pending.length > 0) {
-    const value = pending.pop();
-    if (typeof value === "string") found.add(value);
-    else if (Array.isArray(value)) {
-      for (const item of value) pending.push(item);
-    } else if (value && typeof value === "object") {
-      for (const item of Object.values(value)) pending.push(item);
+    const node = pending.pop()!;
+    if (node.t === "Image") {
+      const value = node.p?.attachment;
+      if (value !== undefined) {
+        if (!("op" in value) || value.op !== "lit" || typeof value.v !== "string") return null;
+        ids.add(value.v);
+      }
     }
+    for (const child of node.c ?? []) pending.push(child);
   }
-  return found;
+  return ids;
 }
 
 /**
- * The message images a native visual can show, in message order: the image
- * attachments whose ids the visual mentions, within the message's inline
- * attachment limit. Snapshot pictures are never included, so a capture carries
- * exactly the images the desktop draws for this visual.
+ * The message images a native visual can show, in message order: image
+ * attachments within the message's inline attachment limit that the visual can
+ * reference. A visual whose `<Image>` ids are all literals gets exactly those
+ * images; a visual with any computed id gets every eligible image, so the
+ * capture resolves the same ids the desktop does. Snapshot pictures and
+ * non-raster or data-less attachments are never included.
  */
 export function visualSnapshotImages(visual: ChatUiVisualV1, attachments: readonly Attachment[] | undefined): Attachment[] {
-  const mentioned = mentionedStrings(visual);
+  const referenced = literalImageReferences(visual.tree);
   const images: Attachment[] = [];
   let bytes = 0;
   for (const attachment of withoutVisualSnapshots(attachments ?? [])) {
     if (attachment.kind !== "image" || !attachment.data || !SNAPSHOT_IMAGE_MIME_TYPE.test(attachment.mimeType)) continue;
-    if (!mentioned.has(attachment.id)) continue;
+    if (referenced && !referenced.has(attachment.id)) continue;
     if (bytes + attachment.size > MAX_ATTACHMENT_INLINE_BYTES) continue;
     bytes += attachment.size;
     images.push(attachment);

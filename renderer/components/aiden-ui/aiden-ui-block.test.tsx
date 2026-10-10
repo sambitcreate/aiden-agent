@@ -5,6 +5,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { compileAum } from "../../shared/aiden-ui/compile";
 import type { ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import type { Attachment } from "../../../main/services/types";
+import { visualSnapshotImages } from "../../../main/services/visual-snapshot-core";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui-block";
 import { setChartModuleLoader } from "./chart";
 
@@ -226,6 +228,31 @@ test("an attachment-backed Image draws its picture when given the attachment, an
   view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", data: "iVBORw0KGgo=" }]} />);
   const picture = screen.getByRole("img", { name: "Original chart" });
   assert.equal(picture.getAttribute("src"), "data:image/png;base64,iVBORw0KGgo=");
+});
+
+test("a computed Image reference draws its picture from the snapshot's image set", () => {
+  const compiled = compileAum(`<Visual><Image attachment={"photo-" + 1} alt="Original chart" /></Visual>`);
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.tree);
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-computed-image",
+    title: "Computed picture",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    fallbackText: compiled.fallbackText,
+  };
+  const messageImages: Attachment[] = [
+    { id: "photo-1", name: "photo-1.png", mimeType: "image/png", kind: "image", size: 4, data: "iVBORw0KGgo=" },
+    { id: "photo-2", name: "photo-2.png", mimeType: "image/png", kind: "image", size: 4, data: "AAAA" },
+  ];
+  // The capture renders with exactly the images the snapshot helper selects.
+  const snapshotImages = visualSnapshotImages(visual, messageImages);
+  const view = render(<AidenUiBlock visual={visual} attachments={snapshotImages} />);
+  const picture = screen.getByRole("img", { name: "Original chart" });
+  assert.equal(picture.getAttribute("src"), "data:image/png;base64,iVBORw0KGgo=");
+  view.unmount();
 });
 
 test("visual Markdown never loads a remote image or navigates a link directly", async () => {
