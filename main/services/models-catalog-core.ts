@@ -264,19 +264,60 @@ export function catalogProviderSlug(providerId: string): string | undefined {
 
 function normalizeId(id: string): string {
   const slash = id.lastIndexOf("/");
-  return (slash >= 0 ? id.slice(slash + 1) : id).toLocaleLowerCase();
+  return (slash >= 0 ? id.slice(slash + 1) : id).toLowerCase();
 }
 
-function entries(provider: RawProvider | undefined): Array<[string, RawModel]> {
-  return provider?.models ? Object.entries(provider.models) : [];
+interface ModelIdIndex {
+  /** Lowercased full id -> first row with that id in iteration order. */
+  exact: Map<string, RawModel>;
+  /** Lowercased id leaf (after the last slash) -> first row with that leaf. */
+  leaf: Map<string, RawModel>;
+}
+
+function emptyIndex(): ModelIdIndex {
+  return { exact: new Map(), leaf: new Map() };
+}
+
+/** First occurrence wins, matching the linear scans these maps replace. */
+function addToIndex(index: ModelIdIndex, key: string, model: RawModel): void {
+  const exact = key.toLowerCase();
+  if (!index.exact.has(exact)) index.exact.set(exact, model);
+  const leaf = normalizeId(key);
+  if (!index.leaf.has(leaf)) index.leaf.set(leaf, model);
+}
+
+// Catalog snapshots are parsed once and never mutated, so each object is indexed once.
+const providerIndexes = new WeakMap<RawProvider, ModelIdIndex>();
+const catalogIndexes = new WeakMap<ModelCatalog, ModelIdIndex>();
+
+function providerIndex(provider: RawProvider): ModelIdIndex {
+  let index = providerIndexes.get(provider);
+  if (!index) {
+    index = emptyIndex();
+    for (const [key, model] of Object.entries(provider.models ?? {})) addToIndex(index, key, model);
+    providerIndexes.set(provider, index);
+  }
+  return index;
+}
+
+function catalogIndex(catalog: ModelCatalog): ModelIdIndex {
+  let index = catalogIndexes.get(catalog);
+  if (!index) {
+    index = emptyIndex();
+    for (const provider of Object.values(catalog)) {
+      for (const [key, model] of Object.entries(provider.models ?? {})) {
+        addToIndex(index, key, model);
+      }
+    }
+    catalogIndexes.set(catalog, index);
+  }
+  return index;
 }
 
 function findRawInProvider(provider: RawProvider | undefined, modelId: string): RawModel | null {
-  const exact = modelId.toLocaleLowerCase();
-  const normalized = normalizeId(modelId);
-  const exactMatch = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
-  if (exactMatch) return exactMatch[1];
-  return entries(provider).find(([key]) => normalizeId(key) === normalized)?.[1] ?? null;
+  if (!provider) return null;
+  const index = providerIndex(provider);
+  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(normalizeId(modelId)) ?? null;
 }
 
 function findRawForProvider(
@@ -291,24 +332,10 @@ function findRawForProvider(
 
 /** Exact matches across the catalog must win before any lossy normalized match. */
 function findRaw(catalog: ModelCatalog, providerId: string, modelId: string): RawModel | null {
-  const exact = modelId.toLocaleLowerCase();
-  const normalized = normalizeId(modelId);
-  const preferred = catalog[catalogProviderSlug(providerId) ?? ""];
-
-  const preferredExact = entries(preferred).find(([key]) => key.toLocaleLowerCase() === exact);
-  if (preferredExact) return preferredExact[1];
-  const preferredNormalized = entries(preferred).find(([key]) => normalizeId(key) === normalized);
-  if (preferredNormalized) return preferredNormalized[1];
-
-  for (const provider of Object.values(catalog)) {
-    const hit = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
-    if (hit) return hit[1];
-  }
-  for (const provider of Object.values(catalog)) {
-    const hit = entries(provider).find(([key]) => normalizeId(key) === normalized);
-    if (hit) return hit[1];
-  }
-  return null;
+  const preferred = findRawInProvider(catalog[catalogProviderSlug(providerId) ?? ""], modelId);
+  if (preferred) return preferred;
+  const index = catalogIndex(catalog);
+  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(normalizeId(modelId)) ?? null;
 }
 
 function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: string): ModelInfo {

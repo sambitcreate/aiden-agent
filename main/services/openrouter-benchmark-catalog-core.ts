@@ -264,14 +264,14 @@ function splitPermaslug(value: string): { author: string; modelId: string } | nu
   const slash = value.indexOf("/");
   if (slash <= 0 || slash === value.length - 1) return null;
   return {
-    author: value.slice(0, slash).toLocaleLowerCase(),
-    modelId: value.slice(slash + 1).toLocaleLowerCase(),
+    author: value.slice(0, slash).toLowerCase(),
+    modelId: value.slice(slash + 1).toLowerCase(),
   };
 }
 
 function modelIdLeaf(value: string): string {
   const slash = value.lastIndexOf("/");
-  return (slash >= 0 ? value.slice(slash + 1) : value).toLocaleLowerCase();
+  return (slash >= 0 ? value.slice(slash + 1) : value).toLowerCase();
 }
 
 function withoutBenchmarkReleaseStamp(value: string): string {
@@ -289,12 +289,60 @@ function normalizedCatalogName(value: string): string {
     .replace(/[^a-z0-9]+/gu, "");
 }
 
+interface IndexedBenchmark {
+  model: OpenRouterBenchmarkModel;
+  /** Position in `cache.models`, so multi-key lookups keep source order. */
+  position: number;
+  /** Lowercased permaslug author, or null when the permaslug has no author/model split. */
+  author: string | null;
+}
+
+interface BenchmarkIndex {
+  byPermaslug: Map<string, IndexedBenchmark[]>;
+  byName: Map<string, IndexedBenchmark[]>;
+  byStampedLeaf: Map<string, IndexedBenchmark[]>;
+}
+
+function pushIndexed(map: Map<string, IndexedBenchmark[]>, key: string, entry: IndexedBenchmark) {
+  const list = map.get(key);
+  if (list) list.push(entry);
+  else map.set(key, [entry]);
+}
+
+// Parsed caches are replaced, never mutated, so each object is indexed once.
+const benchmarkIndexes = new WeakMap<OpenRouterBenchmarkCache, BenchmarkIndex>();
+
+function benchmarkIndex(cache: OpenRouterBenchmarkCache): BenchmarkIndex {
+  let index = benchmarkIndexes.get(cache);
+  if (index) return index;
+  index = { byPermaslug: new Map(), byName: new Map(), byStampedLeaf: new Map() };
+  cache.models.forEach((model, position) => {
+    const parsed = splitPermaslug(model.modelPermaslug);
+    const entry: IndexedBenchmark = { model, position, author: parsed?.author ?? null };
+    pushIndexed(index.byPermaslug, model.modelPermaslug.toLowerCase(), entry);
+    if (parsed === null) return;
+    pushIndexed(index.byName, normalizedCatalogName(model.displayName), entry);
+    pushIndexed(index.byStampedLeaf, withoutBenchmarkReleaseStamp(parsed.modelId), entry);
+  });
+  benchmarkIndexes.set(cache, index);
+  return index;
+}
+
+/** Exactly one eligible record across the candidate lists, or nothing. */
 function uniqueBenchmark(
-  models: readonly OpenRouterBenchmarkModel[],
-  predicate: (model: OpenRouterBenchmarkModel) => boolean,
+  candidates: ReadonlyArray<readonly IndexedBenchmark[] | undefined>,
+  author: string | undefined,
 ): OpenRouterBenchmarkModel | undefined {
-  const matches = models.filter(predicate);
-  return matches.length === 1 ? matches[0] : undefined;
+  const matches = new Set<IndexedBenchmark>();
+  for (const list of candidates) {
+    for (const entry of list ?? []) {
+      if (entry.author !== null && (author === undefined || entry.author === author)) {
+        matches.add(entry);
+      }
+    }
+  }
+  if (matches.size !== 1) return undefined;
+  return matches.values().next().value?.model;
 }
 
 /**
@@ -309,30 +357,24 @@ export function openRouterBenchmarkForModelsDevIdentity(
   cache: OpenRouterBenchmarkCache,
   identity: ModelsDevBenchmarkIdentity,
 ): ModelBenchmarkScores | undefined {
-  const author = identity.author?.toLocaleLowerCase();
-  const exactId = identity.modelId.toLocaleLowerCase();
+  const author = identity.author?.toLowerCase();
   const leaf = modelIdLeaf(identity.modelId);
-  const eligible = cache.models.filter((model) => {
-    const parsed = splitPermaslug(model.modelPermaslug);
-    return parsed !== null && (author === undefined || parsed.author === author);
-  });
+  const index = benchmarkIndex(cache);
 
-  const exact = uniqueBenchmark(eligible, (model) => {
-    const permaslug = model.modelPermaslug.toLocaleLowerCase();
-    return permaslug === exactId || (author !== undefined && permaslug === `${author}/${leaf}`);
-  });
+  const exact = uniqueBenchmark(
+    [
+      index.byPermaslug.get(identity.modelId.toLowerCase()),
+      author === undefined ? undefined : index.byPermaslug.get(`${author}/${leaf}`),
+    ],
+    author,
+  );
   if (exact) return benchmarkScores(cache, exact);
 
   const catalogName = normalizedCatalogName(identity.name);
-  const byName = catalogName
-    ? uniqueBenchmark(eligible, (model) => normalizedCatalogName(model.displayName) === catalogName)
-    : undefined;
+  const byName = catalogName ? uniqueBenchmark([index.byName.get(catalogName)], author) : undefined;
   if (byName) return benchmarkScores(cache, byName);
 
-  const byStampedId = uniqueBenchmark(eligible, (model) => {
-    const parsed = splitPermaslug(model.modelPermaslug);
-    return parsed !== null && withoutBenchmarkReleaseStamp(parsed.modelId) === leaf;
-  });
+  const byStampedId = uniqueBenchmark([index.byStampedLeaf.get(leaf)], author);
   return byStampedId ? benchmarkScores(cache, byStampedId) : undefined;
 }
 
@@ -345,16 +387,16 @@ export function openRouterBenchmarkForModel(
   const author = OPENROUTER_AUTHOR[providerId];
   const candidates = [
     ...(providerId === "openrouter" || modelId.includes("/") ? [modelId] : []),
-    ...(author && !modelId.toLocaleLowerCase().startsWith(`${author}/`)
+    ...(author && !modelId.toLowerCase().startsWith(`${author}/`)
       ? [`${author}/${modelId}`]
       : []),
   ];
-  if (candidates.length === 0) return undefined;
-  const model = cache.models.find((entry) =>
-    candidates.some(
-      (candidate) => entry.modelPermaslug.toLocaleLowerCase() === candidate.toLocaleLowerCase(),
-    ),
-  );
-  if (!model) return undefined;
-  return benchmarkScores(cache, model);
+  const index = benchmarkIndex(cache);
+  // The earliest record in source order wins, as the former linear scan did.
+  let first: IndexedBenchmark | undefined;
+  for (const candidate of candidates) {
+    const hit = index.byPermaslug.get(candidate.toLowerCase())?.[0];
+    if (hit && (first === undefined || hit.position < first.position)) first = hit;
+  }
+  return first ? benchmarkScores(cache, first.model) : undefined;
 }

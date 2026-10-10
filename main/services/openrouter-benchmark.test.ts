@@ -356,3 +356,120 @@ test("connect restores the previous dedicated key when cache publication fails",
   await assert.rejects(() => runtime.connect("replacement-pad-key"), /disk full/u);
   assert.equal(key, "previous-pad-key");
 });
+
+test("catalog reads keep the credential state in memory until a lifecycle action changes it", async () => {
+  let key: string | null = "pad-key";
+  let stored: OpenRouterBenchmarkCache | null = buildOpenRouterBenchmarkCache(responsePayload());
+  let credentialReads = 0;
+  let cacheReads = 0;
+  const fetched = buildOpenRouterBenchmarkCache(responsePayload(), "2026-06-07T00:00:00.000Z");
+  const runtime = new OpenRouterBenchmarkRuntime({
+    credentials: {
+      read: async () => {
+        credentialReads += 1;
+        return key;
+      },
+      write: async (next) => {
+        key = next;
+      },
+      deleteKey: async () => {
+        key = null;
+      },
+    },
+    cache: {
+      read: async () => {
+        cacheReads += 1;
+        return stored;
+      },
+      write: async (next) => {
+        stored = next;
+      },
+      clear: async () => {
+        stored = null;
+      },
+    },
+    fetchCatalog: async () => fetched,
+  });
+
+  const initial = stored;
+  for (let index = 0; index < 5; index += 1) {
+    assert.equal(await runtime.catalog(), initial);
+  }
+  assert.equal(credentialReads, 1);
+  assert.equal(cacheReads, 1);
+
+  await runtime.disconnect();
+  credentialReads = 0;
+  cacheReads = 0;
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await runtime.catalog(), null);
+  }
+  assert.equal(credentialReads, 1);
+  assert.equal(cacheReads, 0);
+
+  await runtime.connect("replacement-key");
+  credentialReads = 0;
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await runtime.catalog(), fetched);
+  }
+  assert.equal(credentialReads, 1);
+
+  await runtime.refresh();
+  credentialReads = 0;
+  cacheReads = 0;
+  assert.equal(await runtime.catalog(), fetched);
+  assert.equal(await runtime.catalog(), fetched);
+  assert.equal(credentialReads, 1);
+  assert.equal(cacheReads, 1);
+});
+
+test("catalog does not remember a credential read that failed", async () => {
+  let failing = true;
+  let credentialReads = 0;
+  const cache = buildOpenRouterBenchmarkCache(responsePayload());
+  const runtime = new OpenRouterBenchmarkRuntime({
+    credentials: {
+      read: async () => {
+        credentialReads += 1;
+        if (failing) throw new Error("keychain locked");
+        return "pad-key";
+      },
+      write: async () => undefined,
+      deleteKey: async () => undefined,
+    },
+    cache: { read: async () => cache, write: async () => undefined, clear: async () => undefined },
+    fetchCatalog: async () => cache,
+  });
+
+  await assert.rejects(() => runtime.catalog(), /keychain locked/u);
+  failing = false;
+  assert.equal(await runtime.catalog(), cache);
+  assert.equal(await runtime.catalog(), cache);
+  assert.equal(credentialReads, 2);
+});
+
+test("models.dev name fallback scopes ambiguity to the requested author", () => {
+  const cache = buildOpenRouterBenchmarkCache(
+    responsePayload([
+      {
+        source: "artificial-analysis",
+        model_permaslug: "alpha/shared-20260101",
+        display_name: "Shared Model (Reasoning)",
+        coding_index: 11,
+      },
+      {
+        source: "artificial-analysis",
+        model_permaslug: "beta/other-20260101",
+        display_name: "Shared Model",
+        coding_index: 22,
+      },
+    ]),
+  );
+  const coding = (identity: { author?: string; modelId: string; name: string }) =>
+    openRouterBenchmarkForModelsDevIdentity(cache, identity)?.coding;
+  const shared = { modelId: "unmatched-id", name: "Shared Model" };
+  assert.equal(coding({ ...shared, author: "beta" }), 22);
+  assert.equal(coding({ ...shared, author: "alpha" }), 11);
+  assert.equal(coding(shared), undefined);
+  assert.equal(coding({ author: "BETA", modelId: "Beta/OTHER-20260101", name: "x" }), 22);
+});

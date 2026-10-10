@@ -709,6 +709,57 @@ test("models.dev lookups retain unknown flags for unmatched model ids", () => {
   });
 });
 
+test("models.dev lookups prefer exact ids, then the mapped provider, then first occurrence", () => {
+  const catalog = parseModelCatalog({
+    alpha: {
+      models: {
+        "Shared-Model": { name: "Alpha shared" },
+        "vendor/leaf-x": { name: "Alpha leaf" },
+        "first/dup-leaf": { name: "Alpha first dup" },
+        "second/dup-leaf": { name: "Alpha second dup" },
+      },
+    },
+    openai: {
+      models: {
+        "a/solo": { name: "OpenAI solo leaf" },
+        solo: { name: "OpenAI solo exact" },
+        "other/leaf-x": { name: "OpenAI leaf" },
+      },
+    },
+    beta: {
+      models: {
+        "shared-model": { name: "Beta shared" },
+        "dup-leaf": { name: "Beta exact dup" },
+        "beta-only": { name: "Beta only", limit: { context: 64_000, output: 2_000 } },
+      },
+    },
+  });
+  const name = (providerId: string, modelId: string) =>
+    lookupCatalogModelInfo(catalog, providerId, modelId).name;
+
+  assert.equal(name("unknown", "shared-model"), "Alpha shared");
+  assert.equal(name("unknown", "SHARED-MODEL"), "Alpha shared");
+  assert.equal(name("unknown", "x/leaf-x"), "Alpha leaf");
+  assert.equal(name("unknown", "dup-leaf"), "Beta exact dup");
+  assert.equal(name("unknown", "z/DUP-LEAF"), "Alpha first dup");
+  assert.equal(name("unknown", "q/second/dup-leaf"), "Alpha first dup");
+  assert.equal(name("unknown", "SECOND/dup-leaf"), "Alpha second dup");
+  assert.equal(name("unknown", "beta-only"), "Beta only");
+  // The mapped provider's leaf match wins before another provider's exact id.
+  assert.equal(name("openai-codex", "vendor/leaf-x"), "OpenAI leaf");
+  // Inside one provider, an exact id wins over an earlier leaf collision.
+  assert.equal(name("openai", "solo"), "OpenAI solo exact");
+  assert.equal(name("openai", "shared-model"), "Alpha shared");
+  assert.equal(lookupCatalogModelInfo(catalog, "unknown", "missing").matched, false);
+
+  // Runtime limits stay scoped to the provider's own catalog entries.
+  assert.equal(resolveRuntimeLimits(catalog, "beta", "Beta-Only").contextWindow, 64_000);
+  assert.equal(
+    resolveRuntimeLimits(catalog, "alpha", "beta-only").contextWindow,
+    CONSERVATIVE_RUNTIME_LIMITS.contextWindow,
+  );
+});
+
 test("models.dev preserves authoritative non-chat families and descriptions", () => {
   const catalog = parseModelCatalog({
     local: {
