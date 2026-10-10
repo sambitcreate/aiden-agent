@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS } from "./catalog.js";
 import { compileAum } from "./compile.js";
+import { fallbackTextFor } from "./fallback-text.js";
 import { parseAum } from "./parse.js";
 import { AIDEN_UI_LIMITS, type AidenUiNodeV1 } from "./types.js";
 import { isWireSafeKey, parseChatUiVisualV1 } from "./visual.js";
@@ -171,4 +172,35 @@ test("reserved data names are refused with a diagnostic", () => {
 test("parser recovery diagnostics are bounded", () => {
   const { diagnostics } = parseAum(`<Visual ${"!".repeat(50_000)}></Visual>`);
   assert.ok(diagnostics.length <= 200);
+});
+
+/** Legal fan-out: 100 iterations × 20 checklists of 1,000 items each (still inside every limit). */
+const FAN_OUT_MARKUP = `<Visual><Data name="items">${JSON.stringify(
+  Array.from({ length: 1000 }, () => ({ label: "task", done: false })),
+)}</Data><Data name="repeat">${JSON.stringify(Array.from({ length: 100 }, () => 0))}</Data><Each in={$repeat}>${"<Checklist items={$items} />".repeat(20)}</Each></Visual>`;
+
+test("a fan-out visual compiles to a capped fallback", () => {
+  const compiled = compileAum(FAN_OUT_MARKUP);
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.fallbackText.length <= AIDEN_UI_LIMITS.fallbackChars);
+  assert.ok(compiled.fallbackText.endsWith("…"));
+  assert.ok(compiled.fallbackText.startsWith("- [ ] task\n- [ ] task"));
+});
+
+test("the fallback stops expanding once it is full, so the work tracks the cap, not the expansion", () => {
+  const compiled = compileAum(FAN_OUT_MARKUP);
+  assert.ok(compiled.tree);
+  // Count every field read on an item: each read is one step of expansion.
+  let reads = 0;
+  const countedItem = () => {
+    const item = {};
+    Object.defineProperty(item, "label", { enumerable: true, get: () => ((reads += 1), "task") });
+    Object.defineProperty(item, "done", { enumerable: true, get: () => ((reads += 1), false) });
+    return item;
+  };
+  const items = Array.from({ length: 1000 }, countedItem);
+  const text = fallbackTextFor(compiled.tree, { vars: { items, repeat: Array.from({ length: 100 }, () => 0) } });
+  assert.equal(text, compiled.fallbackText);
+  // Each item adds at least a few characters, so reads stay within a small multiple of the cap.
+  assert.ok(reads <= 2 * AIDEN_UI_LIMITS.fallbackChars, `read ${reads} item fields`);
 });

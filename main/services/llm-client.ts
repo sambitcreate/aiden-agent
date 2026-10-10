@@ -398,6 +398,7 @@ import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
+import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
@@ -2477,6 +2478,8 @@ export const llmClient = {
                 visualId: visual.id,
                 title: visual.title,
                 visual,
+                // The same images the saved message draws beside this visual.
+                attachments: visualSnapshotImages(visual, assistantAttachments),
                 ...(visual.layout === "wide" ? { layout: "wide" as const } : {}),
               })),
             ],

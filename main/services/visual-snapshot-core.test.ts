@@ -4,11 +4,61 @@ import {
   createVisualSnapshotQueue,
   snapshotAttachment,
   visualSnapshotAttachmentId,
+  visualSnapshotImages,
   type VisualSnapshotJob,
 } from "./visual-snapshot-core.js";
 import { isVisualSnapshotAttachmentId } from "../../renderer/shared/visual-snapshots.js";
+import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-contract.js";
+import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { Attachment } from "./types.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+
+function visualReferencing(markup: string): ChatUiVisualV1 {
+  const compiled = compileAum(markup);
+  assert.ok(compiled.tree);
+  return {
+    version: 1,
+    kind: "ui",
+    id: "ui-1",
+    title: "Chart",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    ...(compiled.dataJson ? { dataJson: compiled.dataJson } : {}),
+    fallbackText: compiled.fallbackText,
+  };
+}
+
+function image(id: string, overrides: Partial<Attachment> = {}): Attachment {
+  return { id, name: `${id}.png`, mimeType: "image/png", kind: "image", size: PNG.length, data: PNG.toString("base64"), ...overrides };
+}
+
+test("a snapshot draws only the message images its visual mentions, in message order", () => {
+  const snapshotId = visualSnapshotAttachmentId("chat-1", "m-1", "ui-1");
+  const visual = visualReferencing(
+    `<Visual><Data name="pic">"photo-4"</Data>` +
+      `<Image attachment="photo-1" alt="A" /><Image attachment={$pic} alt="B" />` +
+      `<Image attachment="notes" alt="C" /><Image attachment="vector" alt="D" />` +
+      `<Image attachment="empty" alt="E" /><Image attachment="huge" alt="F" />` +
+      `<Image attachment="${snapshotId}" alt="G" /></Visual>`,
+  );
+  const attachments: Attachment[] = [
+    image("photo-1"),
+    image("photo-2"),
+    image("photo-4"),
+    { id: "notes", name: "notes.txt", mimeType: "text/plain", kind: "text", size: 4, text: "text" },
+    image("vector", { mimeType: "image/svg+xml" }),
+    image("empty", { data: undefined }),
+    image("huge", { size: MAX_ATTACHMENT_INLINE_BYTES + 1 }),
+    image(snapshotId),
+  ];
+  assert.deepEqual(
+    visualSnapshotImages(visual, attachments).map((attachment) => attachment.id),
+    ["photo-1", "photo-4"],
+  );
+  assert.deepEqual(visualSnapshotImages(visual, undefined), []);
+});
 
 function job(chatId: string, visualIds: string[]): VisualSnapshotJob {
   return { chatId, messageId: "m-1", visuals: visualIds.map((visualId) => ({ kind: "html", visualId, title: visualId })) };

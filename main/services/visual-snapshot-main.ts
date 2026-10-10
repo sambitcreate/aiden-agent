@@ -178,8 +178,13 @@ export function createElectronVisualSnapshotCapture(deps: {
       await sleep(50, signal);
     }
     if (signal.aborted) return null;
+    // Only the images this visual shows travel to the page: id, type, and data.
+    const payload = {
+      visual: visual.visual,
+      attachments: (visual.attachments ?? []).map(({ id, mimeType, data }) => ({ id, mimeType, data })),
+    };
     const height = (await target.webContents.executeJavaScript(
-      `window.__aidenSnapshot(${JSON.stringify(JSON.stringify(visual.visual))}, ${width}, ${PADDING})`,
+      `window.__aidenSnapshot(${JSON.stringify(JSON.stringify(payload))}, ${width}, ${PADDING})`,
     )) as number | null;
     if (!height || signal.aborted) return null;
     return captureSized(target, width, height, signal);

@@ -13,7 +13,7 @@ import type { AidenUiIconName } from "../../shared/aiden-ui/catalog";
 import type { AidenUiNodeV1 } from "../../shared/aiden-ui/types";
 import { cn } from "../../lib/ui-utils";
 import { CodeBlock } from "../code-block";
-import { Markdown, MarkdownInline } from "../markdown";
+import { Markdown, MarkdownInline, type RestrictedMarkdown } from "../markdown";
 import {
   Badge,
   type BadgeColor,
@@ -209,7 +209,17 @@ const Heading: CatalogComponent = ({ node, ctx }) => {
   return <Tag className={cn("m-0 min-w-0 font-semibold text-primary", size)}>{ctx.renderChildren(node.c)}</Tag>;
 };
 
-const MarkdownBlock: CatalogComponent = ({ node }) => <Markdown content={textContent(node.c)} />;
+/** Visual Markdown never loads remote images; its links open through the visual's own confirmed, https-only action. */
+function visualMarkdown(ctx: AidenUiRenderContext): RestrictedMarkdown {
+  return {
+    openLink: (href) => ctx.runAction({ act: "open", url: { op: "lit", v: href } }, ctx.scope),
+    inert: ctx.draft,
+  };
+}
+
+const MarkdownBlock: CatalogComponent = ({ node, ctx }) => (
+  <Markdown content={textContent(node.c)} restricted={visualMarkdown(ctx)} />
+);
 
 const CodeComponent: CatalogComponent = ({ node, ctx }) => (
   <CodeBlock code={textContent(node.c)} lang={asString(read(node, ctx, "lang")) || undefined} />
@@ -218,7 +228,12 @@ const CodeComponent: CatalogComponent = ({ node, ctx }) => (
 const MathComponent: CatalogComponent = ({ node, ctx }) => {
   const tex = textContent(node.c).trim();
   if (!tex) return null;
-  return read(node, ctx, "display") === true ? <Markdown content={`$$\n${tex}\n$$`} /> : <MarkdownInline content={`$${tex}$`} />;
+  const restricted = visualMarkdown(ctx);
+  return read(node, ctx, "display") === true ? (
+    <Markdown content={`$$\n${tex}\n$$`} restricted={restricted} />
+  ) : (
+    <MarkdownInline content={`$${tex}$`} restricted={restricted} />
+  );
 };
 
 const KbdComponent: CatalogComponent = ({ node, ctx }) => <Kbd>{ctx.renderChildren(node.c)}</Kbd>;

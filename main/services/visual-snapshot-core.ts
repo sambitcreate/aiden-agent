@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
-import { VISUAL_SNAPSHOT_ID_PREFIX } from "../../renderer/shared/visual-snapshots.js";
+import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-contract.js";
+import { VISUAL_SNAPSHOT_ID_PREFIX, withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import type { Attachment } from "./types.js";
 
 /**
@@ -11,7 +12,62 @@ import type { Attachment } from "./types.js";
 
 export type SnapshotVisual =
   | { kind: "html"; visualId: string; title: string; layout?: "wide" }
-  | { kind: "ui"; visualId: string; title: string; layout?: "wide"; visual: ChatUiVisualV1 };
+  | {
+      kind: "ui";
+      visualId: string;
+      title: string;
+      layout?: "wide";
+      visual: ChatUiVisualV1;
+      /** The message images this visual shows (see `visualSnapshotImages`). */
+      attachments?: readonly Attachment[];
+    };
+
+const SNAPSHOT_IMAGE_MIME_TYPE = /^image\/(png|jpeg|gif|webp)$/u;
+
+function parseDataJson(dataJson: string | undefined): unknown {
+  if (!dataJson) return undefined;
+  try {
+    return JSON.parse(dataJson) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every string value in a visual's tree, data, and state: an `<Image>` id can only come from one of them. */
+function mentionedStrings(visual: ChatUiVisualV1): Set<string> {
+  const found = new Set<string>();
+  const pending: unknown[] = [visual.tree, visual.state, parseDataJson(visual.dataJson)];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") found.add(value);
+    else if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+    } else if (value && typeof value === "object") {
+      for (const item of Object.values(value)) pending.push(item);
+    }
+  }
+  return found;
+}
+
+/**
+ * The message images a native visual can show, in message order: the image
+ * attachments whose ids the visual mentions, within the message's inline
+ * attachment limit. Snapshot pictures are never included, so a capture carries
+ * exactly the images the desktop draws for this visual.
+ */
+export function visualSnapshotImages(visual: ChatUiVisualV1, attachments: readonly Attachment[] | undefined): Attachment[] {
+  const mentioned = mentionedStrings(visual);
+  const images: Attachment[] = [];
+  let bytes = 0;
+  for (const attachment of withoutVisualSnapshots(attachments ?? [])) {
+    if (attachment.kind !== "image" || !attachment.data || !SNAPSHOT_IMAGE_MIME_TYPE.test(attachment.mimeType)) continue;
+    if (!mentioned.has(attachment.id)) continue;
+    if (bytes + attachment.size > MAX_ATTACHMENT_INLINE_BYTES) continue;
+    bytes += attachment.size;
+    images.push(attachment);
+  }
+  return images;
+}
 
 export interface VisualSnapshotJob {
   chatId: string;

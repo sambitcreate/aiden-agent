@@ -205,3 +205,65 @@ test("newer saved state re-seeds an untouched visual and merges into a touched o
   view.rerender(<AidenUiBlock visual={{ ...base, state: { plan: "solo", seats: 10, annual: false, note: "" } }} />);
   assert.equal(screen.getByRole("tab", { name: "Team" }).getAttribute("aria-selected"), "true");
 });
+
+test("an attachment-backed Image draws its picture when given the attachment, and alt text otherwise", () => {
+  const compiled = compileAum(`<Visual><Image attachment="photo-1" alt="Original chart" /></Visual>`);
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.tree);
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-image",
+    title: "Picture",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    fallbackText: compiled.fallbackText,
+  };
+  const view = render(<AidenUiBlock visual={visual} />);
+  assert.equal(view.container.querySelector("img") === null, true);
+  assert.ok(screen.getByText("Original chart"));
+
+  view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", data: "iVBORw0KGgo=" }]} />);
+  const picture = screen.getByRole("img", { name: "Original chart" });
+  assert.equal(picture.getAttribute("src"), "data:image/png;base64,iVBORw0KGgo=");
+});
+
+test("visual Markdown never loads a remote image or navigates a link directly", async () => {
+  const compiled = compileAum(
+    "<Visual><Markdown>![report](https://example.test/collect?data=private)\n\n[Open report](https://example.test/report) and [plain](http://example.test/plain)</Markdown></Visual>",
+  );
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.tree);
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-markdown-policy",
+    title: "Remote report",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    fallbackText: compiled.fallbackText,
+  };
+  const actions: AidenUiAction[] = [];
+  const view = render(<AidenUiBlock visual={visual} onAction={(action) => actions.push(action)} />);
+  const figure = screen.getByRole("figure", { name: "Remote report" });
+
+  // The remote image becomes its alt text: nothing is requested.
+  assert.equal(figure.querySelector("img") === null, true);
+  assert.ok(within(figure).getByText("report"));
+  // Links are never plain anchors; an https link asks first, a non-https one is text.
+  assert.equal(figure.querySelector("a[href]") === null, true);
+  assert.equal(screen.queryByRole("button", { name: "plain" }), null);
+  fireEvent.click(screen.getByText("plain"));
+  assert.equal(screen.queryByRole("dialog"), null);
+
+  fireEvent.click(screen.getByRole("button", { name: "Open report" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getByText("https://example.test/report"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  assert.deepEqual(actions, []);
+
+  // While the visual is still streaming, its link is visible but cannot act.
+  view.rerender(<AidenUiBlock visual={visual} draft />);
+  assert.equal((screen.getByRole("button", { name: "Open report" }) as HTMLButtonElement).disabled, true);
+});
