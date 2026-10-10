@@ -13,6 +13,8 @@ function capabilitySnapshot() {
       models: {
         "openai/example": {
           name: "Example",
+          canonical_model_id: "openai/example",
+          cost: { input: 1.25, output: 10, cache_read: 0.125, cache_write: 0 },
           limit: { context: 128_000, output: 16_000 },
         },
       },

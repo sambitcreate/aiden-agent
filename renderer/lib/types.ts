@@ -560,6 +560,14 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
@@ -588,6 +596,10 @@ export interface ModelInfo {
   releaseDate?: string;
   ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }

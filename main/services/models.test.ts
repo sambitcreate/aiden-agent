@@ -806,6 +806,74 @@ test("models.dev preserves authoritative non-chat families and descriptions", ()
   );
 });
 
+test("models.dev cost and canonical id are display-only metadata on the matched row", () => {
+  const catalog = parseModelCatalog({
+    openai: {
+      models: {
+        "gpt-priced": {
+          name: "GPT Priced",
+          canonical_model_id: "openai/gpt-priced",
+          cost: { input: 1.25, output: 10, cache_read: 0.125, cache_write: 0, reasoning: 10 },
+          limit: { context: 200_000, output: 32_000 },
+        },
+        "gpt-partial": {
+          name: "GPT Partial",
+          cost: { input: 0.5, output: -1, cache_read: Number.NaN, cache_write: "2" },
+          canonical_model_id: "",
+        },
+        "gpt-invalid": {
+          name: "GPT Invalid",
+          cost: { input: -3, output: "free", cache_read: null },
+          canonical_model_id: "x".repeat(257),
+        },
+        "gpt-scalar-cost": { name: "GPT Scalar", cost: 4, canonical_model_id: 7 },
+        "gpt-plain": { name: "GPT Plain" },
+      },
+    },
+  });
+  const info = (modelId: string) => lookupCatalogModelInfo(catalog, "openai", modelId);
+
+  assert.deepEqual(info("gpt-priced").cost, {
+    input: 1.25,
+    output: 10,
+    cacheRead: 0.125,
+    cacheWrite: 0,
+  });
+  assert.equal(info("gpt-priced").canonicalModelId, "openai/gpt-priced");
+
+  assert.deepEqual(info("gpt-partial").cost, { input: 0.5 });
+  assert.equal(info("gpt-partial").canonicalModelId, undefined);
+
+  for (const modelId of ["gpt-invalid", "gpt-scalar-cost", "gpt-plain", "missing"]) {
+    assert.ok(!("cost" in info(modelId)), `${modelId} has no cost`);
+    assert.ok(!("canonicalModelId" in info(modelId)), `${modelId} has no canonical id`);
+  }
+
+  // Artificial Analysis precedence keeps models.dev's display-only pricing.
+  const hosted = resolveModelInfo(
+    catalog,
+    snapshot([]),
+    { id: "openai", baseUrl: "https://api.openai.com/v1" },
+    "gpt-priced",
+  );
+  assert.equal(hosted.cost?.output, 10);
+  assert.equal(hosted.canonicalModelId, "openai/gpt-priced");
+
+  // Pricing never changes the runtime limits Pi receives.
+  assert.deepEqual(
+    resolveRuntimeLimits(catalog, "openai", "gpt-priced"),
+    resolveRuntimeLimits(
+      parseModelCatalog({
+        openai: {
+          models: { "gpt-priced": { name: "GPT Priced", limit: { context: 200_000, output: 32_000 } } },
+        },
+      }),
+      "openai",
+      "gpt-priced",
+    ),
+  );
+});
+
 test("runtime limits use provider-scoped bundled metadata with conservative partial fallbacks", () => {
   const catalog = parseModelCatalog({
     google: {

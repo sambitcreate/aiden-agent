@@ -5,7 +5,7 @@ import {
 } from "./artificial-analysis-catalog-core.js";
 import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
+import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 import {
   openRouterBenchmarkForModel,
   openRouterBenchmarkForModelsDevIdentity,
@@ -26,6 +26,9 @@ interface RawModel {
   last_updated?: string;
   modalities?: { input?: string[]; output?: string[] };
   limit?: { context?: number; output?: number };
+  /** Unvalidated by the catalog parser; normalized by `modelsDevCost`. */
+  cost?: unknown;
+  canonical_model_id?: unknown;
 }
 
 interface RawProvider {
@@ -338,6 +341,35 @@ function findRaw(catalog: ModelCatalog, providerId: string, modelId: string): Ra
   return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(normalizeId(modelId)) ?? null;
 }
 
+const MAX_MODELS_DEV_CANONICAL_ID_LENGTH = 256;
+
+const MODELS_DEV_COST_FIELDS = [
+  ["input", "input"],
+  ["output", "output"],
+  ["cache_read", "cacheRead"],
+  ["cache_write", "cacheWrite"],
+] as const;
+
+/** Keep only finite, non-negative USD-per-1M-token prices; omit the object when none remain. */
+function modelsDevCost(value: unknown): ModelCost | undefined {
+  const raw = rawRecord(value);
+  if (!raw) return undefined;
+  const cost: ModelCost = {};
+  for (const [source, target] of MODELS_DEV_COST_FIELDS) {
+    const price = raw[source];
+    if (typeof price === "number" && Number.isFinite(price) && price >= 0) cost[target] = price;
+  }
+  return Object.keys(cost).length > 0 ? cost : undefined;
+}
+
+function modelsDevCanonicalId(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_MODELS_DEV_CANONICAL_ID_LENGTH
+    ? value
+    : undefined;
+}
+
 function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: string): ModelInfo {
   const raw = findRaw(catalog, providerId, modelId);
   if (!raw) {
@@ -363,6 +395,9 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
       : /^reranking model\b/iu.test(description)
         ? "reranker"
         : mediaOutputType;
+  // Display-only pricing and identity; runtime limits never read these fields.
+  const cost = modelsDevCost(raw.cost);
+  const canonicalModelId = modelsDevCanonicalId(raw.canonical_model_id);
   return {
     id: modelId,
     name: raw.name,
@@ -381,6 +416,8 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     inputModalities: inputs.length ? inputs : undefined,
     knowledge: raw.knowledge,
     releaseDate: raw.release_date,
+    ...(cost ? { cost } : {}),
+    ...(canonicalModelId ? { canonicalModelId } : {}),
     metadataSource: "models-dev",
     matched: true,
   };

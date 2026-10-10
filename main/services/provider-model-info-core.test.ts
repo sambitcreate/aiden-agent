@@ -88,6 +88,21 @@ test("benchmark-only Codex enrichment preserves Pi metadata authority", () => {
   assert.equal(result.contextLength, pinned.contextLength);
 });
 
+test("Codex enrichment grafts models.dev cost and canonical id onto Pi metadata", () => {
+  const result = mergeCodexModelInfo("gpt-5.4", pinned, {
+    id: "gpt-5.4",
+    metadataSource: "models-dev",
+    matched: true,
+    contextLength: 1,
+    cost: { input: 1.25, output: 10 },
+    canonicalModelId: "openai/gpt-5.4",
+  });
+  assert.deepEqual(result.cost, { input: 1.25, output: 10 });
+  assert.equal(result.canonicalModelId, "openai/gpt-5.4");
+  assert.equal(result.metadataSource, "provider");
+  assert.equal(result.contextLength, pinned.contextLength);
+});
+
 test("keeps unknown Codex ids unavailable and enriches batches consistently", async () => {
   const { service } = fixture();
   const result = await service.infoMany(OPENAI_CODEX_PROVIDER_ID, ["gpt-5.4", "unknown"]);
