@@ -2988,6 +2988,9 @@ class AidenChatViewModel(
             if (instanceId.isNotEmpty()) {
                 chatCache.removeActiveStream(instanceId, chatId, ifStreamId = expectedStreamId)
             }
+            // The terminal transcript was published while the stream still owned
+            // the chat, so the snapshot refresh could not arm then; arm it now.
+            scheduleVisualSnapshotRefresh()
         }
     }
 

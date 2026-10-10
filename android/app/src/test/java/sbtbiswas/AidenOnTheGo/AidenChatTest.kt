@@ -149,6 +149,107 @@ class AidenChatTest {
     @Test
     fun snapshotThatNeverArrivesStopsRefetchingAfterThreeTries() = assertLateSnapshotRefresh(snapshotArrives = false)
 
+    @Test
+    fun snapshotStoredAfterAStreamedTurnSettlesAppearsWithoutUserAction() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-stream-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val wireJson = Json(json) { explicitNulls = false }
+        val initial = AidenChat(
+            id = "chat-stream", workspaceId = "workspace-stream", title = "Plans",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r0"
+        )
+        val question = AidenChatMessage("question-1", AidenChatRole.USER, "Compare plans", createdAt = Instant.now())
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"5".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-1", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The terminal read lands before capture; the snapshot is stored only once the phone has settled.
+        val settled = initial.copy(revision = "r1", messages = listOf(question, reply))
+        val captured = initial.copy(revision = "r2", messages = listOf(question, reply.copy(attachments = listOf(snapshot))))
+        val remote = java.util.concurrent.atomic.AtomicReference(initial)
+        val turnStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                return when {
+                    path == "/api/aiden/v1/chats/chat-stream/turns" -> {
+                        turnStarted.set(true)
+                        remote.set(settled)
+                        MockResponse().setResponseCode(202).setBody(
+                            """{"turnId":"turn-1","streamId":"stream-1","status":"queued","message":${wireJson.encodeToString(question)}}"""
+                        )
+                    }
+                    path == "/api/aiden/v1/chats/chat-stream" -> MockResponse().setBody(wireJson.encodeToString(remote.get()))
+                    path == "/api/aiden/v1/streams/stream-1/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-1\",\"sequence\":1," +
+                            "\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                    )
+                    path == "/api/aiden/v1/streams/stream-1" -> MockResponse().setBody(
+                        """{"streamId":"stream-1","chatId":"chat-stream","turnId":"turn-1","state":"done","lastSequence":1,"updatedAt":"2026-09-22T12:00:00Z"}"""
+                    )
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val grants = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-stream", deviceId = "device-stream", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                // The production client binding without unrelated /server refresh work.
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(
+                    initial.id, coordinator, cache, drafts, initial,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(300L, 300L, 300L))
+                )
+                viewModels.put("stream", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Compare plans")
+                assertTrue(model.canSend)
+                model.send()
+                // The streamed turn reaches its terminal event and settles on the snapshot-less transcript.
+                withTimeout(5_000) { while (!turnStarted.get()) kotlinx.coroutines.delay(10) }
+                withTimeout(5_000) {
+                    while (model.chat.value?.revision != "r1" || model.hasActiveStream.value || model.isStarting.value) {
+                        kotlinx.coroutines.delay(10)
+                    }
+                }
+                assertNull(aidenVisualDisplay(reply.visuals!!.single(), model.chat.value!!.messages.last().attachments.orEmpty()).snapshot)
+                // Capture finishes on the Mac; nothing on the phone asks for it.
+                remote.set(captured)
+                val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                val message = shown.messages.last()
+                assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun assertLateSnapshotRefresh(snapshotArrives: Boolean) {
         val directory = kotlin.io.path.createTempDirectory("aiden-late-snapshot-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
