@@ -508,6 +508,10 @@ export function ModelPadSettings() {
   const [activeValue, setActiveValue] = React.useState<string>();
   const benchmarkMetric = padPreferences.metric;
   const [suggestionPreview, setSuggestionPreview] = React.useState<ModelPadSuggestionPreview>();
+  // Accept saves still in flight. Their optimistic layout already holds the
+  // accepted models, so the preview may look used up; it must survive until
+  // the save settles, because a failed save rolls back and shows the ghosts again.
+  const [acceptsInFlight, setAcceptsInFlight] = React.useState(0);
   // A value to focus once it renders: a suggestion, or a marker just placed from one.
   const focusValueRef = React.useRef<string | undefined>(undefined);
   const insightsButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -656,10 +660,13 @@ export function ModelPadSettings() {
   );
   const previewActive = previewFits && shownSuggestions.length > 0;
   React.useEffect(() => {
-    // Every suggestion is on the Pad now (the saved layout holds it), or the Pad
-    // outgrew the preview grid: the preview is done.
-    if (suggestionPreview && !previewActive) setSuggestionPreview(undefined);
-  }, [suggestionPreview, previewActive]);
+    if (!suggestionPreview) return;
+    // The Pad outgrew the preview grid, or every suggestion is on the Pad and
+    // no accept is still saving: the preview is done.
+    if (!previewFits || (!previewActive && acceptsInFlight === 0)) {
+      setSuggestionPreview(undefined);
+    }
+  }, [suggestionPreview, previewFits, previewActive, acceptsInFlight]);
   // The first visit to an empty Pad starts with the model list open. This is
   // decided once, after loading, so it never reopens after the user closes the
   // list or empties the Pad later on.
@@ -1095,22 +1102,31 @@ export function ModelPadSettings() {
     focusValueRef.current = (remaining[index] ?? remaining[index - 1])?.value ?? value;
   };
 
-  // An accepted ghost stays in the preview: it leaves the Pad as a ghost once the
-  // saved layout holds it (pendingSuggestions skips placed models), and comes
-  // back if the save fails.
+  /** Keep the preview alive until an accept's save settles (see `acceptsInFlight`). */
+  const trackAccept = (save: Promise<boolean>): Promise<boolean> => {
+    setAcceptsInFlight((count) => count + 1);
+    return save.finally(() => setAcceptsInFlight((count) => count - 1));
+  };
+
+  // Accepting never removes a ghost itself. It stops showing once the
+  // optimistic layout holds its model (pendingSuggestions skips placed models);
+  // a failed save rolls that layout back before the save settles, so the ghost
+  // shows again, and the preview stays alive meanwhile (`acceptsInFlight`).
   const acceptSuggestion = (suggestion: ModelPadSuggestion, entry: ModelEntry) => {
     const preview = suggestionPreview;
     if (!preview) return;
     flushPendingMove();
     focusAfterAccepting(suggestion.value);
     const focusTarget = focusValueRef.current;
-    void persistAction((current) => {
-      if (current[suggestion.value]) return null;
-      // The Pad already shows its models on the preview grid; save them there.
-      const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
-      next[suggestion.value] = suggestion.placement;
-      return { placements: next, message: `Added ${placementLabel(entry)}` };
-    }).then((saved) => {
+    void trackAccept(
+      persistAction((current) => {
+        if (current[suggestion.value]) return null;
+        // The Pad already shows its models on the preview grid; save them there.
+        const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
+        next[suggestion.value] = suggestion.placement;
+        return { placements: next, message: `Added ${placementLabel(entry)}` };
+      }),
+    ).then((saved) => {
       // Never leave focus armed for a marker that will not appear.
       if (!saved && focusValueRef.current === focusTarget) focusValueRef.current = undefined;
     });
@@ -1122,18 +1138,20 @@ export function ModelPadSettings() {
     const accepted = shownSuggestions;
     flushPendingMove();
     // The preview ends once the saved layout holds every suggestion; a failed
-    // save leaves the ghosts in place.
+    // save rolls back and leaves the ghosts in place.
     runQuickStart(() =>
-      persistAction((current) => {
-        const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
-        let added = 0;
-        for (const suggestion of accepted) {
-          if (current[suggestion.value]) continue;
-          next[suggestion.value] = suggestion.placement;
-          added += 1;
-        }
-        return added > 0 ? { placements: next, message: addedSuggestionsMessage(added) } : null;
-      }),
+      trackAccept(
+        persistAction((current) => {
+          const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
+          let added = 0;
+          for (const suggestion of accepted) {
+            if (current[suggestion.value]) continue;
+            next[suggestion.value] = suggestion.placement;
+            added += 1;
+          }
+          return added > 0 ? { placements: next, message: addedSuggestionsMessage(added) } : null;
+        }),
+      ),
     );
   };
 

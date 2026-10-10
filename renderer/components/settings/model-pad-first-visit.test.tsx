@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -540,10 +540,10 @@ test("the Pad keeps the preview grid while Accept all is saving", async () => {
   observer.observe(pad(), { attributes: true, attributeFilter: ["data-grid-size"] });
 
   fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
-  // The ghosts stay until the saved layout holds them.
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The optimistic layout shows the accepted models while the write is held.
+  await waitFor(() => assert.equal(markerCount(), 9));
   assert.equal(pad().dataset.gridSize, previewGrid);
-  server.release();
+  await act(async () => server.release());
   await screen.findByText("Added 8 suggestions");
   await waitFor(() => assert.equal(markerCount(), 9));
   observer.disconnect();
@@ -574,4 +574,53 @@ test("a failed accept keeps the suggestion on the Pad", async () => {
   await waitFor(() => assert.equal(suggestions().length, 8));
   assert.ok(screen.getByRole("button", { name: "Accept suggestion: M5 from Test" }));
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
+});
+
+/** Let the optimistic layout render while the write is held, then fail the write. */
+async function failHeldWrite(server: ReturnType<typeof editorServer>, optimisticMarkers: number) {
+  await waitFor(() => assert.equal(markerCount(), optimisticMarkers));
+  await act(async () => server.release());
+  await screen.findByText("Aiden couldn’t save your Model Pad.");
+}
+
+test("a failed Accept all brings every suggestion back and adds no models", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+    holdWrites: true,
+    failWrites: true,
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const previewed = suggestionNames();
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+  await failHeldWrite(server, 9);
+
+  await waitFor(() => assert.deepEqual(suggestionNames(), previewed));
+  assert.equal(markerCount(), 1);
+  assert.ok(screen.getByRole("button", { name: "Accept all (8)" }));
+  assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
+});
+
+test("a failed accept of the last suggestion brings it back", async () => {
+  const placements: ModelPadPlacements = Object.fromEntries(
+    MODELS.slice(0, 9).map((model, index) => [
+      `test::${model}`,
+      { x: (index % 3) / 2, y: Math.floor(index / 3) / 2, xSource: "user", ySource: "user" },
+    ]),
+  );
+  const server = editorServer({ insightsReady: true, placements, holdWrites: true, failWrites: true });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 9));
+  await openPreview();
+  assert.deepEqual(suggestionNames(), ["M9"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept suggestion: M9 from Test" }));
+  await failHeldWrite(server, 10);
+
+  await waitFor(() => assert.deepEqual(suggestionNames(), ["M9"]));
+  assert.equal(markerCount(), 9);
+  assert.equal(Object.keys(server.stored()).length, 9);
 });
