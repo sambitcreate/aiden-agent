@@ -14,8 +14,8 @@ export const MODEL_PACE_MIN_GENERATION_MS = 250;
 export const MODEL_PACE_PERSIST_DEBOUNCE_MS = 5_000;
 const MODEL_PACE_MAX_BYTES = 2 * 1024 * 1024;
 
-/** Stop reasons of a response that completed; failures and partial states are excluded. */
-const COMPLETED_STOP_REASONS: ReadonlySet<string> = new Set(["stop", "length", "toolUse"]);
+/** Stop reasons of a response that completed; failures, truncation and partial states are excluded. */
+const COMPLETED_STOP_REASONS: ReadonlySet<string> = new Set(["stop", "toolUse"]);
 
 export interface ModelPaceSample {
   ttftMs: number;
@@ -193,26 +193,44 @@ export function createModelPacePersistence(root?: () => string): ModelPacePersis
   };
 }
 
+/** The final assistant message fields the timer reads. */
+export interface ModelPaceResponseMessage {
+  role?: string;
+  stopReason?: string;
+  usage?: { output?: number; reasoning?: number };
+}
+
 /** The subset of Pi agent events the timer reads. */
 export interface ModelPaceAgentEvent {
   type: string;
   assistantMessageEvent?: { type: string };
-  message?: { role?: string; stopReason?: string; usage?: { output?: number } };
+}
+
+interface ModelPaceResponseTiming {
+  key: string;
+  startedAt: number;
+  firstDeltaAt?: number;
+  streamedThinking: boolean;
 }
 
 /**
- * Times one model response at a time within a generation.
+ * Times model responses within one generation.
  *
- * `requestStarted` must be called when Pi invokes the stream function for a
- * model request — after context transforms and compaction, immediately before
- * the provider request is sent. TTFT is measured from there to the first text
- * or thinking delta, so it includes connection, queueing and any hidden
- * reasoning the provider does not stream. Generation time runs from that delta
- * to the assistant `message_end`. Tool execution between responses is never
- * counted, because each response needs its own `requestStarted`.
+ * `requestStarted` runs when Pi invokes the stream function for a model
+ * request — after context transforms and compaction, immediately before the
+ * provider request is sent. TTFT is measured from there to the first text or
+ * thinking delta, so it includes connection, queueing and any hidden reasoning
+ * the provider does not stream. Generation time runs from that delta to the
+ * moment the provider stream's final message resolves (before Aiden's own
+ * transcript and journal work on `message_end`). Tool execution between
+ * responses is never counted, because each response has its own request start.
+ *
+ * When no thinking delta streamed, reasoning tokens the provider reports in
+ * `usage.reasoning` were produced before the first visible token, so they are
+ * excluded from the output-speed numerator.
  */
 export class ModelPaceTimer {
-  private current: { key: string; startedAt: number; firstDeltaAt?: number } | null = null;
+  private current: ModelPaceResponseTiming | null = null;
 
   constructor(
     private readonly clock: { monotonic: () => number; wall: () => number } = {
@@ -221,33 +239,96 @@ export class ModelPaceTimer {
     },
   ) {}
 
-  requestStarted(key: string): void {
-    this.current = { key, startedAt: this.clock.monotonic() };
+  requestStarted(key: string): ModelPaceResponseTiming {
+    this.current = { key, startedAt: this.clock.monotonic(), streamedThinking: false };
+    return this.current;
   }
 
-  /** Returns the measured sample when an accepted assistant response ends. */
-  observe(event: ModelPaceAgentEvent): { key: string; sample: ModelPaceSample } | null {
+  /** Note text and thinking deltas of the response currently streaming. */
+  observe(event: ModelPaceAgentEvent): void {
     const current = this.current;
-    if (!current) return null;
-    if (event.type === "message_update") {
-      const kind = event.assistantMessageEvent?.type;
-      if (current.firstDeltaAt === undefined && (kind === "text_delta" || kind === "thinking_delta")) {
-        current.firstDeltaAt = this.clock.monotonic();
-      }
-      return null;
-    }
-    if (event.type !== "message_end" || event.message?.role !== "assistant") return null;
-    this.current = null;
+    if (!current || event.type !== "message_update") return;
+    const kind = event.assistantMessageEvent?.type;
+    if (kind !== "text_delta" && kind !== "thinking_delta") return;
+    if (kind === "thinking_delta") current.streamedThinking = true;
+    current.firstDeltaAt ??= this.clock.monotonic();
+  }
+
+  /** Close a response with its final message; returns the sample when accepted. */
+  responseEnded(
+    timing: ModelPaceResponseTiming,
+    message: ModelPaceResponseMessage,
+  ): { key: string; sample: ModelPaceSample } | null {
+    if (this.current === timing) this.current = null;
+    if (message.role !== "assistant") return null;
+    const output = message.usage?.output ?? Number.NaN;
+    const hiddenReasoning = timing.streamedThinking ? 0 : (message.usage?.reasoning ?? 0);
     const sample = acceptModelPaceSample({
-      requestStartedAt: current.startedAt,
-      firstDeltaAt: current.firstDeltaAt,
+      requestStartedAt: timing.startedAt,
+      firstDeltaAt: timing.firstDeltaAt,
       endedAt: this.clock.monotonic(),
-      outputTokens: event.message.usage?.output ?? Number.NaN,
-      stopReason: event.message.stopReason ?? "",
+      outputTokens: output - hiddenReasoning,
+      stopReason: message.stopReason ?? "",
       at: this.clock.wall(),
     });
-    return sample ? { key: current.key, sample } : null;
+    return sample ? { key: timing.key, sample } : null;
   }
+}
+
+export interface ModelPaceMeasurement {
+  /** Wrap Pi's stream function so each model request is timed. */
+  wrap<Model extends { id: string }, Context, Options, Stream extends { result(): Promise<ModelPaceResponseMessage> }>(
+    streamFn: (model: Model, context: Context, options?: Options) => Stream | Promise<Stream>,
+  ): (model: Model, context: Context, options?: Options) => Stream | Promise<Stream>;
+  /** Feed every agent event; only streaming deltas are read. Never throws. */
+  observe(event: ModelPaceAgentEvent): void;
+}
+
+/**
+ * Per-generation pace measurement. Agent-harness providers (ACP) are never
+ * timed: one of their turns spans several stream calls, runs native tools
+ * inside a stream and reports summed usage, so no sample would describe one
+ * model response. Measurement never throws into the chat stream.
+ */
+export function createModelPaceMeasurement(options: {
+  providerId: string;
+  agentHarness: boolean;
+  record: (key: string, sample: ModelPaceSample) => void;
+  onError?: (error: unknown) => void;
+  timer?: ModelPaceTimer;
+}): ModelPaceMeasurement {
+  const onError = options.onError ?? (() => {});
+  if (options.agentHarness) return { wrap: (streamFn) => streamFn, observe: () => {} };
+  const timer = options.timer ?? new ModelPaceTimer();
+  return {
+    wrap: (streamFn) => async (model, context, streamOptions) => {
+      let timing: ModelPaceResponseTiming | null = null;
+      try {
+        timing = timer.requestStarted(`${options.providerId}::${model.id}`);
+      } catch (error) {
+        onError(error);
+      }
+      const stream = await streamFn(model, context, streamOptions);
+      if (timing) {
+        const started = timing;
+        void stream
+          .result()
+          .then((message) => {
+            const measured = timer.responseEnded(started, message);
+            if (measured) options.record(measured.key, measured.sample);
+          })
+          .catch(onError);
+      }
+      return stream;
+    },
+    observe: (event) => {
+      try {
+        timer.observe(event);
+      } catch (error) {
+        onError(error);
+      }
+    },
+  };
 }
 
 export interface ModelPaceRecorderOptions {

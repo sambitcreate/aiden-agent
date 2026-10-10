@@ -12,6 +12,7 @@ import {
   MODEL_PACE_SAMPLES_PER_MODEL,
   ModelPaceRecorder,
   ModelPaceTimer,
+  createModelPaceMeasurement,
   summarizeModelPace,
   type ModelPaceDocument,
   type ModelPacePersistence,
@@ -32,10 +33,10 @@ test("a successful response yields TTFT and output tokens per generation second"
 });
 
 test("samples are rejected for failures, short output, short generation or missing deltas", () => {
-  for (const stopReason of ["error", "aborted", "pending", "deferred"]) {
+  for (const stopReason of ["error", "aborted", "pending", "deferred", "length"]) {
     assert.equal(acceptModelPaceSample({ ...timing, stopReason }), null, stopReason);
   }
-  for (const stopReason of ["stop", "length", "toolUse"]) {
+  for (const stopReason of ["stop", "toolUse"]) {
     assert.notEqual(acceptModelPaceSample({ ...timing, stopReason }), null, stopReason);
   }
   assert.equal(acceptModelPaceSample({ ...timing, outputTokens: 15 }), null);
@@ -92,49 +93,157 @@ test("summaries report medians, count and last sampled time", () => {
   });
 });
 
-test("the timer measures each model response from its request, not the whole turn", () => {
-  let clock = 0;
-  const timer = new ModelPaceTimer({ monotonic: () => clock, wall: () => 9_000 + clock });
-  const delta = (type: string) => ({ type: "message_update", assistantMessageEvent: { type } });
-  const end = (output: number, stopReason = "toolUse") => ({
-    type: "message_end",
-    message: { role: "assistant", stopReason, usage: { output } },
-  });
+interface FakeMessage {
+  role: string;
+  stopReason: string;
+  usage: { output: number; reasoning?: number };
+}
 
-  timer.requestStarted("p::m");
-  clock = 50;
-  assert.equal(timer.observe({ type: "message_start", message: { role: "assistant" } }), null);
-  clock = 300;
-  assert.equal(timer.observe(delta("thinking_delta")), null);
-  clock = 400;
-  timer.observe(delta("text_delta"));
-  clock = 1_300;
-  assert.deepEqual(timer.observe(end(45)), {
-    key: "p::m",
-    sample: { ttftMs: 300, tokensPerSecond: 45, at: 10_300 },
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
+  return { promise, resolve, reject };
+}
 
-  // Tool execution time between responses never counts toward the next one.
-  clock = 60_000;
-  timer.requestStarted("p::m");
-  clock = 60_200;
-  timer.observe(delta("text_delta"));
-  clock = 60_700;
-  assert.deepEqual(timer.observe(end(100, "stop")), {
-    key: "p::m",
+function fakeStream() {
+  const final = deferred<FakeMessage>();
+  return { result: () => final.promise, final };
+}
+
+function paceHarness(agentHarness = false) {
+  const clock = { now: 0 };
+  const recorded: Array<{ key: string; sample: ModelPaceSample }> = [];
+  const calls: unknown[][] = [];
+  let next = fakeStream();
+  const measurement = createModelPaceMeasurement({
+    providerId: "openai",
+    agentHarness,
+    record: (key, sample) => recorded.push({ key, sample }),
+    timer: new ModelPaceTimer({ monotonic: () => clock.now, wall: () => 9_000 + clock.now }),
+  });
+  const inner = (model: { id: string }, context: string, options?: { tag: string }) => {
+    calls.push([model, context, options]);
+    return next;
+  };
+  const wrapped = measurement.wrap(inner);
+  const delta = (type: string) =>
+    measurement.observe({ type: "message_update", assistantMessageEvent: { type } });
+  const request = async () => {
+    next = fakeStream();
+    const stream = await wrapped({ id: "gpt" }, "context", { tag: "o" });
+    return stream;
+  };
+  return { clock, recorded, calls, inner, wrapped, delta, request, latest: () => next };
+}
+
+const done = (output: number, stopReason = "stop", reasoning?: number): FakeMessage => ({
+  role: "assistant",
+  stopReason,
+  usage: reasoning === undefined ? { output } : { output, reasoning },
+});
+
+test("each model response is timed from its own request start, excluding tool time between responses", async () => {
+  const pace = paceHarness();
+  const first = await pace.request();
+  assert.deepEqual(pace.calls, [[{ id: "gpt" }, "context", { tag: "o" }]]);
+  pace.clock.now = 300;
+  pace.delta("thinking_delta");
+  pace.clock.now = 400;
+  pace.delta("text_delta");
+  pace.clock.now = 1_300;
+  first.final.resolve(done(45, "toolUse"));
+  await settle();
+  assert.deepEqual(pace.recorded, [
+    { key: "openai::gpt", sample: { ttftMs: 300, tokensPerSecond: 45, at: 10_300 } },
+  ]);
+
+  pace.clock.now = 60_000;
+  const second = await pace.request();
+  assert.equal(pace.calls.length, 2);
+  pace.clock.now = 60_200;
+  pace.delta("text_delta");
+  pace.clock.now = 60_700;
+  second.final.resolve(done(100));
+  await settle();
+  assert.deepEqual(pace.recorded[1], {
+    key: "openai::gpt",
     sample: { ttftMs: 200, tokensPerSecond: 200, at: 69_700 },
   });
+});
 
-  // A response without a new request start is ignored rather than mistimed.
-  timer.observe(delta("text_delta"));
-  assert.equal(timer.observe(end(100, "stop")), null);
+test("the wrapper returns the provider stream itself and propagates request failures", async () => {
+  const pace = paceHarness();
+  const stream = await pace.request();
+  assert.equal(stream, pace.latest());
+  const failing = createModelPaceMeasurement({
+    providerId: "openai",
+    agentHarness: false,
+    record: () => assert.fail("a failed request must not be recorded"),
+  }).wrap(async (_model: { id: string }) => {
+    throw new Error("connection refused");
+  });
+  await assert.rejects(failing({ id: "gpt" }, undefined), /connection refused/u);
+});
 
-  // User messages and failed responses never produce samples.
-  timer.requestStarted("p::m");
-  timer.observe(delta("text_delta"));
-  clock += 1_000;
-  assert.equal(timer.observe({ type: "message_end", message: { role: "user" } }), null);
-  assert.equal(timer.observe(end(100, "aborted")), null);
+test("failed, truncated and rejected responses record nothing", async () => {
+  const pace = paceHarness();
+  for (const outcome of ["aborted", "error", "length", "reject"]) {
+    pace.clock.now = 0;
+    const stream = await pace.request();
+    pace.clock.now = 100;
+    pace.delta("text_delta");
+    pace.clock.now = 2_000;
+    if (outcome === "reject") stream.final.reject(new Error("stream failed"));
+    else stream.final.resolve(done(100, outcome));
+    await settle();
+  }
+  assert.deepEqual(pace.recorded, []);
+});
+
+test("hidden reasoning is excluded from output speed, streamed thinking is not", async () => {
+  const pace = paceHarness();
+  const hidden = await pace.request();
+  pace.clock.now = 500;
+  pace.delta("text_delta");
+  pace.clock.now = 1_500;
+  hidden.final.resolve(done(100, "stop", 60));
+  await settle();
+  assert.equal(pace.recorded[0]!.sample.tokensPerSecond, 40);
+
+  pace.clock.now = 0;
+  const mostlyHidden = await pace.request();
+  pace.clock.now = 500;
+  pace.delta("text_delta");
+  pace.clock.now = 1_500;
+  // 70 output tokens, 60 of them hidden reasoning: only 10 visible, below the floor.
+  mostlyHidden.final.resolve(done(70, "stop", 60));
+  await settle();
+  assert.equal(pace.recorded.length, 1);
+
+  pace.clock.now = 0;
+  const streamed = await pace.request();
+  pace.clock.now = 500;
+  pace.delta("thinking_delta");
+  pace.clock.now = 1_500;
+  streamed.final.resolve(done(100, "stop", 60));
+  await settle();
+  assert.equal(pace.recorded[1]!.sample.tokensPerSecond, 100);
+});
+
+test("agent-harness providers are never timed", async () => {
+  const pace = paceHarness(true);
+  assert.equal(pace.wrapped, pace.inner);
+  const stream = await pace.request();
+  pace.clock.now = 100;
+  pace.delta("text_delta");
+  pace.clock.now = 5_000;
+  stream.final.resolve(done(1_000));
+  await settle();
+  assert.deepEqual(pace.recorded, []);
 });
 
 function memoryPersistence(initial: ModelPaceDocument = emptyModelPaceDocument()) {
@@ -229,6 +338,59 @@ test("clear forgets memory and removes the file", async () => {
   timers.fire();
   await recorder.flush();
   assert.deepEqual(state.document.models, {});
+});
+
+test("a sample waiting on the initial load during clear is dropped", async () => {
+  const loaded = deferred<ModelPaceDocument>();
+  const { state, persistence } = memoryPersistence();
+  const recorder = new ModelPaceRecorder(
+    { ...persistence, load: () => loaded.promise },
+    { schedule: () => 1, cancel: () => {} },
+  );
+  recorder.record("p::m", sample(1));
+  await recorder.clear();
+  loaded.resolve(addModelPaceSample(emptyModelPaceDocument(), "p::old", sample(0)));
+  await settle();
+  assert.deepEqual(await recorder.summaries(), {});
+  await recorder.flush();
+  assert.equal(state.saves, 0);
+  assert.deepEqual(state.document.models, {});
+});
+
+test("clear waits for an in-flight save and then removes the file", async () => {
+  const events: string[] = [];
+  const saving = deferred<void>();
+  const { state, persistence } = memoryPersistence();
+  const timers = new ManualTimers();
+  const recorder = new ModelPaceRecorder(
+    {
+      load: persistence.load,
+      save: async (document) => {
+        events.push("save:start");
+        await saving.promise;
+        await persistence.save(document);
+        events.push("save:end");
+      },
+      remove: async () => {
+        events.push("remove");
+        await persistence.remove();
+      },
+    },
+    { schedule: timers.schedule, cancel: timers.cancel },
+  );
+  recorder.record("p::m", sample(1));
+  await settle();
+  timers.fire();
+  await settle();
+  assert.deepEqual(events, ["save:start"]);
+  const clearing = recorder.clear();
+  await settle();
+  assert.deepEqual(events, ["save:start"]);
+  saving.resolve();
+  await clearing;
+  assert.deepEqual(events, ["save:start", "save:end", "remove"]);
+  assert.deepEqual(state.document.models, {});
+  assert.deepEqual(await recorder.summaries(), {});
 });
 
 async function tempRoot(): Promise<string> {

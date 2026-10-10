@@ -387,7 +387,10 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   }
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
-  await modelPaceRecorder.flush().catch(() => undefined);
+  await Promise.race([
+    modelPaceRecorder.flush().catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
+  ]);
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
     logger.warn(

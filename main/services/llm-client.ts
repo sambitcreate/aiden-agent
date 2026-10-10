@@ -1,7 +1,7 @@
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
-import { ModelPaceTimer } from "./model-pace-core.js";
+import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
@@ -2891,13 +2891,16 @@ export const llmClient = {
       const realStream = agentRuntimeOptions.streamFn!;
       const warmedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
       // Device-local pace: Pi calls the stream function once per model
-      // response, right before the provider request, so this marks each
-      // response's request start (see ModelPaceTimer for what TTFT covers).
-      const paceTimer = new ModelPaceTimer();
-      const observedStream: typeof realStream = (requestModel, context, streamOptions) => {
-        paceTimer.requestStarted(`${runtime.provider.id}::${requestModel.id}`);
-        return warmedStream(requestModel, context, streamOptions);
-      };
+      // response, right before the provider request, so the wrapper marks
+      // each response's request start (see ModelPaceTimer for what TTFT covers).
+      const pace = createModelPaceMeasurement({
+        providerId: runtime.provider.id,
+        agentHarness: harnessProvider,
+        record: (key, sample) => modelPaceRecorder.record(key, sample),
+        onError: (error) =>
+          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
+      });
+      const observedStream: typeof realStream = pace.wrap(warmedStream);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3506,12 +3509,7 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
-        try {
-          const measured = paceTimer.observe(event);
-          if (measured) modelPaceRecorder.record(measured.key, measured.sample);
-        } catch (error) {
-          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error);
-        }
+        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();
