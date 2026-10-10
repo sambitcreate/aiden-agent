@@ -405,7 +405,7 @@ function modelsDevBenchmark(
   });
 }
 
-/** Backward-compatible models.dev-only lookup used by focused tests. */
+/** models.dev-only capability lookup; production uses it for bundled request admission (`modelsCatalog.bundledInfo`). */
 export function lookupCatalogModelInfo(
   catalog: ModelCatalog,
   providerId: string,

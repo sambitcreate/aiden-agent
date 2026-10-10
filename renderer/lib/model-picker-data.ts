@@ -15,9 +15,6 @@ import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visi
 import { isNonChatModel } from "../shared/model-eligibility";
 import { modelIdLeaf } from "../shared/model-catalog-provider";
 
-export { BASE_MODEL_PAD_GRID_SIZE as BASE_MODEL_GRID_SIZE } from "./model-pad-layout";
-export { modelPadGridSize as modelGridSize } from "./model-pad-layout";
-
 const FORMAT_RE = /[\s._-](MLX|GGUF|GGML|FP16|BF16|F16|INT8|AWQ|GPTQ|Q\d(?:_[A-Z0-9]+)*)$/i;
 
 export interface ModelEntry {
@@ -126,20 +123,15 @@ export interface ExplicitModelSelection {
   model: string;
 }
 
-/** Saved Pad placements only: placed by the user, or suggested (benchmark or measured). */
-export type PositionConfidence = "personal" | "suggested";
-
 export interface PositionedModel extends ModelEntry {
   /** Left (fast) to right (more deliberate), normalized to 0...1. */
   x: number;
   /** Bottom (everyday) to top (more capable), normalized to 0...1. */
   y: number;
-  confidence: PositionConfidence;
   /** Marker kind shared by every Pad surface. */
   placementKind: ModelPadPlacementKind;
   /** How the marker announces its placement source (see `modelPadPlacementSourceLabel`). */
   placementSourceLabel: string;
-  positionSource: string;
   capabilityLabel: "Everyday" | "Capable" | "Advanced";
   paceLabel: "Faster" | "Balanced" | "Deliberate";
 }
@@ -503,19 +495,8 @@ export function positionSavedModels(
         ...entry,
         x,
         y,
-        confidence: placementKind === "personal" ? ("personal" as const) : ("suggested" as const),
         placementKind,
         placementSourceLabel: modelPadPlacementSourceLabel(placement),
-        positionSource:
-          placementKind === "personal"
-            ? "Personal placement"
-            : placement.xSource === "measured"
-              ? placement.ySource === "benchmark"
-                ? "Benchmark capability · pace measured in your chats"
-                : "Pace measured in your chats"
-              : placement.xSource === "neutral" && placement.ySource === "benchmark"
-                ? "Benchmark capability · pace unmeasured"
-                : "Benchmark suggestion",
         ...labelsFor(x, y),
       },
     ];

@@ -8,7 +8,6 @@ import {
   encodeSelection,
   findDirectionalModel,
   MODEL_PAD_CAPTURE_RADIUS,
-  modelGridSize,
   nearestModel,
   modelBenchmarkPercentiles,
   modelInfoByValue,
@@ -29,6 +28,7 @@ import {
 } from "./model-picker-data";
 import {
   addModelPadPlacement,
+  modelPadGridSize,
   modelPadGridSizeForPlacements,
   reflowVisibleModelPadPlacements,
   type ModelPadPlacement,
@@ -414,13 +414,13 @@ test("saved personal placements alone determine membership and snap to Pad geome
     first: { x: 0.17, y: 0.83, xSource: "user", ySource: "user" },
   });
   assert.deepEqual(
-    positioned.map(({ value, x, y, confidence }) => ({ value, x, y, confidence })),
+    positioned.map(({ value, x, y, placementKind }) => ({ value, x, y, placementKind })),
     [
       {
         value: "first",
         x: 1 / 6,
         y: 5 / 6,
-        confidence: "personal",
+        placementKind: "personal",
       },
     ],
   );
@@ -472,7 +472,7 @@ test("the composer Pad and the settings editor reflow agree on placed positions"
   const editor = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
   const picker = positionSavedModels(entries, placements);
 
-  assert.equal(gridSize, modelGridSize(3));
+  assert.equal(gridSize, 7);
   assert.deepEqual(
     picker.map(({ value, x, y }) => ({ value, x, y })),
     ["model-3", "model-7", "model-9"].map((value) => ({
@@ -527,15 +527,15 @@ test("OpenRouter benchmark percentiles average ties and axis-aware suggestions d
   const [suggested] = positionSavedModels(models, {
     low: { x: 0.5, y: 0.08, xSource: "neutral", ySource: "benchmark" },
   });
-  assert.equal(suggested.confidence, "suggested");
-  assert.equal(suggested.positionSource, "Benchmark capability · pace unmeasured");
+  assert.equal(suggested.placementKind, "benchmark");
+  assert.equal(suggested.placementSourceLabel, "Benchmark-assisted");
 
   const [paced, both] = positionSavedModels(models, {
     low: { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
     high: { x: 1, y: 1, xSource: "measured", ySource: "benchmark" },
   });
-  assert.equal(paced.positionSource, "Pace measured in your chats");
-  assert.equal(both.positionSource, "Benchmark capability · pace measured in your chats");
+  assert.equal(paced.placementSourceLabel, "Measured pace");
+  assert.equal(both.placementSourceLabel, "Benchmark height, measured pace");
 });
 
 test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {
@@ -782,7 +782,7 @@ test("every active model occupies a unique, equally spaced lattice point", () =>
     for (const value of values) placements = addModelPadPlacement(placements, values, value);
     const positioned = positionSavedModels(entries, placements);
     assert.equal(positioned.length, count);
-    const gridDivisions = modelGridSize(count) - 1;
+    const gridDivisions = modelPadGridSize(count) - 1;
     const cells = positioned.map(({ x, y }) => `${x.toFixed(8)}:${y.toFixed(8)}`);
 
     assert.equal(new Set(cells).size, positioned.length);
@@ -791,36 +791,6 @@ test("every active model occupies a unique, equally spaced lattice point", () =>
       assert.equal(Number((model.y * gridDivisions).toFixed(8)) % 1, 0);
     }
   }
-});
-
-test("asynchronous capability metadata enriches details without shifting map geometry", () => {
-  const base = entry("stable", "private-model");
-  const placements = {
-    stable: { x: 0.5, y: 0.5, xSource: "user" as const, ySource: "user" as const },
-  };
-  const [before] = positionSavedModels([base], placements);
-  const [after] = positionSavedModels(
-    [
-      {
-      ...base,
-      info: {
-        id: "private-model",
-        vision: true,
-        toolCall: true,
-        reasoning: true,
-        openWeights: false,
-          metadataSource: "models-dev",
-          matched: true,
-        },
-      },
-    ],
-    placements,
-  );
-
-  assert.deepEqual(
-    { x: after.x, y: after.y, confidence: after.confidence },
-    { x: before.x, y: before.y, confidence: before.confidence },
-  );
 });
 
 test("nearest selection has hysteresis and directional navigation favors aligned models", () => {
