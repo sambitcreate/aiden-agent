@@ -61,6 +61,9 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   await expect(page.getByText("Here are your plan options and weekly total.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
   expect(scenario.error).toBeUndefined();
   expect(scenario.issuedToolNames).toEqual(["render_ui", "render_artifact"]);
+  // A visual's local state changed while it is still streaming resets when the reply settles,
+  // so wait for generation to finish before interacting with it.
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
 
   // The native visual draws with Aiden's components and works without the model.
   const native = page.getByRole("figure", { name: "Plan options" });
