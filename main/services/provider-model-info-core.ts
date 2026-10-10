@@ -50,7 +50,6 @@ function withProviderFallback(
   const catalogInfo = substitute
     ? {
         ...substitute,
-        ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
         ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
       }
     : catalog;
@@ -96,17 +95,15 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.ranking && !catalog.benchmark && !catalog.cost && !catalog.canonicalModelId) {
+  if (!catalog.benchmark && !catalog.cost && !catalog.canonicalModelId) {
     return pinned;
   }
   return {
     ...pinned,
-    ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
     ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
     // Display-only models.dev pricing and identity; Pi's capabilities stay authoritative.
     ...(catalog.cost ? { cost: catalog.cost } : {}),
     ...(catalog.canonicalModelId ? { canonicalModelId: catalog.canonicalModelId } : {}),
-    metadataSource: catalog.ranking ? "artificial-analysis" : pinned.metadataSource,
     matched: true,
   };
 }

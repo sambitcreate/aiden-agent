@@ -51,6 +51,7 @@ import {
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
+import { providerModelInfo } from "../services/provider-model-info.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -393,6 +394,15 @@ export function registerProviderHandlers(): void {
   });
 
   ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
+
+  // Offline, display-only model metadata for one provider's models.
+  ipcMain.handle("models:info", async (_event, providerId: unknown, modelIds: unknown) => {
+    const pid = typeof providerId === "string" ? providerId : "";
+    const ids = Array.isArray(modelIds)
+      ? modelIds.filter((m): m is string => typeof m === "string")
+      : [];
+    return providerModelInfo.infoMany(pid, ids);
+  });
 
   ipcMain.handle("providers:updateCatalogs", async (event) => {
     providerAuthOwner(event);

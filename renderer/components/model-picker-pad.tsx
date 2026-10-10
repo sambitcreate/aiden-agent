@@ -19,22 +19,12 @@ import {
   modelPadKnobTagLayout,
   modelPadLabelPlacement,
   modelPadLeftPercent,
+  modelPadPointFromPointer,
   modelPadTopPercent,
   type ModelPadMetric,
 } from "../lib/model-pad-layout";
 import { cn } from "../lib/ui-utils";
 import { ProviderIcon } from "./provider-icon";
-
-function pointFromPointer(event: React.PointerEvent<HTMLDivElement>, rect: DOMRect): ModelPoint {
-  const inset = MODEL_PAD_INSET_PERCENT / 100;
-  const range = MODEL_PAD_RANGE_PERCENT / 100;
-  const rawX = (event.clientX - rect.left) / rect.width;
-  const rawY = (event.clientY - rect.top) / rect.height;
-  return {
-    x: Math.min(1, Math.max(0, (rawX - inset) / range)),
-    y: 1 - Math.min(1, Math.max(0, (rawY - inset) / range)),
-  };
-}
 
 const PAD_CENTER: ModelPoint = { x: 0.5, y: 0.5 };
 
@@ -261,21 +251,21 @@ export function ModelPickerPad({
     setDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.focus();
-    const point = pointFromPointer(event, rectRef.current);
+    const point = modelPadPointFromPointer(event, rectRef.current);
     applyPoint(point);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType !== "mouse" && !draggingRef.current) return;
     rectRef.current ??= event.currentTarget.getBoundingClientRect();
-    schedulePoint(pointFromPointer(event, rectRef.current));
+    schedulePoint(modelPadPointFromPointer(event, rectRef.current));
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingRef.current) return;
     event.preventDefault();
     const rect = rectRef.current ?? event.currentTarget.getBoundingClientRect();
-    const releasePoint = pointFromPointer(event, rect);
+    const releasePoint = modelPadPointFromPointer(event, rect);
     queuedPointRef.current = releasePoint;
     flushQueuedPoint();
     // A release in an empty area chooses nothing, even after previewing a model.

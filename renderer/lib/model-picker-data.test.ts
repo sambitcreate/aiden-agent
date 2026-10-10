@@ -16,7 +16,6 @@ import {
   parseModel,
   pinnedAndRecentQuickStart,
   positionSavedModels,
-  positionModels,
   previewBenchmarkSuggestions,
   recentModelsForList,
   topBenchmarkSuggestions,
@@ -26,8 +25,10 @@ import {
   modelIdentityKey,
   modelSiblings,
   type ModelEntry,
+  type PositionedModel,
 } from "./model-picker-data";
 import {
+  addModelPadPlacement,
   modelPadGridSizeForPlacements,
   reflowVisibleModelPadPlacements,
   type ModelPadPlacement,
@@ -225,8 +226,14 @@ test("entry creation includes every usable model, keeps hosted providers first, 
     orderModelEntries(entries, ["local::local-b", "stale::model"]).map((model) => model.value),
     ["local::local-b", "hosted::cloud-a", "local::local-a"],
   );
+  const placements = Object.fromEntries(
+    entries.map((model, index) => [
+      model.value,
+      { x: index / 6, y: 0.5, xSource: "user" as const, ySource: "user" as const },
+    ]),
+  );
   const coordinates = (models: ModelEntry[]) =>
-    positionModels(models)
+    positionSavedModels(models, placements)
       .map(({ value, x, y }) => ({ value, x, y }))
       .sort((a, b) => a.value.localeCompare(b.value));
   assert.deepEqual(
@@ -381,35 +388,7 @@ test("previewed suggestions put scored pinned then recent models first, then the
   );
 });
 
-test("licensed benchmark percentiles map directly to capability and response-time axes", () => {
-  const [fastCapable, slowCapable] = positionModels([
-    {
-      ...entry("fast-capable"),
-      ranking: {
-        capabilityPercentile: 0.9,
-        responseTimePercentile: 0.1,
-        source: "Licensed benchmark",
-      },
-    },
-    {
-      ...entry("slow-capable"),
-      ranking: {
-        capabilityPercentile: 0.86,
-        responseTimePercentile: 0.88,
-        source: "Licensed benchmark",
-      },
-    },
-  ]);
-
-  assert.equal(fastCapable.confidence, "benchmark");
-  assert.equal(fastCapable.positionSource, "Licensed benchmark");
-  assert.ok(fastCapable.x < slowCapable.x);
-  assert.ok(fastCapable.y > 0.8);
-  assert.equal(fastCapable.capabilityLabel, "Advanced");
-  assert.equal(fastCapable.paceLabel, "Faster");
-});
-
-test("bundled rankings flow into the pad and stale embedding ids stay out of the picker", () => {
+test("stale embedding ids stay out of the picker", () => {
   const local = provider({
     id: "local",
     label: "Local",
@@ -420,28 +399,13 @@ test("bundled rankings flow into the pad and stale embedding ids stay out of the
       embed: { source: "lmstudio", type: "embedding" },
     },
   });
-  const hosted = provider({ id: "hosted", label: "Hosted", models: ["ranked"] });
-  const ranking = {
-    capabilityPercentile: 0.92,
-    responseTimePercentile: 0.18,
-    source: "Artificial Analysis",
-    sourceUrl: "https://artificialanalysis.ai",
-  };
-  const entries = createModelEntries([local, hosted], {
-    "hosted::ranked": {
-      id: "ranked",
-      ranking,
-      metadataSource: "artificial-analysis",
-      matched: true,
-    },
-  });
+  const hosted = provider({ id: "hosted", label: "Hosted", models: ["cloud"] });
+  const entries = createModelEntries([local, hosted]);
 
   assert.deepEqual(
     entries.map((model) => model.value),
-    ["hosted::ranked", "local::chat"],
+    ["hosted::cloud", "local::chat"],
   );
-  assert.deepEqual(entries[0].ranking, ranking);
-  assert.equal(positionModels(entries)[0].confidence, "benchmark");
 });
 
 test("saved personal placements alone determine membership and snap to Pad geometry", () => {
@@ -808,34 +772,16 @@ test("face-generation selection excludes embeddings and never reroutes stale pro
   );
 });
 
-test("explicit model variants create estimates while unknown models stay visibly unranked", () => {
-  const positioned = positionModels([
-    entry("flash", "gemini-flash"),
-    entry("reasoner", "deepseek-reasoner"),
-    entry("unknown-a", "private-model-a"),
-    entry("unknown-b", "private-model-b"),
-  ]);
-  const flash = positioned.find((model) => model.value === "flash")!;
-  const reasoner = positioned.find((model) => model.value === "reasoner")!;
-  const unknownA = positioned.find((model) => model.value === "unknown-a")!;
-  const unknownB = positioned.find((model) => model.value === "unknown-b")!;
-
-  assert.equal(flash.confidence, "estimated");
-  assert.equal(reasoner.confidence, "estimated");
-  assert.ok(flash.x < reasoner.x);
-  assert.ok(flash.y < reasoner.y);
-  assert.equal(unknownA.confidence, "unranked");
-  assert.match(unknownA.positionSource, /Benchmark unavailable/u);
-  assert.notDeepEqual({ x: unknownA.x, y: unknownA.y }, { x: unknownB.x, y: unknownB.y });
-});
-
 test("every active model occupies a unique, equally spaced lattice point", () => {
   for (const count of [15, 130]) {
-    const positioned = positionModels(
-      Array.from({ length: count }, (_, index) =>
-        entry(`model-${index}`, `private-model-${index}`),
-      ),
+    const entries = Array.from({ length: count }, (_, index) =>
+      entry(`model-${index}`, `private-model-${index}`),
     );
+    const values = entries.map((model) => model.value);
+    let placements: Record<string, ModelPadPlacement> = {};
+    for (const value of values) placements = addModelPadPlacement(placements, values, value);
+    const positioned = positionSavedModels(entries, placements);
+    assert.equal(positioned.length, count);
     const gridDivisions = modelGridSize(count) - 1;
     const cells = positioned.map(({ x, y }) => `${x.toFixed(8)}:${y.toFixed(8)}`);
 
@@ -849,9 +795,13 @@ test("every active model occupies a unique, equally spaced lattice point", () =>
 
 test("asynchronous capability metadata enriches details without shifting map geometry", () => {
   const base = entry("stable", "private-model");
-  const [before] = positionModels([base]);
-  const [after] = positionModels([
-    {
+  const placements = {
+    stable: { x: 0.5, y: 0.5, xSource: "user" as const, ySource: "user" as const },
+  };
+  const [before] = positionSavedModels([base], placements);
+  const [after] = positionSavedModels(
+    [
+      {
       ...base,
       info: {
         id: "private-model",
@@ -859,11 +809,13 @@ test("asynchronous capability metadata enriches details without shifting map geo
         toolCall: true,
         reasoning: true,
         openWeights: false,
-        metadataSource: "models-dev",
-        matched: true,
+          metadataSource: "models-dev",
+          matched: true,
+        },
       },
-    },
-  ]);
+    ],
+    placements,
+  );
 
   assert.deepEqual(
     { x: after.x, y: after.y, confidence: after.confidence },
@@ -872,38 +824,35 @@ test("asynchronous capability metadata enriches details without shifting map geo
 });
 
 test("nearest selection has hysteresis and directional navigation favors aligned models", () => {
-  const models = positionModels([
-    {
-      ...entry("left"),
-      ranking: {
-        capabilityPercentile: 0.5,
-        responseTimePercentile: 0.2,
-        source: "Fixture",
-      },
-    },
-    {
-      ...entry("right"),
-      ranking: {
-        capabilityPercentile: 0.5,
-        responseTimePercentile: 0.8,
-        source: "Fixture",
-      },
-    },
-    {
-      ...entry("up"),
-      ranking: {
-        capabilityPercentile: 0.9,
-        responseTimePercentile: 0.2,
-        source: "Fixture",
-      },
-    },
-  ]);
+  const models = positionSavedModels([entry("left"), entry("right"), entry("up")], {
+    left: { x: 1 / 6, y: 0.5, xSource: "user", ySource: "user" },
+    right: { x: 5 / 6, y: 0.5, xSource: "user", ySource: "user" },
+    up: { x: 1 / 6, y: 5 / 6, xSource: "user", ySource: "user" },
+  });
 
   assert.equal(nearestModel(models, { x: 0.49, y: 0.5 }, "left")?.value, "left");
   assert.equal(nearestModel(models, { x: 0.72, y: 0.5 }, "left")?.value, "right");
   assert.equal(findDirectionalModel(models, "left", "right")?.value, "right");
   assert.equal(findDirectionalModel(models, "left", "up")?.value, "up");
   assert.equal(findDirectionalModel(models, "left", "left")?.value, "left");
+  // Without an active model there is nothing to move from.
+  assert.equal(findDirectionalModel(models, undefined, "right"), undefined);
+  assert.equal(findDirectionalModel(models, "missing", "right"), undefined);
+});
+
+test("hysteresis never keeps the current model once it is beyond the capture radius", () => {
+  const at = (value: string, x: number, y: number): PositionedModel => ({
+    ...positionSavedModels([entry(value)], {
+      [value]: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
+    })[0],
+    x,
+    y,
+  });
+  const models = [at("a", 0.3, 0.5), at("b", 0.7, 0.5)];
+  // 0.205 from A and 0.195 from B: inside the hysteresis band, but A is out of reach.
+  assert.equal(nearestModel(models, { x: 0.505, y: 0.5 }, "a", 0.025, 0.2)?.value, "b");
+  // Within reach, the same band keeps A.
+  assert.equal(nearestModel(models, { x: 0.505, y: 0.5 }, "a", 0.025, 0.3)?.value, "a");
 });
 
 test("nearest selection ignores points beyond the capture radius of every model", () => {
@@ -911,7 +860,7 @@ test("nearest selection ignores points beyond the capture radius of every model"
     center: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
     corner: { x: 0, y: 0, xSource: "user", ySource: "user" },
   });
-  // About 0.32 from the center model and 0.45 from the corner one.
+  // About 0.64 from the center model and 1.34 from the corner one.
   const empty = { x: 0.95, y: 0.95 };
   assert.equal(nearestModel(models, empty, undefined, 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);
   assert.equal(nearestModel(models, empty, "center", 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);

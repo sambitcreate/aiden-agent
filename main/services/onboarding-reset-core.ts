@@ -32,6 +32,22 @@ export async function deleteEveryCredential(
   if (failures.length > 0) throw new Error("Provider credentials were not fully cleared.");
 }
 
+/**
+ * Delete every credential, then let in-memory readers forget what they
+ * remembered from the store, even when a deletion fails.
+ */
+export async function clearEveryCredential(
+  providerIds: readonly string[],
+  deleteCredential: (providerId: string) => Promise<void>,
+  forgetCredentials: () => Promise<void>,
+): Promise<void> {
+  try {
+    await deleteEveryCredential(providerIds, deleteCredential);
+  } finally {
+    await forgetCredentials();
+  }
+}
+
 async function captureFailure(
   failures: unknown[],
   operation: () => Promise<unknown>,

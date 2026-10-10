@@ -1,11 +1,10 @@
-import {
-  artificialAnalysisRanking,
-  findArtificialAnalysisModel,
-  type ArtificialAnalysisCatalog,
-} from "./artificial-analysis-catalog-core.js";
 import type { SamplingParamsByThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import { catalogProviderSlug } from "../../renderer/shared/model-catalog-provider.js";
+import {
+  catalogProviderSlug,
+  modelIdLeaf,
+  openRouterAuthor,
+} from "../../renderer/shared/model-catalog-provider.js";
 import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 import {
   openRouterBenchmarkForModel,
@@ -217,40 +216,9 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
   return value as ModelCatalog;
 }
 
-const OPENROUTER_DIRECT_AUTHOR: Readonly<Record<string, string>> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  google: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "x-ai",
-  mistral: "mistralai",
-  minimax: "minimax",
-  zai: "z-ai",
-  nvidia: "nvidia",
-};
-
 const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate"]);
 
-const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
-  openai: "OpenAI",
-  "openai-codex": "OpenAI",
-  anthropic: "Anthropic",
-  gemini: "Google",
-  google: "Google",
-  deepseek: "DeepSeek",
-  moonshot: "Moonshot AI",
-};
-
 export { catalogProviderSlug };
-
-function normalizeId(id: string): string {
-  const slash = id.lastIndexOf("/");
-  return (slash >= 0 ? id.slice(slash + 1) : id).toLowerCase();
-}
 
 interface ModelIdIndex {
   /** Lowercased full id -> first row with that id in iteration order. */
@@ -267,7 +235,7 @@ function emptyIndex(): ModelIdIndex {
 function addToIndex(index: ModelIdIndex, key: string, model: RawModel): void {
   const exact = key.toLowerCase();
   if (!index.exact.has(exact)) index.exact.set(exact, model);
-  const leaf = normalizeId(key);
+  const leaf = modelIdLeaf(key);
   if (!index.leaf.has(leaf)) index.leaf.set(leaf, model);
 }
 
@@ -299,10 +267,13 @@ function catalogIndex(catalog: ModelCatalog): ModelIdIndex {
   return index;
 }
 
+/** An exact (case-insensitive) id match wins over a leaf match. */
+function lookupIndex(index: ModelIdIndex, modelId: string): RawModel | null {
+  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(modelIdLeaf(modelId)) ?? null;
+}
+
 function findRawInProvider(provider: RawProvider | undefined, modelId: string): RawModel | null {
-  if (!provider) return null;
-  const index = providerIndex(provider);
-  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(normalizeId(modelId)) ?? null;
+  return provider ? lookupIndex(providerIndex(provider), modelId) : null;
 }
 
 function findRawForProvider(
@@ -318,9 +289,7 @@ function findRawForProvider(
 /** Exact matches across the catalog must win before any lossy normalized match. */
 function findRaw(catalog: ModelCatalog, providerId: string, modelId: string): RawModel | null {
   const preferred = findRawInProvider(catalog[catalogProviderSlug(providerId) ?? ""], modelId);
-  if (preferred) return preferred;
-  const index = catalogIndex(catalog);
-  return index.exact.get(modelId.toLowerCase()) ?? index.leaf.get(normalizeId(modelId)) ?? null;
+  return preferred ?? lookupIndex(catalogIndex(catalog), modelId);
 }
 
 const MAX_MODELS_DEV_CANONICAL_ID_LENGTH = 256;
@@ -411,7 +380,7 @@ function modelsDevBenchmark(
   provider: ModelCatalogProvider,
   modelId: string,
 ): ModelInfo["benchmark"] {
-  const directAuthor = OPENROUTER_DIRECT_AUTHOR[provider.id];
+  const directAuthor = openRouterAuthor(provider.id);
   const providerCatalog = catalog[provider.id] ?? catalog[catalogProviderSlug(provider.id) ?? ""];
   if (
     directAuthor === undefined &&
@@ -599,63 +568,26 @@ function localInfo(
     format: metadata.format,
     contextLength: metadata.contextLength ?? fallback.contextLength,
     inputModalities,
-    ranking: undefined,
     metadataSource: "local",
     matched: true,
   };
 }
 
-function hostedInfo(
-  snapshot: ArtificialAnalysisCatalog,
-  provider: ModelCatalogProvider,
-  modelId: string,
-  fallback: ModelInfo,
-): ModelInfo {
-  const match = findArtificialAnalysisModel(
-    snapshot,
-    modelId,
-    ARTIFICIAL_ANALYSIS_CREATOR[provider.id],
-    fallback.name,
-  );
-  if (!match) return fallback;
-  const inputs = match.input_modalities;
-  return {
-    ...fallback,
-    id: modelId,
-    name: match.name ?? fallback.name,
-    vision: inputs ? inputs.includes("image") : fallback.vision,
-    reasoning: match.reasoning ?? fallback.reasoning,
-    openWeights: match.open_weights ?? fallback.openWeights,
-    parameterCount:
-      match.parameter_count_billions === undefined
-        ? fallback.parameterCount
-        : `${match.parameter_count_billions}B`,
-    contextLength: match.context_window_tokens ?? fallback.contextLength,
-    inputModalities: inputs?.length ? inputs : fallback.inputModalities,
-    releaseDate: match.release_date ?? fallback.releaseDate,
-    ranking: artificialAnalysisRanking(snapshot, match),
-    metadataSource: "artificial-analysis",
-    matched: true,
-  };
-}
-
-/** Apply local > Artificial Analysis > models.dev precedence for one model. */
+/** Local metadata wins for local providers; hosted models use models.dev plus benchmark evidence. */
 export function resolveModelInfo(
   catalog: ModelCatalog,
-  artificialAnalysis: ArtificialAnalysisCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
   openRouterBenchmarks?: OpenRouterBenchmarkCache | null,
 ): ModelInfo {
-  const fallback = modelsDevInfo(catalog, provider.id, modelId);
+  const info = modelsDevInfo(catalog, provider.id, modelId);
   if (isLocalProvider(provider)) {
     const metadata = provider.modelMetadata?.[modelId];
-    return metadata ? localInfo(modelId, metadata, fallback) : fallback;
+    return metadata ? localInfo(modelId, metadata, info) : info;
   }
-  const hosted = hostedInfo(artificialAnalysis, provider, modelId, fallback);
   const benchmark = openRouterBenchmarks
     ? (openRouterBenchmarkForModel(openRouterBenchmarks, provider.id, modelId) ??
       modelsDevBenchmark(catalog, openRouterBenchmarks, provider, modelId))
     : undefined;
-  return benchmark ? { ...hosted, benchmark } : hosted;
+  return benchmark ? { ...info, benchmark } : info;
 }

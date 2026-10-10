@@ -204,7 +204,7 @@ Audit row: Backend #5.
 
 Requirements:
 - `main/services/models-catalog-core.ts`: build lookup indexes once per catalog object (e.g. a `WeakMap` cache): per-provider id map, per-provider leaf-id map, global id and leaf maps, and any normalized-name maps the benchmark fallback needs. `findRaw`, `findRawInProvider` and the benchmark name fallback use them and return the same row the linear scans returned (first occurrence wins). Use locale-independent lowercasing for identifiers.
-- `main/services/openrouter-benchmark-runtime-core.ts`: `catalog()` keeps the "has key" answer (and the parsed cache) in memory, invalidated by connect, refresh and disconnect, so ordinary `models:info` calls do not read and decrypt the credential document each time.
+- `main/services/openrouter-benchmark-runtime-core.ts`: `catalog()` keeps the "has key" answer (and the parsed cache) in memory, invalidated by connect, refresh and disconnect (and by `invalidate()` after onboarding reset deletes every stored credential), so ordinary `models:info` calls do not read and decrypt the credential document each time.
 
 Tests: fixture catalog with duplicate ids across providers → lookups return the expected first-occurrence rows; `catalog()` called N times reads credentials once, and again after disconnect/connect.
 

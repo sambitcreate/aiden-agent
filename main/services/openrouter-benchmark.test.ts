@@ -641,6 +641,31 @@ test("catalog reads keep the credential state in memory until a lifecycle action
   assert.equal(cacheReads, 1);
 });
 
+test("invalidate makes catalog re-read a credential deleted outside the runtime", async () => {
+  let key: string | null = "pad-key";
+  const cache = buildOpenRouterBenchmarkCache(responsePayload());
+  const runtime = new OpenRouterBenchmarkRuntime({
+    credentials: {
+      read: async () => key,
+      write: async (next) => {
+        key = next;
+      },
+      deleteKey: async () => {
+        key = null;
+      },
+    },
+    cache: { read: async () => cache, write: async () => undefined, clear: async () => undefined },
+    fetchCatalog: async () => cache,
+  });
+
+  assert.equal(await runtime.catalog(), cache);
+  // A credential store pass (such as onboarding reset) deletes the key directly.
+  key = null;
+  assert.equal(await runtime.catalog(), cache, "the remembered catalog is still served");
+  await runtime.invalidate();
+  assert.equal(await runtime.catalog(), null);
+});
+
 test("catalog does not remember a credential read that failed", async () => {
   let failing = true;
   let credentialReads = 0;

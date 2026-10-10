@@ -65,7 +65,6 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
   assert.match(source, /document\.startViewTransition/u);
   assert.match(source, /panelTransitionRef\.current\?\.skipTransition\(\)/u);
   assert.match(source, /event\.detail > 0/u);
-  assert.match(source, /prefers-reduced-motion: reduce/u);
   assert.match(source, /providerId="openrouter"/u);
   assert.doesNotMatch(source, /Sparkles/u);
   assert.match(source, /hidden=\{activePanel !== "models"\}/u);
@@ -81,7 +80,6 @@ test("Model Pad progressively discloses supporting and advanced controls", () =>
   assert.match(source, /Model list below/u);
   assert.match(source, /enlarge the window to view it beside the Pad/u);
   assert.match(source, /scrollIntoView/u);
-  assert.match(source, /dataset\.reduceMotion === "true"/u);
   assert.doesNotMatch(styles, /--model-pad-fieldset-width/u);
   assert.match(styles, /\.model-pad-fieldset\s*\{\s*width: 100%;\s*min-width: 0/u);
   assert.match(styles, /\.model-pad-field\s*\{\s*padding: 1\.5rem/u);

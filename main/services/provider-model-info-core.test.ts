@@ -4,10 +4,15 @@ import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { createProviderModelInfo, mergeCodexModelInfo } from "./provider-model-info-core.js";
 import type { ModelInfo } from "./types.js";
 
-const ranking = {
-  capabilityPercentile: 0.9,
-  responseTimePercentile: 0.2,
-  source: "Artificial Analysis · Intelligence Index v4.1",
+const benchmark: NonNullable<ModelInfo["benchmark"]> = {
+  source: "openrouter",
+  datasetSource: "artificial-analysis",
+  sourceLabel: "Artificial Analysis via OpenRouter",
+  sourceUrl: "https://artificialanalysis.ai",
+  citation: "Source: Artificial Analysis via OpenRouter.",
+  asOf: "2026-06-03T12:00:00.000Z",
+  license: "CC BY 4.0",
+  coding: 80,
 };
 
 const pinned: ModelInfo = {
@@ -34,8 +39,8 @@ function fixture() {
     reasoning: false,
     openWeights: true,
     contextLength: 1,
-    ranking: modelId === "gpt-5.4" ? ranking : undefined,
-    metadataSource: "artificial-analysis",
+    ...(modelId === "gpt-5.4" ? { benchmark } : {}),
+    metadataSource: "models-dev",
     matched: true,
   });
   const service = createProviderModelInfo({
@@ -58,12 +63,7 @@ function fixture() {
 test("enriches pinned Codex models without replacing Pi-authoritative capabilities", async () => {
   const { service, requests } = fixture();
   const result = await service.info(OPENAI_CODEX_PROVIDER_ID, "gpt-5.4");
-  assert.deepEqual(result, {
-    ...pinned,
-    ranking,
-    metadataSource: "artificial-analysis",
-    matched: true,
-  });
+  assert.deepEqual(result, { ...pinned, benchmark, matched: true });
   assert.deepEqual(requests, [{ providerId: OPENAI_CODEX_PROVIDER_ID, modelIds: ["gpt-5.4"] }]);
 });
 
@@ -106,7 +106,7 @@ test("Codex enrichment grafts models.dev cost and canonical id onto Pi metadata"
 test("keeps unknown Codex ids unavailable and enriches batches consistently", async () => {
   const { service } = fixture();
   const result = await service.infoMany(OPENAI_CODEX_PROVIDER_ID, ["gpt-5.4", "unknown"]);
-  assert.equal(result["gpt-5.4"].ranking, ranking);
+  assert.equal(result["gpt-5.4"].benchmark, benchmark);
   assert.deepEqual(result.unknown, {
     id: "unknown",
     vision: false,
@@ -231,16 +231,6 @@ async function openRouterGatewayService(overrides?: { contextLength: number }) {
   });
   // models.dev knows an unrelated model only, so the gateway model is unmatched.
   const modelsDev = parseModelCatalog({ openrouter: { models: { "other/model": { name: "Other Model" } } } });
-  const artificialAnalysis = {
-    schema_version: 1 as const,
-    source: {
-      name: "Artificial Analysis" as const,
-      url: "https://artificialanalysis.ai/data-api" as const,
-      fetched_at: "2026-10-01T00:00:00.000Z",
-      intelligence_index_version: 4.1,
-    },
-    models: [],
-  };
   const modelId = "acme/fresh-model-20261001";
   const provider = {
     id: "openrouter",
@@ -257,11 +247,11 @@ async function openRouterGatewayService(overrides?: { contextLength: number }) {
   const service = createProviderModelInfo({
     modelsCatalog: {
       info: async (catalogProvider, id) =>
-        resolveModelInfo(modelsDev, artificialAnalysis, catalogProvider, id, benchmarks),
+        resolveModelInfo(modelsDev, catalogProvider, id, benchmarks),
       infoMany: async (catalogProvider, ids) =>
         Object.fromEntries(ids.map((id) => [
           id,
-          resolveModelInfo(modelsDev, artificialAnalysis, catalogProvider, id, benchmarks),
+          resolveModelInfo(modelsDev, catalogProvider, id, benchmarks),
         ])),
     },
     legacyProvider: async () => provider,

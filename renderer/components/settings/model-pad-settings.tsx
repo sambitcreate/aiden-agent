@@ -42,6 +42,7 @@ import {
   modelPadHasBenchmarkHeight,
   modelPadHeightCaption,
   modelPadLeftPercent,
+  modelPadPointFromPointer,
   modelPadPointKey,
   modelPadTopPercent,
   moveModelPadPoint,
@@ -82,17 +83,7 @@ import {
 import type { ModelInfo } from "../../lib/types";
 import { BENCHMARK_STALE_DAYS, isOlderThanDays } from "../../lib/model-details";
 import { cn } from "../../lib/ui-utils";
-
-function pointFromPointer(event: React.PointerEvent, rect: DOMRect): ModelPadPoint {
-  const inset = MODEL_PAD_INSET_PERCENT / 100;
-  const range = MODEL_PAD_RANGE_PERCENT / 100;
-  const rawX = (event.clientX - rect.left) / rect.width;
-  const rawY = (event.clientY - rect.top) / rect.height;
-  return {
-    x: Math.min(1, Math.max(0, (rawX - inset) / range)),
-    y: 1 - Math.min(1, Math.max(0, (rawY - inset) / range)),
-  };
-}
+import { prefersReducedMotion } from "../../lib/appearance-runtime";
 
 /** `column:row` of a grid point, rows counted from the top. */
 function padCellKey(point: ModelPadPoint, gridSize: number): string {
@@ -793,10 +784,7 @@ export function ModelPadSettings() {
     panelTransitionRef.current?.skipTransition();
     panelTransitionRef.current = null;
 
-    const reduceMotion =
-      document.documentElement.dataset.reduceMotion === "true" ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!animate || reduceMotion || !("startViewTransition" in document)) {
+    if (!animate || prefersReducedMotion() || !("startViewTransition" in document)) {
       setActivePanel(nextPanel);
       return;
     }
@@ -851,20 +839,18 @@ export function ModelPadSettings() {
   const scrollToMoreModels = () => {
     const element = catalogRef.current;
     if (!element) return;
-    const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
     element.scrollBy({
       top: Math.max(176, element.clientHeight * 0.72),
-      behavior: reduceMotion ? "auto" : "smooth",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
   };
 
   const scrollToModelBrowser = () => {
     const element = modelsPanelRef.current;
     if (!element) return;
-    const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
     element.scrollIntoView({
       block: "start",
-      behavior: reduceMotion ? "auto" : "smooth",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
   };
 
@@ -977,7 +963,7 @@ export function ModelPadSettings() {
   ): Pick<ModelPadDragState, "point" | "displaced"> | undefined => {
     const rect = padRef.current?.getBoundingClientRect();
     if (!rect) return undefined;
-    const desired = snapToModelPadGrid(pointFromPointer(event, rect), gridSize);
+    const desired = snapToModelPadGrid(modelPadPointFromPointer(event, rect), gridSize);
     const point = nearestAvailableModelPadPoint(desired, gridSize, occupiedPoints(value));
     return {
       point,

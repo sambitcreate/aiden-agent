@@ -20,6 +20,7 @@ import {
 } from "./ui";
 import { ModelPickerPad } from "./model-picker-pad";
 import { cn } from "../lib/ui-utils";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import {
   alsoViaLabel,
   createModelEntries,
@@ -28,7 +29,6 @@ import {
   modelSiblings,
   orderModelEntries,
   positionSavedModels,
-  positionModels,
   recentModelsForList,
   visibleModelEntries,
   type ModelEntry,
@@ -132,11 +132,7 @@ function describeModel(entry: ModelEntry): string {
   const output = formatTokens(entry.info?.outputLimit);
   if (context) details.push(`Context ${context} tokens`);
   if (output) details.push(`Maximum output ${output} tokens`);
-  if (entry.ranking) details.push(`Benchmark ${entry.ranking.source}`);
   if (entry.info?.benchmark) details.push(`Benchmark ${entry.info.benchmark.sourceLabel}`);
-  else if (entry.info?.metadataSource === "artificial-analysis") {
-    details.push("Model data Artificial Analysis");
-  }
   details.push(`Model ID ${entry.model}`);
   return details.join(". ");
 }
@@ -369,10 +365,7 @@ export function ModelHoverDetails({
     benchmarkDate && isOlderThanDays(info?.benchmark?.asOf, BENCHMARK_STALE_DAYS)
       ? `${benchmarkDate} (over ${BENCHMARK_STALE_DAYS} days old)`
       : benchmarkDate;
-  const attributionUrl =
-    info?.benchmark?.sourceUrl ??
-    model.ranking?.sourceUrl ??
-    (info?.metadataSource === "artificial-analysis" ? "https://artificialanalysis.ai" : undefined);
+  const benchmark = info?.benchmark;
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -464,16 +457,14 @@ export function ModelHoverDetails({
         >
           {model.model}
         </div>
-        {attributionUrl ? (
+        {benchmark ? (
           <a
-            href={attributionUrl}
+            href={benchmark.sourceUrl}
             target="_blank"
             rel="noreferrer"
             className="mt-1 inline-block text-mini leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
           >
-            {info?.benchmark
-              ? `${info.benchmark.sourceLabel} · ${info.benchmark.license}`
-              : `${model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`}
+            {`${benchmark.sourceLabel} · ${benchmark.license}`}
           </a>
         ) : null}
       </div>
@@ -484,14 +475,6 @@ export function ModelHoverDetails({
 
 /** Matches the knob's 250ms confirm transition closely enough to read as one beat. */
 const PAD_COMMIT_CLOSE_DELAY_MS = 200;
-
-function prefersReducedMotion(): boolean {
-  if (document.documentElement.dataset.reduceMotion === "true") return true;
-  return (
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
 
 export function ModelPicker({
   providers,
@@ -571,10 +554,6 @@ export function ModelPicker({
       ),
     };
   }, [open, search, entries, recentModels, selectedValue, pinned, orderedEntries]);
-  const detailPositions = React.useMemo(
-    () => (open ? positionModels(entries) : []),
-    [open, entries],
-  );
   const hasPadModels = positioned.length > 0;
   // Named only while some model on the Pad takes its height from a benchmark.
   const heightMetric = React.useMemo(
@@ -607,7 +586,6 @@ export function ModelPicker({
   const selectedOffPad = selectedPosition
     ? undefined
     : entries.find((entry) => entry.value === selectedValue);
-  const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
   const activePosition: ModelEntry | undefined = !open
     ? undefined
     : view === "pad"
@@ -620,21 +598,15 @@ export function ModelPicker({
           selected ??
           (selectedValue ? undefined : positioned[0]))
         : undefined
-      : (detailPosition ??
-        detailPositions.find((entry) => entry.value === selectedValue) ??
-        detailPositions[0]);
+      : (entries.find((entry) => entry.value === previewValue) ??
+        entries.find((entry) => entry.value === selectedValue) ??
+        entries[0]);
   const activeAttribution = activePosition?.info?.benchmark
     ? {
         url: activePosition.info.benchmark.sourceUrl,
         label: `${activePosition.info.benchmark.sourceLabel} · ${activePosition.info.benchmark.license}`,
       }
-    : activePosition?.ranking?.sourceUrl ||
-        activePosition?.info?.metadataSource === "artificial-analysis"
-      ? {
-          url: activePosition?.ranking?.sourceUrl ?? "https://artificialanalysis.ai",
-          label: `${activePosition?.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis`,
-        }
-      : null;
+    : null;
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;

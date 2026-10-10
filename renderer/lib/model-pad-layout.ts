@@ -183,6 +183,24 @@ export function modelPadTopPercent(y: number): number {
   return MODEL_PAD_INSET_PERCENT + (1 - y) * MODEL_PAD_RANGE_PERCENT;
 }
 
+/**
+ * The Pad point under a pointer on a Pad laid out in `rect`: the inverse of
+ * `modelPadLeftPercent`/`modelPadTopPercent`, clamped to the Pad's 0...1 range.
+ */
+export function modelPadPointFromPointer(
+  pointer: { clientX: number; clientY: number },
+  rect: Pick<DOMRectReadOnly, "left" | "top" | "width" | "height">,
+): ModelPadPoint {
+  const inset = MODEL_PAD_INSET_PERCENT / 100;
+  const range = MODEL_PAD_RANGE_PERCENT / 100;
+  const rawX = (pointer.clientX - rect.left) / rect.width;
+  const rawY = (pointer.clientY - rect.top) / rect.height;
+  return {
+    x: Math.min(1, Math.max(0, (rawX - inset) / range)),
+    y: 1 - Math.min(1, Math.max(0, (rawY - inset) / range)),
+  };
+}
+
 /** Half the composer knob (24px). */
 export const MODEL_PAD_KNOB_RADIUS_PX = 12;
 /** Space between the knob's edge and its name tag. */

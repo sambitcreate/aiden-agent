@@ -1,12 +1,9 @@
-import type { ModelBenchmarkMetric, ModelInfo, ModelRanking, Provider } from "./types";
+import type { ModelBenchmarkMetric, ModelInfo, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
 import {
-  modelPadGridPoints,
-  modelPadGridSize,
   modelPadGridSizeForPlacements,
   modelPadPlacementKind,
   modelPadPlacementSourceLabel,
-  MODEL_PAD_PLACEMENT_KIND_LABELS,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   type ModelPadCapabilitySuggestion,
@@ -16,19 +13,12 @@ import {
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
 import { isNonChatModel } from "../shared/model-eligibility";
-
-export type { ModelRanking } from "./types";
+import { modelIdLeaf } from "../shared/model-catalog-provider";
 
 export { BASE_MODEL_PAD_GRID_SIZE as BASE_MODEL_GRID_SIZE } from "./model-pad-layout";
 export { modelPadGridSize as modelGridSize } from "./model-pad-layout";
 
 const FORMAT_RE = /[\s._-](MLX|GGUF|GGML|FP16|BF16|F16|INT8|AWQ|GPTQ|Q\d(?:_[A-Z0-9]+)*)$/i;
-const FAST_VARIANT_RE =
-  /(?:^|[\s._/-])(nano|tiny|mini|small|haiku|flash|lite|instant)(?:$|[\s._/-])/i;
-const DEEP_VARIANT_RE =
-  /(?:^|[\s._/-])(reasoner|reasoning|thinking|think|deep|high|xhigh)(?:$|[\s._/-])/i;
-const CAPABLE_VARIANT_RE = /(?:^|[\s._/-])(sonnet|opus|pro|ultra|max|large)(?:$|[\s._/-])/i;
-const PARAMETER_COUNT_RE = /(?:^|[\s._/-])(\d+(?:\.\d+)?)b(?:$|[\s._/-])/i;
 
 export interface ModelEntry {
   value: string;
@@ -40,7 +30,6 @@ export interface ModelEntry {
   providerArtwork?: Provider["artwork"];
   isLocal: boolean;
   info?: ModelInfo;
-  ranking?: ModelRanking;
 }
 
 /** Why a Pad model has no benchmark scores. */
@@ -137,7 +126,8 @@ export interface ExplicitModelSelection {
   model: string;
 }
 
-export type PositionConfidence = "personal" | "suggested" | "benchmark" | "estimated" | "unranked";
+/** Saved Pad placements only: placed by the user, or suggested (benchmark or measured). */
+export type PositionConfidence = "personal" | "suggested";
 
 export interface PositionedModel extends ModelEntry {
   /** Left (fast) to right (more deliberate), normalized to 0...1. */
@@ -210,7 +200,6 @@ export function modelInfoByValue(
 export function createModelEntries(
   providers: Provider[],
   infoByValue: Readonly<Record<string, ModelInfo | undefined>> = {},
-  rankingsByValue: Readonly<Record<string, ModelRanking | undefined>> = {},
 ): ModelEntry[] {
   const orderedProviders = providers
     .filter(isUsable)
@@ -242,7 +231,6 @@ export function createModelEntries(
         providerArtwork: provider.artwork,
         isLocal: local,
         info,
-        ranking: rankingsByValue[value] ?? info?.ranking,
       });
     }
   }
@@ -263,8 +251,7 @@ export function visibleModelEntries(
  * id, lowercased. Display-only: it links duplicate routes visually and never changes routing.
  */
 export function modelIdentityKey(entry: Pick<ModelEntry, "model" | "info">): string {
-  const id = canonicalModelId(entry) ?? entry.model;
-  return id.slice(id.lastIndexOf("/") + 1).toLowerCase();
+  return modelIdLeaf(canonicalModelId(entry) ?? entry.model);
 }
 
 function canonicalModelId(entry: Pick<ModelEntry, "info">): string | undefined {
@@ -487,146 +474,11 @@ export function previewBenchmarkSuggestions(
   );
 }
 
-function clamp(value: number, min = 0.08, max = 0.92): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function isPercentile(value: number): boolean {
-  return Number.isFinite(value) && value >= 0 && value <= 1;
-}
-
 function labelsFor(x: number, y: number): Pick<PositionedModel, "capabilityLabel" | "paceLabel"> {
   return {
     capabilityLabel: y >= 0.68 ? "Advanced" : y >= 0.4 ? "Capable" : "Everyday",
     paceLabel: x <= 0.34 ? "Faster" : x <= 0.66 ? "Balanced" : "Deliberate",
   };
-}
-
-function estimatePosition(
-  entry: ModelEntry,
-): Omit<
-  PositionedModel,
-  keyof ModelEntry | "capabilityLabel" | "paceLabel" | "placementKind" | "placementSourceLabel"
-> {
-  const ranking = entry.ranking;
-  if (
-    ranking &&
-    isPercentile(ranking.capabilityPercentile) &&
-    isPercentile(ranking.responseTimePercentile)
-  ) {
-    return {
-      x: clamp(ranking.responseTimePercentile),
-      y: clamp(ranking.capabilityPercentile),
-      confidence: "benchmark",
-      positionSource: ranking.source,
-    };
-  }
-
-  let x = 0.5;
-  let y = 0.5;
-  let signals = 0;
-  const model = `${entry.model} ${entry.info?.parameterCount ?? ""}`.toLowerCase();
-
-  if (FAST_VARIANT_RE.test(model)) {
-    x -= 0.22;
-    y -= 0.14;
-    signals += 1;
-  }
-  if (DEEP_VARIANT_RE.test(model)) {
-    x += 0.24;
-    y += 0.16;
-    signals += 1;
-  }
-  if (CAPABLE_VARIANT_RE.test(model)) {
-    x += 0.1;
-    y += 0.12;
-    signals += 1;
-  }
-
-  const parameterMatch = model.match(PARAMETER_COUNT_RE);
-  if (parameterMatch) {
-    const billions = Number(parameterMatch[1]);
-    if (billions >= 100) {
-      x += 0.2;
-      y += 0.18;
-    } else if (billions >= 60) {
-      x += 0.14;
-      y += 0.12;
-    } else if (billions >= 30) {
-      x += 0.08;
-      y += 0.07;
-    } else if (billions <= 4) {
-      x -= 0.18;
-      y -= 0.16;
-    } else if (billions <= 8) {
-      x -= 0.12;
-      y -= 0.1;
-    }
-    signals += 1;
-  }
-
-  if (signals === 0) {
-    return {
-      x,
-      y,
-      confidence: "unranked",
-      positionSource: entry.isLocal
-        ? "Benchmark unavailable · local speed depends on this device"
-        : "Benchmark unavailable · placed near the balanced midpoint",
-    };
-  }
-
-  return {
-    x: clamp(x),
-    y: clamp(y),
-    confidence: "estimated",
-    positionSource: entry.isLocal
-      ? "Estimated from model size or variant · speed depends on this device"
-      : "Estimated from the model variant name",
-  };
-}
-
-export function positionModels(entries: ModelEntry[]): PositionedModel[] {
-  const models = entries.map((entry) => ({
-    ...entry,
-    ...estimatePosition(entry),
-    placementKind: "benchmark" as const,
-    placementSourceLabel: MODEL_PAD_PLACEMENT_KIND_LABELS.benchmark,
-  }));
-  const gridSize = modelPadGridSize(models.length);
-  const availableCells = modelPadGridPoints(gridSize);
-  const confidenceOrder: Record<PositionConfidence, number> = {
-    personal: 0,
-    suggested: 1,
-    benchmark: 2,
-    estimated: 3,
-    unranked: 4,
-  };
-  const assignments = new Map<string, ModelPoint>();
-
-  for (const model of [...models].sort(
-    (a, b) =>
-      confidenceOrder[a.confidence] - confidenceOrder[b.confidence] ||
-      (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
-  )) {
-    let closestIndex = 0;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < availableCells.length; index += 1) {
-      const cell = availableCells[index];
-      const candidateDistance = (cell.x - model.x) ** 2 + (cell.y - model.y) ** 2;
-      if (candidateDistance < closestDistance) {
-        closestIndex = index;
-        closestDistance = candidateDistance;
-      }
-    }
-    const [cell] = availableCells.splice(closestIndex, 1);
-    assignments.set(model.value, cell);
-  }
-
-  return models.map((model) => {
-    const cell = assignments.get(model.value) ?? model;
-    return { ...model, ...cell, ...labelsFor(cell.x, cell.y) };
-  });
 }
 
 /** Saved personal positions are the only models shown on the user-owned Pad. */
@@ -714,8 +566,8 @@ export function findDirectionalModel(
   currentValue: string | undefined,
   direction: ModelDirection,
 ): PositionedModel | undefined {
-  if (models.length === 0) return undefined;
-  const current = models.find((model) => model.value === currentValue) ?? models[0];
+  const current = models.find((model) => model.value === currentValue);
+  if (!current) return undefined;
 
   const candidates = models.filter((model) => {
     if (model.value === current.value) return false;

@@ -218,6 +218,17 @@ export class OpenRouterBenchmarkRuntime {
     });
   }
 
+  /**
+   * Forget the remembered catalog so the next read sees the stored credential.
+   * For credential changes made outside this runtime, such as onboarding
+   * reset's catch-all credential pass.
+   */
+  invalidate(): Promise<void> {
+    return this.stateMutex.run(async () => {
+      this.catalogMemo = undefined;
+    });
+  }
+
   async connect(apiKey: unknown): Promise<ModelInsightsStatus> {
     const key = normalizeOpenRouterBenchmarkApiKey(apiKey);
     return this.actionMutex.run(async () => {

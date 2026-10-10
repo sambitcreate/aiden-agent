@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import type { ArtificialAnalysisCatalog } from "./artificial-analysis-catalog-core.js";
 import { buildOpenRouterBenchmarkCache } from "./openrouter-benchmark-catalog-core.js";
 import {
   CONSERVATIVE_RUNTIME_LIMITS,
@@ -89,19 +88,6 @@ test("Google discovery validates the native endpoint and returns only Pi-support
   assert.equal(result.modelMetadata["gemini-3.5-flash"]?.vision, true);
   assert.equal(requests.length, 2);
 });
-
-function snapshot(models: ArtificialAnalysisCatalog["models"]): ArtificialAnalysisCatalog {
-  return {
-    schema_version: 1,
-    source: {
-      name: "Artificial Analysis",
-      url: "https://artificialanalysis.ai/data-api",
-      fetched_at: "2026-07-20T12:00:00.000Z",
-      intelligence_index_version: 4.1,
-    },
-    models,
-  };
-}
 
 test("LM Studio custom connections use native metadata and exclude embeddings", async (t) => {
   const originalFetch = globalThis.fetch;
@@ -849,10 +835,9 @@ test("models.dev cost and canonical id are display-only metadata on the matched 
     assert.ok(!("canonicalModelId" in info(modelId)), `${modelId} has no canonical id`);
   }
 
-  // Artificial Analysis precedence keeps models.dev's display-only pricing.
+  // The hosted model-info read carries models.dev's display-only pricing.
   const hosted = resolveModelInfo(
     catalog,
-    snapshot([]),
     { id: "openai", baseUrl: "https://api.openai.com/v1" },
     "gpt-priced",
   );
@@ -1101,25 +1086,8 @@ test("local discovery metadata takes precedence over catalog metadata", () => {
       },
     },
   });
-  const artificialAnalysis = snapshot([
-    {
-      id: "aa-gemma",
-      slug: "gemma-4-e2b",
-      name: "Artificial Analysis Gemma",
-      creator: "Google",
-      context_window_tokens: 65_536,
-      input_modalities: ["text"],
-      ranking: {
-        capability_percentile: 0.8,
-        response_time_percentile: 0.4,
-        pace_metric: "median_end_to_end_response_time_seconds",
-      },
-    },
-  ]);
-
   const info = resolveModelInfo(
     catalog,
-    artificialAnalysis,
     {
       id: "lmstudio",
       baseUrl: "http://localhost:1234/v1",
@@ -1148,7 +1116,6 @@ test("local discovery metadata takes precedence over catalog metadata", () => {
   assert.equal(info.parameterCount, "4B-A2B");
   assert.equal(info.outputLimit, 8_192);
   assert.equal(info.openWeights, true);
-  assert.equal(info.ranking, undefined);
 });
 
 test("catalog non-chat types survive a local provider's generic LLM classification", () => {
@@ -1176,64 +1143,13 @@ test("catalog non-chat types survive a local provider's generic LLM classificati
   };
 
   assert.equal(
-    resolveModelInfo(catalog, snapshot([]), provider, "opaque-embedding").modelType,
+    resolveModelInfo(catalog, provider, "opaque-embedding").modelType,
     "embedding",
   );
   assert.equal(
-    resolveModelInfo(catalog, snapshot([]), provider, "voyage/rerank-2.5-lite").modelType,
+    resolveModelInfo(catalog, provider, "voyage/rerank-2.5-lite").modelType,
     "reranker",
   );
-});
-
-test("Artificial Analysis takes precedence for hosted models and models.dev fills gaps", () => {
-  const catalog = parseModelCatalog({
-    openai: {
-      models: {
-        "openai/gpt-example": {
-          name: "GPT Example",
-          attachment: false,
-          tool_call: true,
-          reasoning: false,
-          open_weights: false,
-          limit: { context: 8_192, output: 4_096 },
-        },
-      },
-    },
-  });
-  const info = resolveModelInfo(
-    catalog,
-    snapshot([
-      {
-        id: "aa-openai-example",
-        slug: "gpt-example",
-        name: "GPT Example",
-        creator: "OpenAI",
-        release_date: "2026-06-01",
-        reasoning: true,
-        context_window_tokens: 131_072,
-        input_modalities: ["text", "image"],
-        open_weights: false,
-        openrouter_api_id: "openai/gpt-example",
-        ranking: {
-          capability_percentile: 0.9,
-          response_time_percentile: 0.2,
-          pace_metric: "median_end_to_end_response_time_seconds",
-        },
-      },
-    ]),
-    { id: "openai", baseUrl: "https://api.openai.com/v1" },
-    "openai/gpt-example",
-  );
-
-  assert.equal(info.metadataSource, "artificial-analysis");
-  assert.equal(info.contextLength, 131_072);
-  assert.equal(info.vision, true);
-  assert.equal(info.reasoning, true);
-  assert.equal(info.toolCall, true);
-  assert.equal(info.outputLimit, 4_096);
-  assert.equal(info.ranking?.capabilityPercentile, 0.9);
-  assert.equal(info.ranking?.responseTimePercentile, 0.2);
-  assert.equal(info.ranking?.sourceUrl, "https://artificialanalysis.ai");
 });
 
 test("OpenRouter benchmark evidence attaches independently without changing capability authority", () => {
@@ -1262,7 +1178,6 @@ test("OpenRouter benchmark evidence attaches independently without changing capa
   });
   const info = resolveModelInfo(
     catalog,
-    snapshot([]),
     { id: "openai", baseUrl: "https://api.openai.com/v1" },
     "openai/gpt-example",
     benchmarks,
@@ -1319,7 +1234,6 @@ test("models.dev normalizes versioned benchmark IDs for direct and catalog-backe
   assert.equal(
     resolveModelInfo(
       catalog,
-      snapshot([]),
       { id: "anthropic", baseUrl: "https://api.anthropic.com" },
       "claude-opus-4-8",
       benchmarks,
@@ -1329,7 +1243,6 @@ test("models.dev normalizes versioned benchmark IDs for direct and catalog-backe
   assert.equal(
     resolveModelInfo(
       catalog,
-      snapshot([]),
       { id: "opencode-go", baseUrl: "https://opencode.ai" },
       "kimi-k3",
       benchmarks,
@@ -1339,12 +1252,47 @@ test("models.dev normalizes versioned benchmark IDs for direct and catalog-backe
   assert.equal(
     resolveModelInfo(
       catalog,
-      snapshot([]),
       { id: "custom:untrusted", baseUrl: "https://example.invalid" },
       "kimi-k3",
       benchmarks,
     ).benchmark,
     undefined,
+  );
+});
+
+test("a direct provider's benchmark author scopes the models.dev name fallback", () => {
+  const catalog = parseModelCatalog({
+    xiaomi: { models: { "mimo-v2-flash": { name: "MiMo V2 Flash" } } },
+  });
+  const benchmarks = buildOpenRouterBenchmarkCache({
+    data: [
+      ["xiaomi/mimo-v2-flash-20251216", "MiMo V2 Flash", 41.5],
+      ["community/mimo-v2-flash", "MiMo V2 Flash (community)", 12],
+    ].map(([model_permaslug, display_name, coding_index]) => ({
+      source: "artificial-analysis",
+      model_permaslug,
+      display_name,
+      coding_index,
+    })),
+    meta: {
+      as_of: "2026-08-26T12:00:00.000Z",
+      version: "v1",
+      source: "artificial-analysis",
+      source_url: "https://artificialanalysis.ai",
+      citation: "Source: Artificial Analysis via OpenRouter.",
+      model_count: 2,
+    },
+  });
+
+  // Unscoped, the name and the stamp-free ID both name two rows; the Xiaomi author picks one.
+  assert.equal(
+    resolveModelInfo(
+      catalog,
+      { id: "xiaomi", baseUrl: "https://api.xiaomimimo.com/v1" },
+      "mimo-v2-flash",
+      benchmarks,
+    ).benchmark?.coding,
+    41.5,
   );
 });
 
@@ -1385,7 +1333,6 @@ test("models.dev reasoning flags and thinking IDs pick the matching benchmark va
   const coding = (modelId: string) =>
     resolveModelInfo(
       catalog,
-      snapshot([]),
       { id: "anthropic", baseUrl: "https://api.anthropic.com" },
       modelId,
       benchmarks,

@@ -335,16 +335,6 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-export interface ModelRanking {
-  /** Fixed-snapshot percentile, where 1 is the most capable model. */
-  capabilityPercentile: number;
-  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
 /** One of the benchmark scores (defined with the Pad preferences that persist it). */
 export type ModelBenchmarkMetric = ModelPadMetric;
 
@@ -373,7 +363,6 @@ export interface ModelCost {
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -402,7 +391,6 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
   /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
   cost?: ModelCost;

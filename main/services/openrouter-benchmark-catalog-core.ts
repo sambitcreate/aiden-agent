@@ -1,4 +1,5 @@
 import type { ModelBenchmarkScores } from "./types.js";
+import { modelIdLeaf, openRouterAuthor } from "../../renderer/shared/model-catalog-provider.js";
 
 export const OPENROUTER_BENCHMARK_ENDPOINT =
   "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=500";
@@ -272,24 +273,6 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
   };
 }
 
-const OPENROUTER_AUTHOR: Readonly<Record<string, string>> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  google: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "x-ai",
-  mistral: "mistralai",
-  minimax: "minimax",
-  zai: "z-ai",
-  "zai-coding-cn": "z-ai",
-  xiaomi: "xiaomi",
-  nvidia: "nvidia",
-};
-
 function benchmarkScores(
   cache: OpenRouterBenchmarkCache,
   model: OpenRouterBenchmarkModel,
@@ -315,11 +298,6 @@ function splitPermaslug(value: string): { author: string; modelId: string } | nu
     author: value.slice(0, slash).toLowerCase(),
     modelId: value.slice(slash + 1).toLowerCase(),
   };
-}
-
-function modelIdLeaf(value: string): string {
-  const slash = value.lastIndexOf("/");
-  return (slash >= 0 ? value.slice(slash + 1) : value).toLowerCase();
 }
 
 function withoutBenchmarkReleaseStamp(value: string): string {
@@ -532,13 +510,14 @@ export function openRouterBenchmarkForModel(
   providerId: string,
   modelId: string,
 ): ModelBenchmarkScores | undefined {
-  const author = OPENROUTER_AUTHOR[providerId];
+  const author = openRouterAuthor(providerId);
   const candidates = [
     ...(providerId === "openrouter" || modelId.includes("/") ? [modelId] : []),
     ...(author && !modelId.toLowerCase().startsWith(`${author}/`)
       ? [`${author}/${modelId}`]
       : []),
   ];
+  if (candidates.length === 0) return undefined;
   const index = benchmarkIndex(cache);
   // The earliest record in source order wins, as the former linear scan did.
   let first: IndexedBenchmark | undefined;
