@@ -139,7 +139,7 @@ test("a load with a malformed language is refused before reaching the engine", a
     modelDirectory: "/models/x",
     spec: parakeet,
     language: "not a language!",
-  });
+  }, createLocalSpeechMessageHandler(fake.engine));
   assert.equal(reply?.kind === "failure" && reply.code, "invalid-request");
   assert.equal(fake.loads.length, 0);
 });
