@@ -841,8 +841,11 @@ class AidenChatTest {
 
         // Every visual already has its snapshot: nothing to wait for.
         assertNull(policy.nextDelayMillis(settled, attempt = 0, now = soon))
-        // Missing snapshots: three bounded tries, then stop.
-        assertEquals(listOf(4_000L, 10_000L, 20_000L, null), (0..3).map { policy.nextDelayMillis(pending, it, soon) })
+        // Missing snapshots: three bounded re-reads, then stop. Measured from settlement the
+        // re-reads land at 4 s, 10 s and 20 s, the same schedule iOS uses.
+        val waits = (0..3).map { policy.nextDelayMillis(pending, it, soon) }
+        assertNull(waits.last())
+        assertEquals(listOf(4_000L, 10_000L, 20_000L), waits.filterNotNull().runningReduce { elapsed, wait -> elapsed + wait })
         // One visual still missing its snapshot is enough to retry.
         val partial = settled.copy(attachments = settled.attachments.orEmpty().take(1))
         assertEquals(4_000L, policy.nextDelayMillis(partial, 0, soon))
