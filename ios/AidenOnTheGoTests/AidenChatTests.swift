@@ -4212,6 +4212,55 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenChatVisualPresentation.rowVisuals(in: legacy), [])
     }
 
+    func testLateSnapshotRefetchIsBoundedToARecentReplyStillAwaitingSnapshots() throws {
+        let settled = try visualFixtureMessage()
+        let finishedAt = try XCTUnwrap(settled.timeline?.finishedAt)
+        let committed = Date(timeIntervalSince1970: finishedAt / 1_000)
+        let soon = committed.addingTimeInterval(5)
+        let awaiting = try visualFixtureMessage { message in
+            var visuals = message["visuals"] as? [[String: Any]] ?? []
+            visuals[1].removeValue(forKey: "snapshotAttachmentId")
+            message["visuals"] = visuals
+        }
+        typealias Reconciliation = AidenVisualSnapshotReconciliation
+
+        // Every visual already has its snapshot: nothing to wait for.
+        XCTAssertNil(Reconciliation.nextDelay(for: settled, attempt: 0, now: soon))
+        // One snapshot is missing: about 4 s, 10 s and 20 s after settling, then stop.
+        XCTAssertEqual(
+            (0...3).map { Reconciliation.nextDelay(for: awaiting, attempt: $0, now: soon) },
+            [.seconds(4), .seconds(6), .seconds(10), nil]
+        )
+        // A reply that settled more than two minutes ago is not waited on.
+        XCTAssertNil(Reconciliation.nextDelay(for: awaiting, attempt: 0, now: committed.addingTimeInterval(121)))
+        XCTAssertNotNil(Reconciliation.nextDelay(for: awaiting, attempt: 0, now: committed.addingTimeInterval(119)))
+        // A long reply is recent by when it finished, not when it started.
+        let longReply = AidenChatMessage(
+            id: "long", role: .assistant, text: "Done.",
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart")],
+            timeline: AidenGenerationTimeline(
+                version: 3, generationId: "g", status: .completed,
+                startedAt: (soon.timeIntervalSince1970 - 600) * 1_000,
+                finishedAt: (soon.timeIntervalSince1970 - 10) * 1_000,
+                steps: []
+            ),
+            createdAt: soon.addingTimeInterval(-600)
+        )
+        XCTAssertEqual(Reconciliation.nextDelay(for: longReply, attempt: 0, now: soon), .seconds(4))
+        // No visuals, or not an assistant reply: nothing to wait for.
+        XCTAssertNil(Reconciliation.nextDelay(
+            for: AidenChatMessage(id: "plain", role: .assistant, text: "Hi", createdAt: soon), attempt: 0, now: soon
+        ))
+        XCTAssertNil(Reconciliation.nextDelay(for: nil, attempt: 0, now: soon))
+
+        // Only the newest assistant reply is considered.
+        let user = AidenChatMessage(id: "u", role: .user, text: "Next", createdAt: soon)
+        XCTAssertEqual(Reconciliation.awaitedMessage(in: [awaiting, user])?.id, awaiting.id)
+        let newer = AidenChatMessage(id: "newer", role: .assistant, text: "Later", createdAt: soon)
+        XCTAssertEqual(Reconciliation.awaitedMessage(in: [awaiting, user, newer])?.id, "newer")
+        XCTAssertNil(Reconciliation.awaitedMessage(in: [user]))
+    }
+
     func testHtmlVisualWithoutAUsableSnapshotLeavesItsCardAsTheOnlyRepresentation() throws {
         func transcriptRowIDs(_ message: AidenChatMessage) throws -> [String] {
             try XCTUnwrap(AidenChronologicalProjection.rows(
@@ -10258,6 +10307,11 @@ private final class AidenFailedRemovalFileManager: FileManager, @unchecked Senda
     override func removeItem(at URL: URL) throws { throw CocoaError(.fileWriteNoPermission) }
 }
 
+@MainActor
+private final class AidenSnapshotRefreshLog {
+    var delays: [Duration] = []
+}
+
 private final class AidenRenameRequestLog: @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [URLRequest] = []
@@ -10421,6 +10475,101 @@ extension AidenChatTests {
         await model.loadEarlierMessages()
         XCTAssertEqual(model.chat.messages.map(\.id), (1...80).map { "n\($0)" })
         XCTAssertFalse(model.hasOlderMessages)
+    }
+
+    private func snapshotReply(captured: Bool) -> [AidenChatMessage] {
+        let snapshotID = "visual-snapshot_\(String(repeating: "a", count: 64))"
+        return [
+            AidenChatMessage(id: "m1", role: .user, text: "Draw it", createdAt: Date()),
+            AidenChatMessage(
+                id: "m2", role: .assistant, text: "Here it is.",
+                attachments: captured
+                    ? [AidenMessageAttachment(id: snapshotID, name: "Chart.png", mimeType: "image/png", kind: .image, size: 1_024)]
+                    : nil,
+                visuals: [AidenChatVisual(
+                    id: "ui-1", kind: .ui, title: "Chart", fallbackText: "A chart.",
+                    snapshotAttachmentId: captured ? snapshotID : nil
+                )],
+                createdAt: Date()
+            ),
+        ]
+    }
+
+    @MainActor
+    func testOpenChatAdoptsASnapshotCapturedAfterTheReplySettled() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: snapshotReply(captured: false), revision: "snap-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let log = AidenSnapshotRefreshLog()
+        model.visualSnapshotRefreshSleep = { delay in
+            log.delays.append(delay)
+            // The Mac stores the snapshot while the phone waits for its second retry.
+            if log.delays.count == 2 {
+                fixture.replaceTranscript(self.snapshotReply(captured: true), revision: "snap-r2")
+            }
+        }
+
+        await model.load(observeProgress: false)
+        XCTAssertNil(model.chat.messages.last?.visuals?.first?.snapshotAttachmentId)
+        await model.visualSnapshotRefreshTask?.value
+
+        XCTAssertEqual(log.delays, [.seconds(4), .seconds(6)], "stops as soon as the snapshot arrives")
+        XCTAssertEqual(fixture.windowRequests.count, 3, "the opening read plus two follow-ups")
+        XCTAssertEqual(model.chat.revision, "snap-r2")
+        let reply = try XCTUnwrap(model.chat.messages.last)
+        let visual = try XCTUnwrap(reply.visuals?.first)
+        XCTAssertNotNil(AidenChatVisualPresentation.snapshotAttachment(for: visual, in: reply))
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+    }
+
+    @MainActor
+    func testLateSnapshotRefetchGivesUpAfterThreeTriesAndStopsWhenTheChatCloses() async throws {
+        let fixture = AidenChatMessagesWindowHTTPFixture(
+            messages: snapshotReply(captured: false), revision: "snap-r1", advertisesWindow: true
+        )
+        let (model, root) = try await windowedChatModel(fixture: fixture)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let log = AidenSnapshotRefreshLog()
+        model.visualSnapshotRefreshSleep = { log.delays.append($0) }
+
+        // A capture that never lands: three follow-ups, then no more polling.
+        await model.load(observeProgress: false)
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4), .seconds(6), .seconds(10)])
+        XCTAssertEqual(fixture.windowRequests.count, 4)
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+
+        // Leaving the chat while a follow-up waits cancels it before it fetches.
+        log.delays = []
+        model.visualSnapshotRefreshSleep = { [weak model] delay in
+            log.delays.append(delay)
+            model?.setChatForegrounded(false)
+        }
+        await model.load(observeProgress: false)
+        let requestsAfterReopen = fixture.windowRequests.count
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4)])
+        XCTAssertEqual(fixture.windowRequests.count, requestsAfterReopen, "no read after the chat closed")
+        XCTAssertNil(model.visualSnapshotRefreshTask)
+
+        // Coming back on screen (say, closing an image viewer) waits again,
+        // and a snapshot that landed meanwhile ends it after one read.
+        log.delays = []
+        model.visualSnapshotRefreshSleep = { log.delays.append($0) }
+        fixture.replaceTranscript(snapshotReply(captured: true), revision: "snap-r2")
+        model.setChatForegrounded(true)
+        await model.visualSnapshotRefreshTask?.value
+        XCTAssertEqual(log.delays, [.seconds(4)])
+        XCTAssertEqual(fixture.windowRequests.count, requestsAfterReopen + 1)
+        XCTAssertNotNil(model.chat.messages.last?.visuals?.first?.snapshotAttachmentId)
     }
 
     func testWindowMetadataDecodesAsTheChatAndFailsClosedWhenPartial() throws {

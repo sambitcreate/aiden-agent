@@ -501,6 +501,36 @@ enum AidenChatTitleReconciliation {
     static let retryMilliseconds = [400, 800, 1_200, 2_000, 3_000, 3_500, 3_500]
 }
 
+/// The Mac captures visual snapshots only after a reply commits (serially, up
+/// to a few seconds each), so the phone's settling read usually lands first and
+/// nothing pushes the later revision. A just-settled reply still missing a
+/// snapshot is therefore re-read a bounded number of times, then left alone.
+enum AidenVisualSnapshotReconciliation {
+    /// Waits between re-reads: about 4 s, 10 s and 20 s after the reply settled.
+    static let retryDelays: [Duration] = [.seconds(4), .seconds(6), .seconds(10)]
+    /// Only a reply that settled this recently is still worth waiting for.
+    static let recentReplyWindow: TimeInterval = 120
+
+    /// The reply whose snapshots may still be arriving: the newest assistant message.
+    static func awaitedMessage(in messages: [AidenChatMessage]) -> AidenChatMessage? {
+        messages.last { $0.role == .assistant }
+    }
+
+    /// The wait before re-read number `attempt` (from 0), or nil when the
+    /// reply has every snapshot, is no longer recent, or the tries are spent.
+    static func nextDelay(for message: AidenChatMessage?, attempt: Int, now: Date) -> Duration? {
+        guard let message, message.role == .assistant, retryDelays.indices.contains(attempt),
+              let visuals = message.visuals,
+              visuals.contains(where: { AidenChatVisualPresentation.snapshotAttachment(for: $0, in: message) == nil })
+        else { return nil }
+        // A long reply is judged by when it finished. A Mac clock ahead of the
+        // phone reads as recent; the try count still bounds it.
+        let settledAt = message.timeline?.finishedAt.map { Date(timeIntervalSince1970: $0 / 1_000) } ?? message.createdAt
+        guard now.timeIntervalSince(settledAt) <= recentReplyWindow else { return nil }
+        return retryDelays[attempt]
+    }
+}
+
 struct AidenTerminalReplayGate {
     private(set) var hasReplayedTerminalCursor = false
 
@@ -1160,6 +1190,14 @@ final class AidenChatViewModel {
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshID: UUID?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
+    /// Bounded re-reads for a just-settled reply whose visual snapshots the
+    /// Mac is still capturing (they land after the reply commits).
+    @ObservationIgnored private(set) var visualSnapshotRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var visualSnapshotRefreshID: UUID?
+    // Deterministic test seam for the wait between snapshot re-reads.
+    @ObservationIgnored var visualSnapshotRefreshSleep: @MainActor (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
     private var activeStreamID: String? {
         didSet {
             // An owned stream supersedes observation of a foreign run.
@@ -1388,6 +1426,7 @@ final class AidenChatViewModel {
         streamTask?.cancel()
         progressTask?.cancel()
         titleRefreshTask?.cancel()
+        visualSnapshotRefreshTask?.cancel()
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
@@ -1417,6 +1456,7 @@ final class AidenChatViewModel {
         streamTask?.cancel()
         terminalReconciliationTask?.cancel()
         titleRefreshTask?.cancel()
+        stopVisualSnapshotRefresh()
         stopProgressObservation()
         clearProgressState()
         let removedForeignRunID = foreignRunIsLive ? foreignRun?.runId : nil
@@ -1531,6 +1571,13 @@ final class AidenChatViewModel {
 
     func setChatForegrounded(_ foregrounded: Bool) {
         isChatForegrounded = foregrounded
+        // A full-screen viewer also takes the chat off screen; coming back
+        // re-arms the wait, which the recent-reply window still bounds.
+        if !foregrounded {
+            stopVisualSnapshotRefresh()
+        } else if !isReadOnlyFixture, !isRemoved, let context = try? coordinator.requestContext(for: instanceId) {
+            scheduleVisualSnapshotRefresh(context: context)
+        }
         // Foreground-enter quiets the ambient surface: the Live Activity marks
         // stale (matching Android dismissing its posted notification) and
         // recovers on the next published update.
@@ -2576,6 +2623,7 @@ final class AidenChatViewModel {
         titleRefreshTask?.cancel()
         titleRefreshTask = nil
         titleRefreshID = nil
+        stopVisualSnapshotRefresh()
         isStarting = true
         defer {
             isStarting = false
@@ -4217,7 +4265,70 @@ final class AidenChatViewModel {
         ) else { return false }
         hasOlderMessages = hasOlder
         hasSettledTranscriptWindow = true
+        scheduleVisualSnapshotRefresh(context: context)
         return true
+    }
+
+    /// Re-read the open chat a few times while its newest reply still lacks a
+    /// visual snapshot the Mac is capturing. One schedule runs at a time; the
+    /// re-reads it makes come back through here and are absorbed by it.
+    private func scheduleVisualSnapshotRefresh(context: AidenRemoteRequestContext) {
+        guard visualSnapshotRefreshTask == nil, nextVisualSnapshotRefreshDelay(attempt: 0) != nil else { return }
+        let refreshID = UUID()
+        visualSnapshotRefreshID = refreshID
+        visualSnapshotRefreshTask = Task { [weak self] in
+            var attempt = 0
+            while true {
+                guard !Task.isCancelled,
+                      let delay = self?.nextVisualSnapshotRefreshDelay(attempt: attempt),
+                      let sleep = self?.visualSnapshotRefreshSleep else { break }
+                attempt += 1
+                // The model is held only for the read, never across the wait.
+                do { try await sleep(delay) } catch { break }
+                guard !Task.isCancelled, let model = self,
+                      await model.rereadForVisualSnapshots(context: context) else { break }
+            }
+            guard let model = self, model.visualSnapshotRefreshID == refreshID else { return }
+            model.visualSnapshotRefreshTask = nil
+            model.visualSnapshotRefreshID = nil
+        }
+    }
+
+    private func nextVisualSnapshotRefreshDelay(attempt: Int) -> Duration? {
+        AidenVisualSnapshotReconciliation.nextDelay(
+            for: AidenVisualSnapshotReconciliation.awaitedMessage(in: chat.messages),
+            attempt: attempt,
+            now: Date()
+        )
+    }
+
+    /// One snapshot re-read through the normal newest-transcript path. False
+    /// stops the schedule: the chat changed, closed, or a turn took over.
+    private func rereadForVisualSnapshots(context: AidenRemoteRequestContext) async -> Bool {
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == nil, !isStarting else { return false }
+        let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let latest = try await fetchLatestTranscript(context: context)
+            guard !Task.isCancelled, !isRemoved, coordinator.isCurrent(context) else { return false }
+            guard generation == transcriptGeneration, activeStreamID == nil, !isStarting else { return false }
+            await acceptLatestTranscript(latest, context: context, writeToken: writeToken)
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            // A missed snapshot is cosmetic; the next normal refresh shows it.
+            return !isRemoved && coordinator.isCurrent(context)
+        }
+    }
+
+    /// Stop waiting for late snapshots: the chat left the screen, the app went
+    /// to the background, or a new turn started. The next load re-arms it.
+    func stopVisualSnapshotRefresh() {
+        visualSnapshotRefreshTask?.cancel()
+        visualSnapshotRefreshTask = nil
+        visualSnapshotRefreshID = nil
     }
 
     /// Page back one window from the oldest message on screen. If the Mac no
@@ -4864,6 +4975,8 @@ struct AidenChatDetailView: View {
                 model.startProgressObservation()
             case .suspend:
                 model.stopProgressObservation()
+                // The return to the foreground reloads and re-arms it.
+                model.stopVisualSnapshotRefresh()
             case .none:
                 // `.inactive` is transient; progress keeps streaming.
                 break
