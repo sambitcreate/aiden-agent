@@ -255,7 +255,7 @@ function ModelPadBenchmarkConnection() {
                           ? "Checking"
                           : "Not connected"}
                   </Text>
-                  {status?.ready ? <Badge>{status.cachedModelCount} models</Badge> : null}
+                  {status?.ready ? <Badge>{`${status.cachedModelCount} model${status.cachedModelCount === 1 ? "" : "s"}`}</Badge> : null}
                   {status?.license ? <Badge>{status.license}</Badge> : null}
                 </div>
                 <Text as="p" variant="small" color="secondary" className="mt-1">
@@ -1647,9 +1647,9 @@ export function ModelPadSettings() {
               </div>
               <span
                 className="model-pad-browser-count"
-                aria-label={`${entries.length} models available`}
+                aria-label={`${entries.length} model${entries.length === 1 ? "" : "s"} available`}
               >
-                <span aria-hidden="true">{entries.length} models</span>
+                <span aria-hidden="true">{`${entries.length} model${entries.length === 1 ? "" : "s"}`}</span>
               </span>
             </div>
             <label className="relative block">
@@ -1818,7 +1818,7 @@ export function ModelPadSettings() {
                 ) : null}
                 {modelInsights.data.skippedAmbiguousCount > 0 ? (
                   <li>
-                    {`${modelInsights.data.skippedAmbiguousCount} ambiguous benchmark rows skipped`}
+                    {`${modelInsights.data.skippedAmbiguousCount} ambiguous benchmark row${modelInsights.data.skippedAmbiguousCount === 1 ? "" : "s"} skipped`}
                   </li>
                 ) : null}
               </ul>

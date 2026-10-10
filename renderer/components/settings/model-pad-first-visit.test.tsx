@@ -690,6 +690,20 @@ test("benchmark insights report Pad and visible coverage and why Pad models are 
   );
 });
 
+test("a single skipped benchmark row is counted in the singular", async () => {
+  editorServer({
+    insightsReady: true,
+    skippedAmbiguousCount: 1,
+    placements: { "test::m0": userPlacement },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
+
+  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await within(panel).findByText("1 ambiguous benchmark row skipped");
+});
+
 test("benchmark coverage omits the unmatched list and skipped rows when there are none", async () => {
   editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
   mountEditor();

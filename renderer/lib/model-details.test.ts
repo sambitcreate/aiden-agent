@@ -12,6 +12,9 @@ test("list prices use cents under a dollar and trim whole and half dollars", () 
 
 test("a list price with both sides at zero is free; a one-sided price names its side", () => {
   assert.equal(formatListPrice({ input: 0, output: 0 }), "Free");
+  // A free side of a two-sided price says so rather than "$0.00".
+  assert.equal(formatListPrice({ input: 0, output: 5 }), "Free in / $5 out per 1M");
+  assert.equal(formatListPrice({ input: 0.15, output: 0 }), "$0.15 in / Free out per 1M");
   assert.equal(formatListPrice({ input: 1.25 }), "$1.25 in per 1M");
   assert.equal(formatListPrice({ output: 0.4, cacheRead: 0.1 }), "$0.40 out per 1M");
   assert.equal(formatListPrice({ input: 0 }), "Free in");

@@ -1,6 +1,6 @@
 # Model Pad UX and data overhaul
 
-Status: In progress
+Status: Implemented — PR pending
 
 Spec: the "now vs proposed" audit of the Model Pad (2026-10-09), with the owner's decisions:
 

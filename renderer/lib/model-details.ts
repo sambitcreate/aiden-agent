@@ -34,13 +34,21 @@ function formatDollars(value: number): string {
   return `$${Number(value.toFixed(2))}`;
 }
 
-/** models.dev list price per 1M tokens: "$3 / $15 per 1M", "Free", or one side with "in"/"out". */
+/**
+ * models.dev list price per 1M tokens: "$3 / $15 per 1M", "Free", one side with
+ * "in"/"out", or "Free in / $5 out per 1M" when only one side is free.
+ */
 export function formatListPrice(cost: ModelCost | undefined): string | undefined {
   const input = cost?.input;
   const output = cost?.output;
   if (input === undefined && output === undefined) return undefined;
   if (input === 0 && output === 0) return "Free";
   if (input !== undefined && output !== undefined) {
+    if (input === 0 || output === 0) {
+      const side = (value: number, name: string) =>
+        value === 0 ? `Free ${name}` : `${formatDollars(value)} ${name}`;
+      return `${side(input, "in")} / ${side(output, "out")} per 1M`;
+    }
     return `${formatDollars(input)} / ${formatDollars(output)} per 1M`;
   }
   const [side, value] = input !== undefined ? ["in", input] : ["out", output as number];

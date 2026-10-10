@@ -1373,7 +1373,7 @@ test("settings persistence preserves future assistant fields and values", async 
   assert.equal(saved.settings.profileName, "After");
 });
 
-test("Model Pad placements, pins, recent models and metric survive a settings round trip with invalid entries dropped", async (t) => {
+test("Model Pad placements, pins, recent models and metric survive a settings.json load and reload into a fresh store with invalid entries dropped", async (t) => {
   const r = await roots(t);
   const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark" };
   const measured = { x: 0, y: 0.5, xSource: "measured", ySource: "user" };
@@ -1397,26 +1397,26 @@ test("Model Pad placements, pins, recent models and metric survive a settings ro
     "utf-8",
   );
 
-  const exported = await stores(r).settings.load();
-  assert.deepEqual(exported.settings.modelPadPlacements, {
+  const loaded = await stores(r).settings.load();
+  assert.deepEqual(loaded.settings.modelPadPlacements, {
     "openai::gpt": placement,
     "openai::fast": measured,
   });
-  assert.deepEqual(exported.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
-  assert.deepEqual(exported.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
-  assert.equal(exported.settings.modelPadMetric, "agentic");
+  assert.deepEqual(loaded.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
+  assert.deepEqual(loaded.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(loaded.settings.modelPadMetric, "agentic");
 
-  // Import the exported document into a fresh store and read it back from disk.
+  // Write the loaded document into a fresh store's settings.json and read it back.
   const target = await roots(t);
-  await fs.writeFile(target.settingsFile, JSON.stringify(exported), "utf-8");
-  const imported = runtimeSettingsFrom((await stores(target).settings.load()).settings);
-  assert.deepEqual(imported.modelPadPlacements, {
+  await fs.writeFile(target.settingsFile, JSON.stringify(loaded), "utf-8");
+  const reloaded = runtimeSettingsFrom((await stores(target).settings.load()).settings);
+  assert.deepEqual(reloaded.modelPadPlacements, {
     "openai::gpt": placement,
     "openai::fast": measured,
   });
-  assert.deepEqual(imported.pinnedModels, ["openai::gpt", "google::gemini"]);
-  assert.deepEqual(imported.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
-  assert.equal(imported.modelPadMetric, "agentic");
+  assert.deepEqual(reloaded.pinnedModels, ["openai::gpt", "google::gemini"]);
+  assert.deepEqual(reloaded.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.equal(reloaded.modelPadMetric, "agentic");
 
   const wrongShapes = runtimeSettingsFrom({
     modelPadPlacements: ["openai::gpt"],
