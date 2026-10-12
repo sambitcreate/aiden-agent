@@ -138,15 +138,6 @@
   color: var(--status-warning);
 }
 .oa-cu-shield .oa-icon { width: 9px; height: 9px; }
-.oa-cu-summary {
-  padding: 5px 6px;
-  border-radius: 6px;
-  background: var(--surface-well);
-  color: var(--text-primary);
-  font-size: 7.5px;
-  line-height: 9px;
-  white-space: nowrap;
-}
 
 /* Native Subagents */
 .oa-sub-window { padding: 2px 5px; }

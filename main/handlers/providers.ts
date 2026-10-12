@@ -558,6 +558,10 @@ export function registerProviderHandlers(): void {
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
+    if (p.computerUseAlwaysAllow !== undefined) {
+      if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
+      next.computerUseAlwaysAllow = p.computerUseAlwaysAllow;
+    }
     for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
       if (p[key] === undefined) continue;
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");

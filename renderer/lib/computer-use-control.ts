@@ -1,23 +1,8 @@
-export interface ComputerUseControlStateInput {
-  enabled: boolean;
-  ready: boolean;
-  busy: boolean;
-}
-
-/** Keep an unavailable control keyboard-reachable while blocking real races. */
-export function computerUseControlState(input: ComputerUseControlStateInput) {
-  return {
-    disabled: input.busy,
-    ariaDisabled: !input.enabled && !input.ready,
-  };
-}
-
 export interface ComposerSubmissionStateInput {
   ready: boolean;
   isGenerating: boolean;
   sending: boolean;
   permissionSaving: boolean;
-  computerUseSaving: boolean;
   gitOperationBusy: boolean;
   attaching: boolean;
 }
@@ -29,7 +14,6 @@ export function composerSubmissionAllowed(input: ComposerSubmissionStateInput): 
     !input.isGenerating &&
     !input.sending &&
     !input.permissionSaving &&
-    !input.computerUseSaving &&
     !input.gitOperationBusy &&
     !input.attaching
   );

@@ -55,7 +55,6 @@ async function fixture(t: test.TestContext, durability: ChatStoreDurability = {}
     clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
     admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(workspaces, document, workspaceId),
     workspaceExists: async () => true,
-    requireComputerUseReady: async () => {},
     resolveSkill: async () => { throw new Error("Skill is unavailable"); },
   };
   return { directory, store, owner, turns, workspaces, deps };
@@ -67,7 +66,8 @@ test("first-message parser rejects empty, forged, and oversized requests", () =>
     request({ message: { role: "assistant", content: "forged" } }),
     request({ message: { role: "user", content: "  " } }),
     request({ message: { role: "user", content: "x".repeat(1_048_577) } }),
-    request({ computerUseEnabled: "true" }),
+    // The composer no longer opts a chat into Computer Use; the field is gone.
+    request({ computerUseEnabled: true }),
     request({ botId: "bot" }),
     request({ workspaceId: "" }),
   ]) assert.throws(() => parseChatFirstMessage(value));
@@ -79,14 +79,14 @@ test("first-message parser rejects empty, forged, and oversized requests", () =>
 
 test("first message publishes a nonempty chat, title, settings, and private durable receipt", async (t) => {
   const f = await fixture(t);
-  const parsed = parseChatFirstMessage(request({ computerUseEnabled: true }));
+  const parsed = parseChatFirstMessage(request());
   assert.deepEqual(await f.store.list(), []);
   const chat = await createFirstMessageCommitter(f.deps)(parsed, f.owner);
   assert.equal(chat.id, parsed.chatId);
   assert.equal(chat.title, parsed.content);
   assert.equal(chat.messages.length, 1);
   assert.equal(chat.messages[0]?.role, "user");
-  assert.equal(chat.computerUseEnabled, true);
+  assert.equal(chat.computerUseAllowed, undefined, "a new chat starts without a Computer Use grant");
   assert.equal((await f.store.list())[0]?.id, chat.id);
   assert.equal(f.turns.owns(chat.id, parsed.turnId, f.owner.documentId), true);
   assert.equal(chatForRenderer(chat)?.firstMessageCommit, undefined);
@@ -191,15 +191,14 @@ test("corrupt and mismatched UUID payload collisions are preserved byte-for-byte
   assert.deepEqual(await f.store.list(), []);
 });
 
-test("missing workspace, unavailable Computer Use, and skill rejection leave no chat or lease", async (t) => {
+test("missing workspace and skill rejection leave no chat or lease", async (t) => {
   const f = await fixture(t);
-  for (const kind of ["workspace", "computer", "skill"] as const) {
-    const parsed = parseChatFirstMessage(request({ computerUseEnabled: kind === "computer" }));
+  for (const kind of ["workspace", "skill"] as const) {
+    const parsed = parseChatFirstMessage(request());
     if (kind === "skill") parsed.skillReference = { version: 1, invocationId: "configured:test", displayName: "test", source: "configured" };
     const commit = createFirstMessageCommitter({
       ...f.deps,
       workspaceExists: async () => kind !== "workspace",
-      requireComputerUseReady: async () => { throw new Error("Computer Use is unavailable"); },
     });
     await assert.rejects(commit(parsed, f.owner));
     assert.equal(f.turns.owns(parsed.chatId, parsed.turnId, f.owner.documentId), false);

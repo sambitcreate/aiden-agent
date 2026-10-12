@@ -163,24 +163,27 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
   }
 
   /**
-   * The Bot's Computer Use controller, under the same gates as a legacy turn:
-   * platform support, the global beta, the Bot chat's own opt-in and a ready
-   * driver. A controller lives across the Bot's turns until it is no longer
-   * allowed, the Bot is deleted, or the app quits.
+   * The Bot's Computer Use controller: platform support, the global beta, an
+   * existing grant (Always allow, or the Bot chat was allowed from a desktop
+   * turn) and a ready driver. The durable runtime cannot raise the
+   * once-per-chat access card, so an ungranted Bot never gets the tool. A
+   * controller lives across the Bot's turns until it is no longer allowed,
+   * the Bot is deleted, or the app quits.
    */
   async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
     const chat = await chatStore.get(await deps.canonicalChatId(botId));
+    const settings = await configStore.getSettings();
     const enabled =
       computerUseSupported() &&
-      (await configStore.getSettings()).computerUseEnabled === true &&
-      chat?.computerUseEnabled === true;
+      settings.computerUseEnabled === true &&
+      (settings.computerUseAlwaysAllow === true || chat?.computerUseAllowed === true);
     if (!enabled) {
       await closeController(botId);
       return undefined;
     }
     const status = await computerUseStatus.status({});
     if (!status.ready) {
-      logger.warn("bots", `Computer Use is enabled for Bot ${botId} but is not ready. ${status.detail}`);
+      logger.warn("bots", `Computer Use is allowed for Bot ${botId} but is not ready. ${status.detail}`);
       await closeController(botId);
       return undefined;
     }

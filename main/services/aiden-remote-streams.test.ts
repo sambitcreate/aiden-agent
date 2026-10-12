@@ -292,6 +292,43 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
   ]);
 });
 
+test("a phone can answer the Computer Use access card with a chat or always scope", async () => {
+  const decisions: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: (approvalId, decision, _ownerId, scope) => {
+      decisions.push(`${approvalId}:${decision}:${scope ?? "bare"}`);
+      return true;
+    },
+  });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const ask = (approvalId: string) =>
+    owner.owner.send("chat:approval", {
+      approvalId,
+      toolCallId: `${approvalId}-call`,
+      toolName: "computer_use",
+      summary: "Use your computer in this chat.",
+      details: { kind: "computer-use-access" },
+      scopes: ["chat", "always"],
+    });
+
+  ask("access-1");
+  const pending = service.pendingApproval("device-1", "stream-1");
+  assert.equal(pending?.canAllow, true);
+  assert.deepEqual(pending?.scopes, ["once", "chat", "always"]);
+  assert.equal("details" in (pending ?? {}), false);
+  const scoped = await service.respondApproval(
+    "device-1", "access-1", "allow", "cu-access-key-0000001", inputPassthrough, "always",
+  );
+  assert.equal(scoped.scope, "always");
+
+  // A client that only knows a plain allow still answers the card.
+  ask("access-2");
+  await service.respondApproval("device-1", "access-2", "allow", "cu-access-key-0000002", inputPassthrough);
+  assert.deepEqual(decisions, ["access-1:allow:always", "access-2:allow:bare"]);
+});
+
 test("cancel and approval decisions are bound to the owning device and owner identity", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

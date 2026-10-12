@@ -227,6 +227,16 @@ test("mounted established Composer blocks attachment intake until failed send re
           />,
         ),
       );
+      // Computer Use is requested by the model per chat, never toggled in the composer.
+      assert.equal(
+        Array.from(mounted.container.getElementsByTagName("button")).some(
+          (element) =>
+            /computer/iu.test(element.getAttribute("aria-label") ?? "") ||
+            /computer/iu.test(element.textContent ?? ""),
+        ),
+        false,
+        "the composer footer has no Computer Use control",
+      );
       await React.act(async () => {
         await handlers(button(mounted.container, "Attach files or images")).onClick();
       });

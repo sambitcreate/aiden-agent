@@ -1168,7 +1168,6 @@ export const chatsApi = {
     workspaceId?: string;
     providerId?: string;
     model?: string;
-    computerUseEnabled?: boolean;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1198,8 +1197,9 @@ export const chatsApi = {
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
-  setComputerUse: (id: string, enabled: boolean) =>
-    invoke<Chat>("chats:setComputerUse", id, enabled),
+  /** Clear the post-restart "continue Computer Use" callout without resuming. */
+  dismissComputerUseContinue: (chatId: string) =>
+    invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (

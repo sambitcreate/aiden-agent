@@ -7,7 +7,6 @@ const readyState: ComposerSubmissionStateInput = {
   isGenerating: false,
   sending: false,
   permissionSaving: false,
-  computerUseSaving: false,
   gitOperationBusy: false,
   attaching: false,
 };

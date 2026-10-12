@@ -24,25 +24,6 @@ export function activatedComputerUseStreamIds(
     .map(([streamId]) => streamId);
 }
 
-export class ChatComputerUseMutationGate {
-  private readonly changing = new Set<string>();
-
-  tryBegin(chatId: string, busy: boolean): (() => void) | null {
-    if (busy || this.changing.has(chatId)) return null;
-    this.changing.add(chatId);
-    let active = true;
-    return () => {
-      if (!active) return;
-      active = false;
-      this.changing.delete(chatId);
-    };
-  }
-
-  isChanging(chatId: string): boolean {
-    return this.changing.has(chatId);
-  }
-}
-
 interface ComputerUseSettlementEntry {
   computerUse?: { closeAndSettle(): Promise<void> };
   completion?: Promise<void> | null;

@@ -41,6 +41,7 @@ import {
   parseAidenRemoteChatForkResult,
   parseAidenRemoteChatSummaryProjection,
 } from "./aiden-remote-protocol.js";
+import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 
 const protocolRoot = path.resolve(process.cwd(), "protocol/aiden-remote/v1");
 
@@ -1957,6 +1958,22 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
   assert.equal(pending(legacy), true, "revision 16 servers omit scopes");
   assert.equal(pending({ ...approval, scopes: ["once"] }), false, "a once-only offer is omitted, not listed");
   assert.equal(pending({ ...approval, scopes: ["once", "forever"] }), false);
+
+  // The once-per-chat Computer Use access card offers only chat and always;
+  // its phone projection still fits the wire schema.
+  const streams = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
+  const owner = streams.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "computer-use-access",
+    toolCallId: "call-1",
+    toolName: "computer_use",
+    summary: "Use your computer in this chat.",
+    details: { kind: "computer-use-access" },
+    scopes: ["chat", "always"],
+  });
+  const access = streams.pendingApproval("device-1", "stream-1");
+  assert.equal(access?.canAllow, true);
+  assert.equal(pending(JSON.parse(JSON.stringify(access))), true);
 
   assert.equal(request({ decision: "allow" }), true);
   assert.equal(request({ decision: "allow", scope: "always" }), true);

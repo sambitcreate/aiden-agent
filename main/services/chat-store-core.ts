@@ -873,6 +873,23 @@ export function createChatStore(
     return chat;
   }
 
+  /** Read-modify-write one chat's Computer Use access fields under its lock. */
+  async function updateComputerUseAccess(
+    id: string,
+    mutate: (chat: Chat) => void,
+  ): Promise<Chat> {
+    return shared([id], false, async () => {
+      const chat = await readChat(id, "owner");
+      if (!chat) throw new Error(`Chat ${id} not found`);
+      const before = [chat.computerUseAllowed, chat.computerUsePendingContinue];
+      mutate(chat);
+      if (before[0] !== chat.computerUseAllowed || before[1] !== chat.computerUsePendingContinue) {
+        await writeChat(chat);
+      }
+      return chat;
+    });
+  }
+
   async function writeChat(
     chat: Chat,
     beforeRename: () => void = () => undefined,
@@ -1118,7 +1135,6 @@ export function createChatStore(
       workspaceId: string;
       providerId?: string;
       model?: string;
-      computerUseEnabled: boolean;
       turnId: string;
       fingerprint: string;
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
@@ -1168,7 +1184,6 @@ export function createChatStore(
           workspaceId: input.workspaceId,
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
-          computerUseEnabled: input.computerUseEnabled,
           title: input.title?.trim() || deriveChatTitleSeed(message),
           createdAt: now,
           updatedAt: now,
@@ -1551,25 +1566,22 @@ export function createChatStore(
       });
     },
 
-    /** Persist the chat-local Computer Use opt-in without reordering conversation history. */
-    async setComputerUseEnabled(
-      id: string,
-      enabled: boolean,
-      isCurrent: () => boolean = () => true,
-    ): Promise<Chat> {
-      return shared([id], false, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        if (!isCurrent())
-          throw new Error("The renderer document is no longer active.");
-        chat.computerUseEnabled = enabled;
-        await writeChat(chat, () => {
-          // No await occurs between this ownership check and invoking the
-          // atomic rename, so a replaced document cannot commit the staged opt-in.
-          if (!isCurrent())
-            throw new Error("The renderer document is no longer active.");
-        });
-        return chat;
+    /** Persist the user's per-chat Computer Use grant without reordering history. */
+    async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
+      return updateComputerUseAccess(id, (chat) => {
+        if (allowed) chat.computerUseAllowed = true;
+        else delete chat.computerUseAllowed;
+      });
+    },
+
+    /**
+     * Mark (or clear) a Computer Use access request that is waiting on macOS
+     * setup, so the chat can offer Continue after a restart.
+     */
+    async setComputerUsePendingContinue(id: string, pending: boolean): Promise<Chat> {
+      return updateComputerUseAccess(id, (chat) => {
+        if (pending) chat.computerUsePendingContinue = true;
+        else delete chat.computerUsePendingContinue;
       });
     },
 

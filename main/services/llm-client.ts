@@ -165,10 +165,16 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
-import type {
-  ComputerUseApprovalDescriptor,
-  ComputerUseController,
-} from "./computer-use/controller.js";
+import type { ComputerUseController } from "./computer-use/controller.js";
+import {
+  authorizeAllowedComputerUseAction,
+  COMPUTER_USE_ACCESS_SUMMARY,
+  createComputerUseAccessGate,
+} from "./computer-use/access-gate.js";
+import {
+  COMPUTER_USE_ACCESS_APPROVAL_KIND,
+  COMPUTER_USE_ACCESS_SCOPES,
+} from "../../renderer/shared/computer-use-access.js";
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
@@ -254,7 +260,6 @@ import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
   cancelComputerUseAndSettle,
-  ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
@@ -532,7 +537,6 @@ const initializing = new Map<
   }
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
-const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
 const runInputAdmission = createChatRunInputAdmission({
@@ -1004,36 +1008,41 @@ async function prepareGeneration(
     model,
     params.thinkingLevel ?? savedThinkingLevel,
   );
+  if (chat.computerUsePendingContinue === true) {
+    // Any new turn in the chat supersedes the post-restart Continue callout.
+    try {
+      await chatStore.setComputerUsePendingContinue(chat.id, false);
+    } catch (error) {
+      logger.warn("pi", "Could not clear the chat's Computer Use continue marker.", error);
+    }
+  }
+  // With the beta on, the model always gets the tool. Access is asked once per
+  // chat on its first call (see computer-use/access-gate.ts), and the
+  // controller only starts its driver host on first use, so readiness is
+  // checked there rather than here.
   let computerUse: ComputerUseController | undefined;
   if (
     computerUseSupported() &&
     options.allowComputerUse !== false &&
     (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
-    chat.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
   ) {
-    const status = await computerUseStatus.status({ signal });
-    if (
-      computerUseGenerationGate.isCurrent(computerUseGateSnapshot) &&
-      status.enabled &&
-      !status.ready
-    ) {
-      throw new Error(`Computer Use is enabled for this chat but is not ready. ${status.detail}`);
-    }
-    if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
-      computerUse = createComputerUseController(streamId, supportsImages);
-      activatedComputerUse(computerUse);
-    }
+    computerUse = createComputerUseController(streamId, supportsImages);
+    activatedComputerUse(computerUse);
   }
   // The Form Fill Specialist is layered on Computer Use: it exists only when
-  // CU itself is live for this generation, the user enabled the specialist,
-  // and the verified model package is already on disk (status is offline).
+  // CU itself is available and ready for this generation, the user enabled the
+  // specialist, and the verified model package is already on disk (status is
+  // offline).
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
   if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
-    const artifact = await formFillArtifacts.refresh();
-    if (artifact.state === "ready") {
+    const status = await computerUseStatus.status({ signal });
+    const artifact = status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
+      ? await formFillArtifacts.refresh()
+      : undefined;
+    if (artifact?.state === "ready") {
       formFill = new FormFillService({
         controller: computerUse,
         scorer: formFillRuntime,
@@ -1893,9 +1902,6 @@ export const llmClient = {
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
-      if (chatComputerUseMutationGate.isChanging(params.chatId)) {
-        throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
-      }
       if (chatWorkspaceMutationGate.isChanging(params.chatId)) {
         throw new Error("This chat is changing workspaces. Try again in a moment.");
       }
@@ -2254,6 +2260,43 @@ export const llmClient = {
         timeline: snapshot,
       });
     });
+    // One access card per chat, asked on the first computer_use call. A deny
+    // holds for the rest of this stream.
+    const computerUseAccess = computerUse
+      ? createComputerUseAccessGate({
+          readGrant: async () =>
+            (await configStore.getSettings()).computerUseAlwaysAllow === true ||
+            (await chatStore.get(params.chatId))?.computerUseAllowed === true,
+          status: (statusOptions) => computerUseStatus.status(statusOptions),
+          requestAccess: async (toolCallId, approvalSignal) => {
+            timeline.toolAwaitingApproval(toolCallId);
+            const publicToolCallId = timeline.publicToolCallId(toolCallId);
+            if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
+            const outcome = await approvals.request(
+              {
+                streamId,
+                toolCallId: publicToolCallId,
+                toolName: COMPUTER_USE_TOOL_NAME,
+                summary: COMPUTER_USE_ACCESS_SUMMARY,
+                details: { kind: COMPUTER_USE_ACCESS_APPROVAL_KIND },
+                scopes: COMPUTER_USE_ACCESS_SCOPES,
+              },
+              approvalSignal,
+              owner.documentId,
+            );
+            const scope =
+              outcome === "allowed"
+                ? approvals.takeDecisionPayload(streamId, publicToolCallId)?.scope
+                : undefined;
+            return { outcome, scope };
+          },
+          grantChat: () => chatStore.setComputerUseAllowed(params.chatId, true),
+          grantAlways: () => configStore.setSettings({ computerUseAlwaysAllow: true }),
+          setPendingContinue: (pending) =>
+            chatStore.setComputerUsePendingContinue(params.chatId, pending),
+          warn: (message, error) => logger.warn("pi", message, error),
+        })
+      : undefined;
     if (formFill) {
       formFill.progressSink = (toolCallId, completed, total) =>
         timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
@@ -3035,12 +3078,11 @@ export const llmClient = {
           }
           return changed ? { context: nextContext } : undefined;
         },
-        // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
+        // Computer Use asks once per chat. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
           timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
-          let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
@@ -3075,34 +3117,33 @@ export const llmClient = {
           }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
-            if (!computerUse) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason: "Computer Use is not enabled for this response.",
-              };
+            const blockComputerUse = (reason: string) => {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason };
+            };
+            if (!computerUse || !computerUseAccess) {
+              return blockComputerUse("Computer Use is not enabled for this response.");
             }
+            const access = await computerUseAccess.authorize(context.toolCall.id, signal);
+            if (!access.allowed) return blockComputerUse(access.reason);
+            // The chat is allowed, so input actions run without a per-action card.
             try {
-              const descriptor = await computerUse.approvalFor(
+              await authorizeAllowedComputerUseAction(
+                computerUse,
+                context.toolCall.id,
                 context.args as ComputerUseArgs,
                 signal,
               );
-              if (!descriptor) {
-                timeline.toolRunning(context.toolCall.id);
-                return undefined;
-              }
-              computerUseApproval = descriptor;
-              summary = descriptor.summary;
             } catch (error) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason:
-                  error instanceof Error ? error.message : "Computer Use rejected this action.",
-              };
+              return blockComputerUse(
+                error instanceof Error ? error.message : "Computer Use rejected this action.",
+              );
             }
+            timeline.toolRunning(context.toolCall.id);
+            return undefined;
           } else if (context.toolCall.name === FORM_FILL_TOOL_NAME) {
             if (!formFill) {
               deniedToolCalls.add(context.toolCall.id);
@@ -3457,23 +3498,6 @@ export const llmClient = {
               return {
                 block: true,
                 reason: error instanceof Error ? error.message : "Form-fill approval expired.",
-              };
-            }
-          }
-          if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
-            try {
-              if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
-              computerUse.authorize(
-                context.toolCall.id,
-                context.args as ComputerUseArgs,
-                computerUseApproval,
-              );
-            } catch (error) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason: error instanceof Error ? error.message : "Computer Use approval expired.",
               };
             }
           }
@@ -4442,10 +4466,6 @@ export const llmClient = {
     return finish;
   },
 
-  beginComputerUseSettingChange(chatId: string): (() => void) | null {
-    return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
-  },
-
   beginChatWorkspaceChange(chatId: string): (() => void) | null {
     if (chatDeletionGate.isDeleting(chatId)) return null;
     return chatWorkspaceMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
@@ -4469,8 +4489,7 @@ export const llmClient = {
       chatTurnAdmission.requiresAppendReconciliation(ownerId) ||
       chatDeletionGate.isDeleting(chatId) ||
       chatCopyGate.isChanging(chatId) ||
-      chatWorkspaceMutationGate.isChanging(chatId) ||
-      chatComputerUseMutationGate.isChanging(chatId)
+      chatWorkspaceMutationGate.isChanging(chatId)
     ) {
       return null;
     }

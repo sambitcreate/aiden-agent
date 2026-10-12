@@ -608,7 +608,13 @@ export function useModelInsightsStatus() {
   });
 }
 
-export function useComputerUseStatus(enabled = true) {
+export function useComputerUseStatus(
+  enabled = true,
+  options: {
+    /** Re-check on this interval until status is ready, while a surface waits on macOS permissions. */
+    pollUntilReadyMs?: number;
+  } = {},
+) {
   return useQuery({
     queryKey: queryKeys.computerUseStatus,
     queryFn: () => computerUseApi.status(),
@@ -616,6 +622,9 @@ export function useComputerUseStatus(enabled = true) {
     retry: false,
     staleTime: 5_000,
     refetchOnWindowFocus: true,
+    refetchInterval: options.pollUntilReadyMs
+      ? (query) => (query.state.data?.ready ? false : (options.pollUntilReadyMs ?? false))
+      : false,
   });
 }
 

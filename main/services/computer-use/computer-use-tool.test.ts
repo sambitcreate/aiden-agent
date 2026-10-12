@@ -14,6 +14,7 @@ import {
 } from "./controller.js";
 import { normalizeComputerUseArgs } from "./safety.js";
 import { createComputerUseAgentTool } from "./tool.js";
+import { authorizeAllowedComputerUseAction } from "./access-gate.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import {
   FakeCuaDriver,
@@ -1503,3 +1504,34 @@ for (const code of ["action_outcome_mismatch", "typed_output_mismatch", "tool_ou
     await controller.close();
   });
 }
+
+test("in an allowed chat, input actions run without a card but keep target binding and safety refusals", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const click = { action: "click", element: 0 } as const;
+
+  // Without the allowed-chat authorization, an input action is not approved.
+  await assert.rejects(() => controller.execute("unapproved", click), /not approved/u);
+
+  await authorizeAllowedComputerUseAction(controller, "allowed-click", click);
+  await controller.execute("allowed-click", click);
+  assert.ok(session.calls.some((call) => call.name === "click"));
+
+  // The authorization is bound to that exact call, not reusable.
+  await assert.rejects(() => controller.execute("allowed-click", click), /already used|not approved/u);
+  await capture(controller, "ax");
+  await authorizeAllowedComputerUseAction(controller, "bound", click);
+  await assert.rejects(
+    () => controller.execute("bound", { action: "click", element: 1 }),
+    /not approved|changed after approval/u,
+  );
+
+  // Hard safety refusals still refuse in an allowed chat.
+  await assert.rejects(
+    () => authorizeAllowedComputerUseAction(controller, "quit", { action: "key", keys: "cmd+q" }),
+    /destructive system shortcut/u,
+  );
+  // Observations need no grant at all.
+  await authorizeAllowedComputerUseAction(controller, "observe", { action: "list_apps" });
+  await controller.close();
+});

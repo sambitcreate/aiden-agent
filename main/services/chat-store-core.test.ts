@@ -1620,49 +1620,50 @@ test("does not move a chat after its conversation has started", async (t) => {
   assert.equal((await store.get(chat.id))?.workspaceId, "first");
 });
 
-test("persists Computer Use per chat without reordering the chat index", async (t) => {
+test("persists a per-chat Computer Use grant without reordering the chat index", async (t) => {
   const store = await testStore(t);
   const older = await store.create({ title: "Older" });
   await new Promise((resolve) => setTimeout(resolve, 2));
   const newer = await store.create({ title: "Newer" });
 
-  const enabled = await store.setComputerUseEnabled(older.id, true);
-  assert.equal(enabled.computerUseEnabled, true);
-  assert.equal((await store.get(older.id))?.computerUseEnabled, true);
+  const allowed = await store.setComputerUseAllowed(older.id, true);
+  assert.equal(allowed.computerUseAllowed, true);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, true);
+  assert.equal((await store.get(newer.id))?.computerUseAllowed, undefined);
   assert.deepEqual(
     (await store.list()).map((chat) => chat.id),
     [newer.id, older.id],
   );
 
-  const disabled = await store.setComputerUseEnabled(older.id, false);
-  assert.equal(disabled.computerUseEnabled, false);
+  await store.setComputerUseAllowed(older.id, false);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, undefined);
 });
 
-test("a stale renderer guard cannot persist a per-chat Computer Use opt-in", async (t) => {
-  const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded" });
+test("a Computer Use continue marker survives reopening the store until cleared", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ title: "Waiting on setup" });
+  await first.appendMessage(chat.id, { role: "user", content: "Open Notes" });
 
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => false),
-    /no longer active/u,
-  );
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  const marked = await first.setComputerUsePendingContinue(chat.id, true);
+  assert.equal(marked.computerUsePendingContinue, true);
+
+  // A fresh store over the same directory stands in for relaunching Aiden.
+  const reopened = createChatStore(async () => directory);
+  const restored = await reopened.get(chat.id);
+  assert.equal(restored?.computerUsePendingContinue, true);
+  assert.equal(restored?.messages.length, 1);
+
+  const cleared = await reopened.setComputerUsePendingContinue(chat.id, false);
+  assert.equal(cleared.computerUsePendingContinue, undefined);
+  assert.equal((await createChatStore(async () => directory).get(chat.id))?.computerUsePendingContinue, undefined);
 });
 
-test("a renderer replaced while a per-chat opt-in is staged cannot commit it", async (t) => {
+test("Computer Use access setters reject a missing chat", async (t) => {
   const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded during write" });
-  let checks = 0;
-
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => {
-      checks += 1;
-      return checks === 1;
-    }),
-    /no longer active/u,
-  );
-  assert.equal(checks, 2);
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  await assert.rejects(store.setComputerUsePendingContinue("missing-chat", false), /not found/u);
+  await assert.rejects(store.setComputerUseAllowed("missing-chat", true), /not found/u);
 });
 
 test("the summary index records when assistant output was last persisted", async (t) => {

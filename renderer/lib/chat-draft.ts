@@ -48,7 +48,7 @@ export function createChatDraft(
   return draft;
 }
 
-export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "computerUseEnabled" | "title">): void {
+export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "title">): void {
   const draft = drafts.get(id);
   if (!draft || draft.sending) throw new Error("Wait for the first message to finish saving.");
   drafts.set(id, { ...draft, chat: { ...draft.chat, ...update } });

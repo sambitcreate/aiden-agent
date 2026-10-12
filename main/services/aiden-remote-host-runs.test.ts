@@ -343,6 +343,21 @@ test("a phone attached to a foreign run sees the phone projection: summary, canA
   });
 });
 
+test("a phone may allow the Computer Use access card from a foreign run with its scopes", async () => {
+  const { registry, service } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "computer_use",
+    details: { kind: "computer-use-access" },
+    scopes: ["chat", "always"],
+  }));
+  const response = open(service, phone("device-phone"), "run-1");
+
+  const prompt = response.frames().find((frame) => frame.event === "approval_required")!.data.payload;
+  assert.equal(prompt.canAllow, true);
+  assert.deepEqual(prompt.scopes, ["chat", "always"]);
+  assert.equal("details" in prompt, false);
+});
+
 test("a phone may deny a host-only approval but allowing it is refused with no effect", async () => {
   const { registry, service, access, effects } = harness();
   registry.publish("run-1", "chat:approval", approval("approval-1", { details: { kind: "unrecognized" } }));

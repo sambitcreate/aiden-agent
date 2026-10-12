@@ -67,7 +67,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "computerUse",
     group: "create",
     title: "Computer Use",
-    description: "Inspect and operate Mac apps when you opt in, with approval before every action.",
+    description: "Inspect and operate Mac apps. Aiden asks once in each chat before it uses your computer.",
     icon: MousePointer2,
     size: "tall",
   },
