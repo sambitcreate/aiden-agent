@@ -25,7 +25,7 @@ import {
   assertPackagedModelCatalogEntries,
   assertSlimPackagedEntries,
   assertPackagedSubagentInferenceWorkerEntries,
-  assertPackagedParakeetWorkerEntries,
+  assertPackagedLocalSpeechWorkerEntries,
   assertPackagedNodePtyHelperEntries,
   assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
@@ -36,7 +36,8 @@ import {
   verifyPackagedModelCatalogResources,
   verifyPackagedSlimness,
   verifyPackagedSubagentInferenceWorker,
-  verifyPackagedParakeetWorker,
+  verifyPackagedLocalSpeechWorker,
+  verifyPackagedSpeechResources,
   verifyPackagedVccWorker,
   verifyPackagedNodePtyResources,
   verifyPackagedGenerativeUiLibraries,
@@ -350,19 +351,34 @@ test("package verifier requires a bounded packed subagent inference worker", asy
 
 test("package verifier requires a packed on-device transcription worker", async () => {
   assert.doesNotThrow(() =>
-    assertPackagedParakeetWorkerEntries(["/build/main/parakeet-worker.js"]),
+    assertPackagedLocalSpeechWorkerEntries(["/build/main/local-speech-worker.js"]),
   );
-  assert.throws(() => assertPackagedParakeetWorkerEntries([]), /transcription worker/u);
-  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-parakeet-worker-asar-"));
+  assert.throws(() => assertPackagedLocalSpeechWorkerEntries([]), /transcription worker/u);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-local-speech-worker-asar-"));
   const root = await realpath(temporaryRoot);
   const source = path.join(root, "source");
   const workerDirectory = path.join(source, "build", "main");
   try {
     await mkdir(workerDirectory, { recursive: true });
-    await writeFile(path.join(workerDirectory, "parakeet-worker.js"), "export {};\n");
+    await writeFile(path.join(workerDirectory, "local-speech-worker.js"), "export {};\n");
     const packedAsar = path.join(root, "packed.asar");
     await createPackage(source, packedAsar);
-    await assert.doesNotReject(verifyPackagedParakeetWorker(packedAsar));
+    await assert.doesNotReject(verifyPackagedLocalSpeechWorker(packedAsar));
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires the bundled Silero VAD model", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-speech-resources-"));
+  const resources = await realpath(temporaryRoot);
+  try {
+    await assert.rejects(verifyPackagedSpeechResources(resources));
+    await mkdir(path.join(resources, "speech"));
+    await writeFile(path.join(resources, "speech", "silero_vad.onnx"), "");
+    await assert.rejects(verifyPackagedSpeechResources(resources), /empty/u);
+    await writeFile(path.join(resources, "speech", "silero_vad.onnx"), "onnx");
+    await assert.doesNotReject(verifyPackagedSpeechResources(resources));
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

@@ -15,7 +15,7 @@ test("a directly connectable catalog plugin opens its own preset setup", () => {
     setupEntry: { kind: "mcp-preset", presetId: "notion" },
   });
   const composio = connectionSuggestionFor("composio");
-  assert.equal(composio?.chipLabel, "500+ apps");
+  assert.equal(composio?.chipLabel, "More apps (Composio)");
   assert.deepEqual(composio?.setupEntry, { kind: "mcp-preset", presetId: "composio" });
 });
 

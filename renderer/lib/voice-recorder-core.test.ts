@@ -64,6 +64,7 @@ function deferredConversion(
   t: TestContext,
   provider: "openai" | "gemini" | "local",
   onReadResult: () => void = () => {},
+  samples: Float32Array = new Float32Array([0.25]),
 ) {
   const ready = deferred<void>();
   let finish!: () => void;
@@ -104,7 +105,13 @@ function deferredConversion(
         }
         startRendering() {
           const rendered = deferred<{ getChannelData: () => Float32Array }>();
-          finish = () => rendered.resolve({ getChannelData: () => new Float32Array([0.25]) });
+          finish = () =>
+            rendered.resolve({
+              getChannelData: () => {
+                onReadResult();
+                return samples;
+              },
+            });
           ready.resolve();
           return rendered.promise;
         }
@@ -174,10 +181,30 @@ for (const provider of ["openai", "gemini", "local"] as const) {
     assert.equal(transcribe.mock.callCount(), 1);
     const args = transcribe.mock.calls[0].arguments;
     assert.equal(args[args.length - 1], "successful");
+    // Cloud audio names its provider so main never re-resolves it to on-device.
+    if (provider !== "local") assert.equal(args[2], provider);
     t.mock.timers.tick(transcriptionBudgetMs(provider));
     assert.equal(cancel.mock.callCount(), 0);
   });
 }
+
+test("local transcription sends clamped, rounded PCM16 samples as binary", async (t) => {
+  const conversion = deferredConversion(t, "local", undefined, new Float32Array([0, 0.25, -0.25, 1.5, -1.5, 1, -1]));
+  const local = t.mock.method(voiceApi, "transcribeLocal", async () => "text");
+  const pending = transcribeBlob(new Blob(["audio"], { type: "audio/webm" }), {
+    provider: "local",
+    localModel: "parakeet-v3",
+    operationId: "pcm16",
+  });
+  await conversion.ready;
+  conversion.finish();
+  assert.equal(await pending, "text");
+  const [pcm, modelId, operationId] = local.mock.calls[0].arguments;
+  assert.ok(pcm instanceof ArrayBuffer);
+  assert.deepEqual(Array.from(new Int16Array(pcm)), [0, 8192, -8192, 32767, -32767, 32767, -32767]);
+  assert.equal(modelId, "parakeet-v3");
+  assert.equal(operationId, "pcm16");
+});
 
 test("caller abort still invalidates conversion before dispatch", async (t) => {
   const conversion = deferredConversion(t, "openai");
@@ -235,8 +262,9 @@ for (const provider of ["openai", "gemini", "local"] as const) {
         elapsed = transcriptionBudgetMs(provider) + offset;
         wallClock += offset < 0 ? 86_400_000 : -86_400_000;
       };
-      const conversion = deferredConversion(t, provider, consumeBudget);
-      if (provider !== "openai") {
+      // Local work has no base64 step: its synchronous encoding follows decode.
+      const conversion = deferredConversion(t, provider, provider === "gemini" ? undefined : consumeBudget);
+      if (provider === "gemini") {
         const encode = globalThis.btoa;
         t.mock.method(globalThis, "btoa", (input: string) => {
           consumeBudget();

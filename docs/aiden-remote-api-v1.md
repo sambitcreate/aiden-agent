@@ -164,7 +164,7 @@ Forbidden: provider fingerprint, resolved MCP bindings, chat ID, credentials, pr
 
 ### Speech
 
-Allowed: the fixed local transcription engine identifier and readiness, a bounded allowlisted model catalog with installed/downloading state and progress, one model setup or removal command, and a final bounded transcript. Audio input is exact base64 PCM16: mono, signed 16-bit little-endian, 16 kHz, and no longer than 60 seconds.
+Allowed: the fixed local transcription engine identifier and readiness, a bounded allowlisted model catalog with installed/downloading state and progress (download phases `download`, `verify` and `extract`; each model may also carry the additive `languages`, `capabilities` and `license` fields, which clients decode tolerantly and need not display), one model setup or removal command, and a final bounded transcript. Audio input is exact base64 PCM16: mono, signed 16-bit little-endian, 16 kHz, and no longer than 60 seconds.
 
 Forbidden: server filesystem paths, arbitrary model URLs or archive names, provider credentials, partial recognition events, retained recordings, raw decoder diagnostics, or transcripts above the response bound.
 

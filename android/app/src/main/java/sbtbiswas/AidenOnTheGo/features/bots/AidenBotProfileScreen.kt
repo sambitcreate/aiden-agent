@@ -24,8 +24,11 @@ import androidx.compose.material.icons.filled.HideImage
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.SdStorage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.pluralStringResource
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,6 +102,7 @@ fun AidenBotProfileScreen(
     onNavigateBack: () -> Unit,
     onNavigateToChat: (String) -> Unit,
     onNavigateToEditBot: (String) -> Unit,
+    onNavigateToMemory: (String) -> Unit = {},
     onBotMutated: () -> Unit = {},
     botDeleter: AidenBotDeleter? = null,
     onBotDeleted: () -> Unit = onNavigateBack
@@ -163,6 +167,25 @@ fun AidenBotProfileScreen(
         } finally {
             isLoading = false
         }
+    }
+
+    // Profile → Memory's quiet count (revision 27). A failed read keeps the row without a count.
+    val supportsMemory = serverInfo?.supportsBotMemory == true
+    var memorySummary by remember(botId) { mutableStateOf<AidenBotMemorySummary?>(null) }
+    LifecycleResumeEffect(client, botId, supportsMemory) {
+        val cl = client
+        val job = if (cl != null && supportsMemory) scope.launch {
+            val requestInstance = coordinator.activeInstanceId
+            try {
+                val view = cl.botMemory(botId)
+                if (coordinator.holdsReadAuthority(cl, requestInstance)) memorySummary = AidenBotMemorySummary.of(view)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep the last count; the row still opens the page.
+            }
+        } else null
+        onPauseOrDispose { job?.cancel() }
     }
 
     fun saveText() {
@@ -410,8 +433,44 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (supportsMemory) {
+                    Surface(
+                        onClick = { onNavigateToMemory(current.id) },
+                        color = palette.raised,
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)
+                        ) {
+                            Icon(Icons.Outlined.SdStorage, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Text(stringResource(R.string.bot_memory_title), style = MaterialTheme.typography.bodyLarge, color = palette.foreground, modifier = Modifier.weight(1f))
+                            memorySummary?.let { summary ->
+                                Text(
+                                    when (summary) {
+                                        AidenBotMemorySummary.Unreadable -> stringResource(R.string.bot_memory_count_unreadable)
+                                        AidenBotMemorySummary.Empty -> stringResource(R.string.bot_memory_count_empty)
+                                        is AidenBotMemorySummary.Things ->
+                                            pluralStringResource(R.plurals.bot_memory_count, summary.count, summary.count)
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = palette.secondary
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
                 if (serverInfo?.supportsBotRoutines == true) {
-                    AidenBotRoutinesSection(botId = current.id, client = client)
+                    AidenBotRoutinesSection(
+                        botId = current.id,
+                        client = client,
+                        offersSuggestions = serverInfo?.supportsBotProactive == true
+                    )
                 }
 
                 actionError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }

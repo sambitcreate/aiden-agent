@@ -33,7 +33,9 @@ struct AidenBotDynamicCodingKey: CodingKey {
 enum AidenBotWire {
     static let maxNameLength = 80
     static let maxPurposeLength = 280
-    static let maxGreetingLength = 2_000
+    /// Keys a revision-27 Mac no longer uses. Older clients and hosts may
+    /// still send them, so strict-keyed decoders accept and ignore them.
+    static let retiredIdentityKeys: Set<String> = ["openingGreeting"]
     static let maxInstructionsLength = 32_000
     static let maxSummaryLength = 280
     static let maxPreviewLength = 500
@@ -423,7 +425,6 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let name: String
     let purpose: String
-    let openingGreeting: String?
     let instructions: String
     let avatar: AidenBotAvatarView
     let health: AidenBotHealth
@@ -450,12 +451,8 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             maxLength: AidenBotWire.maxPurposeLength,
             allowEmpty: true
         )
-        openingGreeting = try AidenBotWire.optionalString(
-            values,
-            forKey: .openingGreeting,
-            maxLength: AidenBotWire.maxGreetingLength,
-            allowEmpty: true
-        )
+        // Revision 27 drops `openingGreeting`; an older Mac may still send it,
+        // so it is tolerated and ignored.
         instructions = try AidenBotWire.requiredString(
             values,
             forKey: .instructions,
@@ -524,7 +521,6 @@ struct AidenBotModelSelection: Codable, Equatable, Sendable {
 struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     let name: String
     let purpose: String
-    let openingGreeting: String?
     let instructions: String
     let avatar: AidenBotSemanticAvatar
     /// Optional since revision 25: omitted means Full Access by default, and a
@@ -534,39 +530,31 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     init(
         name: String,
         purpose: String,
-        openingGreeting: String? = nil,
         instructions: String,
         avatar: AidenBotSemanticAvatar,
         access: AidenBotAccessUpdate? = nil
     ) throws {
         try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false)
         try AidenBotWire.validateString(purpose, field: "purpose", maxLength: AidenBotWire.maxPurposeLength, allowEmpty: true)
-        if let openingGreeting {
-            try AidenBotWire.validateString(openingGreeting, field: "openingGreeting", maxLength: AidenBotWire.maxGreetingLength, allowEmpty: true)
-        }
         try AidenBotWire.validateString(instructions, field: "instructions", maxLength: AidenBotWire.maxInstructionsLength, allowEmpty: false)
         self.name = name
         self.purpose = purpose
-        self.openingGreeting = openingGreeting
         self.instructions = instructions
         self.avatar = avatar
         self.access = access
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        try AidenBotWire.requireOnlyKeys(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)).union(AidenBotWire.retiredIdentityKeys)
+        )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try AidenBotWire.requiredString(values, forKey: .name, maxLength: AidenBotWire.maxNameLength)
         purpose = try AidenBotWire.requiredString(
             values,
             forKey: .purpose,
             maxLength: AidenBotWire.maxPurposeLength,
-            allowEmpty: true
-        )
-        openingGreeting = try AidenBotWire.optionalString(
-            values,
-            forKey: .openingGreeting,
-            maxLength: AidenBotWire.maxGreetingLength,
             allowEmpty: true
         )
         instructions = try AidenBotWire.requiredString(
@@ -581,52 +569,47 @@ struct AidenBotCreateRequest: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, purpose, openingGreeting, instructions, avatar, access
+        case name, purpose, instructions, avatar, access
     }
 }
 
 struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
     let name: String?
     let purpose: String?
-    let openingGreeting: String?
     let instructions: String?
     let avatar: AidenBotSemanticAvatar?
 
     init(
         name: String? = nil,
         purpose: String? = nil,
-        openingGreeting: String? = nil,
         instructions: String? = nil,
         avatar: AidenBotSemanticAvatar? = nil
     ) throws {
-        guard name != nil || purpose != nil || openingGreeting != nil || instructions != nil || avatar != nil else {
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
         if let name { try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false) }
         if let purpose { try AidenBotWire.validateString(purpose, field: "purpose", maxLength: AidenBotWire.maxPurposeLength, allowEmpty: true) }
-        if let openingGreeting { try AidenBotWire.validateString(openingGreeting, field: "openingGreeting", maxLength: AidenBotWire.maxGreetingLength, allowEmpty: true) }
         if let instructions { try AidenBotWire.validateString(instructions, field: "instructions", maxLength: AidenBotWire.maxInstructionsLength, allowEmpty: false) }
         self.name = name
         self.purpose = purpose
-        self.openingGreeting = openingGreeting
         self.instructions = instructions
         self.avatar = avatar
     }
 
+    /// A patch body from an older client may still carry `openingGreeting`;
+    /// the key is accepted and ignored. A patch that only carried it is empty.
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        try AidenBotWire.requireOnlyKeys(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)).union(AidenBotWire.retiredIdentityKeys)
+        )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try AidenBotWire.optionalString(values, forKey: .name, maxLength: AidenBotWire.maxNameLength)
         purpose = try AidenBotWire.optionalString(
             values,
             forKey: .purpose,
             maxLength: AidenBotWire.maxPurposeLength,
-            allowEmpty: true
-        )
-        openingGreeting = try AidenBotWire.optionalString(
-            values,
-            forKey: .openingGreeting,
-            maxLength: AidenBotWire.maxGreetingLength,
             allowEmpty: true
         )
         instructions = try AidenBotWire.optionalString(
@@ -641,13 +624,13 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
         } else {
             avatar = nil
         }
-        guard name != nil || purpose != nil || openingGreeting != nil || instructions != nil || avatar != nil else {
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, purpose, openingGreeting, instructions, avatar
+        case name, purpose, instructions, avatar
     }
 }
 

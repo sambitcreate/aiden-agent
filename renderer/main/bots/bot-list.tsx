@@ -1,13 +1,19 @@
 import * as React from "react";
-import { Plus, RotateCcw, Search, X } from "lucide-react";
+import { Ellipsis, Plus, RotateCcw, Search, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
   Button,
+  Callout,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   EmptyState,
   Input,
   Text,
@@ -51,6 +57,30 @@ function matchesSearch(row: BotListRow, query: string): boolean {
   );
 }
 
+function BotRowMenuItems({
+  bot,
+  Item,
+  Separator,
+  onOpenProfile,
+  onDelete,
+}: {
+  bot: BotDefinition;
+  Item: typeof DropdownMenuItem | typeof ContextMenuItem;
+  Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator;
+  onOpenProfile(bot: BotDefinition): void;
+  onDelete(bot: BotDefinition): void;
+}) {
+  return (
+    <>
+      <Item onSelect={() => onOpenProfile(bot)}>Profile</Item>
+      <Separator />
+      <Item color="status-red" onSelect={() => onDelete(bot)}>
+        Delete Bot
+      </Item>
+    </>
+  );
+}
+
 function BotListItem({
   row,
   now,
@@ -68,12 +98,12 @@ function BotListItem({
   const status = botRowStatusLabel(row.state);
   const working = row.state?.kind === "running";
   return (
-    <li>
+    <li className="group relative">
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
             type="button"
-            className="flex w-full min-w-0 items-center gap-3 rounded-card px-3 py-2.5 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="flex w-full min-w-0 items-center gap-3 rounded-card py-2.5 pl-3 pr-12 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
             onClick={() => onOpen(bot)}
           >
             <span className="relative shrink-0">
@@ -125,20 +155,62 @@ function BotListItem({
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => onOpenProfile(bot)}>Profile</ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem color="status-red" onSelect={() => onDelete(bot)}>
-            Delete
-          </ContextMenuItem>
+          <BotRowMenuItems
+            bot={bot}
+            Item={ContextMenuItem}
+            Separator={ContextMenuSeparator}
+            onOpenProfile={onOpenProfile}
+            onDelete={onDelete}
+          />
         </ContextMenuContent>
       </ContextMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            iconOnly
+            variant="transparent"
+            size="medium"
+            aria-label={`More for ${bot.name}`}
+            className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 motion-reduce:transition-none"
+          >
+            <Ellipsis />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <BotRowMenuItems
+            bot={bot}
+            Item={DropdownMenuItem}
+            Separator={DropdownMenuSeparator}
+            onOpenProfile={onOpenProfile}
+            onDelete={onDelete}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
     </li>
+  );
+}
+
+/** Row-shaped placeholders while the Bots load. */
+function BotListSkeleton() {
+  return (
+    <div role="status" aria-label="Loading Bots" className="space-y-0.5">
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex items-center gap-3 px-3 py-2.5">
+          <span className="size-10 shrink-0 rounded-full bg-control motion-safe:animate-pulse" />
+          <span className="grid min-w-0 flex-1 gap-2">
+            <span className="h-3 w-32 rounded-full bg-control motion-safe:animate-pulse" />
+            <span className="h-2.5 w-56 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
+          </span>
+        </div>
+      ))}
+      <span className="sr-only">Loading Bots…</span>
+    </div>
   );
 }
 
 /**
  * The identity-first Bots home: one row per Bot, and a tap opens its chat.
- * Profile and Delete live in each row's context menu.
+ * Profile and Delete Bot live in each row's ••• menu and context menu.
  */
 export function BotList({
   rows,
@@ -167,65 +239,64 @@ export function BotList({
   /** Extra sections rendered after the list, such as Bots on a paired Mac. */
   children?: React.ReactNode;
 }) {
-  const [searching, setSearching] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const visible = rows.filter((row) => matchesSearch(row, query));
-  const closeSearch = () => {
-    setSearching(false);
-    setQuery("");
-  };
+  const showSearch = !loading && !error && rows.length > 0;
 
   return (
     <div className="space-y-4">
-      <header className="flex items-center justify-between gap-3">
-        <Text as="h1" variant="heading1">
-          Bots
-        </Text>
-        <div className="flex items-center gap-2">
-          <Button
-            iconOnly
-            variant="filled"
-            size="large"
-            aria-label={searching ? "Close search" : "Search Bots"}
-            aria-pressed={searching}
-            onClick={() => (searching ? closeSearch() : setSearching(true))}
-          >
-            {searching ? <X /> : <Search />}
-          </Button>
-          <Button iconOnly variant="filled" size="large" aria-label="New Bot" onClick={onCreate}>
-            <Plus />
-          </Button>
+      {showSearch ? (
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-tertiary"
+            aria-hidden="true"
+          />
+          <Input
+            type="search"
+            aria-label="Search Bots"
+            placeholder="Search Bots"
+            className="pl-9 pr-9"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.preventDefault();
+                setQuery("");
+              }
+            }}
+          />
+          {query ? (
+            <Button
+              iconOnly
+              variant="transparent"
+              size="small"
+              aria-label="Clear search"
+              className="absolute right-1 top-1/2 -translate-y-1/2"
+              onClick={() => setQuery("")}
+            >
+              <X />
+            </Button>
+          ) : null}
         </div>
-      </header>
-      {searching ? (
-        <Input
-          autoFocus
-          type="search"
-          aria-label="Search Bots"
-          placeholder="Search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") closeSearch();
-          }}
-        />
       ) : null}
       {loading ? (
-        <Text as="p" color="secondary" role="status">
-          Loading Bots…
-        </Text>
+        <BotListSkeleton />
       ) : error ? (
-        <EmptyState
-          role="alert"
-          title="Your Bots couldn’t be loaded"
-          action={
-            onRetry ? (
-              <Button size="small" variant="filled" onClick={onRetry}>
-                <RotateCcw /> Try again
-              </Button>
-            ) : undefined
-          }
-        />
+        <Callout color="red" role="alert" className="flex-row items-center justify-between gap-4">
+          <div>
+            <Text variant="small-strong" color="red">
+              Your Bots couldn’t be loaded
+            </Text>
+            <Text as="p" variant="small" color="secondary" className="mt-0.5">
+              Check that Aiden finished starting, then try again.
+            </Text>
+          </div>
+          {onRetry ? (
+            <Button size="small" variant="filled" onClick={onRetry}>
+              <RotateCcw /> Try again
+            </Button>
+          ) : null}
+        </Callout>
       ) : rows.length === 0 && emptyState ? (
         emptyState
       ) : rows.length === 0 ? (
@@ -239,9 +310,12 @@ export function BotList({
           }
         />
       ) : visible.length === 0 ? (
-        <Text as="p" color="secondary" role="status">
-          No Bots match “{query.trim()}”.
-        </Text>
+        <EmptyState
+          role="status"
+          placement="inline"
+          title="No matching Bots"
+          description={`Nothing matches “${query.trim()}”.`}
+        />
       ) : (
         <ul className="-mx-3 space-y-0.5" aria-label="Your Bots">
           {visible.map((row) => (

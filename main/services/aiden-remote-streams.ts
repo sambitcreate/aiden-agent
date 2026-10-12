@@ -1534,6 +1534,32 @@ export class AidenRemoteStreamService {
     return null;
   }
 
+  pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null {
+    this.prune();
+    for (const stream of this.streams.values()) {
+      if (stream.chatId !== chatId || terminal(stream.state)) continue;
+      const question = this.pendingQuestionForStream(stream.streamId);
+      if (question) return question;
+    }
+    return null;
+  }
+
+  respondQuestionFromHost(chatId: string, promptId: string, value: unknown): boolean {
+    this.prune();
+    const question = this.questions.get(promptId);
+    if (!question || question.chatId !== chatId || question.expiresAt <= this.options.now()) {
+      return false;
+    }
+    const response = parseAskUserQuestionResponse(value, {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId,
+      streamId: question.streamId,
+      toolCallId: question.toolCallId,
+      questions: question.questions,
+    });
+    return response ? this.resolveQuestion(promptId, response) : false;
+  }
+
   respondApprovalFromHost(
     chatId: string,
     approvalId: string,

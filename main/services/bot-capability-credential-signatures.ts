@@ -1,5 +1,5 @@
 import {
-  botCredentialSignature,
+  botMcpCredentialSignatureCore,
   createBotProviderCredentialSignatureCore,
   type BotProviderCredentialSignatureDependencies,
 } from "./bot-capability-credential-signatures-core.js";
@@ -32,7 +32,7 @@ export function createBotProviderCredentialSignature(
 
 export const botProviderCredentialSignature = createBotProviderCredentialSignature();
 
-/** Covers stdio env/config, configured headers, preset API keys, and durable OAuth sessions. */
+/** Covers stdio env/config, configured headers, preset API keys, and the durable OAuth grant. */
 export async function botMcpCredentialSignature(
   server: McpServer,
   key: Uint8Array,
@@ -45,9 +45,5 @@ export async function botMcpCredentialSignature(
       )
     : null;
   const oauthSession = server.oauth ? await mcpOAuthStore.get(server.id) : null;
-  return botCredentialSignature(key, "mcp", {
-    server,
-    presetKey,
-    oauthSession,
-  });
+  return botMcpCredentialSignatureCore(key, { server, presetKey, oauthSession });
 }

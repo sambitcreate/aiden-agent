@@ -17,6 +17,11 @@
 // the answer is delivered once; startup recovery re-checks too, without ever
 // starting the paused turn. A turn dismissed or stopped for good is
 // `dismissed` and never delivered.
+//
+// Routines: a finished routine's visible reply (or its failure) is a
+// `routine` row keyed by the run's request id. It starts `pending` and uses
+// the same `pending → sending → sent` path and duplicate-labelled redelivery,
+// and its binding is checked again right before each send.
 
 import { readFile } from "node:fs/promises";
 import { writeJsonAtomic } from "../durable-fs.js";
@@ -48,6 +53,9 @@ export type BotReplyRowState =
 export interface BotReplyRow {
   requestId: string;
   botId: string;
+  /** `reply` (absent): an answer to a Telegram message. `routine`: a routine's result. */
+  kind?: "routine";
+  /** The answered submission; empty for a routine row, which never waits on one. */
   submissionId: string;
   chatId: number;
   threadId?: number;
@@ -81,6 +89,18 @@ export interface TelegramBotReply {
   text: string;
 }
 
+/** A routine result for the Bot's bound Telegram chat. */
+export interface TelegramBotRoutineDelivery {
+  botId: string;
+  /** The routine run's session request id: one row per firing. */
+  requestId: string;
+  routineName: string;
+  text: string;
+  chatId: number;
+  threadId?: number;
+  ownerUserId: number;
+}
+
 export interface TelegramBotIngressDeps {
   /** The outbox file, under the Telegram profile's directory. */
   file: string;
@@ -89,13 +109,29 @@ export interface TelegramBotIngressDeps {
     awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome>;
   };
   deliver(reply: TelegramBotReply): Promise<void>;
+  /**
+   * Whether a routine row may still go to its chat: the Bot's binding is
+   * enabled and still targets that chat. Checked right before each send.
+   */
+  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "chatId" | "threadId">): Promise<boolean>;
   now?: () => number;
   onError?(message: string, cause: unknown): void;
+}
+
+/** A routine row's text: the routine name in bold, then its reply (Markdown). */
+export function telegramRoutineText(routineName: string, text: string): string {
+  const name = routineName.trim().replace(/[\\*_`[\]~|]/gu, (character) => `\\${character}`);
+  return `**${name}**\n\n${text}`;
 }
 
 export interface TelegramBotIngress {
   /** Durably admit one message. Resolves only after the session accepted it. */
   admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean }>;
+  /**
+   * Durably queue a routine's result for the bound chat and send it in the
+   * background. A request id that already has a row is ignored.
+   */
+  enqueueRoutineDelivery(delivery: TelegramBotRoutineDelivery): Promise<{ queued: boolean }>;
   /** Startup: resume waiting, deliver saved replies, redeliver ambiguous sends once. */
   recover(): Promise<void>;
   /**
@@ -167,6 +203,15 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     });
   }
 
+  async function routineTargetEnabled(row: BotReplyRow): Promise<boolean> {
+    if (deps.routineTargetEnabled === undefined) return false;
+    try {
+      return await deps.routineTargetEnabled(row);
+    } catch {
+      return false;
+    }
+  }
+
   function inBackground(work: () => Promise<void>): void {
     const promise = work().catch((cause) => deps.onError?.("Telegram Bot reply delivery failed.", cause));
     background.add(promise);
@@ -174,6 +219,12 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
   }
 
   async function deliverRow(requestId: string, duplicate: boolean): Promise<void> {
+    const queued = await locked((file) => file.rows.find((candidate) => candidate.requestId === requestId));
+    if (queued?.kind === "routine" && !(await routineTargetEnabled(queued))) {
+      // Unbound or switched off since the routine ran: drop it unsent.
+      await update(requestId, (current) => void (current.state = "failed"));
+      return;
+    }
     const row = await update(requestId, (current) => {
       current.state = "sending";
       if (duplicate) current.redelivered = true;
@@ -263,6 +314,29 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       });
       if (row !== undefined) trackOnce(row);
       return { requestId, deduped: deduped || row === undefined };
+    },
+
+    async enqueueRoutineDelivery(delivery) {
+      if (stopper.signal.aborted) return { queued: false };
+      const queued = await locked(async (file) => {
+        if (file.rows.some((row) => row.requestId === delivery.requestId)) return false;
+        file.rows.push({
+          requestId: delivery.requestId,
+          botId: delivery.botId,
+          kind: "routine",
+          submissionId: "",
+          chatId: delivery.chatId,
+          ...(delivery.threadId === undefined ? {} : { threadId: delivery.threadId }),
+          ownerUserId: delivery.ownerUserId,
+          state: "pending",
+          text: telegramRoutineText(delivery.routineName, delivery.text),
+          updatedAt: now(),
+        });
+        await persist(file);
+        return true;
+      });
+      if (queued) inBackground(() => deliverRow(delivery.requestId, false));
+      return { queued };
     },
 
     async recover() {

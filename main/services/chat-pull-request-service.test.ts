@@ -504,6 +504,40 @@ test("current resolves through the precedence model with workspace context", asy
   assert.equal(current.pullRequest?.linked, true);
 });
 
+test("sidebar reads each chat's best cached PR without calling GitHub", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const merged = new Set([11, 20]);
+  const { service, calls } = fakeService(directory, {
+    getPullRequestByUrl: async (...args: never[]) => {
+      const number = Number(/\/pull\/(\d+)/u.exec(JSON.stringify(args))?.[1]);
+      return ready({
+        pullRequest: summary(number, merged.has(number) ? { state: "merged" } : {}),
+      }) as GitHubPullRequestStatus;
+    },
+  });
+  // The most recent link is merged, but an open PR still reads as current.
+  await service.link("chat-a", { url: "https://github.com/owner/repo/pull/12" });
+  await service.link("chat-a", { url: "https://github.com/owner/repo/pull/11" });
+  await service.link("chat-b", { url: "https://github.com/owner/repo/pull/20" });
+  // chat-c unlinked its only PR: the row shows none, but remembers the dismissal.
+  await service.link("chat-c", { url: "https://github.com/owner/repo/pull/30" });
+  await service.unlink("chat-c", { host: "github.com", repository: "owner/repo", number: 30 });
+  const callsBefore = { ...calls };
+
+  const rows = await service.sidebar(["chat-a", "chat-b", "chat-c", "chat-unlinked"]);
+
+  assert.deepEqual(calls, callsBefore);
+  assert.deepEqual(Object.keys(rows).sort(), ["chat-a", "chat-b", "chat-c"]);
+  assert.equal(rows["chat-a"]?.pullRequest?.number, 12);
+  assert.equal(rows["chat-a"]?.pullRequest?.state, "open");
+  assert.equal(rows["chat-a"]?.pullRequest?.checksState, "passing");
+  assert.equal(rows["chat-b"]?.pullRequest?.number, 20);
+  assert.equal(rows["chat-b"]?.pullRequest?.state, "merged");
+  assert.equal(rows["chat-c"]?.pullRequest, undefined);
+  assert.deepEqual(rows["chat-c"]?.dismissed, ["github.com/owner/repo#30"]);
+});
+
 test("deleteChat removes the link file and never calls GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

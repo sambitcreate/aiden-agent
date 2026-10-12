@@ -15,6 +15,7 @@ import {
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
 import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
+import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
 import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   MAX_FORK_SUMMARY_TEXT_CHARS,
@@ -33,7 +34,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 26 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 27 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -60,6 +61,15 @@ export const AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE = "bot-durable-session-v1"
 export const AIDEN_REMOTE_BOT_ROUTINES_FEATURE = "bot-routines-v1" as const;
 export const AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE = "bot-connection-requests-v1" as const;
 export const AIDEN_REMOTE_BOT_PRESETS_FEATURE = "bot-presets-v1" as const;
+/**
+ * Bot memory, soul and proactivity (contract revision 27). `bot-memory-v1`
+ * gates `GET /bots/{botId}/memory` and `POST /bots/{botId}/memory/edits`;
+ * `bot-proactive-v1` gates routine proposal answers, routine suggestions and
+ * the Bot routine notification feed. The session cards themselves are gated
+ * per device by the negotiated `bot:cards` capability.
+ */
+export const AIDEN_REMOTE_BOT_MEMORY_FEATURE = "bot-memory-v1" as const;
+export const AIDEN_REMOTE_BOT_PROACTIVE_FEATURE = "bot-proactive-v1" as const;
 
 const AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH = 128;
 const AIDEN_REMOTE_MAX_ENDPOINT_UTF8_BYTES = 2_048;
@@ -158,12 +168,24 @@ export const AIDEN_REMOTE_PHONE_RUN_CAPABILITIES = [
   "runs:control",
 ] as const satisfies readonly AidenRemoteHostCapability[];
 
+/**
+ * Contract revision 27: a device that negotiates `bot:cards` can render the
+ * `memory_update` and `routine_proposal` Bot session entries. Devices without
+ * it never receive them. It grants no authority; any device type may hold it.
+ */
+export const AIDEN_REMOTE_BOT_CARD_CAPABILITIES = [
+  "bot:cards",
+] as const;
+
+export type AidenRemoteBotCardCapability = (typeof AIDEN_REMOTE_BOT_CARD_CAPABILITIES)[number];
+
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_HOST_CAPABILITIES,
   ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -176,6 +198,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_HOST_CAPABILITIES,
   ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -421,6 +444,11 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "schedule_run_in_progress",
   "server_interrupted",
   "internal_error",
+  // Contract revision 27.
+  "memory_entry_not_found",
+  "memory_over_budget",
+  "memory_blocked",
+  "routine_proposal_not_found",
 ] as const;
 
 export type AidenRemoteErrorCode = (typeof AIDEN_REMOTE_ERROR_CODES)[number];
@@ -767,8 +795,14 @@ export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
   access: AidenRemoteBotAccessView;
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
-  openingGreeting?: string;
 };
+
+/**
+ * Retired in contract revision 27: the host never emits `openingGreeting`,
+ * and accepts and ignores it in `POST /bots` and `PATCH /bots/{botId}` bodies
+ * because older phones send it with every Advanced save.
+ */
+export const AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS = ["openingGreeting"] as const;
 
 export interface AidenRemoteBotList {
   bots: AidenRemoteBotSummary[];
@@ -782,7 +816,6 @@ export interface AidenRemoteBotCreateRequest {
   avatar: AidenRemoteBotSemanticAvatar;
   /** Omitted means Full access (contract revision 25 dropped the notice wall). */
   access?: AidenRemoteBotAccessUpdateRequest;
-  openingGreeting?: string;
 }
 
 export interface AidenRemoteBotIdentityPatchRequest {
@@ -790,8 +823,6 @@ export interface AidenRemoteBotIdentityPatchRequest {
   purpose?: string;
   instructions?: string;
   avatar?: AidenRemoteBotSemanticAvatar;
-  /** An empty string explicitly clears the greeting. JSON null is invalid. */
-  openingGreeting?: string;
 }
 
 export interface AidenRemoteBotConversationItemBase {
@@ -961,7 +992,138 @@ export type AidenRemoteBotSessionEntry =
    * newest entry, Retry posts `retryText` as a new message with a new key.
    * `retryText` is omitted when there is nothing to resend.
    */
-  | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string };
+  | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
+  /**
+   * Contract revision 27, only for devices holding `bot:cards`: the Bot saved
+   * something to its memory. Clients show a quiet "Memory updated" line.
+   */
+  | { type: "memory_update"; id: string; createdAt?: string }
+  /**
+   * Contract revision 27, only for devices holding `bot:cards`: a routine the
+   * Bot suggested. A pending card is answered through
+   * `POST /bots/{botId}/routine-proposals/{proposalId}/respond`.
+   */
+  | {
+      type: "routine_proposal";
+      id: string;
+      proposalId: string;
+      name: string;
+      prompt: string;
+      label: string;
+      status: AidenRemoteBotRoutineProposalStatus;
+      routineId?: string;
+      createdAt?: string;
+    };
+
+export const AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES = ["pending", "accepted", "dismissed"] as const;
+export type AidenRemoteBotRoutineProposalStatus = (typeof AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES)[number];
+/** Session entry types that only `bot:cards` devices receive. */
+export const AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES = ["memory_update", "routine_proposal"] as const;
+
+// --- Contract revision 27: Bot memory and proactivity.
+
+// The host store enforces the same bounds on write and read (`BOT_MEMORY_LIMITS`),
+// so every memory view a host can load is representable here and on phones.
+export const AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS = BOT_MEMORY_LIMITS.entryChars;
+export const AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES = BOT_MEMORY_LIMITS.maxEntries;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX = 100;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS = 160;
+
+export interface AidenRemoteBotMemoryEntry {
+  /** Content-addressed: first 16 hex of sha256(target + "\0" + text). */
+  id: string;
+  text: string;
+}
+
+export interface AidenRemoteBotMemoryStore {
+  entries: AidenRemoteBotMemoryEntry[];
+  usedChars: number;
+  limitChars: number;
+  overBudget: boolean;
+}
+
+/** `GET /bots/{botId}/memory`: what the Bot remembers (`bot:read` + `chat:read`). */
+export interface AidenRemoteBotMemory {
+  botId: string;
+  revision: string;
+  /** False when a memory file could not be read; only `clear` is offered. */
+  readable: boolean;
+  /** The Bot's own notes (MEMORY.md). */
+  memory: AidenRemoteBotMemoryStore;
+  /** What it knows about the person (USER.md). */
+  user: AidenRemoteBotMemoryStore;
+  /** Newest write, or null when nothing was ever saved. */
+  updatedAt: string | null;
+}
+
+export type AidenRemoteBotMemoryTarget = "memory" | "user";
+
+export type AidenRemoteBotMemoryEdit =
+  | { kind: "replace"; target: AidenRemoteBotMemoryTarget; entryId: string; text: string }
+  | { kind: "remove"; target: AidenRemoteBotMemoryTarget; entryId: string }
+  | { kind: "clear" };
+
+/** `POST /bots/{botId}/memory/edits` body (`Idempotency-Key` required). */
+export interface AidenRemoteBotMemoryEditRequest {
+  edit: AidenRemoteBotMemoryEdit;
+}
+
+export interface AidenRemoteBotMemoryEditResponse {
+  ok: true;
+  view: AidenRemoteBotMemory;
+}
+
+/** Error codes of `POST /bots/{botId}/memory/edits`. */
+export const AIDEN_REMOTE_BOT_MEMORY_EDIT_ERRORS = [
+  { status: 404, code: "memory_entry_not_found" },
+  { status: 422, code: "memory_over_budget" },
+  { status: 422, code: "memory_blocked" },
+] as const;
+
+/** `POST /bots/{botId}/routine-proposals/{proposalId}/respond` body. */
+export interface AidenRemoteBotRoutineProposalRespondRequest {
+  decision: "accept" | "dismiss";
+}
+
+/** The settled answer; the same on every repeat, from any device. */
+export interface AidenRemoteBotRoutineProposalRespondResult {
+  status: Exclude<AidenRemoteBotRoutineProposalStatus, "pending">;
+  routineId?: string;
+}
+
+export interface AidenRemoteBotRoutineSuggestion {
+  id: "daily-check-in";
+  name: string;
+  prompt: string;
+  schedule: AidenRemoteBotRoutineSchedule;
+  /** Host-formatted friendly schedule. */
+  label: string;
+}
+
+/** `GET /bots/{botId}/routine-suggestions`: empty once the Bot has any routine. */
+export interface AidenRemoteBotRoutineSuggestionList {
+  suggestions: AidenRemoteBotRoutineSuggestion[];
+}
+
+export interface AidenRemoteBotRoutineNotification {
+  /** The routine run id; clients post `aiden.bot-routine.<id>` once. */
+  id: string;
+  botId: string;
+  botName: string;
+  routineId: string;
+  routineName: string;
+  status: "succeeded" | "failed";
+  finishedAt: string;
+  /** First 160 characters of the reply (redacted), or a fixed failure line. */
+  preview: string;
+}
+
+/** `GET /bots/routine-notifications?since=`: newest first, at most 100. */
+export interface AidenRemoteBotRoutineNotificationList {
+  notifications: AidenRemoteBotRoutineNotification[];
+  /** Host time; pass it as the next `since`. */
+  now: string;
+}
 
 /** State of a Bot's one durable conversation. */
 export interface AidenRemoteBotSessionStateView {
@@ -1288,6 +1450,23 @@ export interface AidenRemoteContractFixture {
   };
   botPresets: AidenRemoteBotPresetList;
   botPresetCreate: { request: AidenRemoteBotPresetCreateRequest; response: AidenRemoteBotPresetCreateResult };
+  /** Revision 27: `GET /bots/{botId}/memory`. */
+  botMemory: AidenRemoteBotMemory;
+  /** Revision 27: one memory edit and the route's error codes. */
+  botMemoryEdit: {
+    request: AidenRemoteBotMemoryEditRequest;
+    response: AidenRemoteBotMemoryEditResponse;
+    errors: Array<{ status: number; code: string }>;
+  };
+  /** Revision 27: answering a routine proposal. */
+  botRoutineProposalRespond: {
+    request: AidenRemoteBotRoutineProposalRespondRequest;
+    response: AidenRemoteBotRoutineProposalRespondResult;
+  };
+  botRoutineSuggestions: AidenRemoteBotRoutineSuggestionList;
+  botRoutineNotifications: AidenRemoteBotRoutineNotificationList;
+  /** Revision 27: a session as a `bot:cards` device sees it. */
+  botSessionCards: AidenRemoteBotSession;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -1634,6 +1813,10 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "botSessionSend",
   "botPresets",
   "botPresetCreate",
+  "botMemory",
+  "botMemoryEdit",
+  "botRoutineProposalRespond",
+  "botRoutineNotifications",
   "botAvatarUpload",
   "botAvatarMetadata",
   "taskProgress",
@@ -1682,7 +1865,8 @@ function isPrivateChildProjectionKey(key: string): boolean {
 
 function isAllowedBotIdentityField(root: string, path: readonly string[]): boolean {
   const key = path[path.length - 1];
-  if (key !== "instructions" && key !== "openingGreeting") return false;
+  // `openingGreeting` was retired in revision 27 and is never on the wire.
+  if (key !== "instructions") return false;
   if (root === "botDetail") {
     return path.length === 1;
   }
@@ -2281,9 +2465,10 @@ export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBot
   if (!isRecord(value)) throw new Error("Bot create request must be an object.");
   assertExactKeys(
     value,
-    ["name", "purpose", "openingGreeting", "instructions", "avatar", "access"],
+    ["name", "purpose", ...AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS, "instructions", "avatar", "access"],
     "Bot create request",
   );
+  ignoreRetiredBotGreeting(value, "Bot create");
   return {
     name: boundedText(value.name, "Bot create name", 80),
     purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
@@ -2292,44 +2477,34 @@ export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBot
     ...(hasOwn(value, "access")
       ? { access: parseAidenRemoteBotAccessUpdateRequest(value.access) }
       : {}),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot create openingGreeting",
-            2_000,
-            true,
-          ),
-        }
-      : {}),
   };
+}
+
+/**
+ * An older phone's `openingGreeting` must still be a bounded string (so a
+ * malformed body keeps failing), but it is dropped: the greeting is retired.
+ */
+function ignoreRetiredBotGreeting(value: Record<string, unknown>, label: string): void {
+  if (hasOwn(value, "openingGreeting")) boundedText(value.openingGreeting, `${label} openingGreeting`, 2_000, true);
 }
 
 export function parseAidenRemoteBotIdentityPatchRequest(
   value: unknown,
 ): AidenRemoteBotIdentityPatchRequest {
   if (!isRecord(value)) throw new Error("Bot identity patch must be an object.");
-  const allowed = ["name", "purpose", "openingGreeting", "instructions", "avatar"] as const;
+  const allowed = ["name", "purpose", ...AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS, "instructions", "avatar"] as const;
   assertExactKeys(value, allowed, "Bot identity patch");
   if (Object.keys(value).length === 0) {
     throw new Error("Bot identity patch must change at least one field.");
   }
+  // A patch carrying only the retired greeting is a valid no-op.
+  ignoreRetiredBotGreeting(value, "Bot identity");
   return {
     ...(hasOwn(value, "name")
       ? { name: boundedText(value.name, "Bot identity name", 80) }
       : {}),
     ...(hasOwn(value, "purpose")
       ? { purpose: boundedText(value.purpose, "Bot identity purpose", 280, true) }
-      : {}),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot identity openingGreeting",
-            2_000,
-            true,
-          ),
-        }
       : {}),
     ...(hasOwn(value, "instructions")
       ? { instructions: boundedText(value.instructions, "Bot identity instructions", 32_000) }
@@ -3283,16 +3458,6 @@ export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail 
               modelId: boundedText(selection.modelId, "Bot vision modelId", 512),
             };
           })(),
-        }
-      : {}),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot openingGreeting",
-            2_000,
-            true,
-          ),
         }
       : {}),
   };
@@ -4737,9 +4902,225 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
           : {}),
       };
+    case "memory_update":
+      assertExactKeys(value, ["type", "id", "createdAt"], "Bot memory update");
+      return {
+        type: "memory_update",
+        id,
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot memory update createdAt") }
+          : {}),
+      };
+    case "routine_proposal": {
+      assertExactKeys(
+        value,
+        ["type", "id", "proposalId", "name", "prompt", "label", "status", "routineId", "createdAt"],
+        "Bot routine proposal",
+      );
+      const status = enumMember(value.status, AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES, "Bot routine proposal status");
+      if (hasOwn(value, "routineId") && status !== "accepted") {
+        throw new Error("Only an accepted routine proposal names its routine.");
+      }
+      return {
+        type: "routine_proposal",
+        id,
+        proposalId: parseAidenRemoteBotRoutineProposalId(value.proposalId),
+        name: boundedText(value.name, "Bot routine proposal name", 120),
+        prompt: boundedText(value.prompt, "Bot routine proposal prompt", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS),
+        label: boundedText(value.label, "Bot routine proposal label", 120),
+        status,
+        ...(hasOwn(value, "routineId")
+          ? { routineId: boundedText(value.routineId, "Bot routine proposal routineId", 160) }
+          : {}),
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot routine proposal createdAt") }
+          : {}),
+      };
+    }
     default:
       throw new Error("Bot session entry type is invalid.");
   }
+}
+
+const BOT_ROUTINE_PROPOSAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const BOT_MEMORY_ID = /^[0-9a-f]{16}$/u;
+
+/** A proposal id: a lowercase UUID minted by the host. */
+export function parseAidenRemoteBotRoutineProposalId(value: unknown): string {
+  if (typeof value !== "string" || !BOT_ROUTINE_PROPOSAL_ID.test(value)) {
+    throw new Error("Bot routine proposal id is invalid.");
+  }
+  return value;
+}
+
+function parseBotMemoryTarget(value: unknown, label: string): AidenRemoteBotMemoryTarget {
+  return enumMember(value, ["memory", "user"] as const, label);
+}
+
+function parseBotMemoryEntryId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !BOT_MEMORY_ID.test(value)) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+function parseBotMemoryStore(value: unknown, label: string): AidenRemoteBotMemoryStore {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["entries", "usedChars", "limitChars", "overBudget"], label);
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES) {
+    throw new Error(`${label} entries must contain at most ${AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map((entry) => {
+    if (!isRecord(entry)) throw new Error(`${label} entry must be an object.`);
+    assertExactKeys(entry, ["id", "text"], `${label} entry`);
+    return {
+      id: parseBotMemoryEntryId(entry.id, `${label} entry id`),
+      text: boundedText(entry.text, `${label} entry text`, AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS),
+    };
+  });
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error(`${label} entry ids must be unique.`);
+  }
+  return {
+    entries,
+    usedChars: boundedIntegerValue(value.usedChars, `${label} usedChars`, 0, 1_000_000),
+    limitChars: boundedIntegerValue(value.limitChars, `${label} limitChars`, 1, 1_000_000),
+    overBudget: requiredBooleanValue(value.overBudget, `${label} overBudget`),
+  };
+}
+
+export function parseAidenRemoteBotMemory(value: unknown): AidenRemoteBotMemory {
+  if (!isRecord(value)) throw new Error("Bot memory must be an object.");
+  assertExactKeys(value, ["botId", "revision", "readable", "memory", "user", "updatedAt"], "Bot memory");
+  if (!hasOwn(value, "updatedAt")) throw new Error("Bot memory updatedAt is required.");
+  const revision = boundedText(value.revision, "Bot memory revision", 64);
+  if (!/^[0-9a-f]{16}$/u.test(revision)) throw new Error("Bot memory revision is invalid.");
+  return {
+    botId: boundedBotId(value.botId, "Bot memory botId"),
+    revision,
+    readable: requiredBooleanValue(value.readable, "Bot memory readable"),
+    memory: parseBotMemoryStore(value.memory, "Bot memory notes"),
+    user: parseBotMemoryStore(value.user, "Bot memory about the person"),
+    updatedAt: value.updatedAt === null ? null : dateTimeValue(value.updatedAt, "Bot memory updatedAt"),
+  };
+}
+
+export function parseAidenRemoteBotMemoryEditRequest(value: unknown): AidenRemoteBotMemoryEditRequest {
+  if (!isRecord(value)) throw new Error("Bot memory edit request must be an object.");
+  assertExactKeys(value, ["edit"], "Bot memory edit request");
+  const edit = value.edit;
+  if (!isRecord(edit)) throw new Error("Bot memory edit must be an object.");
+  switch (edit.kind) {
+    case "replace":
+      assertExactKeys(edit, ["kind", "target", "entryId", "text"], "Bot memory replace");
+      return {
+        edit: {
+          kind: "replace",
+          target: parseBotMemoryTarget(edit.target, "Bot memory replace target"),
+          entryId: parseBotMemoryEntryId(edit.entryId, "Bot memory replace entryId"),
+          text: boundedText(edit.text, "Bot memory replace text", AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS),
+        },
+      };
+    case "remove":
+      assertExactKeys(edit, ["kind", "target", "entryId"], "Bot memory remove");
+      return {
+        edit: {
+          kind: "remove",
+          target: parseBotMemoryTarget(edit.target, "Bot memory remove target"),
+          entryId: parseBotMemoryEntryId(edit.entryId, "Bot memory remove entryId"),
+        },
+      };
+    case "clear":
+      assertExactKeys(edit, ["kind"], "Bot memory clear");
+      return { edit: { kind: "clear" } };
+    default:
+      throw new Error("Bot memory edit kind is invalid.");
+  }
+}
+
+export function parseAidenRemoteBotMemoryEditResponse(value: unknown): AidenRemoteBotMemoryEditResponse {
+  if (!isRecord(value)) throw new Error("Bot memory edit response must be an object.");
+  assertExactKeys(value, ["ok", "view"], "Bot memory edit response");
+  if (value.ok !== true) throw new Error("Bot memory edit response must be ok.");
+  return { ok: true, view: parseAidenRemoteBotMemory(value.view) };
+}
+
+export function parseAidenRemoteBotRoutineProposalRespondRequest(
+  value: unknown,
+): AidenRemoteBotRoutineProposalRespondRequest {
+  if (!isRecord(value)) throw new Error("Bot routine proposal response must be an object.");
+  assertExactKeys(value, ["decision"], "Bot routine proposal response");
+  return { decision: enumMember(value.decision, ["accept", "dismiss"] as const, "Bot routine proposal decision") };
+}
+
+export function parseAidenRemoteBotRoutineProposalRespondResult(
+  value: unknown,
+): AidenRemoteBotRoutineProposalRespondResult {
+  if (!isRecord(value)) throw new Error("Bot routine proposal result must be an object.");
+  assertExactKeys(value, ["status", "routineId"], "Bot routine proposal result");
+  const status = enumMember(value.status, ["accepted", "dismissed"] as const, "Bot routine proposal result status");
+  if (hasOwn(value, "routineId") !== (status === "accepted")) {
+    throw new Error("An accepted routine proposal, and only one, names its routine.");
+  }
+  return {
+    status,
+    ...(hasOwn(value, "routineId")
+      ? { routineId: boundedText(value.routineId, "Bot routine proposal routineId", 160) }
+      : {}),
+  };
+}
+
+export function parseAidenRemoteBotRoutineSuggestionList(value: unknown): AidenRemoteBotRoutineSuggestionList {
+  if (!isRecord(value)) throw new Error("Bot routine suggestions must be an object.");
+  assertExactKeys(value, ["suggestions"], "Bot routine suggestions");
+  if (!Array.isArray(value.suggestions) || value.suggestions.length > 8) {
+    throw new Error("Bot routine suggestions must contain at most 8 items.");
+  }
+  return {
+    suggestions: value.suggestions.map((suggestion) => {
+      if (!isRecord(suggestion)) throw new Error("Bot routine suggestion must be an object.");
+      assertExactKeys(suggestion, ["id", "name", "prompt", "schedule", "label"], "Bot routine suggestion");
+      return {
+        id: enumMember(suggestion.id, ["daily-check-in"] as const, "Bot routine suggestion id"),
+        name: boundedText(suggestion.name, "Bot routine suggestion name", 120),
+        prompt: boundedText(suggestion.prompt, "Bot routine suggestion prompt", 32_000),
+        schedule: parseAidenRemoteBotRoutineSchedule(suggestion.schedule),
+        label: boundedText(suggestion.label, "Bot routine suggestion label", 120),
+      };
+    }),
+  };
+}
+
+export function parseAidenRemoteBotRoutineNotificationList(value: unknown): AidenRemoteBotRoutineNotificationList {
+  if (!isRecord(value)) throw new Error("Bot routine notifications must be an object.");
+  assertExactKeys(value, ["notifications", "now"], "Bot routine notifications");
+  if (!Array.isArray(value.notifications) || value.notifications.length > AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX) {
+    throw new Error(`Bot routine notifications must contain at most ${AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX} items.`);
+  }
+  const notifications = value.notifications.map((notification) => {
+    if (!isRecord(notification)) throw new Error("Bot routine notification must be an object.");
+    assertExactKeys(
+      notification,
+      ["id", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview"],
+      "Bot routine notification",
+    );
+    return {
+      id: boundedText(notification.id, "Bot routine notification id", 160),
+      botId: boundedBotId(notification.botId, "Bot routine notification botId"),
+      botName: boundedText(notification.botName, "Bot routine notification botName", 80),
+      routineId: boundedText(notification.routineId, "Bot routine notification routineId", 160),
+      routineName: boundedText(notification.routineName, "Bot routine notification routineName", 120),
+      status: enumMember(notification.status, ["succeeded", "failed"] as const, "Bot routine notification status"),
+      finishedAt: dateTimeValue(notification.finishedAt, "Bot routine notification finishedAt"),
+      preview: boundedText(
+        notification.preview,
+        "Bot routine notification preview",
+        AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS,
+      ),
+    };
+  });
+  if (new Set(notifications.map((notification) => notification.id)).size !== notifications.length) {
+    throw new Error("Bot routine notification ids must be unique.");
+  }
+  return { notifications, now: dateTimeValue(value.now, "Bot routine notifications now") };
 }
 
 function boundedPluginId(value: unknown, label: string): string {
@@ -5356,6 +5737,45 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   ) {
     throw new Error("Canonical Bot rev-26 fixtures do not agree.");
   }
+  const botMemory = parseAidenRemoteBotMemory(value.botMemory);
+  if (!isRecord(value.botMemoryEdit)) throw new Error("Bot memory edit fixture must be an object.");
+  assertExactKeys(value.botMemoryEdit, ["request", "response", "errors"], "Bot memory edit fixture");
+  if (!Array.isArray(value.botMemoryEdit.errors)) throw new Error("Bot memory edit fixture errors must be an array.");
+  const botMemoryEdit = {
+    request: parseAidenRemoteBotMemoryEditRequest(value.botMemoryEdit.request),
+    response: parseAidenRemoteBotMemoryEditResponse(value.botMemoryEdit.response),
+    errors: value.botMemoryEdit.errors.map((error) => {
+      if (!isRecord(error)) throw new Error("Bot memory edit fixture error must be an object.");
+      assertExactKeys(error, ["status", "code"], "Bot memory edit fixture error");
+      const known = AIDEN_REMOTE_BOT_MEMORY_EDIT_ERRORS.find(
+        (candidate) => candidate.code === error.code && candidate.status === error.status,
+      );
+      if (!known) throw new Error("Bot memory edit fixture error is not a documented error.");
+      return { status: known.status as number, code: known.code as string };
+    }),
+  };
+  const proposalRespondRecord = requestResponseRecord(value.botRoutineProposalRespond, "Bot routine proposal respond");
+  const botRoutineProposalRespond = {
+    request: parseAidenRemoteBotRoutineProposalRespondRequest(proposalRespondRecord.request),
+    response: parseAidenRemoteBotRoutineProposalRespondResult(proposalRespondRecord.response),
+  };
+  const botRoutineSuggestions = parseAidenRemoteBotRoutineSuggestionList(value.botRoutineSuggestions);
+  const botRoutineNotifications = parseAidenRemoteBotRoutineNotificationList(value.botRoutineNotifications);
+  const botSessionCards = parseAidenRemoteBotSession(value.botSessionCards);
+  if (
+    botMemoryEdit.request.edit.kind === "replace" &&
+    !botMemoryEdit.response.view[botMemoryEdit.request.edit.target].entries.some(
+      (entry) => botMemoryEdit.request.edit.kind === "replace" && entry.text === botMemoryEdit.request.edit.text,
+    )
+  ) {
+    throw new Error("Bot memory edit response does not apply the requested edit.");
+  }
+  if (
+    (botRoutineProposalRespond.request.decision === "accept") !==
+    (botRoutineProposalRespond.response.status === "accepted")
+  ) {
+    throw new Error("Bot routine proposal response does not apply the requested decision.");
+  }
   const botAvatarUploadRecord = isRecord(value.botAvatarUpload)
     ? value.botAvatarUpload
     : null;
@@ -5492,7 +5912,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botCreate.response.name !== botCreate.request.name ||
     botCreate.response.purpose !== botCreate.request.purpose ||
     botCreate.response.instructions !== botCreate.request.instructions ||
-    botCreate.response.openingGreeting !== botCreate.request.openingGreeting ||
     JSON.stringify(botCreate.response.avatar.semantic) !==
       JSON.stringify(botCreate.request.avatar)
   ) {
@@ -5507,12 +5926,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       botIdentity.response.instructions !== botIdentity.request.instructions) ||
     (botIdentity.request.avatar !== undefined &&
       JSON.stringify(botIdentity.response.avatar.semantic) !==
-        JSON.stringify(botIdentity.request.avatar)) ||
-    (botIdentity.request.openingGreeting !== undefined &&
-      (botIdentity.request.openingGreeting === ""
-        ? botIdentity.response.openingGreeting !== undefined
-        : botIdentity.response.openingGreeting !==
-          botIdentity.request.openingGreeting))
+        JSON.stringify(botIdentity.request.avatar))
   ) {
     throw new Error("Bot identity response does not apply the exact requested patch.");
   }
@@ -5889,6 +6303,12 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botConnectionRequest,
     botPresets,
     botPresetCreate,
+    botMemory,
+    botMemoryEdit,
+    botRoutineProposalRespond,
+    botRoutineSuggestions,
+    botRoutineNotifications,
+    botSessionCards,
     botAvatarUpload,
     botAvatarMetadata,
     taskProgress,

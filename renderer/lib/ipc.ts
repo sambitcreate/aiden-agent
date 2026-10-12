@@ -177,6 +177,7 @@ import type {
   ChatPullRequestPendingCreate,
   ChatPullRequestRef,
   ChatPullRequestView,
+  ChatSidebarPullRequests,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
 import {
@@ -660,6 +661,10 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
   pendingApproval: (chatId: string) =>
     invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
+  pendingQuestion: (chatId: string) =>
+    invoke<(AskUserQuestionPromptV1 & { source: "remote" }) | null>("remote:getPendingQuestion", chatId),
+  respondQuestion: (chatId: string, promptId: string, response: AskUserQuestionResponseV1) =>
+    invoke<{ status: "answered" | "elsewhere" }>("remote:respondQuestionFromHost", chatId, promptId, response),
   respondApproval: (
     chatId: string,
     approvalId: string,
@@ -706,7 +711,7 @@ export interface ModelDownloadProgress {
   downloaded: number;
   total: number;
   percentage: number;
-  phase: "download" | "extract";
+  phase: "download" | "verify" | "extract";
 }
 
 export const shortcutApi = {
@@ -1005,6 +1010,9 @@ export const pullRequestsApi = {
       "pullRequests:current",
       chatId,
     ),
+  /** Cache-only: each listed chat's best linked PR and dismissed refs, for sidebar rows. */
+  sidebar: (chatIds: readonly string[]) =>
+    invoke<Record<string, ChatSidebarPullRequests>>("pullRequests:sidebar", chatIds),
   candidates: (chatId: string, workspaceId?: string) =>
     invoke<ChatPullRequestCandidatesResult>("pullRequests:candidates", chatId, workspaceId),
   link: (chatId: string, input: { url: string }) =>
@@ -1341,6 +1349,24 @@ export const botsApi = {
       invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
+  },
+  /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
+  memory: {
+    get: (botId: string) => invoke<import("../shared/bot-memory").BotMemoryView>("bots:memory:get", botId),
+    /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
+    edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
+      invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
+  },
+  /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
+  onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
+    onNotification<import("../shared/bot-memory").BotMemoryChangedEvent>("bots:memory:changed", handler),
+  routineProposals: {
+    /** Add routine or Not now on a Bot's proposal card; a repeated answer returns the settled status. */
+    respond: (input: import("../shared/bot-routine-proposals").BotRoutineProposalRespondInput) =>
+      invoke<import("../shared/bot-routine-proposals").BotRoutineProposalRespondResult>(
+        "bots:routineProposals:respond",
+        input,
+      ),
   },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),

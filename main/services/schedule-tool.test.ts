@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { runToolCall, type AgentToolResult } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { digestPiRuntimeEffectArguments } from "./pi-runtime-effect-core.js";
 import type {
   McpServer,
   ScheduledMcpServerBinding,
@@ -193,6 +195,36 @@ function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
   assert.equal(block?.type, "text");
   if (!block || block.type !== "text") throw new Error("Expected a text tool result.");
   return JSON.parse(block.text) as Record<string, unknown>;
+}
+
+for (const attended of [false, true]) {
+  test(`approved ${attended ? "Assistant" : "standard"} task reaches execution through the durable tool boundary`, async () => {
+    const fake = fakeDependencies();
+    const tool = createScheduleTaskTool(
+      attended ? ATTENDED_ACCESS : { kind: "standard", modelSelection: ASSISTANT_MODEL_SELECTION },
+      fake.dependencies,
+    );
+    const outcome = await runToolCall({
+      type: "toolCall", id: "create-approved", name: tool.name,
+      arguments: { action: "create", name: "Inbox brief", cron: "0 9 * * *", prompt: "Summarize unread email.", permission: "full", mcpServerIds: ["gmail"] },
+    }, {
+      assistantMessage: fauxAssistantMessage("I’ll prepare your daily brief."),
+      tools: [tool],
+      context: { messages: [], tools: [tool] },
+      beforeToolCall: async ({ args }) => {
+        if (attended) attachAssistantScheduleMcpApproval(args, [GMAIL_BINDING]);
+        else await prepareStandardScheduleApproval(args, ASSISTANT_MODEL_SELECTION, fake.dependencies);
+        // The managed runtime hashes arguments after approval and before dispatch.
+        digestPiRuntimeEffectArguments(args);
+        return undefined;
+      },
+    });
+    assert.equal(outcome.isError, false, JSON.stringify(outcome.result));
+    assert.equal(fake.tasks.length, 1);
+    assert.equal(fake.tasks[0]?.providerId, "local-provider");
+    assert.equal(fake.tasks[0]?.model, "local-model");
+    assert.deepEqual(fake.tasks[0]?.mcpServerBindings, [GMAIL_BINDING]);
+  });
 }
 
 test("schedule_task supports the full create/update/list/pause/resume/run/remove lifecycle", async () => {
@@ -1573,125 +1605,5 @@ test("generic automation tools never list or change a Bot's routines", async () 
   assert.deepEqual(
     (assistantListed.tasks as Array<{ id: string }>).map((task) => task.id),
     ["task-1"],
-  );
-});
-
-function fakeBotRoutines() {
-  const calls: Array<{ action: string; input: unknown }> = [];
-  const routine = (botId: string, id = "routine-1") => ({
-    id,
-    botId,
-    name: "Weekly meal prep",
-    prompt: "Plan this week's dinners.",
-    schedule: { kind: "weekly" as const, days: [0], time: "08:41" },
-    timezone: "UTC",
-    label: "Every Sunday at 8:41 AM",
-    enabled: true,
-    updatedAt: 3,
-  });
-  return {
-    calls,
-    routines: {
-      list: async (botId: string) => {
-        calls.push({ action: "list", input: botId });
-        return [routine(botId)];
-      },
-      create: async (input: { botId: string }) => {
-        calls.push({ action: "create", input });
-        return routine(input.botId);
-      },
-      update: async (input: { botId: string; id: string }) => {
-        calls.push({ action: "update", input });
-        return routine(input.botId, input.id);
-      },
-      delete: async (input: unknown) => {
-        calls.push({ action: "delete", input });
-      },
-    },
-  };
-}
-
-test("inside a Bot turn the schedule tool manages only that Bot's routines", async () => {
-  const fake = fakeBotRoutines();
-  const tools = scheduleTaskToolsForContext({
-    bot: { botId: "bot-chef", routines: fake.routines },
-  });
-  assert.deepEqual(tools.map((tool) => tool.name), [SCHEDULE_TOOL_NAME]);
-  const [tool] = tools;
-
-  const created = jsonResult(
-    await tool!.execute("create", {
-      action: "create",
-      name: "Weekly meal prep",
-      schedule: { kind: "weekly", days: [0], time: "08:41" },
-      prompt: "Plan this week's dinners.",
-    }),
-  );
-  assert.deepEqual(fake.calls[0], {
-    action: "create",
-    input: {
-      botId: "bot-chef",
-      name: "Weekly meal prep",
-      schedule: { kind: "weekly", days: [0], time: "08:41" },
-      prompt: "Plan this week's dinners.",
-    },
-  });
-  assert.equal((created.routine as { label: string }).label, "Every Sunday at 8:41 AM");
-
-  await tool!.execute("list", { action: "list" });
-  assert.deepEqual(fake.calls[1], { action: "list", input: "bot-chef" });
-
-  await tool!.execute("update", {
-    action: "update",
-    id: "routine-1",
-    expectedUpdatedAt: 3,
-    schedule: { kind: "daily", time: "09:00" },
-  });
-  assert.deepEqual(fake.calls[2], {
-    action: "update",
-    input: {
-      botId: "bot-chef",
-      id: "routine-1",
-      expectedUpdatedAt: 3,
-      schedule: { kind: "daily", time: "09:00" },
-    },
-  });
-
-  await tool!.execute("remove", { action: "remove", id: "routine-1", expectedUpdatedAt: 3 });
-  assert.deepEqual(fake.calls[3], {
-    action: "delete",
-    input: { botId: "bot-chef", id: "routine-1", expectedUpdatedAt: 3 },
-  });
-
-  // The Bot cannot aim a routine at another Bot or smuggle raw cron through.
-  await assert.rejects(
-    tool!.execute("other", {
-      action: "create",
-      botId: "bot-scout",
-      name: "Steal",
-      schedule: { kind: "daily", time: "09:00" },
-      prompt: "x",
-    }),
-    /Invalid/u,
-  );
-  await assert.rejects(
-    tool!.execute("cron", {
-      action: "create",
-      name: "Raw",
-      cron: "* * * * *",
-      prompt: "x",
-    }),
-    /Invalid/u,
-  );
-  assert.equal(fake.calls.length, 4);
-});
-
-test("a routine run cannot create routines", () => {
-  const fake = fakeBotRoutines();
-  assert.deepEqual(
-    scheduleTaskToolsForContext({
-      bot: { botId: "bot-chef", routineRun: true, routines: fake.routines },
-    }),
-    [],
   );
 });

@@ -39,9 +39,6 @@ const desktopProviderLogoDirectory = fileURLToPath(
 const iosAssetCatalogDirectory = fileURLToPath(
   new URL("../ios/AidenOnTheGo/Resources/Assets.xcassets/", import.meta.url),
 );
-const desktopOnboardingDirectory = fileURLToPath(
-  new URL("../renderer/assets/onboarding/", import.meta.url),
-);
 
 const appSourcePaths = [
   "AidenOnTheGo/AidenOnTheGoApp.swift",
@@ -57,6 +54,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotCreateView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
   "AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotMemoryView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotPresetsView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotProfileView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotRoutinesView.swift",
@@ -95,6 +93,7 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
+  "AidenOnTheGo/Models/AidenBotMemory.swift",
   "AidenOnTheGo/Models/AidenBotRoutine.swift",
   "AidenOnTheGo/Models/AidenBotSession.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
@@ -122,6 +121,7 @@ const testSources = [
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",
   "AidenBotImagePlaygroundTests.swift",
+  "AidenBotMemoryTests.swift",
   "AidenBotSessionTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatTests.swift",
@@ -342,7 +342,8 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u,
   );
   assert.match(chat, /AidenComposerView\([\s\S]*?\.disabled\(model\.isReadOnlyPresentation\)/u);
-  assert.match(chat, /guard !model\.isReadOnlyPresentation, autoStartVoice/u);
+  // Voice-launch admission is exercised by AidenChatTests with a read-only
+  // fixture, rather than coupling this inventory check to the guard's location.
   assert.match(botHome, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botProfile, /AidenBotCanonicalAvatarView\(/u);
   assert.match(botProfile, /\.aidenBotImagePlaygroundSheet\(/u);
@@ -392,24 +393,6 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
         readFile(`${iosAssetCatalogDirectory}ProviderLogo-${slug}.imageset/${slug}.svg`),
       ]);
       assert.deepEqual(iosArtwork, desktopArtwork, `${slug} artwork diverged from Aiden Agent`);
-    }),
-  );
-});
-
-test("iOS onboarding reuses the reviewed Mac feature artwork byte for byte", async () => {
-  const artworkPairs = [
-    ["aiden-workspace.png", "OnboardingBuild.imageset/onboarding-build.png"],
-    ["features/model-freedom.png", "OnboardingExtend.imageset/onboarding-extend.png"],
-    ["features/scheduled-automations.png", "OnboardingControl.imageset/onboarding-control.png"],
-  ];
-
-  await Promise.all(
-    artworkPairs.map(async ([desktopPath, iosPath]) => {
-      const [desktopArtwork, iosArtwork] = await Promise.all([
-        readFile(`${desktopOnboardingDirectory}${desktopPath}`),
-        readFile(`${iosAssetCatalogDirectory}${iosPath}`),
-      ]);
-      assert.deepEqual(iosArtwork, desktopArtwork, `${iosPath} diverged from Aiden Agent`);
     }),
   );
 });

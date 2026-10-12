@@ -136,8 +136,9 @@ test("Create a bot keeps the draft after a failed save, then creates it with Ful
   await editor.getByRole("button", { name: "Next", exact: true }).click();
   // The second step renames the dialog to "Connections".
   const connections = page.getByRole("dialog", { name: "Connections", exact: true });
-  await expect(connections.getByRole("group", { name: "Suggested connections" })).toBeVisible();
-  await connections.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(connections.getByRole("list", { name: "Suggested connections" })).toBeVisible();
+  // Connections are optional; Create goes ahead without any.
+  await connections.getByRole("button", { name: "Create", exact: true }).click();
   await expect(connections.getByRole("alert")).toContainText("The test storage is unavailable.");
   await connections.getByRole("button", { name: "Back", exact: true }).click();
   await expect(editor.getByRole("textbox", { name: "Name" })).toHaveValue("Meal Planner");
@@ -154,7 +155,7 @@ test("Create a bot from a name and a help answer, then switch its Advanced acces
   await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
   await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
   await editor.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByRole("dialog", { name: "Connections", exact: true }).getByRole("button", { name: "Skip", exact: true }).click();
+  await page.getByRole("dialog", { name: "Connections", exact: true }).getByRole("button", { name: "Create", exact: true }).click();
 
   // Creating opens the Bot's chat; the request carries the name, the answer as
   // the subtitle, and Full access by default (no custom selection).
@@ -178,7 +179,7 @@ test("Create a bot from a name and a help answer, then switch its Advanced acces
   await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
   await onlyChoose.click();
   await expect(onlyChoose).toBeChecked();
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
   const { accessUpdates } = await botCreateE2e(aiden.app);

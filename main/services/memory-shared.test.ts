@@ -62,12 +62,9 @@ test("memory scope uses the shared folder hash when the desktop knows the folder
     kind: "workspace",
     id: sharedWorkspaceScopeId("/repo/project"),
   });
-  // Unknown folder keeps the legacy workspace-id scope; bots are unchanged.
+  // Unknown folder keeps the legacy workspace-id scope; Bots keep their own memory files.
   assert.deepEqual(memoryScopeForChat(chat()), { kind: "workspace", id: "workspace-a" });
-  assert.deepEqual(memoryScopeForChat(chat({ botId: "bot-a" }), "/repo/project"), {
-    kind: "bot",
-    id: "bot-a",
-  });
+  assert.throws(() => memoryScopeForChat(chat({ botId: "bot-a" }), "/repo/project"));
 });
 
 test("memory store absorbs a legacy database once and remaps scope ids", async (t) => {
@@ -76,7 +73,6 @@ test("memory store absorbs a legacy database once and remaps scope ids", async (
   const legacyScope: MemoryScope = { kind: "workspace", id: "workspace-uuid-1" };
   const legacy = new MemoryStore({ root: () => legacyDir, now: () => 1_000 });
   await legacy.put({ scope: legacyScope, text: "User likes dark mode", provenance: { kind: "user_edit", sourceId: "aiden" } });
-  await legacy.put({ scope: { kind: "bot", id: "bot-1" }, text: "Bot memory stays", provenance: { kind: "user_edit", sourceId: "aiden" } });
   await legacy.close();
 
   const sharedDir = path.join(root, "shared");
@@ -90,7 +86,6 @@ test("memory store absorbs a legacy database once and remaps scope ids", async (
   });
   const shared = make();
   assert.equal((await shared.list({ kind: "workspace", id: mapped })).length, 1);
-  assert.equal((await shared.list({ kind: "bot", id: "bot-1" })).length, 1);
   await shared.close();
 
   // Reopening does not duplicate, and the legacy file is left intact.
@@ -256,22 +251,6 @@ test("a corrupt or invalid legacy row is skipped without poisoning the import", 
   await shared.put({ scope, text: "post-import write works", provenance: { kind: "user_edit", sourceId: "aiden" } });
   assert.equal((await shared.list(scope)).length, 2);
   await shared.close();
-});
-
-test("a cross-kind scope alias is skipped instead of corrupting scoping", async (t) => {
-  const root = await fixture(t);
-  const scope: MemoryScope = { kind: "workspace", id: "workspace-x" };
-  const store = new MemoryStore({ root: () => root, now: () => 1_000 });
-  await store.put({ scope, text: "workspace fact", provenance: { kind: "user_edit", sourceId: "aiden" } });
-  await store.close();
-
-  const migrated = new MemoryStore({
-    root: () => root,
-    scopeAliases: async () => [{ from: scope, to: { kind: "bot", id: "bot-y" } }],
-  });
-  // No workspace rows may appear under a bot scope.
-  assert.equal((await migrated.list({ kind: "bot", id: "bot-y" })).length, 0);
-  await migrated.close();
 });
 
 test("two surfaces can write to the shared store concurrently", async (t) => {

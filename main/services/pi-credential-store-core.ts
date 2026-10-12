@@ -33,8 +33,61 @@ interface EncryptedPiCredentialStoreOptions {
   /** A committed write stays successful when directory fsync is unsupported. */
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
-  beforeWritePublish?(): void;
-  afterWritePublish?(): void;
+  /** Runs around every publication; `grantChanged` is false for an in-place OAuth refresh. */
+  beforeWritePublish?(change: PiCredentialWriteChange): void;
+  afterWritePublish?(change: PiCredentialWriteChange): void;
+}
+
+export interface PiCredentialWriteChange {
+  readonly grantChanged: boolean;
+}
+
+/**
+ * OAuth fields that rotate on every refresh (or, for Copilot, are refreshed
+ * catalog metadata) rather than describing the signed-in grant.
+ */
+const VOLATILE_OAUTH_FIELDS = new Set(["access", "refresh", "expires", "availableModelIds"]);
+
+/**
+ * The non-secret-bearing part of a stored credential that identifies the
+ * grant. API keys are their whole credential. OAuth logins keep only stable
+ * metadata (account id, enterprise URL, client id, scopes, ...), so a token
+ * refresh keeps the same identity while signing out or into a different
+ * account changes it.
+ */
+export function piCredentialGrantIdentity(credential: Credential): unknown {
+  if (credential.type !== "oauth") return credential;
+  return Object.fromEntries(
+    Object.entries(credential)
+      .filter(([key]) => !VOLATILE_OAUTH_FIELDS.has(key))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+  );
+}
+
+/**
+ * Aiden-owned id stamped on every explicit OAuth sign-in. Token-only OAuth
+ * credentials (Anthropic, xAI, Kimi) carry no account field, so without it a
+ * sign-in to a different account would look like the same grant.
+ */
+const AIDEN_GRANT_ID_FIELD = "aidenGrantId";
+
+/** The credential an explicit sign-in commits: a fresh grant even if it looks like the old one. */
+export function piCredentialWithFreshGrant(credential: Credential): Credential {
+  if (credential.type !== "oauth") return credential;
+  return { ...credential, [AIDEN_GRANT_ID_FIELD]: randomUUID() } as Credential;
+}
+
+/** A refresh rebuilds the credential from scratch; keep the grant id it replaced. */
+function carryPiCredentialGrant(current: Credential | undefined, next: Credential): Credential {
+  if (current?.type !== "oauth" || next.type !== "oauth") return next;
+  const grantId = (current as Record<string, unknown>)[AIDEN_GRANT_ID_FIELD];
+  if (typeof grantId !== "string" || AIDEN_GRANT_ID_FIELD in next) return next;
+  return { ...next, [AIDEN_GRANT_ID_FIELD]: grantId } as Credential;
+}
+
+function samePiCredentialGrant(left: Credential | undefined, right: Credential | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return JSON.stringify(piCredentialGrantIdentity(left)) === JSON.stringify(piCredentialGrantIdentity(right));
 }
 
 class AsyncMutex {
@@ -203,6 +256,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   private async writeDocument(
     document: CredentialDocument,
     beginPublication: () => void,
+    change: PiCredentialWriteChange = { grantChanged: true },
   ): Promise<void> {
     const destination = await this.resolvedFilePath();
     const directory = path.dirname(destination);
@@ -216,10 +270,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       await handle.sync();
       await handle.close();
       handle = undefined;
-      this.options.beforeWritePublish?.();
+      this.options.beforeWritePublish?.(change);
       beginPublication();
       await fs.rename(temporary, destination);
-      this.options.afterWritePublish?.();
+      this.options.afterWritePublish?.(change);
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -327,9 +381,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
           options?.signal?.throwIfAborted();
           const current = await this.read(providerId, options);
           options?.signal?.throwIfAborted();
-          const next = await modifier(current);
+          const modified = await modifier(current);
           options?.signal?.throwIfAborted();
-          if (next === undefined) return current;
+          if (modified === undefined) return current;
+          const next = carryPiCredentialGrant(current, modified);
           const encrypted = await this.encrypt(next);
           options?.signal?.throwIfAborted();
           const documentMutex = await this.mutex("document");
@@ -338,7 +393,9 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             const document = await this.readDocument();
             options?.signal?.throwIfAborted();
             document.entries[providerId] = encrypted;
-            await this.writeDocument(document, beginPublication);
+            await this.writeDocument(document, beginPublication, {
+              grantChanged: !samePiCredentialGrant(current, next),
+            });
           });
           return next;
         },

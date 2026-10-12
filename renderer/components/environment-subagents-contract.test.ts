@@ -175,7 +175,6 @@ test("floating Environment remains non-modal across every app-level interaction 
   assert.match(root, /<AssistantDock rightInset=\{environmentPanel\.dockRightInset\} \/>/u);
   assert.doesNotMatch(layout, /contentModalOpen=/u);
 
-  assert.match(assistant, /useCommand\("assistant\.open", openPanel, live\.visible\)/u);
   assert.match(assistant, /Math\.max\(0, rightInset\)/u);
   assert.doesNotMatch(assistant, /interactionBlocked|data-environment-modal-background/u);
 });

@@ -1,11 +1,13 @@
-// Aiden's window-level Live control. Before setup it presents the app
-// mark; after setup it becomes a stateful blue Live mark.
+// Aiden's window-level Live control: one compact "Live" pill whose leading
+// Helix glyph and label follow the session state.
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useCommandHandler } from "../../lib/command-system";
+import { useSettings } from "../../lib/queries";
 import type { SettingsSection } from "../../lib/settings-section";
-import { AidenLiveMark } from "./aiden-live-mark";
+import { AidenActivityMark } from "../aiden-activity-mark";
+import { aidenLiveMark, type AidenLiveMarkState } from "./aiden-live-mark";
 import {
   AssistantLiveHud,
   AssistantLiveSetupDialog,
@@ -21,7 +23,6 @@ const SESSION_ACTIONS: AssistantLiveApprovals = {
   decideApproval: async () => undefined,
 };
 
-const AIDEN_LOGO_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const AIDEN_LIVE_SETUP_COMPLETE_KEY = "aiden.live.setup-complete";
 const LEGACY_GEMINI_LIVE_SETUP_COMPLETE_KEY = "aiden.gemini-live.setup-complete";
 
@@ -31,6 +32,29 @@ export function liveDockClickAction(live: Pick<AssistantLiveController, "state" 
   if (live.busy) return "none";
   if (!setupCompleted) return "setup";
   return live.setupComplete ? "start" : "settings";
+}
+
+const TRIGGER_LABEL: Record<AidenLiveMarkState, string> = {
+  ready: "Live",
+  unavailable: "Live",
+  connecting: "Connecting…",
+  listening: "Listening",
+  thinking: "Thinking",
+  speaking: "Speaking",
+  acting: "Working",
+  approval: "Approve",
+  error: "Disconnected",
+};
+
+/** Visible pill label. Closing and a revealed Stop override the mark state. */
+export function liveTriggerLabel(
+  markState: AidenLiveMarkState,
+  closing: boolean,
+  stopRevealed: boolean,
+): string {
+  if (closing) return "Stopping…";
+  if (stopRevealed) return "Stop";
+  return TRIGGER_LABEL[markState];
 }
 
 function storedSetupComplete(): boolean {
@@ -47,6 +71,10 @@ function storedSetupComplete(): boolean {
 export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): React.ReactElement {
   const navigate = useNavigate();
   const live = useAssistantLive(null);
+  const settings = useSettings();
+  // Until settings load, keep Live off so a disabled feature never flashes on.
+  const enabled = settings.data ? settings.data.aidenLiveEnabled !== false : false;
+  const buttonVisible = settings.data?.aidenLiveButtonVisible !== false;
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
@@ -59,6 +87,8 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
       chat={SESSION_ACTIONS}
       live={live}
       rightInset={rightInset}
+      enabled={enabled}
+      buttonVisible={buttonVisible}
       onOpenSettings={openSettings}
     />
   );
@@ -68,12 +98,18 @@ export function AssistantDockPresentation({
   chat,
   live,
   rightInset = 0,
+  enabled = true,
+  buttonVisible = true,
   onOpenSettings = () => undefined,
   useCommand = useCommandHandler,
 }: {
   chat: AssistantLiveApprovals;
   live: AssistantLiveController;
   rightInset?: number;
+  /** Settings → Aiden Live. Off renders nothing and ignores the Live command. */
+  enabled?: boolean;
+  /** Settings → Show Live button. Off hides only the idle pill. */
+  buttonVisible?: boolean;
   onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
   useCommand?: typeof useCommandHandler;
 }): React.ReactElement {
@@ -88,6 +124,22 @@ export function AssistantDockPresentation({
   React.useEffect(() => {
     if (!live.active) setStopRevealed(false);
   }, [live.active]);
+
+  // Turning Aiden Live off ends any session this window owns (once per
+  // transition) and closes setup. Main also stops every session on its side.
+  const { active, busy, setupOpen, setSetupOpen, stop } = live;
+  const disabledStopRequested = React.useRef(false);
+  React.useEffect(() => {
+    if (enabled) {
+      disabledStopRequested.current = false;
+      return;
+    }
+    if ((active || busy) && !disabledStopRequested.current) {
+      disabledStopRequested.current = true;
+      void stop();
+    }
+    if (setupOpen) setSetupOpen(false);
+  }, [enabled, active, busy, setupOpen, setSetupOpen, stop]);
 
   React.useEffect(() => {
     if (approvalPending || live.error) setHudOpen(true);
@@ -119,8 +171,24 @@ export function AssistantDockPresentation({
     }
     onOpenSettings(live.available ? "computerUse" : "providers");
   }, [live, onOpenSettings, setupCompleted, stopRevealed]);
-  useCommand("assistant.open", openPanel, live.visible);
-  if (!live.visible) return <></>;
+  useCommand("assistant.open", openPanel, live.visible && enabled);
+  if (!live.visible || !enabled) return <></>;
+
+  const closing = live.state === "closing";
+  const showStop = stopRevealed && live.active;
+  // Whenever there is a session, a pending approval, or an error to see and
+  // stop, the pill stays even if the user hid the idle button.
+  const sessionVisible = live.active || live.busy || closing || Boolean(live.error) || approvalPending;
+  const glyph = aidenLiveMark(markState);
+  const label = liveTriggerLabel(markState, closing, showStop);
+  const action = live.active
+    ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
+    : !setupCompleted
+    ? "Set up Aiden Live"
+    : "Start Aiden Live";
+  // The accessible name must contain the visible label (WCAG 2.5.3) so voice
+  // control can target "Listening" or "Disconnected" by what it shows.
+  const accessibleName = action.toLowerCase().includes(label.toLowerCase()) ? action : `${label}, ${action}`;
 
   return (
     <div
@@ -137,35 +205,30 @@ export function AssistantDockPresentation({
           ) : null}
         </AssistantLiveHud>
       ) : null}
-      <button
-        ref={triggerRef}
-        type="button"
-        className="aiden-live-trigger pointer-events-auto"
-        data-kind={setupCompleted ? "mark" : "logo"}
-        data-state={markState}
-        data-stop-revealed={stopRevealed && live.active}
-        disabled={live.state === "closing"}
-        aria-label={
-          live.active
-            ? stopRevealed ? "Stop Aiden Live" : "Show Stop Aiden Live button"
-            : !setupCompleted
-            ? "Set up Aiden Live"
-            : "Start Aiden Live"
-        }
-        aria-expanded={live.active ? stopRevealed : live.setupOpen}
-        onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
-        onClick={openPanel}
-      >
-        {setupCompleted ? (
-          <AidenLiveMark state={markState} level={live.microphoneLevel} />
-        ) : (
-          <span className="aiden-live-trigger-logo-mask squircle-control">
-            <img src={AIDEN_LOGO_URL} alt="" draggable={false} />
+      {buttonVisible || sessionVisible ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          className="aiden-live-trigger pointer-events-auto"
+          data-state={markState}
+          data-stop-revealed={showStop}
+          disabled={closing}
+          aria-label={accessibleName}
+          aria-expanded={live.active ? stopRevealed : live.setupOpen}
+          onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
+          onClick={openPanel}
+        >
+          <span className="aiden-live-trigger-glyph" aria-hidden="true">
+            {showStop ? (
+              <span className="aiden-live-stop-symbol" />
+            ) : (
+              <AidenActivityMark key={glyph.mark} mark={glyph.mark} size={20} active={glyph.active} level={live.microphoneLevel} />
+            )}
           </span>
-        )}
-        <span className="aiden-live-stop-symbol" aria-hidden="true" />
-        {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
-      </button>
+          <span className="aiden-live-trigger-label">{label}</span>
+          {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
+        </button>
+      ) : null}
       <span role="status" aria-live="polite" className="sr-only">
         {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : live.active
           ? live.microphoneActive ? "Listening · mic on" : "Live · mic off"

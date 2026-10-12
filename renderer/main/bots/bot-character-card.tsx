@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Check } from "lucide-react";
 import { AvatarFace } from "../../components/bot-avatar";
-import { Button, Text } from "../../components/ui";
+import { Button, Field, FieldSet } from "../../components/ui";
 import {
   BOT_AVATAR_COLOR_LABELS,
   BOT_AVATAR_COLORS,
@@ -77,11 +77,8 @@ export function BotCharacterCard({
   const isDefault = sameCharacter(current, DEFAULT_BOT_AVATAR);
 
   return (
-    <section aria-labelledby="bot-character-title" className="space-y-2">
-      <Text id="bot-character-title" as="h2" variant="small-strong" color="secondary" className="px-1">
-        Character
-      </Text>
-      <div className="space-y-3 rounded-card bg-well p-3">
+    <FieldSet title="Character">
+      <Field orientation="vertical" label="Colour">
         <div role="radiogroup" aria-label="Colour" className="flex flex-wrap gap-2">
           {BOT_AVATAR_COLORS.map((color) => {
             const checked = current.color === color;
@@ -107,7 +104,8 @@ export function BotCharacterCard({
             );
           })}
         </div>
-        <div className="h-px bg-separator" aria-hidden="true" />
+      </Field>
+      <Field orientation="vertical" label="Shape">
         <div role="radiogroup" aria-label="Shape" className="flex flex-wrap gap-1">
           {BOT_AVATAR_SHAPES.map((shape) => {
             const checked = current.shape === shape;
@@ -123,7 +121,7 @@ export function BotCharacterCard({
                 disabled={disabled}
                 onClick={() => choose({ shape })}
                 onKeyDown={(event) => shapes.onKeyDown(event, shape)}
-                className={`grid size-10 place-items-center rounded-control p-1.5 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 ${
+                className={`grid size-10 place-items-center rounded-control p-1.5 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 motion-reduce:transition-none ${
                   checked ? "bg-list-selection" : ""
                 }`}
               >
@@ -132,19 +130,17 @@ export function BotCharacterCard({
             );
           })}
         </div>
-        <div className="h-px bg-separator" aria-hidden="true" />
+      </Field>
+      <Field label="Default look" description="How this Bot looks everywhere: its list row, chat, and phone.">
         <Button
           size="small"
-          variant="transparent"
+          variant="filled"
           disabled={disabled || isDefault}
           onClick={() => onChange({ ...DEFAULT_BOT_AVATAR })}
         >
           Reset to default
         </Button>
-      </div>
-      <Text as="p" variant="small" color="tertiary" className="px-1">
-        How this Bot looks everywhere.
-      </Text>
-    </section>
+      </Field>
+    </FieldSet>
   );
 }

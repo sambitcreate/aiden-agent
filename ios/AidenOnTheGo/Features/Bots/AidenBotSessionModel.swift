@@ -7,6 +7,11 @@ enum AidenBotHostFeature {
     static let routines = "bot-routines-v1"
     static let connectionRequests = "bot-connection-requests-v1"
     static let presets = "bot-presets-v1"
+    /// Contract revision 27: Profile → Memory.
+    static let memory = "bot-memory-v1"
+    /// Contract revision 27: routine proposal answers, the daily check-in
+    /// suggestion and the Bot routine notification feed.
+    static let proactive = "bot-proactive-v1"
 
     static func isAdvertised(_ token: String, by features: [String]?) -> Bool {
         features?.contains(token) == true
@@ -74,6 +79,12 @@ protocol AidenBotSessionTransport: Sendable {
         request: AidenBotConnectionRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotConnectionRequestReceipt
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
@@ -102,6 +113,43 @@ enum AidenBotSessionCopy {
     static let retry = "Retry"
 
     static func connectTitle(_ name: String) -> String { "Connect \(name)" }
+
+    static let memoryUpdated = "Memory updated"
+    static let proposalTitle = "Add a routine?"
+    static let addRoutine = "Add routine"
+    static let notNow = "Not now"
+    static let notAdded = "Not added"
+    static let proposalFailed = "That didn’t reach your Mac. Please try again."
+
+    static func proposalBody(name: String, label: String) -> String { "\(name) · \(label)" }
+    static func proposalAdded(label: String) -> String { "Added ✓ · \(label)" }
+}
+
+/// One row of the durable Bot transcript. Consecutive `memory_update` entries
+/// collapse into one quiet "Memory updated" caption.
+enum AidenBotTranscriptRow: Equatable, Identifiable {
+    case entry(AidenBotSessionEntry)
+    case memoryUpdated(id: String)
+
+    var id: String {
+        switch self {
+        case let .entry(entry): entry.id
+        case let .memoryUpdated(id): id
+        }
+    }
+
+    static func rows(for entries: [AidenBotSessionEntry]) -> [Self] {
+        var rows: [Self] = []
+        for entry in entries {
+            if case let .memoryUpdate(id, _) = entry {
+                if case .memoryUpdated = rows.last { continue }
+                rows.append(.memoryUpdated(id: id))
+            } else {
+                rows.append(.entry(entry))
+            }
+        }
+        return rows
+    }
 }
 
 /// True when a request failure may have reached the Mac, so a retry of the
@@ -134,6 +182,8 @@ final class AidenBotSessionModel {
     private(set) var hasLoaded = false
     private(set) var inFlight: Set<Action> = []
     private(set) var sentConnectionRequests: Set<String> = []
+    /// Routine proposals with an answer on its way to the Mac, by proposal id.
+    private(set) var respondingProposals: Set<String> = []
     var errorMessage: String?
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
@@ -143,6 +193,8 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
     /// The key of a Retry that failed ambiguously, by failed-turn id.
     @ObservationIgnored private var retainedRetry: (turnID: String, key: UUID)?
+    /// The key of a proposal answer that failed ambiguously, by proposal id.
+    @ObservationIgnored private var proposalKeys: [String: (decision: AidenBotRoutineProposalDecision, key: UUID)] = [:]
 
     init(botID: String, transport: any AidenBotSessionTransport) {
         self.botID = botID
@@ -243,6 +295,9 @@ final class AidenBotSessionModel {
                 // entries leave it alone; the host clears it with `partial ""`.
                 if case let .message(message) = entry, message.role == .assistant { partial = nil }
             }
+        case .unknownEntry:
+            // A newer Mac's entry type: the sequence advances, nothing renders.
+            break
         case let .state(view):
             stateView = view
         case let .question(next):
@@ -468,6 +523,59 @@ final class AidenBotSessionModel {
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedKeys[action] = nil }
             errorMessage = "That didn’t work. Please try again."
+        }
+    }
+
+    // MARK: Routine proposals
+
+    /// Answers a pending routine proposal. The card shows the Mac's settled
+    /// answer as soon as it arrives (the same answer on every repeat, from any
+    /// device). A failure keeps the card pending with its actions; the key
+    /// survives an ambiguous failure so tapping again cannot add twice.
+    @discardableResult
+    func respondToProposal(_ proposalId: String, decision: AidenBotRoutineProposalDecision) async -> Bool {
+        guard hasLoaded, !respondingProposals.contains(proposalId),
+              let index = proposalIndex(proposalId),
+              case let .routineProposal(card) = entries[index],
+              card.status == .pending else { return false }
+        let key: UUID
+        if let retained = proposalKeys[proposalId], retained.decision == decision {
+            key = retained.key
+        } else {
+            key = UUID()
+            proposalKeys[proposalId] = (decision, key)
+        }
+        respondingProposals.insert(proposalId)
+        defer { respondingProposals.remove(proposalId) }
+        do {
+            let result = try await transport.respondToBotRoutineProposal(
+                botId: botID,
+                proposalId: proposalId,
+                request: AidenBotRoutineProposalRespondRequest(decision: decision),
+                idempotencyKey: key
+            )
+            proposalKeys[proposalId] = nil
+            if let current = proposalIndex(proposalId), case let .routineProposal(latest) = entries[current] {
+                entries[current] = .routineProposal(latest.settled(result))
+            }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { proposalKeys[proposalId] = nil }
+            if case AidenRemoteClientError.server(404, _) = error {
+                // The proposal is gone on the Mac; show what the Mac has now.
+                _ = await fetchSnapshot()
+            }
+            errorMessage = AidenBotSessionCopy.proposalFailed
+            return false
+        }
+    }
+
+    private func proposalIndex(_ proposalId: String) -> Int? {
+        entries.firstIndex { entry in
+            if case let .routineProposal(card) = entry { return card.proposalId == proposalId }
+            return false
         }
     }
 

@@ -116,10 +116,16 @@ export async function normalizeTelegramInbound(
           notices.push(`Voice file ${candidate.name} arrived, but Aiden voice transcription is unavailable.`);
           continue;
         }
-        const transcript = await deps.transcribeAudio({
-          audioBase64: Buffer.from(bytes).toString("base64"),
-          mimeType: candidate.mimeType,
-        });
+        let transcript: string;
+        try {
+          transcript = await deps.transcribeAudio({
+            audioBase64: Buffer.from(bytes).toString("base64"),
+            mimeType: candidate.mimeType,
+          });
+        } catch (cause) {
+          notices.push(`${candidate.name} was not transcribed: ${cause instanceof Error ? cause.message : String(cause)}`);
+          continue;
+        }
         if (transcript.trim()) {
           text = [text, `[Voice transcript]\n${transcript.trim()}`].filter(Boolean).join("\n\n");
         }

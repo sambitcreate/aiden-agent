@@ -746,6 +746,32 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun testMacSpeechStatusDecodesSixModelsWithAdditiveFieldsAndVerifyPhase() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""
+            {
+              "engine":{"ready":true,"error":null},
+              "selectedModelId":"parakeet-v3",
+              "models":[
+              {"id":"parakeet-v3","name":"Parakeet TDT 0.6B v3","description":"Fast and accurate across 25 European languages.","sizeLabel":"487 MB","quant":"int8","languagesLabel":"25 languages","accuracy":0.88,"speed":0.79,"recommended":true,"installed":true,"languages":["bg","hr","cs"],"capabilities":{"autoDetect":true,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"parakeet-v2","name":"Parakeet TDT 0.6B v2","description":"English only, and the most accurate model for English.","sizeLabel":"482 MB","quant":"int8","languagesLabel":"English","accuracy":0.89,"speed":0.85,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"canary-180m-flash","name":"Canary 180M Flash","description":"Small and very fast. English, German, Spanish and French, with translation to English.","sizeLabel":"154 MB","quant":"int8","languagesLabel":"English, German, Spanish, French","accuracy":0.88,"speed":0.98,"recommended":false,"installed":false,"languages":["en","de","es","fr"],"capabilities":{"autoDetect":false,"languageHint":true,"translateToEnglish":true,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"whisper-turbo","name":"Whisper Large v3 Turbo","description":"Broadest language coverage. Slower than the others.","sizeLabel":"564 MB","quant":"int8","languagesLabel":"99 languages","accuracy":0.88,"speed":0.35,"recommended":false,"installed":false,"languages":["en","zh","de"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (OpenAI Whisper)","url":"https://github.com/openai/whisper/blob/main/LICENSE"},"download":{"id":"whisper-turbo","percentage":90,"phase":"verify","status":"downloading"}},
+              {"id":"sense-voice","name":"SenseVoice Small","description":"Fast Chinese, Cantonese, English, Japanese and Korean.","sizeLabel":"163 MB","quant":"int8","languagesLabel":"Chinese, Cantonese, English, Japanese, Korean","accuracy":0.81,"speed":0.98,"recommended":false,"installed":false,"languages":["zh","yue","en","ja","ko"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"FunASR Model License 1.1","url":"https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE","attribution":"SenseVoice Small, Alibaba FunAudioLLM"}},
+              {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for Macs with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
+            ],
+              "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
+            }
+        """.trimIndent()))
+        val status = client.speechStatus()
+        assertEquals(6, status.models.size)
+        assertEquals("487 MB", status.models.first().sizeLabel)
+        val whisper = status.models.single { it.id == "whisper-turbo" }
+        assertEquals("verify", whisper.download?.phase)
+        assertEquals(90, whisper.download?.percentage)
+        assertNull(status.models.first().download)
+    }
+
+    @Test
     fun testMacSpeechStatusAndTranscriptionContract() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""
             {

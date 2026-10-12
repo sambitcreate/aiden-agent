@@ -81,6 +81,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:todo",
   "chat:tool",
   "bots:changed",
+  "bots:memory:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",
@@ -106,6 +107,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "dictation:state",
   "formFill:progress",
   "localModels:progress",
+  "localVoice:state",
   "providers:auth:done",
   "providers:auth:error",
   "providers:auth:event",

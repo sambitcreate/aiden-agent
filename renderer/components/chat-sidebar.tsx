@@ -25,9 +25,6 @@ import {
   DropdownMenuTrigger,
   EmptyState,
   Input,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   Sidebar,
   SidebarFooter,
   SidebarList,
@@ -38,18 +35,11 @@ import {
   toast,
 } from "./ui";
 import {
-  AlertCircle,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleDashed,
-  Clock3,
-  ExternalLink,
   Folder,
   FolderPlus,
-  FolderGit2,
   GitFork,
-  GitPullRequest,
   Loader2,
   MoreHorizontal,
   Settings,
@@ -71,11 +61,11 @@ import {
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
-import { queryKeys, refreshGitPullRequestStatus, useAllRegularChats, useFoundationModelsConnection, useGitPullRequestStatus } from "../lib/queries";
-import { formatGitHubPausedUntil, githubPausedUntil } from "../lib/github-pause";
+import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useSidebarChatPullRequests } from "../lib/queries";
+import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
-import type { ChatMeta, GitHubPullRequestCheck, GitHubPullRequestChecksState, Workspace } from "../lib/types";
+import type { ChatMeta, Workspace } from "../lib/types";
 import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
@@ -86,6 +76,8 @@ import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activi
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
 import { ChatRowStatus } from "./chat-row-status";
+import { ChatRowContextGlyphs } from "./chat-row-context";
+import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -242,262 +234,6 @@ function SidebarOverflowMenu({
         {children}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function pullRequestChecksLabel(state: GitHubPullRequestChecksState | null | undefined, checkCount = 0): string {
-  switch (state) {
-    case "passing":
-      return "All checks have passed";
-    case "failing":
-      return "Some checks were not successful";
-    case "pending":
-      return "Some checks haven’t completed yet";
-    default:
-      return checkCount > 0 ? "Checks did not run" : "No checks reported";
-  }
-}
-
-function pullRequestChecksTone(state: GitHubPullRequestChecksState | null | undefined): string {
-  switch (state) {
-    case "passing":
-      return "bg-status-green-surface text-status-green";
-    case "failing":
-      return "bg-status-red-surface text-status-red";
-    case "pending":
-      return "bg-status-warning-surface text-status-warning";
-    default:
-      return "bg-control text-secondary";
-  }
-}
-
-function pullRequestChecksIconTone(state: GitHubPullRequestChecksState | null | undefined): string {
-  switch (state) {
-    case "passing":
-      return "text-status-green";
-    case "failing":
-      return "text-status-red";
-    case "pending":
-      return "text-status-warning";
-    default:
-      return "text-secondary";
-  }
-}
-
-function checkStatusLabel(check: GitHubPullRequestCheck): string {
-  if (check.status === "action-required" && /\/actions\/runs\/\d+/u.test(check.url ?? "")) {
-    return "Awaiting approval";
-  }
-  switch (check.status) {
-    case "success":
-      return "Passed";
-    case "failure":
-      return "Failed";
-    case "pending":
-      return "Running";
-    case "action-required":
-      return "Awaiting action";
-    case "cancelled":
-      return "Cancelled";
-    case "skipped":
-      return "Skipped";
-    case "neutral":
-      return "Neutral";
-  }
-}
-
-function checkStatusTone(check: GitHubPullRequestCheck): string {
-  switch (check.status) {
-    case "success":
-      return "text-status-green";
-    case "failure":
-      return "text-status-red";
-    case "pending":
-    case "action-required":
-      return "text-status-warning";
-    case "cancelled":
-    case "skipped":
-    case "neutral":
-      return "text-tertiary";
-  }
-}
-
-function checksIcon(state: GitHubPullRequestChecksState | null | undefined) {
-  if (state === "passing") return <CheckCircle2 className="size-3.5" />;
-  if (state === "failing") return <AlertCircle className="size-3.5" />;
-  return <CircleDashed className="size-3.5" />;
-}
-
-function openExternal(url: string): void {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function pullRequestStateLabel(state: "open" | "closed" | "merged", isDraft?: boolean): string | null {
-  if (state === "merged") return "Merged";
-  if (state === "closed") return "Closed";
-  if (isDraft) return "Draft";
-  return null;
-}
-
-function WorkspacePullRequestIndicator({ workspace, visible, accessibilityName }: { workspace: Workspace; visible: boolean; accessibilityName: string }) {
-  const queryClient = useQueryClient();
-  const enabled = visible && Boolean(workspace.folderPath && workspace.permission !== "none");
-  const status = useGitPullRequestStatus(workspace.id, enabled);
-  const refreshStatus = () => void refreshGitPullRequestStatus(queryClient, workspace.id);
-  const pullRequest = status.data?.pullRequest;
-  if (!enabled || status.isLoading) return null;
-  const pausedUntil = githubPausedUntil(status.data, Date.now());
-  const pausedLabel = pausedUntil === undefined ? undefined : formatGitHubPausedUntil(pausedUntil, Date.now());
-
-  if (!pullRequest && pausedLabel) {
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            className="text-tertiary"
-            aria-label={`${accessibilityName} GitHub pull request status: ${pausedLabel}`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Clock3 aria-hidden="true" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
-          <p className="text-small-strong text-primary">{pausedLabel}</p>
-          <p className="mt-1 text-small text-secondary">
-            GitHub's API rate limit was reached. Aiden checks pull requests again once it resets.
-          </p>
-        </PopoverContent>
-      </Popover>
-    );
-  }
-
-  if (!pullRequest) {
-    const message = status.data?.message;
-    if (
-      !message ||
-      status.data?.availability === "no-pull-request" ||
-      status.data?.availability === "not-repo" ||
-      status.data?.availability === "not-github"
-    ) return null;
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            className="text-status-red"
-            aria-label={`${accessibilityName} GitHub pull request status: ${message}`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <AlertCircle aria-hidden="true" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-72 p-3" align="start" aria-label="GitHub pull request status">
-          <p className="text-small-strong text-primary">GitHub status unavailable</p>
-          <p className="mt-1 text-small text-secondary">{message}</p>
-          <div className="mt-3 flex justify-end">
-            <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching}>
-              {status.isFetching ? "Refreshing…" : "Refresh"}
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-  }
-
-  const stateLabel = pullRequestStateLabel(pullRequest.state, pullRequest.isDraft);
-  const displayChecksState = stateLabel ? undefined : pullRequest.checksState;
-  const checkLabel = pullRequestChecksLabel(pullRequest.checksState, pullRequest.checks.length);
-  const label = stateLabel ? `${stateLabel}; ${checkLabel}` : checkLabel;
-  const visibleChecks = pullRequest.checks.slice(0, 6);
-  const remainingChecks = pullRequest.checks.length - visibleChecks.length;
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="transparent"
-          size="small"
-          iconOnly
-          className={pullRequestChecksIconTone(displayChecksState)}
-          aria-label={`${accessibilityName} pull request #${pullRequest.number}: ${label}`}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <GitPullRequest aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-80 p-3" align="start" aria-label={`Pull request #${pullRequest.number} checks`}>
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-small-strong text-primary">
-              <GitPullRequest className="size-4 shrink-0 text-secondary" aria-hidden="true" />
-              <span className="truncate">PR #{pullRequest.number}</span>
-            </div>
-            <p className="mt-1 line-clamp-2 text-regular text-primary">{pullRequest.title}</p>
-            <p className="mt-1 truncate text-small text-tertiary">
-              {pullRequest.headBranch} → {pullRequest.baseBranch}
-            </p>
-            {stateLabel ? <span className="mt-2 inline-flex rounded-control bg-control px-2 py-0.5 text-small-strong text-secondary">{stateLabel}</span> : null}
-          </div>
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            aria-label={`Open pull request #${pullRequest.number}`}
-            onClick={() => openExternal(pullRequest.url)}
-          >
-            <ExternalLink />
-          </Button>
-        </div>
-        <div className={`mt-3 flex items-center gap-2 rounded-control px-2.5 py-2 text-small ${pullRequestChecksTone(displayChecksState)}`} role="status">
-          {checksIcon(displayChecksState)}
-          <span>{checkLabel}</span>
-        </div>
-        {visibleChecks.length > 0 ? (
-          <div className="mt-3 flex flex-col gap-1.5">
-            {visibleChecks.map((check) => (
-              <div key={`${check.name}:${check.status}:${check.url ?? ""}`} className="flex min-w-0 items-center gap-2 text-small">
-                <span className={`size-1.5 shrink-0 rounded-full bg-current ${checkStatusTone(check)}`} aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate text-primary" title={check.description ?? check.name}>{check.name}</span>
-                <span className={`shrink-0 ${checkStatusTone(check)}`}>{checkStatusLabel(check)}</span>
-                {check.url ? (
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    iconOnly
-                    aria-label={`Open details for ${check.name}`}
-                    onClick={() => openExternal(check.url!)}
-                  >
-                    <ExternalLink className="size-3.5" />
-                  </Button>
-                ) : null}
-              </div>
-            ))}
-            {remainingChecks > 0 ? (
-              <p className="text-small text-tertiary">
-                {remainingChecks === 1 ? "1 more check on GitHub." : `${remainingChecks} more checks on GitHub.`}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {pausedLabel ? (
-          <p className="mt-3 flex items-center gap-1.5 text-small text-secondary" role="status">
-            <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
-            {pausedLabel}. Showing the last status.
-          </p>
-        ) : null}
-        <div className="mt-3 flex items-center justify-between gap-2">
-          {status.isFetching ? <span className="inline-flex items-center gap-1.5 text-small text-tertiary"><Loader2 className="size-3.5 animate-spin" />Refreshing…</span> : <span className="text-small text-tertiary">Refreshes every 30 seconds.</span>}
-          <Button variant="muted" size="small" onClick={refreshStatus} disabled={status.isFetching || pausedLabel !== undefined}>
-            Refresh
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -744,6 +480,10 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     () => new Map((chats.data ?? []).map((chat) => [chat.id, chat.title])),
     [chats.data],
   );
+  const workspacesById = React.useMemo(
+    () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
+    [workspaces],
+  );
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
   const initialPreferences = React.useMemo(
@@ -765,6 +505,18 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
   } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState(
     () => new Set(initialPreferences.expandedWorkspaceIds),
+  );
+  const sidebarChatIds = React.useMemo(
+    () => sidebarPullRequestChatIds(chats.data ?? [], expandedWorkspaceIds, MAX_SIDEBAR_PULL_REQUEST_CHATS),
+    [chats.data, expandedWorkspaceIds],
+  );
+  const sidebarPullRequestsQuery = useSidebarChatPullRequests(sidebarChatIds);
+  const sidebarPullRequests = sidebarPullRequestsQuery.data?.rows ?? {};
+  // Only chats the bulk read actually asked about have known dismissals; a
+  // missing entry for any other chat is not proof that nothing was unlinked.
+  const sidebarPullRequestsKnown = React.useMemo(
+    () => new Set(sidebarPullRequestsQuery.data?.chatIds ?? []),
+    [sidebarPullRequestsQuery.data?.chatIds],
   );
   const [fullyRevealedWorkspaceIds, setFullyRevealedWorkspaceIds] = React.useState(
     () => new Set<string>(),
@@ -1339,7 +1091,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     }
   }, []);
 
-  const renderChatRow = (chat: ChatMeta, indented = false) => {
+  const renderChatRow = (chat: ChatMeta, indented = false, liveContext = false) => {
     const shortcutNumber = shortcutNumberByChatId.get(chat.id);
     const shortcutBinding = shortcutNumber
       ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
@@ -1349,7 +1101,6 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
       chat.id,
       chat.id === activeChatId && environmentPanel.agentBusy,
     );
-    const showsState = rowState !== "idle";
     // The open chat is being viewed, so its own output never reads as unread.
     const unread = chat.id !== activeChatId && isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence);
     const forkedFrom = chat.forkedFrom
@@ -1389,20 +1140,26 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
               )
             }
             trailing={
-              showsState || unread || (chatShortcutsVisible && shortcutBinding) ? (
-                <span className="flex items-center gap-1">
-                  {chatShortcutsVisible && shortcutBinding ? (
-                    <kbd
-                      aria-hidden="true"
-                      data-chat-shortcut-hint="true"
-                      className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                    >
-                      {prettyAccelerator(shortcutBinding)}
-                    </kbd>
-                  ) : null}
-                  <ChatRowStatus state={rowState} unread={unread} />
-                </span>
-              ) : undefined
+              <>
+                {chatShortcutsVisible && shortcutBinding ? (
+                  <kbd
+                    aria-hidden="true"
+                    data-chat-shortcut-hint="true"
+                    className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                  >
+                    {prettyAccelerator(shortcutBinding)}
+                  </kbd>
+                ) : null}
+                {/* Only rows in a group the user expanded (not one search opened)
+                    read live branch PRs, as the old group indicator did, and only
+                    once their dismissals are known. */}
+                <ChatRowContextGlyphs
+                  workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
+                  pullRequests={sidebarPullRequests[chat.id]}
+                  live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
+                />
+                <ChatRowStatus state={rowState} unread={unread} />
+              </>
             }
             aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
             selected={chat.id === activeChatId}
@@ -1479,10 +1236,10 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
     />
   );
 
-  const renderSidebarChat = (summary: SidebarRow, indented = false) =>
+  const renderSidebarChat = (summary: SidebarRow, indented = false, liveContext = false) =>
     isRemoteSidebarChat(summary)
       ? renderRemoteChatRow(summary, indented)
-      : renderChatRow(summary.chat, indented);
+      : renderChatRow(summary.chat, indented, liveContext);
 
   // A workspace that lives only on a paired host. Its rows are last-known while the
   // host is unreachable, and nothing here changes the host's data.
@@ -1523,7 +1280,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
             icon={
               <span className="flex items-center gap-1.5">
                 {expanded ? <ChevronDown /> : <ChevronRight />}
-                {primary.repository ? <FolderGit2 /> : <Folder />}
+                <Folder />
               </span>
             }
             title={
@@ -1543,9 +1300,6 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
             onClick={() => toggleRemoteProject(projectKey)}
           />
           <div className="group/workspace-actions relative size-7 shrink-0">
-            <div className="absolute inset-0 flex items-center justify-center group-hover/workspace:invisible group-has-[.workspace-overflow-trigger:focus-visible]/workspace-actions:invisible group-has-[.workspace-overflow-trigger[data-state=open]]/workspace-actions:invisible">
-              <RemoteHostMarker hostLabel={primary.hostLabel} stale={primary.stale} />
-            </div>
             <SidebarOverflowMenu
               ariaLabel={`Actions for ${accessibleName}`}
               triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
@@ -1874,7 +1628,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
                           icon={
                             <span className="flex items-center gap-1.5">
                               {expanded ? <ChevronDown /> : <ChevronRight />}
-                              {workspace.folderPath ? <FolderGit2 /> : <Folder />}
+                              <Folder />
                             </span>
                           }
                           title={
@@ -1894,17 +1648,6 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
                           onClick={() => toggleWorkspace(workspace.id)}
                         />
                         <div className="group/workspace-actions relative size-7 shrink-0">
-                          <div className="absolute inset-0 group-hover/workspace:invisible group-has-[.workspace-overflow-trigger:focus-visible]/workspace-actions:invisible group-has-[.workspace-overflow-trigger[data-state=open]]/workspace-actions:invisible">
-                            <WorkspacePullRequestIndicator
-                              workspace={workspace}
-                              visible={explicitlyExpanded}
-                              accessibilityName={workspaceAccessibleName(
-                                workspace,
-                                pathPreferences,
-                                workspaces,
-                              )}
-                            />
-                          </div>
                           <SidebarOverflowMenu
                             ariaLabel={`Actions for ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
                             triggerClassName="workspace-overflow-trigger pointer-events-none absolute inset-0 size-7 text-tertiary opacity-0 group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
@@ -1963,7 +1706,7 @@ export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
-                          {visibleChats.map((summary) => renderSidebarChat(summary, true))}
+                          {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 ? (
                             <SidebarListItem
                               className="pl-9 text-secondary"

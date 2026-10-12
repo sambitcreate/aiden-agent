@@ -866,6 +866,7 @@ struct AidenBotsHomeView: View {
             snapshot = persistedSnapshot ?? refreshed
             validateSelectedBot(in: list?.bots ?? snapshot?.list?.bots ?? [])
             isLoading = false
+            Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
             if cacheWriteFailed {
                 loadError = "Bots loaded, but this iPhone couldn’t save them for offline use."
             } else if !failures.isEmpty {

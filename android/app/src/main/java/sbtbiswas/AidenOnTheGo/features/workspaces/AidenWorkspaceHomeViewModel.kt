@@ -462,7 +462,9 @@ fun projectAidenWorkspaceSidebar(
 ): AidenWorkspaceSidebarProjection {
     val query = searchQuery.trim()
     val workspacesById = workspaces.associateBy { it.id }
-    val regularChats = regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
+    val regularChats = aidenNeedsAttentionFirst(
+        regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
+    )
     val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
     val sections = workspaces.mapNotNull { workspace ->
         val allChats = chatsByWorkspace[workspace.id].orEmpty()
@@ -477,7 +479,7 @@ fun projectAidenWorkspaceSidebar(
             chats = visibleChats,
             newestActivityAt = maxOf(
                 workspace.updatedAt ?: Instant.EPOCH,
-                allChats.firstOrNull()?.updatedAt ?: Instant.EPOCH
+                allChats.maxOfOrNull { it.updatedAt } ?: Instant.EPOCH
             )
         )
     }.sortedWith(

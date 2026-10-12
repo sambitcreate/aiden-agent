@@ -163,6 +163,47 @@ test("a time the host refuses keeps the editor open with its reason", async () =
   assert.ok(screen.getByRole("dialog", { name: "Add routine" }));
 });
 
+test("with no routines, Try a daily check-in opens a prefilled editor and creates nothing until Save", async () => {
+  const calls = installBotTestIpc({
+    "bots:routines:list": () => [],
+    "bots:routines:create": (input) => routine({ ...(input as object), id: "task-3", label: "Every day at 9:00 AM" }),
+  });
+  await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
+  const suggestion = await screen.findByRole("button", { name: /Try a daily check-in/u });
+  assert.match(suggestion.textContent ?? "", /Every day at 9:00 AM/u);
+  fireEvent.click(suggestion);
+
+  const dialog = await screen.findByRole("dialog", { name: "Add routine" });
+  assert.equal((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Daily check-in");
+  assert.match(
+    (within(dialog).getByRole("textbox", { name: "What should it do?" }) as HTMLTextAreaElement).value,
+    /^Check in briefly\. Using what you remember about me/u,
+  );
+  assert.equal(within(dialog).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"), "true");
+  assert.equal((within(dialog).getByLabelText("Time") as HTMLInputElement).value, "09:00");
+  assert.equal(calls.some((call) => call.channel === "bots:routines:create"), false, "opening creates nothing");
+
+  // Cancel leaves no routine behind; opening it again still starts prefilled.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(document.querySelector("[role=dialog]") === null, true));
+  assert.equal(calls.some((call) => call.channel === "bots:routines:create"), false);
+
+  fireEvent.click(await screen.findByRole("button", { name: /Try a daily check-in/u }));
+  const again = await screen.findByRole("dialog", { name: "Add routine" });
+  fireEvent.click(within(again).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:create").length, 1));
+  const input = calls.find((call) => call.channel === "bots:routines:create")!.args[0] as Record<string, unknown>;
+  assert.equal(input.name, "Daily check-in");
+  assert.deepEqual(input.schedule, { kind: "daily", time: "09:00" });
+});
+
+test("the daily check-in suggestion is offered only while a Bot has no routines", async () => {
+  installBotTestIpc({ "bots:routines:list": () => [routine()] });
+  await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
+  await screen.findByRole("list", { name: "Routines" });
+  assert.equal(screen.queryByRole("button", { name: /Try a daily check-in/u }) === null, true);
+});
+
 test("routines that fail to load say so instead of claiming there are none", async () => {
   let attempts = 0;
   installBotTestIpc({
