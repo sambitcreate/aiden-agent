@@ -80,7 +80,7 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Completed
 
-- [Pi harness paper deep dive](../research/2609.20804-pi-harness-deep-dive.md) — Complete locally (2026-10-11). Three-hour Astra-medium research and validation completed; paper, findings, reproducible experiments and tested context/tool/CLI fixes are preserved in one append-only report. PR packaging and current-main validation authorized on 2026-10-12. Original full local checks and both sustained soaks pass; live-model quality/cost trials and release acceptance are separate future work.
+- [Pi harness paper deep dive](../research/2609.20804-pi-harness-deep-dive.md) — Complete locally (2026-10-11). Three-hour Astra-medium research and validation completed; paper, findings, reproducible experiments and tested context/tool/CLI fixes are preserved in one append-only report. [PR #440](https://github.com/sambitcreate/aiden-agent/pull/440) opened on 2026-10-12; merged-main local validation passed with one recorded Electron teardown flake, and exact-head CI is tracked on the PR. Original full local checks and both sustained soaks pass; live-model quality/cost trials and release acceptance are separate future work.
 
 | Plan                                                                                           | Status   | Completion note                                                                                                                                      |
 | ---------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
