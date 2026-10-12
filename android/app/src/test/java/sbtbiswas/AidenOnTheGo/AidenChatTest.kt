@@ -32,6 +32,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -62,6 +63,27 @@ class AidenChatTest {
         assertEquals(listOf("call-1", "call-2"), timeline.steps.map { it.toolCallId })
         assertEquals(listOf("codemode", "read_file"), timeline.steps.map { it.toolName })
         assertEquals(2, timeline.steps.map { it.id }.toSet().size)
+    }
+
+    @Test
+    fun canonicalFixtureQuestionnaireRecapDecodesFromTheTimelineEvent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val timelineEvent = root.getValue("events").jsonArray.map { it.jsonObject }
+            .single { it.getValue("type").jsonPrimitive.content == "timeline" }
+        val timeline = json.decodeFromJsonElement(
+            AidenGenerationTimeline.serializer(),
+            timelineEvent.getValue("payload").jsonObject.getValue("timeline"),
+        )
+        assertTrue(timeline.isRendererSafe())
+        val recap = timeline.steps.firstNotNullOf { it.questionnaireRecap }
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap.outcome)
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Plain text"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED),
+            ),
+            recap.items.map { recap.answer(it) },
+        )
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -475,6 +497,141 @@ class AidenChatTest {
                 AidenChronologicalRow.Kind.TEXT),
             AidenChronologicalProjection.rows(message.text, "", hiddenTimeline)?.map { it.kind }
         )
+    }
+
+    private val answeredQuestionnaireJson = """{"version":1,"outcome":"answered","items":[""" +
+        """{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]},""" +
+        """{"question":"Which extras?","header":"Extras","kind":"multi","answers":["Auth","Billing"]},""" +
+        """{"question":"Anything else?","header":"Notes","kind":"custom","answers":["Keep it small"]},""" +
+        """{"question":"Deploy target?","header":"Deploy","kind":"skipped","answers":[]}]}"""
+
+    private fun questionnaireTimelineJson(
+        questionnaire: String = answeredQuestionnaireJson,
+        toolName: String = "ask_user_question",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-questions","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Ask","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"questionnaire":$questionnaire},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"run_command","label":"Run command","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun answeredQuestionnaireBecomesItsOwnRowAtItsPositionAndLeavesTheActivityTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        val message = AidenChatMessage("message-q", AidenChatRole.ASSISTANT, "Before.After.",
+            timeline = timeline, createdAt = Instant.EPOCH)
+        assertTrue(message.isWireSafe)
+
+        val recap = timeline.steps[1].questionnaireRecap
+        assertNotNull(recap)
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap!!.outcome)
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            recap.items.map { it.question })
+
+        // The recap splits the activity at its offset: the read before it and the
+        // command after it stay activity lines on either side of the answers.
+        val rows = AidenChronologicalProjection.rows(message.text, "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1", "QUESTIONNAIRE:tool-2", "TOOL:tool-3", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].questionnaire)
+
+        // Two tool calls are activity; the questionnaire is not counted.
+        assertEquals("Explored 1 file, ran 1 command", AidenAgentActivityPresentation.summary(timeline))
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.activityTimeline(timeline).steps.map { it.id })
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].questionnaireRecap)
+        // An absent recap stays absent on the wire rather than turning into null.
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("questionnaire"))
+    }
+
+    @Test
+    fun questionnaireAnswersReadAsChoicesQuotesOrTheReasonTheyWereUnanswered() {
+        val recap = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(answeredQuestionnaireJson))!!
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Postgres"),
+                AidenQuestionnaireRecap.Answer.Choice("Auth, Billing"),
+                AidenQuestionnaireRecap.Answer.Custom("Keep it small"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED)
+            ),
+            recap.items.map(recap::answer)
+        )
+        for (outcome in listOf("dismissed", "expired")) {
+            val closed = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(
+                """{"version":1,"outcome":"$outcome","items":[{"question":"Which database?","header":"Database","kind":"skipped","answers":[]}]}"""
+            ))!!
+            assertEquals(outcome, closed.outcome.wire)
+            assertTrue(closed.answer(closed.items.single()) is AidenQuestionnaireRecap.Answer.Unanswered)
+        }
+    }
+
+    @Test
+    fun malformedQuestionnaireIsDroppedWhileTheStepAndChatStillRender() {
+        fun item(kind: String, answers: String, question: String = "Which database?", header: String = "Database") =
+            """{"question":"$question","header":"$header","kind":"$kind","answers":$answers}"""
+        fun recap(outcome: String = "answered", version: String = "1", vararg items: String) =
+            """{"version":$version,"outcome":"$outcome","items":[${items.joinToString(",")}]}"""
+        val oneItem = item("option", """["Postgres"]""")
+        val malformed = mapOf(
+            "option with two answers" to recap(items = arrayOf(item("option", """["Postgres","MySQL"]"""))),
+            "option with no answer" to recap(items = arrayOf(item("option", "[]"))),
+            "multi with a repeated label" to recap(items = arrayOf(item("multi", """["Auth","Auth"]"""))),
+            "multi with six labels" to recap(items = arrayOf(item("multi", """["a","b","c","d","e","f"]"""))),
+            "custom with two answers" to recap(items = arrayOf(item("custom", """["a","b"]"""))),
+            "skipped with an answer" to recap(items = arrayOf(item("skipped", """["Postgres"]"""))),
+            "answer on a dismissed card" to recap(outcome = "dismissed", items = arrayOf(oneItem)),
+            "answer on an expired card" to recap(outcome = "expired", items = arrayOf(oneItem)),
+            "no items" to recap(),
+            "five items" to recap(items = Array(5) { oneItem }),
+            "unknown kind" to recap(items = arrayOf(item("ranking", """["Postgres"]"""))),
+            "unknown outcome" to recap(outcome = "ignored", items = arrayOf(oneItem)),
+            "future version" to recap(version = "2", items = arrayOf(oneItem)),
+            "string version" to recap(version = "\"1\"", items = arrayOf(oneItem)),
+            "non-string answer" to recap(items = arrayOf(item("option", "[7]"))),
+            "answers not a list" to recap(items = arrayOf(item("option", "\"Postgres\""))),
+            "blank question" to recap(items = arrayOf(item("option", """["Postgres"]""", question = "  "))),
+            "header over 16 characters" to recap(items = arrayOf(item("option", """["Postgres"]""", header = "A".repeat(17)))),
+            "control character" to recap(items = arrayOf(item("option", """["Post\u0007gres"]"""))),
+            "label over 60 characters" to recap(items = arrayOf(item("option", """["${"x".repeat(61)}"]"""))),
+            "not an object" to "\"answered\"",
+            "null" to "null"
+        )
+        for ((case, questionnaire) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(questionnaire))
+            val step = timeline.steps[1]
+            assertNull(case, step.questionnaire)
+            assertEquals(case, "ask_user_question", step.toolName)
+            assertTrue(case, timeline.isRendererSafe(contentLength = 13))
+            // Without a recap the questionnaire is an ordinary activity line again.
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertEquals(case, listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+        }
+
+        // A literal tab or newline is allowed inside a custom answer.
+        val multiline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(
+            recap(items = arrayOf(item("custom", """["Line one\nLine two"]"""))))
+        )
+        assertEquals("Line one\nLine two", multiline.steps[1].questionnaireRecap?.items?.single()?.answers?.single())
+    }
+
+    @Test
+    fun recapOutsideACompletedAskUserQuestionStepKeepsTheActivityLine() {
+        for ((toolName, status) in listOf("ask_user_question" to "cancelled", "read_file" to "completed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                questionnaireTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].questionnaireRecap)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(rows.none { it.kind == AidenChronologicalRow.Kind.QUESTIONNAIRE })
+            assertEquals(listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+            assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        }
     }
 
     @Test

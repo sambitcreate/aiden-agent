@@ -26,7 +26,7 @@ export function AskUserQuestionComposer({
   const [customDrafts, setCustomDrafts] = React.useState<ReadonlyMap<number, string>>(
     () => new Map(),
   );
-  const firstOptionRef = React.useRef<HTMLButtonElement | null>(null);
+  const optionRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   const customRef = React.useRef<HTMLTextAreaElement | null>(null);
   const question = prompt.questions[activeIndex]!;
   const answer = answers.get(activeIndex);
@@ -41,7 +41,7 @@ export function AskUserQuestionComposer({
 
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      firstOptionRef.current?.focus({ preventScroll: true });
+      optionRefs.current[0]?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [prompt.promptId]);
@@ -122,18 +122,37 @@ export function AskUserQuestionComposer({
   };
 
   const handleCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (submitting || customOpen || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (submitting || customOpen || event.altKey || event.nativeEvent.isComposing) return;
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      if (!answer) return;
+      event.preventDefault();
+      commit(answer);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      commit();
+      return;
+    }
     if (/^[1-5]$/u.test(event.key)) {
-      const option = question.options[Number(event.key) - 1];
+      const optionIndex = Number(event.key) - 1;
+      const option = question.options[optionIndex];
       if (!option) return;
       event.preventDefault();
       if (question.multiSelect) toggleMulti(option.label);
       else selectOption(option.label);
+      // Keep focus on the chosen row so Enter continues from it.
+      optionRefs.current[optionIndex]?.focus({ preventScroll: true });
     }
   };
 
   return (
-    <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column min-w-0">
+    <div
+      data-browser-composer-inset="true"
+      className="aiden-dock-inset chat-content-column min-w-0 pb-4 pt-3 sm:pb-5"
+    >
       <section
         className="composer-shell ask-user-question-shell relative z-10 -mt-1 flex max-h-[min(60dvh,36rem)] min-w-0 flex-col overflow-hidden bg-popover p-2.5 shadow-composer"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
@@ -193,7 +212,9 @@ export function AskUserQuestionComposer({
             return (
               <Button variant="transparent"
                 key={option.label}
-                ref={optionIndex === 0 ? firstOptionRef : undefined}
+                ref={(element) => {
+                  optionRefs.current[optionIndex] = element;
+                }}
                 type="button"
                 aria-pressed={!question.multiSelect ? selected : undefined}
                 role={question.multiSelect ? "checkbox" : undefined}
@@ -206,6 +227,26 @@ export function AskUserQuestionComposer({
                 onClick={() => {
                   if (question.multiSelect) toggleMulti(option.label);
                   else selectOption(option.label);
+                }}
+                onKeyDown={(event) => {
+                  // Enter on the chosen single answer moves on; on any other
+                  // row it activates that row as usual.
+                  if (
+                    event.key !== "Enter" ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey ||
+                    question.multiSelect ||
+                    !selected ||
+                    !answer ||
+                    submitting
+                  ) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  commit(answer);
                 }}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-full bg-control/45 text-regular text-secondary">
@@ -290,6 +331,7 @@ export function AskUserQuestionComposer({
             <Button variant="transparent"
               type="button"
               className="ask-user-question-pill"
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               disabled={submitting}
               onClick={() => commit(answer)}
             >
@@ -299,6 +341,7 @@ export function AskUserQuestionComposer({
           <Button variant="transparent"
             type="button"
             className="ask-user-question-pill"
+            aria-keyshortcuts="Escape"
             disabled={submitting}
             onClick={() => commit()}
           >
@@ -306,6 +349,47 @@ export function AskUserQuestionComposer({
           </Button>
         </div>
       </section>
+      {!customOpen && !submitting ? (
+        <AskUserQuestionKeyHints
+          optionCount={question.options.length}
+          multiSelect={question.multiSelect}
+          last={activeIndex === prompt.questions.length - 1}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** Keyboard shortcuts the open question accepts, in the tertiary footnote style. */
+export function AskUserQuestionKeyHints({
+  optionCount,
+  multiSelect,
+  last,
+}: {
+  optionCount: number;
+  multiSelect: boolean;
+  last: boolean;
+}) {
+  const hints: { keys: string[]; label: string }[] = [
+    { keys: [`1–${Math.min(optionCount, 5)}`], label: multiSelect ? "toggle" : "choose" },
+    { keys: multiSelect ? ["⌘", "↵"] : ["↵"], label: last ? "submit" : "next" },
+    { keys: ["esc"], label: "skip" },
+  ];
+  return (
+    <p
+      aria-hidden="true"
+      className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-4 text-mini text-tertiary"
+    >
+      {hints.map((hint) => (
+        <span key={hint.label} className="inline-flex items-center gap-1">
+          {hint.keys.map((key) => (
+            <kbd key={key} className="ask-user-question-key">
+              {key}
+            </kbd>
+          ))}
+          <span>{hint.label}</span>
+        </span>
+      ))}
+    </p>
   );
 }

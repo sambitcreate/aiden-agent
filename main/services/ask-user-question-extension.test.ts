@@ -132,6 +132,34 @@ test("tool returns selected and skipped answers without replaying an interruptio
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
   assert.match(text, /Answer: Direct/u);
   assert.match(text, /Answer: Skipped/u);
+  // The transcript recap carries the owner's choices, not the model-facing prose.
+  assert.deepEqual(result.details, {
+    version: 1,
+    outcome: "answered",
+    items: [
+      { question: "Which approach?", header: "Approach", kind: "option", answers: ["Direct"] },
+      { question: "How detailed?", header: "Detail", kind: "skipped", answers: [] },
+    ],
+  });
+});
+
+test("a stopped run leaves no recap, while a dismissed questionnaire records it", async () => {
+  const dismissed = { version: 1 as const, promptId: "q-one", cancelled: true, answers: [] };
+  const extension = createAskUserQuestionExtension({ request: async () => dismissed });
+  const tool = extension.tools?.[0];
+  assert.ok(tool);
+
+  const closed = await tool.execute("call-closed", { questions: oneQuestion });
+  assert.deepEqual(closed.details, {
+    version: 1,
+    outcome: "dismissed",
+    items: [{ question: "Which approach?", header: "Approach", kind: "skipped", answers: [] }],
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+  const stopped = await tool.execute("call-stopped", { questions: oneQuestion }, controller.signal);
+  assert.equal(stopped.details, null);
 });
 
 const oneQuestion = [

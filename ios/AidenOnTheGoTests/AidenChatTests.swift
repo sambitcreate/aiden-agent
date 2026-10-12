@@ -264,6 +264,128 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: legacyTimeline))
     }
 
+    private func questionnaireStepJSON(
+        id: Int,
+        toolName: String = "ask_user_question",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        questionnaire: String?
+    ) -> String {
+        let recap = questionnaire.map { #","questionnaire":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Tool","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset)\#(recap)}"#
+    }
+
+    private func decodeQuestionnaireStep(_ json: String) throws -> AidenAgentStep {
+        try JSONDecoder().decode(AidenAgentStep.self, from: Data(json.utf8))
+    }
+
+    func testQuestionnaireRecapDecodesOnCompletedAskStepAndReadsAsAnswers() throws {
+        let answered = #"{"version":1,"outcome":"answered","items":[{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]},{"question":"Which regions?","header":"Regions","kind":"multi","answers":["US","EU"]},{"question":"Anything else?","header":"Notes","kind":"custom","answers":["Keep it cheap"]},{"question":"Budget?","header":"Budget","kind":"skipped","answers":[]}]}"#
+        let step = try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: answered))
+        let recap = try XCTUnwrap(step.questionnaire)
+        XCTAssertTrue(step.isQuestionnaire)
+        XCTAssertEqual(recap.outcome, .answered)
+        XCTAssertEqual(recap.items.map(\.question), ["Which database?", "Which regions?", "Anything else?", "Budget?"])
+        XCTAssertEqual(
+            recap.items.map { $0.answer(for: recap.outcome) },
+            [.chosen("Postgres"), .chosen("US, EU"), .custom("\u{201C}Keep it cheap\u{201D}"), .unanswered("Skipped")]
+        )
+
+        for (outcome, label) in [("dismissed", "Dismissed"), ("expired", "No answer")] {
+            let unanswered = #"{"version":1,"outcome":"\#(outcome)","items":[{"question":"Which database?","header":"Database","kind":"skipped","answers":[]}]}"#
+            let recap = try XCTUnwrap(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: unanswered)).questionnaire)
+            XCTAssertEqual(recap.items.map { $0.answer(for: recap.outcome) }, [.unanswered(label)])
+        }
+
+        // The recap survives the chat cache's encode/decode round trip.
+        let roundTripped = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(roundTripped.questionnaire, recap)
+    }
+
+    func testMalformedOrMisplacedQuestionnaireRecapIsDroppedButTheStepStillDecodes() throws {
+        func item(_ kind: String, _ answers: String, question: String = "Which database?", header: String = "Database") -> String {
+            #"{"question":"\#(question)","header":"\#(header)","kind":"\#(kind)","answers":\#(answers)}"#
+        }
+        func recap(_ items: [String], outcome: String = "answered", version: Int = 1) -> String {
+            #"{"version":\#(version),"outcome":"\#(outcome)","items":[\#(items.joined(separator: ","))]}"#
+        }
+        let invalidRecaps: [(String, String)] = [
+            ("no items", recap([])),
+            ("five items", recap(Array(repeating: item("skipped", "[]"), count: 5))),
+            ("unknown version", recap([item("option", #"["Postgres"]"#)], version: 2)),
+            ("unknown outcome", recap([item("skipped", "[]")], outcome: "cancelled")),
+            ("unknown kind", recap([item("ranked", #"["Postgres"]"#)])),
+            ("option with two answers", recap([item("option", #"["Postgres","MySQL"]"#)])),
+            ("multi with no answers", recap([item("multi", "[]")])),
+            ("multi with six answers", recap([item("multi", #"["a","b","c","d","e","f"]"#)])),
+            ("multi with duplicates", recap([item("multi", #"["US","US"]"#)])),
+            ("custom over 1000 characters", recap([item("custom", #"["\#(String(repeating: "a", count: 1_001))"]"#)])),
+            ("option label over 60 characters", recap([item("option", #"["\#(String(repeating: "b", count: 61))"]"#)])),
+            ("skipped with an answer", recap([item("skipped", #"["Postgres"]"#)])),
+            ("answer on a dismissed card", recap([item("option", #"["Postgres"]"#)], outcome: "dismissed")),
+            ("answer on an expired card", recap([item("custom", #"["Later"]"#)], outcome: "expired")),
+            ("blank question", recap([item("skipped", "[]", question: "  ")])),
+            ("header over 16 characters", recap([item("skipped", "[]", header: String(repeating: "h", count: 17))])),
+            ("control character in question", recap([item("skipped", "[]", question: #"Which\u0007database?"#)])),
+            ("not an object", #""answered""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(questionnaireStepJSON(id: 3, questionnaire: invalid))
+            XCTAssertNil(step.questionnaire, name)
+            XCTAssertFalse(step.isQuestionnaire, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "ask_user_question", name)
+        }
+
+        // Boundary values the host accepts still decode.
+        let boundary = recap([
+            item("custom", #"["\#(String(repeating: "😀", count: 1_000))"]"#, header: String(repeating: "h", count: 16)),
+            item("multi", #"["a","b","c","d","e"]"#),
+            item("option", #"["\#(String(repeating: "b", count: 60))"]"#, question: #"Line one\nline two"#),
+            item("skipped", "[]"),
+        ])
+        XCTAssertEqual(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: boundary)).questionnaire?.items.count, 4)
+
+        let valid = recap([item("option", #"["Postgres"]"#)])
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, toolName: "read_file", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, status: "running", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, status: "cancelled", questionnaire: valid)).questionnaire)
+        XCTAssertNil(try decodeQuestionnaireStep(questionnaireStepJSON(id: 1, questionnaire: nil)).questionnaire)
+    }
+
+    func testChronologicalProjectionGivesQuestionnaireItsOwnRowOutsideActivity() throws {
+        let recap = #"{"version":1,"outcome":"answered","items":[{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]}]}"#
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+            questionnaireStepJSON(id: 2, contentOffset: 7, questionnaire: recap),
+            questionnaireStepJSON(id: 3, toolName: "grep", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .questionnaire, .tool, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1"], ["tool-2"], ["tool-3"], []])
+        XCTAssertEqual(rows.map(\.text), ["Before.", "", "", "", "After."])
+        XCTAssertEqual(rows[2].steps.first?.questionnaire?.items.first?.answers, ["Postgres"])
+
+        // Fallback transcripts list the recap separately and leave it out of the activity feed and its tally.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.questionnaireSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, 1 search")
+
+        // A stopped questionnaire carries no recap and stays an ordinary activity line.
+        let stopped = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"cancelled","startedAt":1000,"finishedAt":2000,"steps":[\#(questionnaireStepJSON(id: 1, status: "cancelled", contentOffset: 7, questionnaire: nil))]}"#.utf8
+        ))
+        XCTAssertEqual(
+            AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: stopped)?.map(\.kind),
+            [.text, .tool, .text]
+        )
+        XCTAssertTrue(AidenAgentActivityPresentation.questionnaireSteps(stopped).isEmpty)
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(stopped), "1 tool call")
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,

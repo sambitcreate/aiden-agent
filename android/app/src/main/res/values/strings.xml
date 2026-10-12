@@ -772,6 +772,11 @@
     <string name="chat_reasoning_collapse">Collapse reasoning</string>
     <string name="chat_reasoning_expand">Expand reasoning</string>
     <string name="chat_timeline_file">File %1$s · %2$s</string>
+    <string name="chat_questionnaire_recap_cd">Your answers</string>
+    <string name="chat_questionnaire_custom_answer">“%1$s”</string>
+    <string name="chat_questionnaire_skipped">Skipped</string>
+    <string name="chat_questionnaire_dismissed">Dismissed</string>
+    <string name="chat_questionnaire_no_answer">No answer</string>
 
     <!-- Chat: message actions -->
     <string name="chat_message_actions">Message actions</string>

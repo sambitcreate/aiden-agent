@@ -1899,7 +1899,7 @@ final class AidenBotContractTests: XCTestCase {
         let fixture = try decodedSharedFixture()
         let raw = try sharedFixtureObject()
 
-        XCTAssertEqual(fixture.contractRevision, 27)
+        XCTAssertEqual(fixture.contractRevision, 28)
         XCTAssertTrue(fixture.server.features.contains(AidenBotHostFeature.memory))
         XCTAssertTrue(fixture.server.features.contains(AidenBotHostFeature.proactive))
 
