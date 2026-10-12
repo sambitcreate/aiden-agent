@@ -174,7 +174,7 @@ Shared rules:
    store, IPC, preload, `ipc.ts` client, onboarding reset, AGENTS.md network
    paragraph, tests. Done 2026-10-12 (see `.memory/image-generation.md`).
 2. **Consumers (main).** Chat wiring, conversation mode, Create Images port,
-   E2E env, tests.
+   E2E env, tests. Done 2026-10-12 (see `.memory/image-generation.md`).
 3. **Renderer.** Settings page, registration, logos component, Create Images
    picker logos and copy, onboarding note, tests.
 4. **Review.** Two independent Opus reviews (correctness/edge cases/blast

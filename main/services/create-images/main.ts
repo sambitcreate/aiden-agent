@@ -3,8 +3,11 @@
 // the assembly lives in port-wiring-core.ts and runtime.ts, which are tested.
 import path from "node:path";
 import { app, ipcMain, logger } from "../../platform.js";
-import { configStore } from "../config-store.js";
-import { providerRegistry } from "../provider-registry.js";
+import {
+  IMAGE_GENERATION_PROVIDER_NAMES,
+  isImageGenerationProviderId,
+} from "../../../renderer/shared/image-generation/types.js";
+import { imageGeneration } from "../image-generation/runtime-main.js";
 import { studioAssetStore } from "../studio-assets/main.js";
 import { usageStore } from "../usage-store.js";
 import { createWiredImagePort } from "./port-wiring-core.js";
@@ -17,11 +20,11 @@ export const createImagesRuntime = new CreateImagesRuntime({
   assets: studioAssetStore,
   port: () =>
     createWiredImagePort({
-      models: providerRegistry.models,
-      providerLabel: (providerId) => providerRegistry.builtinProvider(providerId)?.label ?? providerId,
-      // Offline: ensureBuiltinCatalogs restores durable catalogs from disk and never contacts a provider.
-      restoreOfflineCatalogs: () => providerRegistry.ensureBuiltinCatalogs(),
-      listStoredProviders: () => configStore.listStoredProviders(),
+      models: imageGeneration.models,
+      providerLabel: (providerId) =>
+        isImageGenerationProviderId(providerId) ? IMAGE_GENERATION_PROVIDER_NAMES[providerId] : providerId,
+      // Offline: loads image settings and registers providers; never contacts a provider.
+      ready: () => imageGeneration.ready(),
       recordUsage: (record) => usageStore.record(record),
     }),
   notify: (snapshot) => ipcMain.broadcast(IMAGE_RUN_CHANGED_CHANNEL, snapshot),

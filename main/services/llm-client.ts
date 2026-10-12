@@ -375,13 +375,25 @@ import {
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
-import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
+import {
+  classifierApprovalFor,
+  createPiModelTools,
+  piModelOperationProviderLabel,
+  piModelOperationsSystemPrompt,
+  piModelOperationUsage,
+} from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
   DISPLAY_IMAGE_TOOL_NAME,
   shouldEnableDisplayImageExtension,
+  shouldEnableImageGeneration,
 } from "./display-image-extension.js";
+import { imageGeneration } from "./image-generation/runtime-main.js";
+import {
+  IMAGE_GENERATION_PROVIDER_NAMES,
+  isImageGenerationProviderId,
+} from "../../renderer/shared/image-generation/types.js";
 import {
   CHAT_ARTIFACT_EVENT_VERSION,
   type ChatHtmlArtifactV1,
@@ -815,7 +827,7 @@ async function prepareGeneration(
       const current = await chatStore.get(params.chatId);
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
-      if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
+      if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
       return current.messages.flatMap((message) => message.attachments ?? []);
     },
   });
@@ -1612,9 +1624,18 @@ async function prepareGeneration(
       return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
     });
   }
+  // Image generation also runs in folderless conversations; only display_image
+  // (which reads workspace files) needs a workspace and its permission.
   if (
     !botContext &&
-    shouldEnableDisplayImageExtension({
+    shouldEnableImageGeneration({
+      usageSource: options.usageSource,
+      interactionSurface: options.interactionSurface,
+      assistantMode,
+      excluded: false,
+    })
+  ) {
+    const displayImageWorkspaceRoot = shouldEnableDisplayImageExtension({
       usageSource: options.usageSource,
       interactionSurface: options.interactionSurface,
       assistantMode,
@@ -1622,7 +1643,8 @@ async function prepareGeneration(
       permission,
       excluded: false,
     })
-  ) {
+      ? folderPath
+      : undefined;
     const artifactStoreAvailability = displayImageArtifactStore.availability();
     if (!artifactStoreAvailability.available) {
       throw new Error(
@@ -1637,7 +1659,7 @@ async function prepareGeneration(
       );
     }
     const displayImageRuntime = createDisplayImageExtensionRuntime({
-      workspaceRoot: folderPath!,
+      workspaceRoot: displayImageWorkspaceRoot,
       artifactNamespace: streamId,
       existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
       existingChatImageCount: existingUsage.count + pendingUsage.count,
@@ -1680,7 +1702,7 @@ async function prepareGeneration(
         return true;
       },
     });
-    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+    if (displayImageRuntime.extension && !options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
     // Labels, local/remote accounting and classifier opt-in need provider shape only, not keychain presence.
@@ -1692,21 +1714,33 @@ async function prepareGeneration(
       resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
     const operationProviders = [runtime.provider, ...savedOperationProviders];
+    // Image generation has its own registry and keys (Settings → Image Generation);
+    // it never uses chat provider credentials. Loading it is offline.
+    const defaultImageModel = await imageGeneration.defaultModel().catch((error: unknown) => {
+      logger.warn("image-generation", "Could not load image generation settings for this chat.", error);
+      return undefined;
+    });
     generationExtensions.push({
       id: "aiden.model-operations",
-      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      systemPrompt: piModelOperationsSystemPrompt(defaultImageModel),
       tools: createPiModelTools({
-        models: localClassifierModels.models,
-        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
+        imageModels: imageGeneration.models,
+        classifierModels: localClassifierModels.models,
+        providerLabel: (id, type) =>
+          type === "image"
+            ? isImageGenerationProviderId(id) ? IMAGE_GENERATION_PROVIDER_NAMES[id] : id
+            : piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
+          // Image providers are always hosted; chat provider deployments never apply to them.
+          const imageOperation = record.operation === "image";
           await usageStore.record(modelOperationUsageRecord(
-            record, operationProviders, options.usageSource ?? "chat",
-            localClassifierModels.isLocalProvider(record.provider),
+            record, imageOperation ? [] : operationProviders, options.usageSource ?? "chat",
+            !imageOperation && localClassifierModels.isLocalProvider(record.provider),
           ));
         },
       })

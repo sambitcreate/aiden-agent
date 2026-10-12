@@ -15,8 +15,11 @@ export type ImageOperationUsage = Parameters<NonNullable<PiModelToolsHost["onUsa
 export interface PiImagePortOptions {
   models: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">;
   providerLabel(providerId: string): string;
-  /** Offline catalog hydration before listing. Never a network refresh. */
-  beforeList?(): Promise<void>;
+  /**
+   * Offline registry hydration before any lookup (listing or a request), since
+   * model lookups are synchronous. Never a network refresh.
+   */
+  prepare?(): Promise<void>;
   onUsage?(record: ImageOperationUsage): Promise<void>;
 }
 
@@ -38,7 +41,7 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
 
   return {
     async listModels(signal) {
-      await options.beforeList?.();
+      await options.prepare?.();
       const available = await options.models.getAvailableOfType("image", undefined, { signal });
       return available
         .filter((model) => !AUTO_ROUTER.test(model.id))
@@ -54,6 +57,11 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
     },
 
     async generate(request) {
+      try {
+        await options.prepare?.();
+      } catch {
+        return failed("unknown-model", "Image models could not be loaded. Check Settings → Image Generation.");
+      }
       const model = options.models.getModelOfType("image", request.provider, request.model);
       if (!model || model.provider !== request.provider || model.id !== request.model || AUTO_ROUTER.test(model.id)) {
         return failed("unknown-model", "This image model is not available. Choose another model.");

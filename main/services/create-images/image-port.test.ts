@@ -139,18 +139,18 @@ test("a finished result wins over an abort observed later, and a failing account
   assert.equal(result.kind === "images" ? result.images.length : 0, 1);
 });
 
-test("listing hydrates offline catalogs first and gives up when the caller aborts", async () => {
+test("listing hydrates the offline registry first and gives up when the caller aborts", async () => {
   const order: string[] = [];
   const fake = fakeImageModels();
   const images = createPiImageGenerationPort({
     models: fake.models,
     providerLabel: (id) => id,
-    beforeList: async () => {
-      order.push("beforeList");
+    prepare: async () => {
+      order.push("prepare");
     },
   });
   assert.equal((await images.listModels()).length, 1);
-  assert.deepEqual(order, ["beforeList"]);
+  assert.deepEqual(order, ["prepare"]);
   const stopped = new AbortController();
   stopped.abort();
   await assert.rejects(images.listModels(stopped.signal));

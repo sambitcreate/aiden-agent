@@ -12,6 +12,7 @@ import {
   createPiModelTools,
   classifierApprovalFor,
   piModelOperationProviderLabel,
+  piModelOperationsSystemPrompt,
   piModelOperationUsage,
   resolvePiModelImageInputs,
   type PiModelToolsHost,
@@ -45,6 +46,9 @@ const questionSet = {
     criteria: { true: "Relevant", false: "Irrelevant" },
   },
 };
+type FakeModels = PiModelToolsHost["imageModels"] & PiModelToolsHost["classifierModels"];
+/** The fixture fake serves both registries; separation has its own test below. */
+const registries = (models: FakeModels) => ({ imageModels: models, classifierModels: models });
 function fixture() {
   const catalog = [
     {
@@ -140,10 +144,10 @@ function fixture() {
       controls.classifierSignal = options.signal;
       return controls.classifierResult;
     },
-  } as unknown as PiModelToolsHost["models"];
+  } as unknown as FakeModels;
   const staged: ImageContent[] = [];
   const tools = createPiModelTools({
-    models,
+    ...registries(models),
     onImage: async (_id, item) => {
       staged.push(item);
     },
@@ -299,7 +303,7 @@ test("image errors, cancellation, output limits and artifact failures retain bil
   assert.equal(staged.length, 0);
   controls.imageEffect = undefined;
   const failingArtifact = createPiModelTools({
-    models,
+    ...registries(models),
     onImage: async () => {
       throw new Error("Disk full");
     },
@@ -395,7 +399,7 @@ test("provider accounting is once per paid call and survives failed rendering an
   const { models, controls } = fixture();
   const records: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0][] = [];
   const tools = createPiModelTools({
-    models,
+    ...registries(models),
     onImage: async () => {
       throw new Error("staging unavailable");
     },
@@ -441,7 +445,7 @@ test("real codemode nested paid calls retain host disclosure admission and bill 
     let charged = 0,
       prompts = 0;
     const modelTools = createPiModelTools({
-      models,
+      ...registries(models),
       onImage: async () => {},
       onUsage: async () => {
         charged++;
@@ -513,7 +517,7 @@ test("accounting failures cannot erase paid result usage or mask provider errors
   const { models } = fixture();
   let presented = 0;
   const tools = createPiModelTools({
-    models,
+    ...registries(models),
     onImage: async () => {
       presented++;
     },
@@ -561,7 +565,7 @@ test("image references list metadata only and edit with current-chat images afte
   const { models, controls } = fixture();
   let accounted = 0;
   const tools = createPiModelTools({
-    models,
+    ...registries(models),
     ...references,
     onUsage: async () => {
       accounted++;
@@ -608,7 +612,7 @@ test("blank sanitized image names remain usable through listing, disclosure and 
     const attachment = { ...referenceAttachment(), name };
     const references = createPiModelImageReferences({ snapshot: [attachment], readCurrent: async () => [attachment], generated: () => [] });
     const { models, controls } = fixture();
-    const tools = createPiModelTools({ models, ...references, onImage: async () => {} });
+    const tools = createPiModelTools({ ...registries(models), ...references, onImage: async () => {} });
     const listed = await tools.find(tool => tool.name === "list_image_references")!.execute("list", {});
     assert.equal((listed.structuredContent as { images: { name: string }[] }).images[0]?.name, "Image");
     const args = { ...imageRequest, referenceImageIds: [attachment.id] };
@@ -630,7 +634,7 @@ test("reference authority rejects foreign, changed, ambiguous or malformed image
   });
   const { models, controls } = fixture();
   const tool = createPiModelTools({
-    models,
+    ...registries(models),
     ...references,
     onImage: async () => {},
   })[1]!;
@@ -652,7 +656,7 @@ test("reference authority rejects foreign, changed, ambiguous or malformed image
   current = [original, { ...original, data: "AAAA" }];
   assert.deepEqual(await references.listImages(), []);
   const malformed = createPiModelTools({
-    models,
+    ...registries(models),
     resolveImage: async () => ({
       name: "broken.png",
       image: { ...image, data: "!!!!" },
@@ -695,7 +699,7 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
   );
   const controller = new AbortController();
   const aborting = createPiModelTools({
-    models,
+    ...registries(models),
     resolveImage: async () => {
       controller.abort();
       return { name: "input.png", image };
@@ -712,7 +716,7 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
   );
   (controls.catalog[0] as { input?: string[] }).input = ["text"];
   const textOnly = createPiModelTools({
-    models,
+    ...registries(models),
     resolveImage: async () => ({ name: "input.png", image }),
     onImage: async () => {},
   })[1]!;
@@ -743,7 +747,7 @@ test("classification approval includes the exact complete dispatched state and q
 test("cross-provider operation accounting uses configured or built-in display names", async () => {
   const { models } = fixture();
   const labels: string[] = [];
-  const tools = createPiModelTools({ models, onImage: async () => {},
+  const tools = createPiModelTools({ ...registries(models), onImage: async () => {},
     providerLabel: id => piModelOperationProviderLabel(id, [{ id: "fixture", label: "Research team" }], "Built-in name"),
     onUsage: async record => { labels.push(record.providerLabel); } });
   await tools.find(tool => tool.name === "classify")!.execute("paid", classifierRequest);
@@ -811,4 +815,104 @@ test("long image prompts are disclosed before approval and dispatched only after
       if (outcome === "allow") assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: prompt }] });
     } finally { await harness.dispose(); }
   }
+});
+
+function registry(
+  catalog: { type: string; provider: string; id: string; name: string; input?: string[] }[],
+  options: { keyless?: readonly string[] } = {},
+) {
+  const calls = { generate: 0, classify: 0, lookups: [] as string[] };
+  const models = {
+    getAvailableOfType: async (type: string) =>
+      catalog.filter((entry) => entry.type === type && !options.keyless?.includes(entry.provider)),
+    getModelOfType: (type: string, provider: string, id: string) => {
+      calls.lookups.push(`${type}:${provider}/${id}`);
+      return catalog.find((entry) => entry.type === type && entry.provider === provider && entry.id === id);
+    },
+    generateImages: async (model: { api?: string; provider: string; id: string }) => {
+      calls.generate++;
+      return { api: "fixture-images", provider: model.provider, model: model.id, output: [image], stopReason: "stop", timestamp: 1 };
+    },
+    classify: async () => {
+      calls.classify++;
+      return { stopReason: "error", errorMessage: "unused", timestamp: 1 };
+    },
+  } as unknown as FakeModels;
+  return { models, calls };
+}
+
+test("image operations use only the image registry and classification only the classifier registry", async () => {
+  const sharedImage = { type: "image", provider: "openrouter", id: "chat-only-image", name: "Chat registry image", input: ["text"] };
+  const images = registry([{ type: "image", provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell", input: ["text"] }]);
+  const classifiers = registry([
+    sharedImage,
+    { type: "classifier", provider: "custom:llama", id: "qwen", name: "Qwen classifier" },
+  ]);
+  const operations: (string | undefined)[] = [];
+  const tools = createPiModelTools({
+    imageModels: images.models,
+    classifierModels: classifiers.models,
+    onImage: async () => {},
+    onUsage: async (record) => {
+      operations.push(`${record.operation}:${record.provider}`);
+    },
+  });
+  const get = (name: string) => tools.find((tool) => tool.name === name)!;
+
+  const listed = await get("list_operation_models").execute("list", {});
+  assert.deepEqual(
+    (listed.structuredContent as { models: { provider: string; model: string; type: string }[] }).models.map(
+      (model) => `${model.type}:${model.provider}/${model.model}`,
+    ),
+    ["image:fal/fal-ai/flux/schnell", "classifier:custom:llama/qwen"],
+    "a chat-registry image model is never offered",
+  );
+
+  await assert.rejects(
+    get("generate_image").execute("chat-image", { provider: "openrouter", model: "chat-only-image", prompt: "A fox" }),
+    /Unknown image model.*Settings → Image Generation/,
+  );
+  assert.equal(classifiers.calls.generate, 0);
+  const generated = await get("generate_image").execute("fal", { provider: "fal", model: "fal-ai/flux/schnell", prompt: "A fox" });
+  assert.equal(generated.isError, undefined);
+  assert.equal(images.calls.generate, 1);
+
+  await get("classify").execute("classify", { ...classifierRequest, provider: "custom:llama", model: "qwen" });
+  assert.equal(classifiers.calls.classify, 1);
+  assert.equal(images.calls.classify, 0);
+  assert.ok(!images.calls.lookups.some((lookup) => lookup.startsWith("classifier:")));
+  assert.deepEqual(operations, ["image:fal", "classifier:custom:llama"], "accounting knows which registry billed");
+});
+
+test("the operations prompt names the default image model, or says where image keys are added", () => {
+  const withDefault = piModelOperationsSystemPrompt({ provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell" });
+  assert.match(withDefault, /Default image model: fal\/fal-ai\/flux\/schnell \(FLUX schnell\)/);
+  assert.match(withDefault, /Settings → Image Generation/);
+  const without = piModelOperationsSystemPrompt();
+  assert.doesNotMatch(without, /Default image model/);
+  assert.match(without, /Add an image key in Settings → Image Generation\./);
+});
+
+test("an image model without a key, or no image model at all, points to Settings → Image Generation", async () => {
+  const keyless = registry([{ type: "image", provider: "replicate", id: "black-forest-labs/flux-schnell", name: "FLUX", input: ["text"] }], {
+    keyless: ["replicate"],
+  });
+  const empty = registry([]);
+  const tools = createPiModelTools({ imageModels: keyless.models, classifierModels: empty.models, onImage: async () => {} });
+  const get = (name: string) => tools.find((tool) => tool.name === name)!;
+
+  await assert.rejects(
+    get("generate_image").execute("no-key", { provider: "replicate", model: "black-forest-labs/flux-schnell", prompt: "A fox" }),
+    /no image key\. Add an image key in Settings → Image Generation\./,
+  );
+  assert.equal(keyless.calls.generate, 0);
+
+  const listed = await get("list_operation_models").execute("list", { type: "image" });
+  assert.deepEqual(listed.structuredContent, {
+    models: [],
+    truncated: false,
+    imageSetup: "No image model is available. Add an image key in Settings → Image Generation.",
+  });
+  const classifiersOnly = await get("list_operation_models").execute("list", { type: "classifier" });
+  assert.deepEqual(classifiersOnly.structuredContent, { models: [], truncated: false });
 });

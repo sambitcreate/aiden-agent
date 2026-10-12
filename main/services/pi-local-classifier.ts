@@ -8,7 +8,7 @@ import type { PiModelToolsHost } from "./pi-model-tools.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { StoredProvider } from "./types.js";
 
-type OperationModels = PiModelToolsHost["models"];
+type OperationModels = PiModelToolsHost["classifierModels"];
 type LocalModel = ClassifierModel<"llama-cpp-classify">;
 
 /** Strip only the explicitly configured chat route; preserve reverse-proxy prefixes. */
@@ -25,7 +25,7 @@ function hasModel(provider: StoredProvider, id: string): boolean {
   return provider.models.includes(id) && (type === undefined || type === "llm");
 }
 
-/** A request-owned classifier facet. It never modifies Pi's chat or image inventory. */
+/** A request-owned classifier facet. It never modifies Pi's chat inventory and carries no image operations. */
 export function createLocalClassifierModels(deps: {
   models: OperationModels;
   providers: readonly StoredProvider[];
@@ -76,7 +76,6 @@ export function createLocalClassifierModels(deps: {
       const local = type === "classifier" ? find(provider, id) : undefined;
       return local ? structuredClone(local) as ModelTypeMap[T] : deps.models.getModelOfType(type, provider, id);
     },
-    generateImages: (...args) => deps.models.generateImages(...args),
     async classify(model: ClassifierModel<ClassifierApi>, context, options) {
       const local = find(model.provider, model.id);
       if (!local && model.api !== "llama-cpp-classify" && !providers.has(model.provider)) {

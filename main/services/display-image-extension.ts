@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
@@ -32,7 +32,12 @@ const DISPLAY_IMAGE_MIME_TYPES = new Set([
 ]);
 
 export interface DisplayImageExtensionOptions {
-  workspaceRoot: string;
+  /**
+   * The authorized workspace that `display_image` reads from. A folderless
+   * conversation omits it: the runtime then presents generated images only and
+   * has no `display_image` tool.
+   */
+  workspaceRoot?: string;
   /** Stable only for this generation; combined with the Pi call id for artifact identity. */
   artifactNamespace?: string;
   existingChatImageBytes?: number;
@@ -47,7 +52,8 @@ export interface DisplayImageExtensionOptions {
 }
 
 export interface DisplayImageExtensionRuntime {
-  extension: PiAgentRuntimeExtension;
+  /** The `display_image` contribution; absent without a workspace root. */
+  extension: PiAgentRuntimeExtension | undefined;
   presentGeneratedImage(toolCallId: string, image: ImageContent, signal?: AbortSignal): Promise<void>;
 }
 
@@ -68,11 +74,24 @@ export interface DisplayImageExtensionScope {
 /** Keep the GUI tool on ordinary attended workspace chat only. */
 export function shouldEnableDisplayImageExtension(scope: DisplayImageExtensionScope): boolean {
   return (
+    shouldEnableImageGeneration(scope) &&
+    Boolean(scope.workspaceRoot) &&
+    scope.permission !== "none"
+  );
+}
+
+/**
+ * Image generation (and inline presentation of its results) runs in ordinary
+ * attended chats, including conversations with no workspace folder. It reads no
+ * workspace files, so it needs neither a workspace nor a file permission.
+ */
+export function shouldEnableImageGeneration(
+  scope: Omit<DisplayImageExtensionScope, "workspaceRoot" | "permission">,
+): boolean {
+  return (
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.assistantMode &&
-    Boolean(scope.workspaceRoot) &&
-    scope.permission !== "none" &&
     !scope.excluded
   );
 }
@@ -428,10 +447,7 @@ function sameIdentity(
 export function createDisplayImageExtensionRuntime(
   options: DisplayImageExtensionOptions,
 ): DisplayImageExtensionRuntime {
-  const lexicalRoot = path.resolve(options.workspaceRoot);
-  const canonicalRoot = realpathSync(lexicalRoot);
-  const rootIdentity = statSync(canonicalRoot);
-  if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
+  const workspace = options.workspaceRoot === undefined ? undefined : pinWorkspaceRoot(options.workspaceRoot);
   const existingChatImageBytes = options.existingChatImageBytes ?? 0;
   const existingChatImageCount = options.existingChatImageCount ?? 0;
   const existingChatImagePixels = options.existingChatImagePixels ?? 0;
@@ -474,124 +490,126 @@ export function createDisplayImageExtensionRuntime(
     }
   };
 
-  const assertWorkspaceRoot = async (): Promise<void> => {
-    const [currentCanonical, currentIdentity] = await Promise.all([
-      fs.realpath(lexicalRoot),
-      fs.stat(lexicalRoot),
-    ]);
-    if (
-      currentCanonical !== canonicalRoot ||
-      !currentIdentity.isDirectory() ||
-      !sameIdentity(currentIdentity, rootIdentity)
-    ) {
-      throw new Error("The authorized workspace root changed during this generation.");
-    }
-  };
+  const createDisplayTool = ({ lexicalRoot, canonicalRoot, rootIdentity }: PinnedWorkspaceRoot): AgentTool => {
+    const assertWorkspaceRoot = async (): Promise<void> => {
+      const [currentCanonical, currentIdentity] = await Promise.all([
+        fs.realpath(lexicalRoot),
+        fs.stat(lexicalRoot),
+      ]);
+      if (
+        currentCanonical !== canonicalRoot ||
+        !currentIdentity.isDirectory() ||
+        !sameIdentity(currentIdentity, rootIdentity)
+      ) {
+        throw new Error("The authorized workspace root changed during this generation.");
+      }
+    };
 
-  const tool: AgentTool = declarePiRuntimeReplay(
-    {
-      name: DISPLAY_IMAGE_TOOL_NAME,
-      label: "Display Image",
-      description:
-        "Display an existing raster image from the workspace inline in Aiden's current chat. Use this after creating or rendering an image, or whenever the user asks to see one. Paths are relative to the workspace root.",
-      parameters: Type.Object({
-        path: Type.String({
-          description: "Raster image path relative to the workspace folder.",
-          minLength: 1,
-          maxLength: 4096,
+    return declarePiRuntimeReplay(
+      {
+        name: DISPLAY_IMAGE_TOOL_NAME,
+        label: "Display Image",
+        description:
+          "Display an existing raster image from the workspace inline in Aiden's current chat. Use this after creating or rendering an image, or whenever the user asks to see one. Paths are relative to the workspace root.",
+        parameters: Type.Object({
+          path: Type.String({
+            description: "Raster image path relative to the workspace folder.",
+            minLength: 1,
+            maxLength: 4096,
+          }),
         }),
-      }),
-      execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
-        const previous = serial;
-        let release!: () => void;
-        serial = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        await previous;
-        try {
-          if (signal?.aborted) throw new Error("Image display was cancelled.");
-          if (displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE) {
-            throw new Error(
-              `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} images can be displayed in one response.`,
-            );
-          }
-          if (existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT) {
-            throw new Error(
-              `This chat has reached its ${MAX_DISPLAY_IMAGES_PER_CHAT}-image inline display limit.`,
-            );
-          }
-          const remainingBytes = Math.min(
-            MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE - displayedBytes,
-            MAX_DISPLAY_IMAGE_BYTES_PER_CHAT - existingChatImageBytes - displayedBytes,
-          );
-          if (remainingBytes < 1) {
-            throw new Error("Inline images reached this response or chat's storage limit.");
-          }
-          const suppliedPath = (params as { path: string }).path;
-          // Read beneath the already-pinned canonical root so an authorized
-          // workspace opened through a symlink remains usable. Descendant
-          // symlinks are still rejected by the hardened attachment reader.
-          const resolved = resolveWorkspaceImage(canonicalRoot, suppliedPath);
-          await assertWorkspaceRoot();
-          const [attachment] = await readPickedAttachments([resolved.absolute], {
-            maxBatchBytes: remainingBytes,
-            isActive: () => !signal?.aborted,
+        execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
+          const previous = serial;
+          let release!: () => void;
+          serial = new Promise<void>((resolve) => {
+            release = resolve;
           });
-          await assertWorkspaceRoot();
-          if (!attachment || attachment.kind !== "image" || !attachment.data) {
-            throw new Error(`${suppliedPath} could not be prepared as an inline image.`);
-          }
-          const dimensions = validateDisplayImageDimensions(
-            Buffer.from(attachment.data, "base64"),
-            attachment.mimeType,
-            attachment.name,
-          );
-          const imagePixels = dimensions.width * dimensions.height;
-          if (displayedPixels + imagePixels > MAX_DISPLAY_IMAGE_PIXELS_PER_RESPONSE) {
-            throw new Error("Inline images reached this response's decoded-pixel limit.");
-          }
-          if (
-            existingChatImagePixels + displayedPixels + imagePixels >
-            MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT
-          ) {
-            throw new Error("This chat has reached its inline-image decoded-pixel limit.");
-          }
-          await options.beforeArtifact?.();
-          if (signal?.aborted) throw new Error("Image display was cancelled.");
-          const artifact: ChatImageArtifactV1 = {
-            version: CHAT_ARTIFACT_VERSION,
-            kind: "image",
-            attachment: {
-              id: createHash("sha256")
-                .update(artifactNamespace)
-                .update("\0")
-                .update(toolCallId)
-                .digest("hex"),
-              name: attachment.name,
-              mimeType: attachment.mimeType,
+          await previous;
+          try {
+            if (signal?.aborted) throw new Error("Image display was cancelled.");
+            if (displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE) {
+              throw new Error(
+                `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} images can be displayed in one response.`,
+              );
+            }
+            if (existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT) {
+              throw new Error(
+                `This chat has reached its ${MAX_DISPLAY_IMAGES_PER_CHAT}-image inline display limit.`,
+              );
+            }
+            const remainingBytes = Math.min(
+              MAX_DISPLAY_IMAGE_BYTES_PER_RESPONSE - displayedBytes,
+              MAX_DISPLAY_IMAGE_BYTES_PER_CHAT - existingChatImageBytes - displayedBytes,
+            );
+            if (remainingBytes < 1) {
+              throw new Error("Inline images reached this response or chat's storage limit.");
+            }
+            const suppliedPath = (params as { path: string }).path;
+            // Read beneath the already-pinned canonical root so an authorized
+            // workspace opened through a symlink remains usable. Descendant
+            // symlinks are still rejected by the hardened attachment reader.
+            const resolved = resolveWorkspaceImage(canonicalRoot, suppliedPath);
+            await assertWorkspaceRoot();
+            const [attachment] = await readPickedAttachments([resolved.absolute], {
+              maxBatchBytes: remainingBytes,
+              isActive: () => !signal?.aborted,
+            });
+            await assertWorkspaceRoot();
+            if (!attachment || attachment.kind !== "image" || !attachment.data) {
+              throw new Error(`${suppliedPath} could not be prepared as an inline image.`);
+            }
+            const dimensions = validateDisplayImageDimensions(
+              Buffer.from(attachment.data, "base64"),
+              attachment.mimeType,
+              attachment.name,
+            );
+            const imagePixels = dimensions.width * dimensions.height;
+            if (displayedPixels + imagePixels > MAX_DISPLAY_IMAGE_PIXELS_PER_RESPONSE) {
+              throw new Error("Inline images reached this response's decoded-pixel limit.");
+            }
+            if (
+              existingChatImagePixels + displayedPixels + imagePixels >
+              MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT
+            ) {
+              throw new Error("This chat has reached its inline-image decoded-pixel limit.");
+            }
+            await options.beforeArtifact?.();
+            if (signal?.aborted) throw new Error("Image display was cancelled.");
+            const artifact: ChatImageArtifactV1 = {
+              version: CHAT_ARTIFACT_VERSION,
               kind: "image",
-              size: attachment.size,
-              data: attachment.data,
-            },
-          };
-          await present(artifact, dimensions, signal);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Displayed ${resolved.relative} inline (${dimensions.width}×${dimensions.height}).`,
+              attachment: {
+                id: createHash("sha256")
+                  .update(artifactNamespace)
+                  .update("\0")
+                  .update(toolCallId)
+                  .digest("hex"),
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                kind: "image",
+                size: attachment.size,
+                data: attachment.data,
               },
-            ],
-            details: null,
-          };
-        } finally {
-          release();
-        }
+            };
+            await present(artifact, dimensions, signal);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Displayed ${resolved.relative} inline (${dimensions.width}×${dimensions.height}).`,
+                },
+              ],
+              details: null,
+            };
+          } finally {
+            release();
+          }
+        },
       },
-    },
-    // Replaying a presentation side effect could duplicate an assistant artifact.
-    "never",
-  );
+      // Replaying a presentation side effect could duplicate an assistant artifact.
+      "never",
+    );
+  };
 
   return {
     async presentGeneratedImage(toolCallId, image, signal) {
@@ -618,17 +636,33 @@ export function createDisplayImageExtensionRuntime(
         }, dimensions, signal);
       } finally { release(); }
     },
-    extension: {
-      id: DISPLAY_IMAGE_EXTENSION_ID,
-      systemPrompt:
-        "Aiden can display existing workspace raster images inline with the display_image tool. Use it when the user asks to see an image or when showing a visual artifact is useful. Do not claim inline image display is unavailable while this tool is present.",
-      tools: [tool],
-    },
+    extension: workspace
+      ? {
+          id: DISPLAY_IMAGE_EXTENSION_ID,
+          systemPrompt:
+            "Aiden can display existing workspace raster images inline with the display_image tool. Use it when the user asks to see an image or when showing a visual artifact is useful. Do not claim inline image display is unavailable while this tool is present.",
+          tools: [createDisplayTool(workspace)],
+        }
+      : undefined,
   };
 }
 
+interface PinnedWorkspaceRoot {
+  lexicalRoot: string;
+  canonicalRoot: string;
+  rootIdentity: Stats;
+}
+
+function pinWorkspaceRoot(workspaceRoot: string): PinnedWorkspaceRoot {
+  const lexicalRoot = path.resolve(workspaceRoot);
+  const canonicalRoot = realpathSync(lexicalRoot);
+  const rootIdentity = statSync(canonicalRoot);
+  if (!rootIdentity.isDirectory()) throw new Error("The workspace root is not a directory.");
+  return { lexicalRoot, canonicalRoot, rootIdentity };
+}
+
 export function createDisplayImageExtension(
-  options: DisplayImageExtensionOptions,
+  options: DisplayImageExtensionOptions & { workspaceRoot: string },
 ): PiAgentRuntimeExtension {
-  return createDisplayImageExtensionRuntime(options).extension;
+  return createDisplayImageExtensionRuntime(options).extension!;
 }

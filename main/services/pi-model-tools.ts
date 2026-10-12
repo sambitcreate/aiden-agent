@@ -12,6 +12,22 @@ import {
 import { MAX_GENERATED_IMAGES as MAX_IMAGES, parseGeneratedImages } from "./pi-model-image-output.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
+export const IMAGE_GENERATION_SETUP_HINT =
+  "Add an image key in Settings → Image Generation.";
+
+/** The model-operations extension prompt, naming the default image model when one is available. */
+export function piModelOperationsSystemPrompt(
+  defaultImageModel?: { provider: string; id: string; name: string },
+): string {
+  return [
+    "Use list_operation_models to discover image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+    defaultImageModel
+      ? `Default image model: ${defaultImageModel.provider}/${defaultImageModel.id} (${defaultImageModel.name}). Use it unless the user asks for another.`
+      : `No image model is available yet. If the user asks for an image, tell them: ${IMAGE_GENERATION_SETUP_HINT}`,
+    "Image-generation keys and models are managed in Settings → Image Generation, separately from chat providers.",
+  ].join(" ");
+}
+
 /** Parent codemode results aggregate child usage; only provider operations add turn totals. */
 export function piModelOperationUsage(
   toolName: string,
@@ -40,12 +56,17 @@ export interface PiModelToolsHost {
     ids: readonly string[],
     signal?: AbortSignal,
   ): Promise<{ name: string; image: ImageContent }[]>;
-  models: Pick<
-    Models,
-    "getAvailableOfType" | "getModelOfType" | "generateImages" | "classify"
-  >;
-  providerLabel?(providerId: string): string;
+  /**
+   * The image-generation registry (Settings → Image Generation). It has its own
+   * keys, so image operations never see chat providers or their credentials.
+   */
+  imageModels: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">;
+  /** Chat-provider classifiers, including opted-in local llama.cpp classifiers. */
+  classifierModels: Pick<Models, "getAvailableOfType" | "getModelOfType" | "classify">;
+  providerLabel?(providerId: string, type: "image" | "classifier"): string;
   onUsage?(record: {
+    /** Which registry served the call; absent outside the chat tools. */
+    operation?: "image" | "classifier";
     provider: string;
     providerLabel: string;
     model: string;
@@ -364,16 +385,17 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     }
   };
   const request = async <T extends { usage?: Usage; stopReason: string }>(
-    model: { provider: string; id: string; name: string },
+    model: { type: "image" | "classifier"; provider: string; id: string; name: string },
     signal: AbortSignal | undefined,
     invoke: () => Promise<T>,
   ): Promise<T> => {
-    const providerLabel = host.providerLabel?.(model.provider) ?? model.provider;
+    const providerLabel = host.providerLabel?.(model.provider, model.type) ?? model.provider;
     let result: T;
     try {
       result = await invoke();
     } catch (error) {
       await account({
+        operation: model.type,
         provider: model.provider,
         providerLabel,
         model: model.id,
@@ -383,6 +405,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       throw error;
     }
     await account({
+      operation: model.type,
       provider: model.provider,
       providerLabel,
       model: model.id,
@@ -401,7 +424,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     name: "list_operation_models",
     label: "List image and classifier models",
     description:
-      "List configured image-generation and classifier models from the local runtime. Does not refresh catalogs, download models or reveal credentials.",
+      "List available image-generation models (enabled in Settings → Image Generation, with a key) and configured classifier models. Does not refresh catalogs, download models or reveal credentials.",
     parameters: Type.Object(
       {
         type: Type.Optional(
@@ -424,8 +447,10 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         : ["image", "classifier"];
       const models: JsonObject[] = [];
       let truncated = false;
+      let images = 0;
       for (const type of types) {
-        const available = await host.models.getAvailableOfType(
+        const registry = type === "image" ? host.imageModels : host.classifierModels;
+        const available = await registry.getAvailableOfType(
           type,
           undefined,
           { signal },
@@ -437,6 +462,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
             truncated = true;
             break;
           }
+          if (type === "image") images++;
           models.push({
             provider: text(model.provider, 128, "provider"),
             model: text(model.id, 256, "model"),
@@ -448,7 +474,13 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
           });
         }
       }
-      const structuredContent = { models, truncated };
+      const structuredContent: JsonObject = {
+        models,
+        truncated,
+        ...(types.includes("image") && images === 0 && !truncated
+          ? { imageSetup: `No image model is available. ${IMAGE_GENERATION_SETUP_HINT}` }
+          : {}),
+      };
       return {
         content: [{ type: "text", text: JSON.stringify(structuredContent) }],
         structuredContent,
@@ -460,7 +492,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     name: "generate_image",
     label: "Generate image",
     description:
-      "Send a prompt to a configured image-generation model and display its generated images. Uses that provider's credentials and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted.",
+      "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted.",
     parameters: Type.Object(
       {
         ...identity,
@@ -484,7 +516,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       const provider = text(input.provider, 128, "provider"),
         modelId = text(input.model, 256, "model"),
         prompt = text(input.prompt, 16_384, "image prompt");
-      const model = host.models.getModelOfType("image", provider, modelId);
+      const model = host.imageModels.getModelOfType("image", provider, modelId);
       if (
         !model ||
         model.type !== "image" ||
@@ -492,8 +524,13 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         model.id !== modelId
       )
         throw new Error(
-          "Unknown image model. Use list_operation_models to find a configured image model.",
+          `Unknown image model. Use list_operation_models to find an available image model. ${IMAGE_GENERATION_SETUP_HINT}`,
         );
+      // A registered model is listed only when its provider has an image key.
+      const available = await host.imageModels.getAvailableOfType("image", provider, { signal });
+      signal?.throwIfAborted();
+      if (!available.some((entry) => entry.provider === provider && entry.id === modelId))
+        throw new Error(`This image model's provider has no image key. ${IMAGE_GENERATION_SETUP_HINT}`);
       const { images: references } = await resolvePiModelImageInputs(
         host,
         input.referenceImageIds,
@@ -503,7 +540,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         throw new Error("This image model does not support reference images.");
       signal?.throwIfAborted();
       const result = await request(model, signal, () =>
-        host.models.generateImages(
+        host.imageModels.generateImages(
           model,
           { input: [{ type: "text", text: prompt }, ...references] },
           { signal },
@@ -565,7 +602,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
       const { provider, modelId, context } = parsePiClassifierRequest(args);
-      const model = host.models.getModelOfType("classifier", provider, modelId);
+      const model = host.classifierModels.getModelOfType("classifier", provider, modelId);
       if (
         !model ||
         model.type !== "classifier" ||
@@ -576,7 +613,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
           "Unknown classifier model. Use list_operation_models to find a configured classifier model.",
         );
       const result = await request(model, signal, () =>
-        host.models.classify(model, context, { signal }),
+        host.classifierModels.classify(model, context, { signal }),
       );
       if (result.stopReason !== "stop" || signal?.aborted)
         return errorResult(
