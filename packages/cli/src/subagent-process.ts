@@ -83,7 +83,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
       input.telemetry?.running(); if (input.signal?.aborted) abort();
     });
     const last = messages.at(-1);
-    if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error("The child model returned no successful final answer.");
+    if (!last || last.stopReason === "error" || last.stopReason === "aborted" || last.stopReason === "length") throw new Error("The child model returned no successful final answer.");
     const summary = messages.flatMap((message) => message.content.filter((part) => part.type === "text").map((part) => part.text)).join("\n");
     return { role: input.request.role, label: input.request.label, status: "completed" as const, summary: summary.slice(0, MAX_SUBAGENT_SUMMARY_CHARS), ...(summary.length > MAX_SUBAGENT_SUMMARY_CHARS ? { summaryTruncated: true as const } : {}) };
   } catch (error) {

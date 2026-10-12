@@ -493,16 +493,17 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
 
 test("isolated subagent inference executes only parent-owned tools with immutable fork context", async (t) => {
   const dir = temporary(t), requests = [], original = process.env.AIDEN_CLI_ENTRY;
+  let terminalReason;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body); requests.push(parsed);
     response.writeHead(200, { "content-type": "text/event-stream" });
-    const first = !parsed.messages.some((message) => message.role === "tool");
-    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "read-test", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: "Parent-owned tools succeeded" };
+    const first = !terminalReason && !parsed.messages.some((message) => message.role === "tool");
+    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "read-test", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] } : { role: "assistant", content: terminalReason === "length" ? "Incomplete finding: the fix is" : "Parent-owned tools succeeded" };
     response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : terminalReason ?? "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -529,6 +530,21 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   revoked = true;
   await assert.rejects(botTool.execute("bot-revoked", { tasks: [{ role: "scout", label: "Bot scout", task: "Must not run" }] }), /Bot revoked/);
   assert.equal(requests.length, 4);
+  revoked = false;
+  for (const reason of ["length", "stop"]) {
+    terminalReason = reason;
+    const before = requests.length;
+    const expectedStatus = reason === "length" ? "failed" : "completed";
+    const terminal = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fork", revisionHash: "terminal", messages: context }, request: { role: "scout", label: "Terminal probe", task: "Explain the fix" }, policy: { deadlineMs: 15000 } }, [], async () => {});
+    assert.equal(terminal.status, expectedStatus, `${reason}: ${JSON.stringify(terminal)}`);
+    assert.equal(terminal.summary, reason === "length" ? "The subagent did not complete this investigation." : "Parent-owned tools succeeded");
+    assert.equal(requests.length, before + 1, "terminal output must not trigger an automatic retry");
+    const report = await botTool.execute(`bot-${reason}`, { tasks: [{ role: "scout", label: "Bot terminal", task: "Explain the fix" }] });
+    const reportText = report.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    assert.ok(reportText.includes(`Status: ${expectedStatus}`), reportText);
+    if (reason === "length") assert.ok(!reportText.includes("Incomplete finding"), "failed child retains the existing generic summary policy");
+    assert.equal(requests.length, before + 2, "Bot child must make exactly one request with no retry");
+  }
 });
 
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
@@ -947,5 +963,189 @@ test("Azure endpoint migration cannot pair a legacy deployment with a different 
     assert.throws(() => api.migrateCliAzureConfig(dir), /legacy endpoint/);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "models.json"), "utf8")), models);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "auth.json"), "utf8")), auth);
+  }
+});
+
+function todoHarness(manager, widgets = []) {
+  const harness = extension(api.createTodoInlineExtension({ latestContext: () => undefined }));
+  const context = { sessionManager: manager, hasUI: true, mode: "tui", ui: { setWidget: (_name, lines) => widgets.push(lines) } };
+  return { ...harness, context, widgets,
+    start: async (reason = "startup", ctx = context) => harness.events.get("session_start")?.({ type: "session_start", reason }, ctx),
+    call: async (args) => harness.tools.get("todo").execute("test-call", args),
+    async persist(args) {
+      const result = await harness.tools.get("todo").execute("test-call", args);
+      const id = manager.appendMessage({ role: "toolResult", toolCallId: "test-call", toolName: "todo", content: result.content, details: result.details, isError: false, timestamp: 1 });
+      return { result, id };
+    },
+  };
+}
+
+test("CLI todo restores branch-local checkpoints after restart, compaction, switching and clearing", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const first = todoHarness(manager); await first.start();
+  const one = await first.persist({ action: "create", subject: "First checkpoint" });
+  await first.persist({ action: "create", subject: "Second checkpoint" });
+  manager.appendCompaction("Earlier observations compressed", null, 10000);
+  const resumed = todoHarness(manager); await resumed.start("resume");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint", "Second checkpoint"]);
+  assert.ok(resumed.widgets.at(-1).some((line) => line.includes("First checkpoint")));
+  const third = await resumed.persist({ action: "create", subject: "Third checkpoint" });
+  assert.equal(third.result.details.tasks.at(-1).id, 3);
+  manager.branch(one.id);
+  await resumed.events.get("session_tree")({ type: "session_tree", newLeafId: one.id, oldLeafId: third.id }, resumed.context);
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint"]);
+  await resumed.persist({ action: "clear" });
+  await resumed.start("reload");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, []);
+  assert.equal(resumed.widgets.at(-1), undefined);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  await resumed.start("new", { ...resumed.context, sessionManager: empty });
+  const fresh = await resumed.call({ action: "create", subject: "New session only" });
+  assert.deepEqual(fresh.details.tasks.map(({ id, subject }) => ({ id, subject })), [{ id: 1, subject: "New session only" }]);
+  await resumed.start("resume");
+  assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, [], "switching back must not retain the new session's task");
+});
+
+test("CLI todo corrupt newest checkpoint fails closed and a later valid session recovers", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const harness = todoHarness(manager); await harness.start();
+  await harness.persist({ action: "create", subject: "Must not fall back" });
+  manager.appendMessage({ role: "toolResult", toolCallId: "broken", toolName: "todo", content: [], details: { kind: "broken" }, isError: false, timestamp: 2 });
+  await harness.start("reload");
+  await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
+  await assert.rejects(harness.call({ action: "create", subject: "Must not overwrite" }), /unavailable/i);
+  assert.equal(harness.widgets.at(-1), undefined);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  const widgetCount = harness.widgets.length;
+  await harness.start("new", { ...harness.context, sessionManager: empty, hasUI: false });
+  assert.deepEqual((await harness.call({ action: "list" })).details.tasks, []);
+  assert.equal(harness.widgets.length, widgetCount, "headless restoration must not render a widget");
+});
+
+test("CLI todo ignores stale asynchronous restoration after a newer session starts", async (t) => {
+  const manager = api.SessionManager.inMemory(temporary(t));
+  const seed = todoHarness(manager); await seed.start();
+  await seed.persist({ action: "create", subject: "Old session task" });
+  const harness = todoHarness(manager);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const oldStart = harness.start("resume", { ...harness.context, sessionManager: { getBranch: () => pending } });
+  await assert.rejects(harness.call({ action: "create", subject: "During restore" }), /unavailable/i);
+  const empty = api.SessionManager.inMemory(temporary(t));
+  await harness.start("new", { ...harness.context, sessionManager: empty });
+  await harness.call({ action: "create", subject: "Newer session task" });
+  release(manager.getBranch()); await oldStart;
+  assert.deepEqual((await harness.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["Newer session task"]);
+  assert.equal(harness.widgets.at(-1), undefined);
+  await harness.events.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, harness.context);
+  await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
+});
+
+test("real SDK binding initializes todo before tool use and restores it on a resumed session", async (t) => {
+  const dir = temporary(t), manager = api.SessionManager.inMemory(dir);
+  const model = { id: "offline", name: "Offline", provider: "offline-fixture", api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  async function boot(reason) {
+    const loader = new api.DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, extensionFactories: [api.createTodoInlineExtension({ latestContext: () => undefined })] });
+    await loader.reload();
+    const { session } = await api.createAgentSession({ cwd: dir, agentDir: dir, model, resourceLoader: loader, sessionManager: manager, settingsManager: api.SettingsManager.inMemory({}), tools: ["todo"], sessionStartEvent: { type: "session_start", reason } });
+    t.after(() => session.dispose());
+    return { session, tool: session.agent.state.tools.find(({ name }) => name === "todo") };
+  }
+  const first = await boot("startup");
+  await assert.rejects(first.tool.execute("before-bind", { action: "list" }), /unavailable/i);
+  await first.session.bindExtensions({ mode: "rpc" });
+  const result = await first.tool.execute("create", { action: "create", subject: "SDK checkpoint" });
+  manager.appendMessage({ role: "toolResult", toolCallId: "create", toolName: "todo", content: result.content, details: result.details, isError: false, timestamp: 1 });
+  first.session.dispose();
+  const resumed = await boot("resume"); await resumed.session.bindExtensions({ mode: "rpc" });
+  assert.deepEqual((await resumed.tool.execute("list", { action: "list" })).details.tasks.map(({ subject }) => subject), ["SDK checkpoint"]);
+});
+
+test("daemon initializes todo lifecycle before inference and recovers checkpoints on the next turn", async (t) => {
+  const dir = temporary(t), requests = [];
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); const index = requests.length;
+    const operation = index === 1 ? { action: "create", subject: "Daemon durable checkpoint" } : index === 3 ? { action: "list" } : undefined;
+    const delta = operation ? { role: "assistant", tool_calls: [{ index: 0, id: `todo-${index}`, type: "function", function: { name: "todo", arguments: JSON.stringify(operation) } }] } : { role: "assistant", content: "Done" };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "todo", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "todo", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: operation ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", dir]); await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "todo-daemon", title: "Todo lifecycle", workspaceId: workspace.id });
+  const events = [], owner = { id: 0, documentId: "todo-owner", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  for (const content of ["Track work", "Recover work"]) {
+    const admission = daemon.llmClient.beginChatTurn("todo-daemon", "stream", owner.documentId); assert.ok(admission);
+    try {
+      await daemon.chatStore.appendMessage("todo-daemon", { role: "user", content }); admission.settleAsyncWork();
+      await daemon.llmClient.start("stream", { chatId: "todo-daemon", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content }] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle("todo-daemon");
+    } finally { admission.release(); }
+  }
+  assert.equal(requests.length, 4, JSON.stringify(events));
+  const toolObservations = requests.filter((_, index) => index === 1 || index === 3).map((request) => request.messages.filter(({ role }) => role === "tool").at(-1));
+  for (const observation of toolObservations) assert.ok(JSON.stringify(observation).includes("Daemon durable checkpoint"), JSON.stringify(observation));
+  assert.equal(events.filter(({ channel }) => channel === "chat:error").length, 0);
+});
+
+test("daemon releases sessions and authority when extension binding fails or is revoked", async (t) => {
+  const root = temporary(t);
+  const model = { id: "test", name: "Test", provider: "cli-test", api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const loader = new api.DefaultResourceLoader({ cwd: root, agentDir: root, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true });
+  await loader.reload();
+  const { session: seed } = await api.createAgentSession({ cwd: root, agentDir: root, model, resourceLoader: loader, sessionManager: api.SessionManager.inMemory(root), settingsManager: api.SettingsManager.inMemory({}), tools: [] });
+  const prototype = Object.getPrototypeOf(seed), originalBind = prototype.bindExtensions;
+  seed.dispose();
+  let requests = 0;
+  const server = createServer((_request, response) => { requests++; response.writeHead(500); response.end("Inference must not start after authority loss"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { prototype.bindExtensions = originalBind; server.closeAllConnections(); server.close(); });
+
+  for (const mode of ["bind-reject", "owner-invalidated", "workspace-removed"]) {
+    const dir = join(root, mode);
+    api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [model] } } });
+    const workspace = await api.workspaceCommand(dir, ["add", dir]); await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+    const daemon = api.createDaemonChats(dir);
+    await daemon.chatStore.create({ id: "binding-fault", title: "Binding fault", workspaceId: workspace.id });
+    let destroyed = false, invalidate, shutdowns = 0, disposals = 0, binds = 0;
+    const events = [], owner = { id: 0, documentId: "binding-owner", isDestroyed: () => destroyed, onInvalidated: (callback) => { invalidate = callback; return () => {}; }, send: (channel, value) => events.push({ channel, value }) };
+    prototype.bindExtensions = async function (...args) {
+      binds++;
+      const emit = this.extensionRunner.emit.bind(this.extensionRunner);
+      this.extensionRunner.emit = async (event) => { if (event.type === "session_shutdown") shutdowns++; return emit(event); };
+      const dispose = this.dispose.bind(this);
+      this.dispose = () => { disposals++; return dispose(); };
+      // Exercise the real SDK session_start and todo restore before injecting a
+      // failure at the newly awaited boundary, rather than mocking startup away.
+      await originalBind.apply(this, args);
+      if (mode === "bind-reject") throw new Error("Injected extension binding failure");
+      if (mode === "owner-invalidated") { destroyed = true; invalidate(); }
+      if (mode === "workspace-removed") await api.workspaceStore(dir).save([]);
+    };
+    const before = requests, admission = daemon.llmClient.beginChatTurn("binding-fault", mode, owner.documentId);
+    assert.ok(admission);
+    try {
+      await daemon.chatStore.appendMessage("binding-fault", { role: "user", content: "Must not reach inference" }); admission.settleAsyncWork();
+      await daemon.llmClient.start(mode, { chatId: "binding-fault", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Must not reach inference" }] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle("binding-fault");
+      assert.equal(binds, 1, mode);
+      assert.equal(requests, before, `${mode}: no inference after failure or revocation`);
+      assert.equal(shutdowns, 1, `${mode}: extensions release resources`);
+      assert.equal(disposals, 1, `${mode}: SDK session is disposed`);
+      const release = api.acquireLease(daemon.sessionPath("binding-fault")); release();
+      const next = daemon.llmClient.beginChatTurn("binding-fault", "next", "next-owner");
+      assert.ok(next, `${mode}: failed startup must not strand chat admission`); next.settleAsyncWork(); next.release();
+      assert.equal(events.filter(({ channel }) => channel === "chat:error").length, destroyed ? 0 : 1, mode);
+    } finally {
+      prototype.bindExtensions = originalBind;
+      admission.release();
+      await daemon.stop();
+    }
   }
 });

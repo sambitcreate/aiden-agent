@@ -45,3 +45,5 @@ export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
 export { createCliMcpRevision } from "./subagent-hosts.ts";
 
 export { migrateCliAzureConfig } from "./azure-config-migration.ts";
+export { createTodoInlineExtension } from "./extensions/todo.ts";
+export { createAgentSession, DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
