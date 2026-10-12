@@ -602,6 +602,22 @@ object AidenAgentActivityPresentation {
         return timeline.copy(steps = timeline.steps.filter { it.questionnaireRecap == null })
     }
 
+    /**
+     * Live tool rows without the questionnaires the timeline already shows as a
+     * recap. Live rows carry the stream's own `tool_N` ids, unrelated to the
+     * timeline's tool-call ids, so they pair by order: each recap stands for the
+     * next question call that finished successfully.
+     */
+    fun liveToolsWithoutRecaps(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): List<AidenLiveTool> {
+        var recaps = timeline?.steps?.count { it.questionnaireRecap != null } ?: 0
+        if (recaps == 0) return tools
+        return tools.filterNot { tool ->
+            val recapped = recaps > 0 && tool.name == AidenQuestionnaireRecap.TOOL_NAME && tool.status == "succeeded"
+            if (recapped) recaps -= 1
+            recapped
+        }
+    }
+
     fun summary(timeline: AidenGenerationTimeline): String {
         val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
         if (tools.isEmpty()) {

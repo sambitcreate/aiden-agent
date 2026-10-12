@@ -1609,8 +1609,7 @@ internal fun ActiveStreamingCard(
 
             // Questionnaire recaps replace their tool's live row.
             val recapSteps = activityTimeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
-            val recapToolIds = recapSteps.mapNotNull { it.toolCallId }.toSet()
-            val liveTools = tools.filterNot { it.id in recapToolIds }
+            val liveTools = AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, activityTimeline)
             recapSteps.forEach { step ->
                 key(step.id) {
                     AidenQuestionnaireRecapStack(recap = step.questionnaireRecap!!, palette = palette)

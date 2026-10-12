@@ -126,8 +126,9 @@ class AidenQuestionnaireRecapUiTest {
                     liveText = "Hello",
                     reasoning = "Thinking about the answers",
                     tools = listOf(
-                        AidenLiveTool(id = "call-1", name = "ask_user_question", status = "completed"),
-                        AidenLiveTool(id = "call-2", name = "read_file", status = null)
+                        // The stream numbers live tools itself; these ids never match the step's call id.
+                        AidenLiveTool(id = "tool_1", name = "ask_user_question", status = "succeeded"),
+                        AidenLiveTool(id = "tool_2", name = "read_file", status = null)
                     ),
                     activityTimeline = timeline,
                     isBotChat = false,

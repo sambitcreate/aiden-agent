@@ -549,6 +549,24 @@ class AidenChatTest {
     }
 
     @Test
+    fun liveToolRowsDropOnlyTheQuestionCallTheRecapStandsFor() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        // Live rows use the stream's tool_N ids, which never match the timeline's call ids.
+        val tools = listOf(
+            AidenLiveTool("tool_1", "ask_user_question", "failed"),
+            AidenLiveTool("tool_2", "read_file", "succeeded"),
+            AidenLiveTool("tool_3", "ask_user_question", "succeeded"),
+            AidenLiveTool("tool_4", "ask_user_question", null),
+            AidenLiveTool("tool_5", "run_command", "succeeded")
+        )
+
+        // One recap: the failed call and the still-open question keep their rows.
+        assertEquals(listOf("tool_1", "tool_2", "tool_4", "tool_5"),
+            AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, timeline).map { it.id })
+        assertEquals(tools, AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, null))
+    }
+
+    @Test
     fun questionnaireAnswersReadAsChoicesQuotesOrTheReasonTheyWereUnanswered() {
         val recap = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(answeredQuestionnaireJson))!!
         assertEquals(
