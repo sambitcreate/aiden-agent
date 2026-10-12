@@ -108,6 +108,21 @@ test("codemode bounds model-facing output and reports script failures", async ()
   assert.equal((await tool.execute("parent", { code: 'throw new Error("script failed");' })).isError, true);
 });
 
+test("codemode discloses omitted text after an exact output boundary", async () => {
+  const { tool } = fixture();
+  for (const prefix of ['text("x".repeat(32000));', 'text("x".repeat(16000)); text("y".repeat(16000));', 'text("x".repeat(32001));']) {
+    const result = await tool.execute("boundary", { code: `${prefix} text("TESTS FAILED"); text("additional detail");` });
+    const texts = result.content.filter((part) => part.type === "text").map((part) => part.text);
+    assert.equal(result.isError, false);
+    assert.equal(texts.filter((text) => text === "[Codemode text output truncated.]").length, 1,
+      "omitted observations must be disclosed even when the retained block was not sliced");
+    assert.equal(texts.filter((text) => text !== "[Codemode text output truncated.]").join("").length, 32000);
+  }
+  const exact = await tool.execute("complete", { code: 'text("x".repeat(32000)); text("");' });
+  assert.equal(exact.content.some((part) => part.type === "text" && part.text.includes("truncated")), false,
+    "a completely retained observation must not be labeled truncated");
+});
+
 test("nested operation usage is counted once on the parent tool result", async () => {
   const callable: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) };
   const tool = createPiCodemodeTool({

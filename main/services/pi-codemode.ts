@@ -111,6 +111,7 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
         let imageCount = 0;
         let invalidImage = false;
         let limitNoticed = false;
+        let textTruncated = false;
         for (const item of result.output) {
           if (item.type === "image") {
             imageBytes += item.data.length;
@@ -127,11 +128,14 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
               limitNoticed = true;
               content.push({ type: "text", text: "Additional codemode images omitted: output limit." });
             }
-          } else if (remaining > 0) {
+          } else {
             const text = item.text.slice(0, remaining);
-            content.push({ type: "text", text });
+            if (remaining > 0) content.push({ type: "text", text });
             remaining -= text.length;
-            if (text.length < item.text.length) content.push({ type: "text", text: "[Codemode text output truncated.]" });
+            if (text.length < item.text.length && !textTruncated) {
+              textTruncated = true;
+              content.push({ type: "text", text: "[Codemode text output truncated.]" });
+            }
           }
         }
         if (result.ok) {

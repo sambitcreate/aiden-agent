@@ -4276,7 +4276,8 @@ final class AidenChatTests: XCTestCase {
             ("agent_subagents", "Run subagents", .completed, nil, nil, "Ran subagents"),
             ("agent_tool", "Use agent tool", .running, nil, nil, "Using an agent tool"),
             ("agent_context_rebuilt", "Started a fresh agent session from this chat", .completed, nil, nil, "Started a fresh agent session"),
-            ("run_command", "Run command", .completed, nil, "a command", "Ran a command")
+            ("run_command", "Run command", .completed, nil, "a command", "Ran a command"),
+            ("run_command", "Run command", .failed, nil, "a command", "Run command failed a command")
         ]
         for (index, (toolName, label, status, target, detail, line)) in expected.enumerated() {
             let step = AidenAgentStep(

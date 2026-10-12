@@ -115,6 +115,26 @@ test("namespace output is bounded and oversized inventories reject instead of pa
   assert.throws(() => excessive.searchTools(""), /exceeds 512/);
 });
 
+test("the inventory limit counts callable tools while excluded wrappers stay undiscoverable", () => {
+  const callable = Array.from({ length: 512 }, (_, index) => tool(`tool_${index}`, "mcp:one"));
+  const wrapper = tool("codemode");
+  const excluded = tool("excluded", "mcp:private");
+  let admitted = [...callable, wrapper, excluded, tool("tool_search")];
+  const discovery = createPiToolDiscovery({
+    tools: () => admitted,
+    isCallable: (candidate) => candidate !== wrapper && candidate !== excluded,
+  });
+  assert.deepEqual(names(discovery.searchTools("tool_511")), ["tool_511"]);
+  assert.deepEqual(names(discovery.searchTools("codemode")), []);
+  assert.deepEqual(names(discovery.searchTools("tool_search")), []);
+  assert.throws(() => discovery.describeNamespace("mcp:private"), /Unknown or unavailable/);
+  admitted = [...admitted, tool("overflow", "mcp:one")];
+  assert.throws(() => discovery.searchTools("tool_511"), /exceeds 512/);
+  admitted = admitted.filter((candidate) => candidate.name !== "overflow" && candidate.name !== "tool_511");
+  assert.deepEqual(names(discovery.searchTools("tool_511")), []);
+  assert.deepEqual(names(discovery.searchTools("tool_510")), ["tool_510"]);
+});
+
 
 test("server descriptions make otherwise generic tools discoverable without exposing excluded servers", () => {
   const generic = tool("query", "mcp:warehouse");

@@ -1930,7 +1930,10 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         : result.outputLimitExceeded
           ? "Command exceeded the output limit."
           : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-      return textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS));
+      return {
+        ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
+        isError: true,
+      };
     },
   };
 }

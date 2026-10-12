@@ -65,11 +65,11 @@ function namespaceMetadata(value: PiToolDiscoveryMetadata | undefined): PiToolDi
 
 export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
   function inventory() {
-    const admitted = host.tools();
+    const admitted = host.tools().filter((tool) => tool.name !== "tool_search" && host.isCallable(tool));
     if (admitted.length > MAX_INVENTORY) throw new Error("Tool discovery inventory exceeds 512 tools.");
     const names = new Set<string>();
     const namespaces = new Map<string, PiToolDiscoveryMetadata>();
-    const tools = admitted.filter((tool) => tool.name !== "tool_search" && host.isCallable(tool)).map((tool) => {
+    const tools = admitted.map((tool) => {
       if (names.has(tool.name)) throw new Error("Tool discovery identity collision.");
       names.add(tool.name);
       const metadata = namespaceMetadata((tool as PiDiscoverableTool).discovery);
