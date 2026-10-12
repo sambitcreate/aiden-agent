@@ -140,6 +140,11 @@ export interface ImageGenerationSetModelEnabledRequest {
   enabled: boolean;
 }
 
+/** Several enable choices applied in one write (Settings' bulk actions). */
+export interface ImageGenerationSetModelsEnabledRequest {
+  changes: ImageGenerationSetModelEnabledRequest[];
+}
+
 /** `null` clears the default. */
 export type ImageGenerationSetDefaultModelRequest = ImageModelRef | null;
 
@@ -181,4 +186,6 @@ export const IMAGE_GENERATION_LIMITS = {
   maxModelNameLength: 120,
   maxCustomModelsPerProvider: 50,
   maxFetchedModelsPerProvider: 500,
+  /** Most enable choices one bulk request may carry. */
+  maxBulkModelChanges: 2000,
 } as const;

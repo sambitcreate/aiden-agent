@@ -380,3 +380,59 @@ test("registered OpenRouter models carry the same name Settings shows, and maker
   assert.equal(runtime.imageModelMaker("replicate", "black-forest-labs/flux-schnell"), "black-forest-labs");
   assert.equal(runtime.imageModelMaker("fal", "unknown-vendor/thing"), undefined);
 });
+
+test("bulk enable choices land in one write and leave untouched providers' registrations alone", async (t) => {
+  let writes = 0;
+  const { runtime } = await setup(t, {
+    env: { AIDEN_IMAGE_FAL_KEY: "fal-env-key-123", AIDEN_IMAGE_OPENROUTER_API_KEY: "sk-or-image-env" },
+    wrapSettings: (store) => ({
+      ...store,
+      update: (mutate) => {
+        writes += 1;
+        return store.update(mutate);
+      },
+    }),
+  });
+  await runtime.ready();
+  const openRouter = runtime.models.getModelOfType("image", "openrouter", "google/gemini-3.1-flash-image");
+  assert.ok(openRouter);
+  await runtime.setDefaultModel({ provider: "fal", id: "fal-ai/flux/schnell" });
+  writes = 0;
+
+  const state = await runtime.setModelsEnabled([
+    { provider: "fal", id: "fal-ai/flux/schnell", enabled: false },
+    { provider: "replicate", id: "google/imagen-4-fast", enabled: false },
+    { provider: "fal", id: "fal-ai/flux-2-pro", enabled: false },
+  ]);
+
+  assert.equal(writes, 1);
+  const enabled = (id: string) => state.models.find((model) => model.id === id)?.enabled;
+  assert.deepEqual(
+    [enabled("fal-ai/flux/schnell"), enabled("google/imagen-4-fast"), enabled("fal-ai/flux-2-pro")],
+    [false, false, false],
+  );
+  assert.equal(runtime.models.getModelOfType("image", "fal", "fal-ai/flux/schnell"), undefined);
+  assert.equal(runtime.models.getModelOfType("image", "replicate", "google/imagen-4-fast"), undefined);
+  // OpenRouter was not in the request, so its registration is the same object.
+  assert.equal(runtime.models.getModelOfType("image", "openrouter", "google/gemini-3.1-flash-image"), openRouter);
+  // Turning off the default keeps it stored, as a single toggle does.
+  assert.deepEqual(state.defaultModel, { provider: "fal", id: "fal-ai/flux/schnell" });
+
+  const back = await runtime.setModelsEnabled([{ provider: "fal", id: "fal-ai/flux/schnell", enabled: true }]);
+  assert.equal(back.models.find((model) => model.id === "fal-ai/flux/schnell")?.enabled, true);
+  assert.ok(runtime.models.getModelOfType("image", "fal", "fal-ai/flux/schnell"));
+});
+
+test("a bulk request naming an unlisted model is rejected without writing any choice", async (t) => {
+  const { runtime, root } = await setup(t);
+  const before = await runtime.getState();
+  await assert.rejects(
+    runtime.setModelsEnabled([
+      { provider: "fal", id: "fal-ai/flux/schnell", enabled: false },
+      { provider: "fal", id: "acme/not-listed", enabled: true },
+    ]),
+    (error: unknown) => error instanceof ImageGenerationError && error.code === "invalid_request",
+  );
+  assert.deepEqual(await runtime.getState(), before);
+  await assert.rejects(fs.readFile(path.join(root, IMAGE_GENERATION_SETTINGS_FILE), "utf8"), { code: "ENOENT" });
+});

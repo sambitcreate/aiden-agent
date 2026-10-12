@@ -9,6 +9,7 @@ import {
   parseSetDefaultModelRequest,
   parseSetKeyRequest,
   parseSetModelEnabledRequest,
+  parseSetModelsEnabledRequest,
 } from "./image-generation-parse.js";
 import type { ImageGenerationState } from "../../renderer/shared/image-generation/types.js";
 
@@ -76,4 +77,38 @@ test("action results expose only known codes and messages", async () => {
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(result).includes("sk-or-leak"), false);
   assert.equal(seen.length, 1);
+});
+
+test("bulk enable requests carry 1 to 2000 distinct, well-formed changes", () => {
+  const change = (id: string, enabled = true) => ({ provider: "fal", id, enabled });
+  assert.deepEqual(parseSetModelsEnabledRequest({ changes: [change("a/b"), change("c/d", false)] }), {
+    changes: [
+      { provider: "fal", id: "a/b", enabled: true },
+      { provider: "fal", id: "c/d", enabled: false },
+    ],
+  });
+  // The same id under another provider is a different model.
+  assert.equal(
+    parseSetModelsEnabledRequest({ changes: [change("a/b"), { provider: "replicate", id: "a/b", enabled: true }] })
+      .changes.length,
+    2,
+  );
+  const atLimit = Array.from({ length: 2000 }, (_, index) => change(`m/${index}`));
+  assert.equal(parseSetModelsEnabledRequest({ changes: atLimit }).changes.length, 2000);
+
+  const rejected: unknown[] = [
+    undefined,
+    [change("a/b")],
+    { changes: [] },
+    { changes: "a/b" },
+    { changes: [change("a/b")], extra: true },
+    { changes: [change("a/b"), change("a/b", false)] },
+    { changes: [{ provider: "anthropic", id: "a/b", enabled: true }] },
+    { changes: [{ provider: "fal", id: "a/b", enabled: "yes" }] },
+    { changes: [{ provider: "fal", id: "a/b" }] },
+    { changes: [...atLimit, change("one/more")] },
+  ];
+  for (const value of rejected) {
+    assert.throws(() => parseSetModelsEnabledRequest(value), INVALID, JSON.stringify(value)?.slice(0, 80));
+  }
 });

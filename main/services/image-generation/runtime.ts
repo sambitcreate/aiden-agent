@@ -588,6 +588,33 @@ export class ImageGenerationRuntime {
     });
   }
 
+  /**
+   * Apply many enable choices in one settings write and re-register each
+   * affected provider once. Every model must be listed, or nothing is written.
+   * Like `setModelEnabled`, turning off the default keeps it stored.
+   */
+  async setModelsEnabled(
+    changes: readonly { provider: ImageGenerationProviderId; id: string; enabled: boolean }[],
+  ): Promise<ImageGenerationState> {
+    await this.ready();
+    if (changes.length > IMAGE_GENERATION_LIMITS.maxBulkModelChanges) throw invalidRequest();
+    const seen = new Set<string>();
+    for (const { provider, id } of changes) {
+      const key = `${provider}\u0000${id}`;
+      const listed = this.rows.some((row) => row.entry.provider === provider && row.entry.id === id);
+      if (!listed || seen.has(key)) throw invalidRequest("One or more of those models aren't in the list.");
+      seen.add(key);
+    }
+    if (changes.length === 0) return this.getState();
+    const providers = IMAGE_GENERATION_PROVIDER_IDS.filter((provider) =>
+      changes.some((change) => change.provider === provider),
+    );
+    return this.mutate(providers, (draft) => {
+      for (const provider of providers) draft.enabled[provider] = { ...(draft.enabled[provider] ?? {}) };
+      for (const { provider, id, enabled } of changes) draft.enabled[provider]![id] = enabled;
+    });
+  }
+
   async setDefaultModel(ref: ImageModelRef | null): Promise<ImageGenerationState> {
     await this.ready();
     // Only turning on a previously disabled model changes what is registered.

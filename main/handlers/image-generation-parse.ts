@@ -11,6 +11,7 @@ import {
   type ImageGenerationProviderRequest,
   type ImageGenerationSetKeyRequest,
   type ImageGenerationSetModelEnabledRequest,
+  type ImageGenerationSetModelsEnabledRequest,
   type ImageModelRef,
 } from "../../renderer/shared/image-generation/types.js";
 
@@ -63,6 +64,23 @@ export function parseSetModelEnabledRequest(value: unknown): ImageGenerationSetM
   const request = shape(value, ["provider", "id", "enabled"]);
   if (typeof request.enabled !== "boolean") invalid();
   return { provider: provider(request.provider), id: modelId(request.id), enabled: request.enabled };
+}
+
+/** 1 to `maxBulkModelChanges` distinct models; a repeated model is rejected. */
+export function parseSetModelsEnabledRequest(value: unknown): ImageGenerationSetModelsEnabledRequest {
+  const { changes } = shape(value, ["changes"]);
+  if (!Array.isArray(changes) || changes.length === 0 || changes.length > IMAGE_GENERATION_LIMITS.maxBulkModelChanges) {
+    invalid();
+  }
+  const seen = new Set<string>();
+  const parsed = changes.map((change: unknown) => {
+    const request = parseSetModelEnabledRequest(change);
+    const key = `${request.provider}\u0000${request.id}`;
+    if (seen.has(key)) invalid();
+    seen.add(key);
+    return request;
+  });
+  return { changes: parsed };
 }
 
 export function parseSetDefaultModelRequest(value: unknown): ImageModelRef | null {

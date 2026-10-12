@@ -224,10 +224,10 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     new URL("../components/provider-icon.tsx", import.meta.url),
     "utf8",
   );
-  const providersSettingsSource = readFileSync(
-    new URL("../components/settings/providers-settings.tsx", import.meta.url),
-    "utf8",
-  );
+  // The built-in provider row lives in the shared ProviderSetupRow.
+  const providersSettingsSource = ["providers-settings.tsx", "provider-setup-row.tsx"]
+    .map((file) => readFileSync(new URL(`../components/settings/${file}`, import.meta.url), "utf8"))
+    .join("\n");
   const codexProviderSettingsSource = readFileSync(
     new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
     "utf8",

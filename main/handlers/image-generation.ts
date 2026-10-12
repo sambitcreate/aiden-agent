@@ -8,6 +8,7 @@ import {
   parseSetDefaultModelRequest,
   parseSetKeyRequest,
   parseSetModelEnabledRequest,
+  parseSetModelsEnabledRequest,
 } from "./image-generation-parse.js";
 
 function unexpected(action: string) {
@@ -36,6 +37,12 @@ export function registerImageGenerationHandlers(): void {
       const request = parseSetModelEnabledRequest(input);
       return imageGeneration.setModelEnabled(request.provider, request.id, request.enabled);
     }, unexpected("model toggle")),
+  );
+  ipcMain.handle("imageGeneration:setModelsEnabled", async (_event, input: unknown) =>
+    runImageGenerationAction(
+      () => imageGeneration.setModelsEnabled(parseSetModelsEnabledRequest(input).changes),
+      unexpected("bulk model toggle"),
+    ),
   );
   ipcMain.handle("imageGeneration:setDefaultModel", async (_event, input: unknown) =>
     runImageGenerationAction(

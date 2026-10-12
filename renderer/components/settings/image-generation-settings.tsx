@@ -5,12 +5,17 @@
 // controls (one provider's key or fetch, one model row), never the whole page.
 
 import * as React from "react";
-import { KeyRound, Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Check, ChevronDown, KeyRound, Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import {
   AlertDialog,
   Badge,
   Button,
   Callout,
+  Dialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Field,
   FieldSet,
   Input,
@@ -19,6 +24,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Separator,
   Switch,
   Text,
   toast,
@@ -26,6 +32,7 @@ import {
 import { imageGenerationApi } from "../../lib/ipc";
 import { formatRelativeTime } from "../../lib/relative-time";
 import { ImageModelLogo, ImageProviderLogo } from "../image-model-logo";
+import { ProviderSetupRow } from "./provider-setup-row";
 import {
   FAL_REFERENCE_FIELDS,
   IMAGE_GENERATION_LIMITS,
@@ -37,6 +44,7 @@ import {
   type ImageGenerationModelView,
   type ImageGenerationProviderId,
   type ImageGenerationProviderView,
+  type ImageGenerationSetModelEnabledRequest,
   type ImageGenerationState,
   type ImageModelRef,
 } from "../../shared/image-generation/types";
@@ -81,9 +89,10 @@ export function ImageGenerationSettings() {
   const [pending, setPending] = React.useState<ReadonlySet<string>>(() => new Set());
   const pendingRef = React.useRef(new Set<string>());
   const overlappedRef = React.useRef(false);
-  const [notices, setNotices] = React.useState<
-    Partial<Record<ImageGenerationProviderId, Notice>>
-  >({});
+  // Inline notices keyed like the actions: `key:<provider>` and `fetch:<provider>`.
+  const [notices, setNotices] = React.useState<Readonly<Record<string, Notice>>>({});
+  const [setupProvider, setSetupProvider] = React.useState<ImageGenerationProviderId | null>(null);
+  const setupTriggers = React.useRef<Partial<Record<ImageGenerationProviderId, HTMLButtonElement | null>>>({});
   const [confirmRemove, setConfirmRemove] = React.useState<ImageGenerationProviderId | null>(
     null,
   );
@@ -140,22 +149,22 @@ export function ImageGenerationSettings() {
   );
 
   const setNotice = React.useCallback(
-    (provider: ImageGenerationProviderId, notice: Notice | null) =>
+    (key: string, notice: Notice | null) =>
       setNotices((current) => {
         const next = { ...current };
-        if (notice) next[provider] = notice;
-        else delete next[provider];
+        if (notice) next[key] = notice;
+        else delete next[key];
         return next;
       }),
     [],
   );
 
   const saveKey = async (provider: ImageGenerationProviderId, key: string): Promise<boolean> => {
-    setNotice(provider, null);
+    setNotice(`key:${provider}`, null);
     const result = await run(`key:${provider}`, () => imageGenerationApi.setKey(provider, key));
     if (!result) return false;
     if (!result.ok) {
-      setNotice(provider, { tone: "error", message: result.message });
+      setNotice(`key:${provider}`, { tone: "error", message: result.message });
       return false;
     }
     toast.success(`${IMAGE_GENERATION_PROVIDER_NAMES[provider]} image key saved.`);
@@ -163,22 +172,22 @@ export function ImageGenerationSettings() {
   };
 
   const removeKey = async (provider: ImageGenerationProviderId) => {
-    setNotice(provider, null);
+    setNotice(`key:${provider}`, null);
     const result = await run(`key:${provider}`, () => imageGenerationApi.removeKey(provider));
-    if (result && !result.ok) setNotice(provider, { tone: "error", message: result.message });
+    if (result && !result.ok) setNotice(`key:${provider}`, { tone: "error", message: result.message });
     else if (result?.ok) toast.success(`${IMAGE_GENERATION_PROVIDER_NAMES[provider]} image key removed.`);
   };
 
   const fetchModels = async (provider: ImageGenerationProviderId) => {
-    setNotice(provider, null);
+    setNotice(`fetch:${provider}`, null);
     const result = await run(`fetch:${provider}`, () => imageGenerationApi.fetchModels(provider));
     if (!result) return;
     if (!result.ok) {
-      setNotice(provider, { tone: "error", message: result.message });
+      setNotice(`fetch:${provider}`, { tone: "error", message: result.message });
       return;
     }
     const count = result.state.providers.find((entry) => entry.id === provider)?.fetchedCount ?? 0;
-    setNotice(provider, {
+    setNotice(`fetch:${provider}`, {
       tone: "info",
       message: `Fetched ${count} ${count === 1 ? "model" : "models"}. New ones start off.`,
     });
@@ -189,6 +198,12 @@ export function ImageGenerationSettings() {
       void run(`model:${modelKey(model)}`, () =>
         imageGenerationApi.setModelEnabled(model.provider, model.id, enabled),
       ).then(reportFailure),
+    [run],
+  );
+
+  const setModelsEnabled = React.useCallback(
+    (changes: ImageGenerationSetModelEnabledRequest[]) =>
+      run("bulk", () => imageGenerationApi.setModelsEnabled(changes)),
     [run],
   );
 
@@ -218,6 +233,9 @@ export function ImageGenerationSettings() {
   }
 
   const removing = confirmRemove ? IMAGE_GENERATION_PROVIDER_NAMES[confirmRemove] : "";
+  const settingUp = setupProvider
+    ? state.providers.find((provider) => provider.id === setupProvider)
+    : undefined;
 
   return (
     <div>
@@ -230,19 +248,45 @@ export function ImageGenerationSettings() {
       </Callout>
 
       <FieldSet title="Providers">
-        {state.providers.map((provider) => (
-          <ProviderRow
-            key={provider.id}
-            provider={provider}
-            fetching={pending.has(`fetch:${provider.id}`)}
-            savingKey={pending.has(`key:${provider.id}`)}
-            notice={notices[provider.id]}
-            onSaveKey={(key) => saveKey(provider.id, key)}
-            onRequestRemove={() => setConfirmRemove(provider.id)}
-            onFetch={() => void fetchModels(provider.id)}
-          />
-        ))}
+        {state.providers.map((provider, index) => {
+          const action = provider.key.connected ? "Manage" : "Set up";
+          return (
+            <React.Fragment key={provider.id}>
+              {index > 0 ? <Separator /> : null}
+              <ProviderSetupRow
+                icon={<ImageProviderLogo providerId={provider.id} className="size-4.5" />}
+                name={provider.name}
+                badge={<KeyStatusBadge provider={provider} />}
+                subtitle={providerSubtitle(state, provider)}
+                actionLabel={action}
+                actionAriaLabel={`${action} ${provider.name}`}
+                actionRef={(element) => {
+                  setupTriggers.current[provider.id] = element;
+                }}
+                onAction={() => setSetupProvider(provider.id)}
+              />
+            </React.Fragment>
+          );
+        })}
       </FieldSet>
+
+      {settingUp ? (
+        <ProviderSetupDialog
+          key={settingUp.id}
+          provider={settingUp}
+          fetching={pending.has(`fetch:${settingUp.id}`)}
+          savingKey={pending.has(`key:${settingUp.id}`)}
+          keyNotice={notices[`key:${settingUp.id}`]}
+          fetchNotice={notices[`fetch:${settingUp.id}`]}
+          onOpenChange={(open) => {
+            if (!open) setSetupProvider(null);
+          }}
+          onSaveKey={(key) => saveKey(settingUp.id, key)}
+          onRequestRemove={() => setConfirmRemove(settingUp.id)}
+          onFetch={() => void fetchModels(settingUp.id)}
+          returnFocus={() => setupTriggers.current[settingUp.id] ?? null}
+        />
+      ) : null}
 
       <DefaultModelGroup
         state={state}
@@ -256,6 +300,7 @@ export function ImageGenerationSettings() {
         state={state}
         pending={pending}
         onToggle={toggleModel}
+        onSetMany={setModelsEnabled}
         onRemove={removeModel}
       />
 
@@ -284,36 +329,70 @@ export function ImageGenerationSettings() {
   );
 }
 
-function ProviderRow({
+function providerSubtitle(state: ImageGenerationState, provider: ImageGenerationProviderView): string {
+  const models = state.models.filter((model) => model.provider === provider.id);
+  const on = models.filter((model) => model.enabled).length;
+  const counts = `${models.length} ${models.length === 1 ? "model" : "models"} · ${on} on`;
+  return provider.fetchedAt ? `${counts} · fetched ${formatRelativeTime(provider.fetchedAt)}` : counts;
+}
+
+function KeyStatusBadge({ provider }: { provider: ImageGenerationProviderView }) {
+  const status = keyStatus(provider);
+  return (
+    <Badge color={status.color} icon={provider.key.connected ? <Check /> : undefined}>
+      {status.label}
+    </Badge>
+  );
+}
+
+function NoticeLine({ notice }: { notice: Notice | undefined }) {
+  if (!notice) return null;
+  return (
+    <Text
+      as="p"
+      variant="small"
+      color={notice.tone === "error" ? "status-red" : "secondary"}
+      role={notice.tone === "error" ? "alert" : "status"}
+    >
+      {notice.message}
+    </Text>
+  );
+}
+
+/** Set up / Manage for one image provider: its key and its model list. */
+function ProviderSetupDialog({
   provider,
   fetching,
   savingKey,
-  notice,
+  keyNotice,
+  fetchNotice,
+  onOpenChange,
   onSaveKey,
   onRequestRemove,
   onFetch,
+  returnFocus,
 }: {
   provider: ImageGenerationProviderView;
   /** This provider's Fetch latest is running; it never locks the key controls. */
   fetching: boolean;
   /** This provider's key is being saved or removed. */
   savingKey: boolean;
-  notice: Notice | undefined;
+  keyNotice: Notice | undefined;
+  fetchNotice: Notice | undefined;
+  onOpenChange: (open: boolean) => void;
   onSaveKey: (key: string) => Promise<boolean>;
   onRequestRemove: () => void;
   onFetch: () => void;
+  returnFocus: () => HTMLElement | null;
 }) {
-  const [editing, setEditing] = React.useState(false);
+  const [replacing, setReplacing] = React.useState(false);
   const [draft, setDraft] = React.useState("");
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const keyHeadingId = React.useId();
+  const listHeadingId = React.useId();
   const fetchHintId = React.useId();
-  const status = keyStatus(provider);
   const stored = provider.key.source === "stored";
+  const showForm = !stored || replacing;
   const fetchBlocked = provider.fetchRequiresKey && !provider.key.connected;
-
-  React.useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -321,7 +400,7 @@ function ProviderRow({
     if (!key || savingKey) return;
     if (await onSaveKey(key)) {
       setDraft("");
-      setEditing(false);
+      setReplacing(false);
     }
   };
 
@@ -330,117 +409,133 @@ function ProviderRow({
     : "Using the built-in list. Fetch latest to see newer models.";
 
   return (
-    <Field
-      orientation="vertical"
-      label={
-        <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-control bg-control text-secondary">
-            <ImageProviderLogo providerId={provider.id} className="size-4" />
+    <Dialog
+      open
+      onOpenChange={onOpenChange}
+      returnFocus={returnFocus}
+      title={
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+            <ImageProviderLogo providerId={provider.id} className="size-4.5" />
           </span>
           <span className="truncate">{provider.name}</span>
-          <Badge color={status.color}>{status.label}</Badge>
         </span>
       }
-      description={fetchedLine}
+      description="Image keys are encrypted on this Mac and used only for image generation, never for chat."
+      confirmHidden
     >
-      <div className="flex flex-wrap items-center gap-2">
-        {!editing ? (
-          <Button
-            size="small"
-            variant="muted"
-            disabled={savingKey}
-            onClick={() => setEditing(true)}
-            aria-label={`${stored ? "Replace" : "Add"} ${provider.name} key`}
-          >
-            <KeyRound aria-hidden="true" />
-            {stored ? "Replace key" : "Add key"}
-          </Button>
-        ) : null}
-        {stored ? (
-          <Button
-            size="small"
-            variant="transparent"
-            disabled={savingKey}
-            onClick={onRequestRemove}
-            aria-label={`Remove ${provider.name} key`}
-          >
-            Remove
-          </Button>
-        ) : null}
-        <Button
-          size="small"
-          variant="transparent"
-          disabled={fetching || fetchBlocked}
-          onClick={onFetch}
-          aria-describedby={fetchBlocked ? fetchHintId : undefined}
-          aria-label={`Fetch latest ${provider.name} models`}
-        >
-          {fetching ? (
-            <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+      <div className="grid gap-5">
+        <section aria-labelledby={keyHeadingId} className="grid gap-2">
+          <Text id={keyHeadingId} as="h3" variant="small-strong">
+            API key
+          </Text>
+          {showForm ? (
+            <>
+              {provider.key.source === "env" ? (
+                <Text as="p" variant="small" color="secondary">
+                  Using a key from your environment. A key you save here is used instead.
+                </Text>
+              ) : null}
+              <form className="flex flex-wrap gap-2" onSubmit={(event) => void submit(event)}>
+                <Input
+                  className="min-w-0 flex-1 basis-48"
+                  type="password"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={IMAGE_GENERATION_LIMITS.maxKeyLength}
+                  placeholder={`Paste a ${provider.name} API key`}
+                  aria-label={`${provider.name} image API key`}
+                  aria-invalid={keyNotice?.tone === "error" ? true : undefined}
+                  disabled={savingKey}
+                />
+                <Button type="submit" size="medium" disabled={savingKey || !draft.trim()}>
+                  {savingKey ? (
+                    <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                  ) : null}
+                  Save key
+                </Button>
+                {replacing ? (
+                  <Button
+                    size="medium"
+                    variant="transparent"
+                    disabled={savingKey}
+                    onClick={() => {
+                      setDraft("");
+                      setReplacing(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+              </form>
+            </>
           ) : (
-            <RefreshCw aria-hidden="true" />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Badge color="green" icon={<Check />}>
+                Key saved
+              </Badge>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="small"
+                  variant="muted"
+                  disabled={savingKey}
+                  onClick={() => setReplacing(true)}
+                  aria-label={`Replace ${provider.name} key`}
+                >
+                  <KeyRound aria-hidden="true" />
+                  Replace
+                </Button>
+                <Button
+                  size="small"
+                  variant="transparent"
+                  disabled={savingKey}
+                  onClick={onRequestRemove}
+                  aria-label={`Remove ${provider.name} key`}
+                >
+                  Remove
+                </Button>
+              </div>
+            </div>
           )}
-          {fetching ? "Fetching…" : "Fetch latest models"}
-        </Button>
+          <NoticeLine notice={keyNotice} />
+        </section>
+
+        <section aria-labelledby={listHeadingId} className="grid gap-2">
+          <Text id={listHeadingId} as="h3" variant="small-strong">
+            Model list
+          </Text>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Text as="p" variant="small" color="tertiary" className="min-w-0">
+              {fetchedLine}
+            </Text>
+            <Button
+              size="small"
+              variant="filled"
+              disabled={fetching || fetchBlocked}
+              onClick={onFetch}
+              aria-describedby={fetchBlocked ? fetchHintId : undefined}
+              aria-label={`Fetch latest ${provider.name} models`}
+            >
+              {fetching ? (
+                <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+              ) : (
+                <RefreshCw aria-hidden="true" />
+              )}
+              {fetching ? "Fetching…" : "Fetch latest models"}
+            </Button>
+          </div>
+          {fetchBlocked ? (
+            <Text id={fetchHintId} as="p" variant="small" color="secondary">
+              Add a {provider.name} key to fetch its model list. {provider.name} requires one for its
+              catalog.
+            </Text>
+          ) : null}
+          <NoticeLine notice={fetchNotice} />
+        </section>
       </div>
-      {fetchBlocked ? (
-        <Text id={fetchHintId} as="p" variant="small" color="secondary">
-          Add a {provider.name} key to fetch its model list. {provider.name} requires one for its
-          catalog.
-        </Text>
-      ) : null}
-      {editing ? (
-        <form className="flex flex-wrap gap-2" onSubmit={(event) => void submit(event)}>
-          <Input
-            ref={inputRef}
-            className="min-w-0 flex-1 basis-60"
-            type="password"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              event.preventDefault();
-              setDraft("");
-              setEditing(false);
-            }}
-            autoComplete="off"
-            spellCheck={false}
-            maxLength={IMAGE_GENERATION_LIMITS.maxKeyLength}
-            placeholder={`Paste a ${provider.name} API key`}
-            aria-label={`${provider.name} image API key`}
-            aria-invalid={notice?.tone === "error" ? true : undefined}
-            disabled={savingKey}
-          />
-          <Button type="submit" size="medium" disabled={savingKey || !draft.trim()}>
-            {savingKey ? (
-              <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
-            ) : null}
-            Save key
-          </Button>
-          <Button
-            size="medium"
-            variant="transparent"
-            disabled={savingKey}
-            onClick={() => {
-              setDraft("");
-              setEditing(false);
-            }}
-          >
-            Cancel
-          </Button>
-        </form>
-      ) : null}
-      {notice ? (
-        <Text
-          as="p"
-          variant="small"
-          color={notice.tone === "error" ? "status-red" : "secondary"}
-          role={notice.tone === "error" ? "alert" : "status"}
-        >
-          {notice.message}
-        </Text>
-      ) : null}
-    </Field>
+    </Dialog>
   );
 }
 
@@ -535,17 +630,48 @@ function matchesQuery(model: ImageGenerationModelView, terms: readonly string[])
   return terms.every((term) => haystack.includes(term));
 }
 
+type BulkAction = "on" | "off" | "keyed";
+
+const BULK_ACTIONS: readonly { action: BulkAction; label: string }[] = [
+  { action: "on", label: "Turn on all listed" },
+  { action: "off", label: "Turn off all listed" },
+  { action: "keyed", label: "Only providers with a key" },
+];
+
+/** The enable choices a bulk action would change among `models`; unchanged models are left out. */
+function bulkChanges(
+  action: BulkAction,
+  models: readonly ImageGenerationModelView[],
+  connected: ReadonlySet<ImageGenerationProviderId>,
+): ImageGenerationSetModelEnabledRequest[] {
+  return models.flatMap((model) => {
+    const enabled = action === "on" ? true : action === "off" ? false : connected.has(model.provider);
+    return model.enabled === enabled ? [] : [{ provider: model.provider, id: model.id, enabled }];
+  });
+}
+
+function bulkResult(changes: readonly ImageGenerationSetModelEnabledRequest[]): string {
+  const on = changes.filter((change) => change.enabled).length;
+  const off = changes.length - on;
+  const models = (count: number) => `${count} ${count === 1 ? "model" : "models"}`;
+  if (on && off) return `Turned on ${models(on)} and turned off ${models(off)}.`;
+  return on ? `Turned on ${models(on)}.` : `Turned off ${models(off)}.`;
+}
+
 function ModelsGroup({
   state,
   pending,
   onToggle,
+  onSetMany,
   onRemove,
 }: {
   state: ImageGenerationState;
   pending: ReadonlySet<string>;
   onToggle: (model: ImageGenerationModelView, enabled: boolean) => void;
+  onSetMany: (changes: ImageGenerationSetModelEnabledRequest[]) => Promise<ImageGenerationActionResult | null>;
   onRemove: (model: ImageGenerationModelView) => void;
 }) {
+  const [bulkMessage, setBulkMessage] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<ProviderFilter>("all");
   const [showOff, setShowOff] = React.useState(false);
@@ -555,7 +681,10 @@ function ModelsGroup({
     [query],
   );
 
-  React.useEffect(() => setLimit(MODEL_ROW_PAGE), [terms, filter, showOff]);
+  React.useEffect(() => {
+    setLimit(MODEL_ROW_PAGE);
+    setBulkMessage(null);
+  }, [terms, filter, showOff]);
 
   const inFilter = state.models.filter(
     (model) => filter === "all" || model.provider === filter,
@@ -569,6 +698,21 @@ function ModelsGroup({
   );
   const hiddenCount = revealOff ? 0 : inFilter.filter(hiddenOff).length;
   const rows = matching.slice(0, limit);
+  const connected = new Set(
+    state.providers.filter((provider) => provider.key.connected).map((provider) => provider.id),
+  );
+  const bulkBusy = pending.has("bulk");
+
+  // Bulk actions cover every listed row, including ones past the current page.
+  const runBulk = async (action: BulkAction) => {
+    const changes = bulkChanges(action, matching, connected);
+    if (changes.length === 0) return;
+    setBulkMessage(null);
+    const result = await onSetMany(changes);
+    if (!result) return;
+    if (result.ok) setBulkMessage(bulkResult(changes));
+    else toast.error(result.message);
+  };
 
   return (
     <FieldSet title="Models">
@@ -592,20 +736,58 @@ function ModelsGroup({
             className="pl-8"
           />
         </label>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter models by provider">
-          {(["all", ...IMAGE_GENERATION_PROVIDER_IDS] as const).map((option) => (
-            <Button
-              key={option}
-              size="small"
-              variant={filter === option ? "muted" : "transparent"}
-              aria-pressed={filter === option}
-              className={filter === option ? "bg-list-selection text-primary" : "text-secondary"}
-              onClick={() => setFilter(option)}
-            >
-              {option === "all" ? "All" : IMAGE_GENERATION_PROVIDER_NAMES[option]}
-            </Button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter models by provider">
+            {(["all", ...IMAGE_GENERATION_PROVIDER_IDS] as const).map((option) => (
+              <Button
+                key={option}
+                size="small"
+                variant={filter === option ? "muted" : "transparent"}
+                aria-pressed={filter === option}
+                className={filter === option ? "bg-list-selection text-primary" : "text-secondary"}
+                onClick={() => setFilter(option)}
+              >
+                {option === "all" ? "All" : IMAGE_GENERATION_PROVIDER_NAMES[option]}
+              </Button>
+            ))}
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="filled"
+                size="small"
+                disabled={bulkBusy || matching.length === 0}
+                aria-label="Bulk actions for listed models"
+              >
+                {bulkBusy ? (
+                  <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                ) : null}
+                Bulk
+                <ChevronDown aria-hidden="true" className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              {BULK_ACTIONS.map(({ action, label }) => {
+                const count = bulkChanges(action, matching, connected).length;
+                return (
+                  <DropdownMenuItem
+                    key={action}
+                    disabled={count === 0}
+                    onSelect={() => void runBulk(action)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                    <span className="shrink-0 tabular-nums opacity-70">{count}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
+        {bulkMessage ? (
+          <Text as="p" variant="small" color="secondary" role="status">
+            {bulkMessage}
+          </Text>
+        ) : null}
       </div>
 
       <div role="list" aria-label="Image models">

@@ -172,6 +172,7 @@ import type {
   ImageGenerationProviderId,
   ImageGenerationState,
   ImageModelRef,
+  ImageGenerationSetModelEnabledRequest,
 } from "../shared/image-generation/types";
 import { subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
@@ -438,6 +439,9 @@ export const imageGenerationApi = {
     invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
   setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
     invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+  /** One write for many enable choices (Settings' bulk actions). */
+  setModelsEnabled: (changes: ImageGenerationSetModelEnabledRequest[]) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelsEnabled", { changes }),
   setDefaultModel: (model: ImageModelRef | null) =>
     invoke<ImageGenerationActionResult>("imageGeneration:setDefaultModel", model),
   addCustomModel: (request: ImageGenerationAddCustomModelRequest) =>
