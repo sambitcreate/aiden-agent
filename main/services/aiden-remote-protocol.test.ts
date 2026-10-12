@@ -13,6 +13,7 @@ import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
@@ -104,11 +105,13 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 ];
 
 // Simulator control is a desktop-to-desktop grant that pairing never issues,
-// and the phone simulator viewer grant is negotiated only after pairing.
+// and the phone simulator viewer grant and the Bot card opt-in are negotiated
+// only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
   (capability) =>
     !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
-    !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+    !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+    !(AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability),
 );
 // Host-wide grants are issued to desktops only, so phones are never told they
 // exist either and the shared mobile fixture omits both families.
@@ -116,9 +119,24 @@ const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
   (capability) => !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
 );
 
+test("every server feature token the host can announce fits the server feature budget", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE } = await import("./aiden-remote-providers.js");
+  const { REMOTE_TTS_FEATURE } = await import("./aiden-remote-tts.js");
+  const tokens = new Set<string>([AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, REMOTE_TTS_FEATURE]);
+  for (const [name, value] of Object.entries(protocol)) {
+    if (name.endsWith("_FEATURE") && typeof value === "string") tokens.add(value);
+  }
+  assert.ok(tokens.has("bot-memory-v1") && tokens.has("bot-proactive-v1"));
+  assert.ok(
+    tokens.size <= AIDEN_REMOTE_MAX_SERVER_FEATURES,
+    `${tokens.size} feature tokens exceed the ${AIDEN_REMOTE_MAX_SERVER_FEATURES}-token /server budget`,
+  );
+});
+
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 26);
+  assert.equal(fixture.contractRevision, 27);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
@@ -534,6 +552,11 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/routines",
     "/bots/{botId}/routines/{routineId}",
     "/bots/{botId}/connection-requests",
+    "/bots/{botId}/memory",
+    "/bots/{botId}/memory/edits",
+    "/bots/{botId}/routine-proposals/{proposalId}/respond",
+    "/bots/{botId}/routine-suggestions",
+    "/bots/routine-notifications",
     "/bot-conversations",
     "/bots/{botId}/chats",
     "/bot-capabilities",
@@ -910,10 +933,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     privateResponseFields.normalization,
     "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
   );
-  assert.deepEqual(privateResponseFields.allowedSchemaProperties, [
-    "BotDetail.instructions",
-    "BotDetail.openingGreeting",
-  ]);
+  assert.deepEqual(privateResponseFields.allowedSchemaProperties, ["BotDetail.instructions"]);
   assert.deepEqual(privateResponseFields.chatSummaryOnlyForbiddenNormalizedNames, [
     "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
     "botid", "providerid", "modelid", "preview",
@@ -1078,7 +1098,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   const botDetailProperties = record(record(schemas.BotDetail, "BotDetail").properties, "BotDetail properties");
   assert.equal(record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"], true);
   assert.equal(record(botDetailProperties.instructions, "instructions").maxLength, 32_000);
-  assert.equal(record(botDetailProperties.openingGreeting, "openingGreeting").maxLength, 2_000);
+  // Revision 27 retired the greeting: never emitted, accepted and ignored in requests.
+  assert.equal("openingGreeting" in botDetailProperties, false);
   assert.equal(record(botDetailProperties.access, "Bot access").$ref, "#/components/schemas/BotAccessView");
   const botModelSelection = record(botDetailProperties.modelSelection, "Bot model selection");
   assert.deepEqual(botModelSelection.required, ["providerId", "modelId"]);
@@ -1236,6 +1257,11 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
     ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
     ["/bots/{botId}/connection-requests", "post", "200", "BotConnectionRequestReceipt"],
+    ["/bots/{botId}/memory", "get", "200", "BotMemory"],
+    ["/bots/{botId}/memory/edits", "post", "200", "BotMemoryEditResponse"],
+    ["/bots/{botId}/routine-proposals/{proposalId}/respond", "post", "200", "BotRoutineProposalRespondResult"],
+    ["/bots/{botId}/routine-suggestions", "get", "200", "BotRoutineSuggestionList"],
+    ["/bots/routine-notifications", "get", "200", "BotRoutineNotificationList"],
   ] as const) {
     assert.equal(responseSchemaRef(route, method, status), `#/components/schemas/${schema}`);
   }

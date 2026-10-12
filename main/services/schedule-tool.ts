@@ -47,11 +47,10 @@ import { formatScheduledTaskCadence } from "../../renderer/shared/scheduled-task
 import { BOT_ROUTINE_MAX_MONTH_DAY } from "../../renderer/shared/bot-routine-schedule.js";
 import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
 import {
-  parseBotRoutineCreate,
-  parseBotRoutineDelete,
-  parseBotRoutineUpdate,
-  type BotRoutineService,
-} from "./scheduled-bot-routines.js";
+  BOT_ROUTINE_PROPOSAL_REASON_LIMIT,
+  BOT_ROUTINES_TOOL_NAME,
+} from "../../renderer/shared/bot-routine-proposals.js";
+import type { BotRoutine } from "./scheduled-bot-routines.js";
 
 export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
@@ -1741,21 +1740,21 @@ export function createScheduleTaskTool(
   };
 }
 
-export type BotRoutineToolDependencies = Pick<
-  BotRoutineService,
-  "list" | "create" | "update" | "delete"
->;
-
-const defaultBotRoutineDependencies: BotRoutineToolDependencies = {
-  list: async (botId) =>
-    (await import("./scheduled-bot-routines-main.js")).botRoutineService.list(botId),
-  create: async (input) =>
-    (await import("./scheduled-bot-routines-main.js")).botRoutineService.create(input),
-  update: async (input) =>
-    (await import("./scheduled-bot-routines-main.js")).botRoutineService.update(input),
-  delete: async (input) =>
-    (await import("./scheduled-bot-routines-main.js")).botRoutineService.delete(input),
-};
+/**
+ * What the Bot's `routines` tool may do. Creating, changing or deleting a
+ * routine is the person's job: `propose` only shows an approval card, and
+ * `pause` only reduces activity.
+ */
+export interface BotRoutinesToolDependencies {
+  list(botId: string): Promise<BotRoutine[]>;
+  /** Turn one of this Bot's routines off. Throws when it is not this Bot's. */
+  pause(botId: string, routineId: string): Promise<BotRoutine>;
+  /** Store the proposal and show its card. */
+  propose(
+    botId: string,
+    input: { name: string; schedule: unknown; prompt: string; reason?: string },
+  ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+}
 
 const BOT_ROUTINE_TIME = Type.String({
   pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$",
@@ -1800,38 +1799,36 @@ const BOT_ROUTINE_SCHEDULE = Type.Union(
   { description: "When the routine runs, in the person's local timezone." },
 );
 
+function routinesRequest(fields: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(fields)) {
+    if (!allowed.includes(key)) throw new Error("Invalid routine request.");
+  }
+}
+
 /**
- * The schedule tool as a Bot sees it: routines that send the Bot a message on
- * a schedule. Every action is bound to the current Bot; the model can neither
- * name another Bot nor pass raw cron, workspaces, scripts, or MCP servers.
+ * The Bot's `routines` tool (spec 2026-10-09 §11.3): `list` reads this Bot's
+ * routines, `propose` shows the person an Add routine card, and `pause` turns
+ * one off. It is bound to the current Bot and has no way to create, change or
+ * delete a routine itself.
  */
-export function createBotRoutineTool(
-  botId: string,
-  routines: BotRoutineToolDependencies = defaultBotRoutineDependencies,
-): AgentTool {
+export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDependencies): AgentTool {
   return {
-    name: SCHEDULE_TOOL_NAME,
+    name: BOT_ROUTINES_TOOL_NAME,
     label: "Routines",
     description:
-      "Manage this Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. Actions: create, list, update, remove. Create needs name, schedule, and prompt. List immediately before update or remove and pass the routine's exact id and updatedAt as expectedUpdatedAt. Routines always run as you, in this chat.",
+      "This Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. " +
+      "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card they approve or decline, so only propose when a regular check-in would clearly help and they haven't declined it; pause (id from list) turns a routine off. " +
+      "You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
     parameters: Type.Object(
       {
-        action: Type.Union([
-          Type.Literal("create"),
-          Type.Literal("list"),
-          Type.Literal("update"),
-          Type.Literal("remove"),
-        ]),
-        id: Type.Optional(Type.String({ description: "Exact routine id from list." })),
-        expectedUpdatedAt: Type.Optional(
-          Type.Number({ description: "Exact updatedAt from the same list result." }),
-        ),
+        action: Type.Union([Type.Literal("list"), Type.Literal("propose"), Type.Literal("pause")]),
+        id: Type.Optional(Type.String({ description: "Exact routine id from list (pause)." })),
         name: Type.Optional(Type.String({ description: "Short routine name, for example \"Weekly meal prep\"." })),
         schedule: Type.Optional(BOT_ROUTINE_SCHEDULE),
-        prompt: Type.Optional(
-          Type.String({ description: "What you should do each time the routine runs." }),
+        prompt: Type.Optional(Type.String({ description: "What you should do each time the routine runs." })),
+        reason: Type.Optional(
+          Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
         ),
-        enabled: Type.Optional(Type.Boolean({ description: "Turn the routine on or off." })),
       },
       { additionalProperties: false },
     ),
@@ -1842,44 +1839,51 @@ export function createBotRoutineTool(
       }
       const { action, ...fields } = rawParams as Record<string, unknown>;
       if (action === "list") {
-        if (Object.keys(fields).length > 0) throw new Error("Invalid routine request.");
-        return result({ routines: await routines.list(botId) });
+        routinesRequest(fields, []);
+        return result({
+          routines: (await routines.list(botId)).map((routine) => ({
+            id: routine.id,
+            name: routine.name,
+            label: routine.label,
+            enabled: routine.enabled,
+          })),
+        });
       }
-      // The bound Bot is authoritative; a model-supplied botId is rejected by
-      // the strict parsers below rather than silently overridden.
-      if ("botId" in fields) throw new Error("Invalid routine request.");
-      if (action === "create") {
-        return result({ routine: await routines.create(parseBotRoutineCreate({ ...fields, botId })) });
+      if (action === "pause") {
+        routinesRequest(fields, ["id"]);
+        if (typeof fields.id !== "string" || !fields.id) throw new Error("Invalid routine request.");
+        const paused = await routines.pause(botId, fields.id);
+        return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
       }
-      if (action === "update") {
-        return result({ routine: await routines.update(parseBotRoutineUpdate({ ...fields, botId })) });
-      }
-      if (action === "remove") {
-        const input = parseBotRoutineDelete({ ...fields, botId });
-        await routines.delete(input);
-        return result({ removed: input.id });
+      if (action === "propose") {
+        routinesRequest(fields, ["name", "schedule", "prompt", "reason"]);
+        const outcome = await routines.propose(botId, {
+          name: typeof fields.name === "string" ? fields.name : "",
+          schedule: fields.schedule,
+          prompt: typeof fields.prompt === "string" ? fields.prompt : "",
+          ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
+        });
+        if (!outcome.ok) return result({ ok: false, code: outcome.code, error: outcome.error });
+        return result({
+          ok: true,
+          proposalId: outcome.proposalId,
+          message: "I've shown the person an Add routine card. Don't ask again unless they bring it up.",
+        });
       }
       throw new Error("Invalid routine request.");
     },
   };
 }
 
+
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
   assistantModelSelection?: AssistantScheduleModelSelection;
-  /**
-   * Set for a Bot turn. Routines are bound to this Bot; `routineRun` marks a
-   * turn submitted by a routine, which may not create or change routines.
-   */
-  bot?: { botId: string; routineRun?: boolean; routines?: BotRoutineToolDependencies };
 }): AgentTool[] {
+  // Bots use `createBotRoutinesTool`, built by the durable Bot runtime.
   if (context.allowScheduling === false) return [];
-  if (context.bot) {
-    if (context.bot.routineRun) return [];
-    return [createBotRoutineTool(context.bot.botId, context.bot.routines)];
-  }
   if (context.mode === "assistant-attended") {
     if (!context.assistantModelSelection) {
       throw new Error("Assistant scheduling requires an exact provider and model selection.");

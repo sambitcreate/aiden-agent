@@ -179,7 +179,6 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertNil(patch.name)
         XCTAssertNil(patch.purpose)
         XCTAssertNil(patch.instructions)
-        XCTAssertNil(patch.openingGreeting)
     }
 
     func testCharacterChangesKeepTheOtherAxisAndUnchangedLookSendsNothing() throws {
@@ -208,6 +207,69 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(
             AidenBotEditorDraft.seededInstructions(helpWith: "   "),
             AidenBotEditorDraft.defaultInstructions
+        )
+    }
+
+    // MARK: Advanced without the opening greeting
+
+    /// An older Mac may still send `openingGreeting`. Advanced has no greeting
+    /// field any more, so opening and saving it unchanged sends nothing, and
+    /// an edit never carries a greeting.
+    func testAdvancedIgnoresAGreetingFromAnOlderMacAndNeverSendsOne() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let catalog = try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(object["botCapabilityCatalog"]))
+        )
+        let rawDetail = try XCTUnwrap(object["botDetail"] as? [String: Any])
+        let detail = try AidenRemoteJSONDecoder.decode(
+            AidenBotDetail.self,
+            from: JSONSerialization.data(withJSONObject: rawDetail.merging(["openingGreeting": "Hi there!"]) { $1 })
+        )
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: detail, catalog: catalog))
+        XCTAssertNil(try draft.identityPatch(comparedTo: detail), "an untouched Advanced page saves nothing")
+
+        draft.purpose = "Plans the week"
+        let patch = try XCTUnwrap(try draft.identityPatch(comparedTo: detail))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(patch)) as? [String: Any])
+        XCTAssertEqual(Set(body.keys), ["purpose"])
+    }
+
+    // MARK: Profile → Memory row
+
+    private func memory(user: [String], notes: [String], readable: Bool = true) throws -> AidenBotMemory {
+        func group(_ texts: [String], limit: Int) -> [String: Any] {
+            [
+                "entries": texts.enumerated().map { index, text in
+                    ["id": String(format: "%016x", index + (limit == 1_375 ? 0 : 100)), "text": text]
+                },
+                "usedChars": texts.reduce(0) { $0 + $1.count },
+                "limitChars": limit,
+                "overBudget": false,
+            ]
+        }
+        let object: [String: Any] = [
+            "botId": "bot_fixture_01",
+            "revision": "9f2c1a0b7d3e4f51",
+            "readable": readable,
+            "user": group(user, limit: 1_375),
+            "memory": group(notes, limit: 2_200),
+            "updatedAt": NSNull(),
+        ]
+        return try AidenRemoteJSONDecoder.decode(AidenBotMemory.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    func testMemoryRowCountReadsQuietly() throws {
+        XCTAssertEqual(AidenBotMemoryCopy.count(try memory(user: [], notes: [])), "Nothing yet")
+        XCTAssertEqual(AidenBotMemoryCopy.count(try memory(user: ["Prefers tea"], notes: [])), "1 thing")
+        XCTAssertEqual(
+            AidenBotMemoryCopy.count(try memory(user: ["a", "b", "c"], notes: ["d", "e", "f"])),
+            "6 things"
+        )
+        XCTAssertEqual(
+            AidenBotMemoryCopy.count(try memory(user: ["a"], notes: [], readable: false)),
+            "Couldn’t be read"
         )
     }
 }

@@ -34,7 +34,7 @@ import {
   presetServerId,
 } from "../services/mcp-presets.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
-import { transcribe } from "../services/transcription.js";
+import { transcribeCloud } from "../services/transcription.js";
 import { geminiLiveTranscription } from "../services/gemini-live-transcription.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
@@ -628,23 +628,31 @@ export function registerPhase2Handlers(): void {
       mimeType: unknown,
       model: unknown,
       operationId: unknown,
+      provider: unknown,
     ) => {
       const owner = rendererDocumentOwner(
         event,
         () => new Error("Voice transcription must come from the active application document."),
       );
+      // Recorded audio is resolved in the renderer; on-device audio never comes here.
+      if (provider !== "openai" && provider !== "gemini") {
+        throw new Error("Invalid cloud voice provider.");
+      }
       const key = voiceOperationKey(owner, operationId);
       activeVoiceTranscriptions.get(key)?.controller.abort();
       const controller = new AbortController();
       const removeOwnerInvalidation = owner.onInvalidated(() => controller.abort());
       activeVoiceTranscriptions.set(key, { controller, removeOwnerInvalidation });
       try {
-        return await transcribe({
-          audioBase64: asString(audioBase64, "audioBase64"),
-          mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
-          model: typeof model === "string" ? model : undefined,
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
-        });
+        return await transcribeCloud(
+          {
+            audioBase64: asString(audioBase64, "audioBase64"),
+            mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
+            model: typeof model === "string" ? model : undefined,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+          },
+          provider,
+        );
       } finally {
         removeOwnerInvalidation();
         if (activeVoiceTranscriptions.get(key)?.controller === controller) {

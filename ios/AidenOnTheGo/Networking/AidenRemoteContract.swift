@@ -657,10 +657,16 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 24: the pairing vocabulary plus the phone-scoped run
     /// subset, which a phone can only negotiate (never receive at pairing).
     /// Contract revision 26 adds the phone simulator viewer grant.
+    /// Contract revision 27 adds `bot:cards`, which only opts the device into
+    /// the memory and routine proposal session entries.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
-        Self(rawValue: "simulators:mobile"),
+        Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
     ]
+
+    /// Revision 27: the device renders `memory_update` and `routine_proposal`
+    /// Bot session entries. It grants no authority.
+    static let botCards = Self(rawValue: "bot:cards")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -762,6 +768,11 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "schedule_run_in_progress"),
         Self(rawValue: "server_interrupted"),
         Self(rawValue: "internal_error"),
+        // Contract revision 27: Bot memory edits and routine proposals.
+        Self(rawValue: "memory_entry_not_found"),
+        Self(rawValue: "memory_over_budget"),
+        Self(rawValue: "memory_blocked"),
+        Self(rawValue: "routine_proposal_not_found"),
     ]
 
     init(from decoder: Decoder) throws {
@@ -2654,6 +2665,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
+        "botSessionCards",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2706,7 +2718,8 @@ private enum AidenBotPrivateResponseValidator {
                 if (normalizedPrivateKeys.contains(normalizedKey)
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
-                   !isAllowedKnownIdentityKey(key, root: root, parentPath: path) {
+                   !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
+                   !isAllowedRoutineProposalPrompt(key, root: root, object: object) {
                     throw AidenRemoteContractError.unsafePayloadField(key)
                 }
                 try validate(child, root: root, path: path + [key])
@@ -2770,6 +2783,20 @@ private enum AidenBotPrivateResponseValidator {
         }
         return String(String.UnicodeScalarView(scalars))
             .lowercased(with: Locale(identifier: "en_US"))
+    }
+
+    /// Revision 27: a `routine_proposal` session entry shows the person the
+    /// routine's own prompt before they choose to add it. Only that entry's
+    /// `prompt`, inside a Bot session or session event, is allowed.
+    private static func isAllowedRoutineProposalPrompt(
+        _ key: String,
+        root: String,
+        object: [String: Any]
+    ) -> Bool {
+        key == "prompt"
+            && ["botSession", "botSessionEvents", "botSessionCards"].contains(root)
+            && object["type"] as? String == "routine_proposal"
+            && object["proposalId"] is String
     }
 
     private static func isAllowedKnownIdentityKey(

@@ -15,7 +15,7 @@ const RUNTIME_LOADED = new Map([
   ["electron-updater", "app-updater.ts loads it on first update use via createRequire"],
   ["minimatch", "coding-tool-matcher resolves it for glob matching in a worker"],
   ["node-pty", "terminal.ts resolves its package directory for the spawn helper"],
-  ["sherpa-onnx-node", "parakeet-engine.ts requires the native transcription addon"],
+  ["sherpa-onnx-node", "local-speech-engine.ts requires the native transcription addon"],
   ["ws", "gemini-live/owned-sdk-connector.ts requires its WebSocket client"],
 ]);
 

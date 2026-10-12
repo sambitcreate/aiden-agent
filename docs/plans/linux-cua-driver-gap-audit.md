@@ -60,3 +60,21 @@ Aiden's [existing integration decision](../computer-use-integration.md#decision)
 A separate live Fedora probe recorded Electron 43.1.1 browser, GPU, renderer, network utility, and Node utility processes using the same Electron executable and stock `unconfined_t`. The sandboxed renderer reported `Seccomp: 2` and `NoNewPrivs: 1`; the run did not use `--no-sandbox`. Receipt: `/tmp/aiden-fedora-parity-vm/electron-role-results.json`. This is an observational subset, not a full process inventory: `getAppMetrics` did not enumerate a zygote.
 
 A source-domain transition from a constrained launcher into main, followed by a different transition when main executes the same binary, is a candidate for the next isolated experiment. Its correctness depends on actual exec and fork paths, including zygotes and direct utility processes, plus payload integrity and JIT constraints. The observation does not establish role isolation, and command-line role strings must not become the admission credential.
+
+## 2026-10-09 addendum: upstream 0.34.1 delta
+
+Source-only re-read of `cua-driver-rs-v0.8.3..cua-driver-rs-v0.34.1` while the macOS pin moved to 0.34.1 ([upgrade plan](cua-driver-0-34-upgrade-plan.md)). Linux stays disabled; nothing here was installed or exercised on the Fedora VM.
+
+| Audit gap | 0.34.1 status | Evidence |
+| --- | --- | --- |
+| WinRects declares Shell 45–48 | Declared 45–50 (API 10); contributor-tested on Ubuntu GNOME 50.1 only | trycua/cua#2565; GNOME 50 capture hardening #2226 |
+| No caller authentication on `org.cua.WinRects` | Still open and wider: new `CaptureWindow`/`CaptureWindowPreview` capture an occluded window by id, `pid=0` skips the owner check | `winrects@cua/extension.js` (no `get_sender()` check); #4882 |
+| Authenticate the service side | Partially closed: the driver resolves the unique bus owner and requires same-UID, root-owned, non-writable `gnome-shell` | `platform-linux/src/wayland/shell_helper.rs` (#2367) |
+| Protect installed extension code | Still open: `install.sh` copies into user-writable `~/.local/share/gnome-shell/extensions` | `wayland-helper/install.sh` |
+| Wayland gate off by default | Unchanged (`CUA_DRIVER_RS_ENABLE_WAYLAND` opt-in) | `wayland/mod.rs::wayland_enabled` |
+| Window capture was a display crop | Closed for helper API ≥ 9 (per-actor capture; refuses locked, greeter, minimized) | #4882 |
+| Portal ScreenCast/RemoteDesktop route | Still open; existing portal code hardened (per-portal zbus connection, libei EIS ack) | #2552, #4880 |
+| GNOME Electron/Tauri renderer coverage | Still open; `linux-desktop-validation.md` unchanged | `platform-support.mdx` open gaps |
+| Linux artifact provenance | Improved: every asset ships a cosign `.sigstore.json` bundle | `cd-rust-cua-driver.yml` |
+
+The blocker is now Aiden's trust boundary rather than GNOME compatibility. Minimal path: re-pin the full `linux-*.tar.gz` package (it bundles the API 10 helper), run upstream's `scripts/ci/linux/run-rust-e2e-desktop.sh gnome` and Aiden's GTK/Electron matrix on the Fedora VM, then either land sender authentication in WinRects plus a root-owned system-wide install (fork or upstream PR) or record an explicit residual-risk decision. KWin and Hyprland helpers added upstream do not apply to the GNOME target. Other ACP hosts now co-install the same `winrects@cua` UUID, so a per-user install would inherit their install and downgrade races.

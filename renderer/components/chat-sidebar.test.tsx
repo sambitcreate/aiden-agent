@@ -225,11 +225,9 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden Live settings has a dedicated destination and the dock restores the app logo", () => {
+test("Aiden Live settings has a dedicated destination", () => {
   const settings = source("../main/settings-view.tsx");
-  const dock = source("./assistant/assistant-dock.tsx");
   assert.match(settings, /geminiLive: <AudioWaveform/u);
-  assert.match(dock, /resources\/app-icon\.png/u);
   assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
 });
 

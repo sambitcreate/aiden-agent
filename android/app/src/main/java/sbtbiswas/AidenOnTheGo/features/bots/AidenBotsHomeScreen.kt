@@ -37,8 +37,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -230,11 +232,20 @@ fun AidenBotsHomeScreen(
     var deleteError by remember { mutableStateOf<String?>(null) }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
 
-    LaunchedEffect(client, connectionState) {
-        if (client != null && connectionState == AidenConnectionState.CONNECTED) viewModel.loadBots()
+    // Revision 27: finished Bot routine runs become local notifications on each refresh.
+    val context = LocalContext.current
+    val routineNotifier = remember { AidenScheduledRunNotifier(context.applicationContext) }
+    LaunchedEffect(client, connectionState, serverInfo) {
+        if (client != null && connectionState == AidenConnectionState.CONNECTED) {
+            viewModel.loadBots()
+            routineNotifier.deliverBotRoutines(coordinator)
+        }
     }
     // Coming back to the app rereads stale Bots underneath what is already shown.
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.revalidate() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        viewModel.revalidate()
+        scope.launch { routineNotifier.deliverBotRoutines(coordinator) }
+    }
 
     val allBots = botList?.bots.orEmpty()
     val rows = remember(allBots, conversations, searchQuery, remoteSearchResults) {

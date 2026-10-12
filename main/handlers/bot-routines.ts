@@ -1,4 +1,7 @@
 import { ipcMain } from "../platform.js";
+import { BOT_ROUTINE_PROPOSAL_CHANNELS } from "../../renderer/shared/bot-routine-proposals.js";
+import { parseBotRoutineProposalRespond } from "../services/bot-routine-proposals.js";
+import { botRoutineProposals } from "../services/bot-routine-proposals-main.js";
 import { botRoutineService } from "../services/scheduled-bot-routines-main.js";
 import {
   parseBotRoutineBotId,
@@ -23,5 +26,9 @@ export function registerBotRoutineHandlers(): void {
   );
   ipcMain.handle("bots:routines:delete", (_event, input: unknown) =>
     botRoutineService.delete(parseBotRoutineDelete(input)),
+  );
+  // Add routine / Not now on a card the Bot showed. A repeat returns the settled answer.
+  ipcMain.handle(BOT_ROUTINE_PROPOSAL_CHANNELS.respond, (_event, input: unknown) =>
+    botRoutineProposals.respond(parseBotRoutineProposalRespond(input)),
   );
 }

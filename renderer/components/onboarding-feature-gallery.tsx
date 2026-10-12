@@ -214,7 +214,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers its instructions, and can run on a schedule.",
+      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule.",
     icon: Bot,
     size: "standard",
   },
@@ -232,7 +232,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     size: "standard",
   },

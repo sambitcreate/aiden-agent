@@ -510,6 +510,8 @@ export interface ScheduledTask {
   botId?: string;
   /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
+  sourceProposalId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -557,6 +559,8 @@ export interface ScheduledTaskInput {
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
+  sourceProposalId?: string;
   notify?: boolean;
 }
 
@@ -700,8 +704,14 @@ export interface AppSettings {
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */
   geminiUsageScope?: GeminiUsageScope;
-  /** Selected on-device speech model id (see local-models catalog). */
+  /** Selected on-device speech model id (see local-speech-catalog). */
   localVoiceModel?: string;
+  /** "auto" or a base language code; resolved per model at use (see renderer/shared/voice-language.ts). */
+  voiceLanguage?: string;
+  /** Translate speech to English when the active on-device model can. */
+  voiceTranslateToEnglish?: boolean;
+  /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
@@ -744,6 +754,10 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

@@ -40,6 +40,20 @@ export function useConnectionSetup(onSaved: () => void | Promise<void>) {
     [presets.data, servers.data],
   );
 
+  /**
+   * Suggestions whose own preset is set up, switched on, and signed in. Apps
+   * reached through Composio are not reported: Aiden can't see inside it.
+   */
+  const isConnected = React.useCallback(
+    (pluginId: string): boolean => {
+      const suggestion = connectionSuggestionFor(pluginId);
+      if (suggestion?.setupEntry.kind !== "mcp-preset") return false;
+      const state = presets.data?.find((entry) => entry.preset.id === suggestion.setupEntry.presetId);
+      return Boolean(state?.configured && state.enabled && state.ready);
+    },
+    [presets.data],
+  );
+
   const dialog = target ? (
     <PresetSetupDialog
       state={target.state}
@@ -52,5 +66,5 @@ export function useConnectionSetup(onSaved: () => void | Promise<void>) {
     />
   ) : null;
 
-  return { open, dialog };
+  return { open, dialog, isConnected };
 }

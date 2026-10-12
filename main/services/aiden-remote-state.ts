@@ -15,6 +15,7 @@ import {
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -255,6 +256,16 @@ function isMobileSimulatorCapability(
   return (
     typeof value === "string" &&
     (AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/** Revision 27 opt-in to Bot session cards: no authority, any device type. */
+function isBotCardCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_BOT_CARD_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(value)
   );
 }
 
@@ -794,7 +805,8 @@ export class AidenRemoteStateRegistry {
         !isProgressCapability(capability) &&
         !isSimulatorCapability(capability) &&
         !isMobileSimulatorCapability(capability) &&
-        !isHostCapability(capability))
+        !isHostCapability(capability) &&
+        !isBotCardCapability(capability))
     ) {
       return null;
     }
@@ -823,7 +835,8 @@ export class AidenRemoteStateRegistry {
           (isProgressCapability(capability) ||
             isSimulatorCapability(capability) ||
             isMobileSimulatorCapability(capability) ||
-            isHostCapability(capability)) &&
+            isHostCapability(capability) ||
+            isBotCardCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);

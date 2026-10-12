@@ -14,6 +14,7 @@ import type {
 import { createModels } from "@earendil-works/pi-ai";
 import { CodexProviderService, OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { piCredentialStore } from "./pi-credential-store.js";
+import { piCredentialWithFreshGrant } from "./pi-credential-store-core.js";
 import {
   piModelsStore,
   piProviderModelsStore,
@@ -216,7 +217,13 @@ export class ProviderRegistry {
           signal: interaction.signal ?? new AbortController().signal,
         }, { getDeviceId: getProviderLoginDeviceId }),
       commitCredential: async (credential: unknown) => {
-        await this.credentials.modify(providerId, async () => credential as Credential);
+        // An explicit sign-in is a new grant even when it looks like the old
+        // one: the fresh grant id changes the Bot credential signature, so a
+        // Custom Bot bound to the previous account needs its access reviewed.
+        await this.credentials.modify(providerId, async () =>
+          piCredentialWithFreshGrant(credential as Credential),
+        );
+        invalidateBotRuntimeInventoryAuthority("provider_credential");
         // Credential setup is an explicit network action. Publish this
         // provider's current Pi catalog before reporting setup complete so
         // newly released models appear immediately on Mac and paired clients.

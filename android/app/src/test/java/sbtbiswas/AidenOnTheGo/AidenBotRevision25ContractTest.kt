@@ -15,9 +15,14 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
+import kotlinx.serialization.json.jsonPrimitive
 
-/** Revision 25 Bot DTOs against the shared contract fixture, through the strict client codec. */
+/**
+ * Revision 25 Bot DTOs, and the revision 27 memory, proactivity and session card DTOs, against
+ * the shared contract fixture, through the strict client codec.
+ */
 class AidenBotRevision25ContractTest {
     private val json = AidenBotWireJson.json
 
@@ -51,6 +56,148 @@ class AidenBotRevision25ContractTest {
     }
 
     @Test
+    fun fixtureIsRevision27AndAdvertisesMemoryAndProactivity() {
+        assertTrue((fixture.getValue("contractRevision") as JsonPrimitive).content.toInt() >= 27)
+        val server = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromJsonElement(AidenServer.serializer(), fixture.getValue("server"))
+        assertTrue(server.supportsBotMemory)
+        assertTrue(server.supportsBotProactive)
+        // Either feature is enough to ask the Mac for `bot:cards`.
+        assertTrue(server.offersBotCards)
+        assertFalse(server.copy(features = server.features - AidenRemoteProtocol.BOT_MEMORY_FEATURE - AidenRemoteProtocol.BOT_PROACTIVE_FEATURE).offersBotCards)
+        // The retired greeting is gone from every Bot shape the host sends.
+        for (element in listOf(fixture.getValue("botDetail"), pair("botCreate", "request"), pair("botCreate", "response"), pair("botIdentity", "response"))) {
+            assertFalse(element.jsonObject.containsKey("openingGreeting"))
+        }
+    }
+
+    @Test
+    fun memoryDtosRoundTrip() {
+        val memory = roundTrip(AidenBotMemory.serializer(), fixture.getValue("botMemory"))
+        assertTrue(memory.readable)
+        assertEquals(listOf("Prefers short answers.", "Has two kids, Mia (8) and Leo (5)."), memory.user.entries.map { it.text })
+        assertEquals(1_375, memory.user.limitChars)
+        assertEquals(2_200, memory.memory.limitChars)
+        assertEquals(3, memory.entryCount)
+
+        val request = roundTrip(AidenBotMemoryEditRequest.serializer(), pair("botMemoryEdit", "request"))
+        assertEquals(
+            AidenBotMemoryEdit.Replace(AidenBotMemoryTarget.USER, "0f1e2d3c4b5a6978", "Prefers short, friendly answers."),
+            request.edit
+        )
+        val response = roundTrip(AidenBotMemoryEditResponse.serializer(), pair("botMemoryEdit", "response"))
+        // A replaced entry comes back under a new id.
+        assertEquals("5e5e5e5e5e5e5e5e", response.view.user.entries.first().id)
+        assertEquals(memory.botId, response.view.botId)
+
+        // The other edit kinds use the same `kind` discriminator.
+        assertEquals(
+            json.parseToJsonElement("""{"edit":{"kind":"remove","target":"memory","entryId":"a1b2c3d4e5f60718"}}"""),
+            json.encodeToJsonElement(
+                AidenBotMemoryEditRequest.serializer(),
+                AidenBotMemoryEditRequest(AidenBotMemoryEdit.Remove(AidenBotMemoryTarget.MEMORY, "a1b2c3d4e5f60718"))
+            )
+        )
+        assertEquals(
+            json.parseToJsonElement("""{"edit":{"kind":"clear"}}"""),
+            json.encodeToJsonElement(AidenBotMemoryEditRequest.serializer(), AidenBotMemoryEditRequest(AidenBotMemoryEdit.Clear))
+        )
+
+        // The error codes the fixture lists decode to the shared envelope's codes.
+        val codes = fixture.getValue("botMemoryEdit").jsonObject.getValue("errors").jsonArray
+            .map { AidenRemoteErrorCode(it.jsonObject.getValue("code").jsonPrimitive.content) }
+        assertTrue(AidenRemoteErrorCode.V1_KNOWN.containsAll(codes))
+        assertEquals(
+            listOf(AidenRemoteErrorCode.MEMORY_ENTRY_NOT_FOUND, AidenRemoteErrorCode.MEMORY_OVER_BUDGET, AidenRemoteErrorCode.MEMORY_BLOCKED),
+            codes
+        )
+    }
+
+    @Test
+    fun memoryFollowsTheHostBounds() {
+        val view = fixture.getValue("botMemory").jsonObject
+        val user = view.getValue("user").jsonObject
+        val entry = user.getValue("entries").jsonArray[0].jsonObject
+        fun withEntry(changed: JsonObject) = view.with("user" to user.with("entries" to JsonArray(listOf(changed))))
+        val serializer = AidenBotMemory.serializer()
+
+        rejects(serializer, withEntry(entry.with("id" to JsonPrimitive("0F1E2D3C4B5A6978"))))
+        rejects(serializer, withEntry(entry.with("text" to JsonPrimitive(""))))
+        rejects(serializer, withEntry(entry.with("text" to JsonPrimitive("t".repeat(501)))))
+        rejects(serializer, withEntry(entry.with("source" to JsonPrimitive("tool"))))
+        rejects(serializer, view.with("revision" to JsonPrimitive("rev_1")))
+        rejects(serializer, view.with("readable" to JsonPrimitive("true")))
+        rejects(serializer, view.with("user" to user.with("limitChars" to JsonPrimitive(0))))
+        rejects(serializer, view.with("user" to user.with("entries" to JsonArray(listOf(entry, entry)))))
+        // An unreadable memory still decodes, so the page can offer Erase.
+        assertFalse(json.decodeFromJsonElement(serializer, view.with("readable" to JsonPrimitive(false))).readable)
+        // An error-shaped edit response is not a success.
+        rejects(AidenBotMemoryEditResponse.serializer(), pair("botMemoryEdit", "response").jsonObject.with("ok" to JsonPrimitive(false)))
+        // A person's replacement is trimmed, non-empty and at most 500 characters.
+        assertThrows(Exception::class.java) { AidenBotMemoryEdit.Replace(AidenBotMemoryTarget.USER, "0f1e2d3c4b5a6978", " padded ") }
+        assertThrows(Exception::class.java) { AidenBotMemoryEdit.Replace(AidenBotMemoryTarget.USER, "0f1e2d3c4b5a6978", "") }
+        assertThrows(Exception::class.java) { AidenBotMemoryEdit.Replace(AidenBotMemoryTarget.USER, "0f1e2d3c4b5a6978", "x".repeat(501)) }
+    }
+
+    @Test
+    fun proactivityDtosRoundTrip() {
+        val decision = roundTrip(AidenBotRoutineProposalRespondRequest.serializer(), pair("botRoutineProposalRespond", "request"))
+        assertEquals(AidenBotRoutineProposalDecision.ACCEPT, decision.decision)
+        val result = roundTrip(AidenBotRoutineProposalRespondResult.serializer(), pair("botRoutineProposalRespond", "response"))
+        assertEquals(AidenBotRoutineProposalOutcome.ACCEPTED, result.status)
+        assertEquals("task_fixture_routine_03", result.routineId)
+        // Only an accepted proposal names its routine, and always does.
+        rejects(AidenBotRoutineProposalRespondResult.serializer(), json.parseToJsonElement("""{"status":"accepted"}"""))
+        rejects(AidenBotRoutineProposalRespondResult.serializer(), json.parseToJsonElement("""{"status":"dismissed","routineId":"task_1"}"""))
+        assertNull(json.decodeFromJsonElement(AidenBotRoutineProposalRespondResult.serializer(), json.parseToJsonElement("""{"status":"dismissed"}""")).routineId)
+
+        val suggestions = roundTrip(AidenBotRoutineSuggestionList.serializer(), fixture.getValue("botRoutineSuggestions")).suggestions
+        val checkIn = suggestions.single()
+        assertEquals("Daily check-in", checkIn.name)
+        assertEquals(AidenBotRoutineSchedule.Daily("09:00"), checkIn.schedule)
+        assertEquals("Every day at 9:00 AM", checkIn.label)
+
+        val feed = roundTrip(AidenBotRoutineNotificationList.serializer(), fixture.getValue("botRoutineNotifications"))
+        val run = feed.notifications.single()
+        assertEquals("run_fixture_bot_01", run.id)
+        assertEquals("Scout", run.botName)
+        assertEquals("Morning brief", run.routineName)
+        assertEquals(AidenBotRoutineNotificationStatus.SUCCEEDED, run.status)
+        assertEquals(java.time.Instant.parse("2026-08-19T15:01:00Z"), feed.now)
+        val raw = fixture.getValue("botRoutineNotifications").jsonObject
+        val item = raw.getValue("notifications").jsonArray[0].jsonObject
+        rejects(AidenBotRoutineNotificationList.serializer(), raw.with("notifications" to JsonArray(listOf(item.with("status" to JsonPrimitive("silent"))))))
+        rejects(AidenBotRoutineNotificationList.serializer(), raw.with("notifications" to JsonArray(listOf(item.with("preview" to JsonPrimitive("p".repeat(161)))))))
+        rejects(AidenBotRoutineNotificationList.serializer(), raw.with("notifications" to JsonArray(listOf(item, item))))
+        rejects(AidenBotRoutineNotificationList.serializer(), JsonObject(raw - "now"))
+    }
+
+    @Test
+    fun sessionCardsRoundTripAndFollowTheHostGrammar() {
+        val session = roundTrip(AidenBotSession.serializer(), fixture.getValue("botSessionCards"))
+        val memory = session.entries[0] as AidenBotSessionEntry.MemoryUpdate
+        assertEquals("entry_20", memory.id)
+        val pending = session.entries[1] as AidenBotSessionEntry.RoutineProposal
+        assertEquals(AidenBotRoutineProposalStatus.PENDING, pending.status)
+        assertEquals("7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11", pending.proposalId)
+        assertNull(pending.routineId)
+        val accepted = session.entries[2] as AidenBotSessionEntry.RoutineProposal
+        assertEquals(AidenBotRoutineProposalStatus.ACCEPTED, accepted.status)
+        assertEquals("task_fixture_routine_02", accepted.routineId)
+
+        val raw = fixture.getValue("botSessionCards").jsonObject.getValue("entries").jsonArray
+        val entry = AidenBotSessionEntry.serializer()
+        val update = raw[0].jsonObject
+        val card = raw[1].jsonObject
+        rejects(entry, update.with("text" to JsonPrimitive("Saved")))
+        rejects(entry, card.with("proposalId" to JsonPrimitive("7D0C5C8E-2F0B-4C4E-9A59-3B6F1F0E9A11")))
+        rejects(entry, card.with("status" to JsonPrimitive("expired")))
+        rejects(entry, card.with("routineId" to JsonPrimitive("task_1")))
+        rejects(entry, card.with("label" to JsonPrimitive("l".repeat(121))))
+        rejects(entry, card.with("prompt" to JsonPrimitive("")))
+    }
+
+    @Test
     fun changedBotDtosRoundTrip() {
         val summary = roundTrip(AidenBotSummary.serializer(), fixture.getValue("botSummary"))
         assertEquals(AidenBotSessionState.INTERRUPTED, summary.sessionState)
@@ -79,6 +226,8 @@ class AidenBotRevision25ContractTest {
                     is AidenBotSessionEntry.ConnectCard -> "connect_card"
                     is AidenBotSessionEntry.Notice -> "notice"
                     is AidenBotSessionEntry.FailedTurn -> "failed_turn"
+                    is AidenBotSessionEntry.MemoryUpdate -> "memory_update"
+                    is AidenBotSessionEntry.RoutineProposal -> "routine_proposal"
                 }
             }
         )

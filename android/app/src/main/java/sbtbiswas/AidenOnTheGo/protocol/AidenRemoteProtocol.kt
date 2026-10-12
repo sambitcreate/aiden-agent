@@ -64,6 +64,11 @@ object AidenRemoteProtocol {
     /** Contract revision 26: phones may watch and tap simulators the Mac
      * shares, behind the negotiated `simulators:mobile` grant. */
     const val MOBILE_SIMULATORS_FEATURE = "mobile-simulators-v1"
+
+    /** Contract revision 27: a Bot's memory routes. */
+    const val BOT_MEMORY_FEATURE = "bot-memory-v1"
+    /** Contract revision 27: routine proposal answers, routine suggestions and the routine notification feed. */
+    const val BOT_PROACTIVE_FEATURE = "bot-proactive-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5
@@ -252,8 +257,12 @@ object AidenBotPrivateResponseValidator {
         "botPolicyUpdate", "botAvatarUpload", "botAvatarMetadata",
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
-        "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate"
+        "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
+        // Contract revision 27.
+        "botMemory", "botMemoryEdit", "botRoutineProposalRespond", "botRoutineSuggestions",
+        "botRoutineNotifications", "botSessionCards"
     )
+    private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
     private val privateSummaryProjectionKeys = setOf(
         "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
@@ -360,7 +369,8 @@ object AidenBotPrivateResponseValidator {
                     if ((normalizedPrivateKeys.contains(normalize(key)) ||
                             (rejectPrivateChildFields &&
                                 (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
-                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed)
+                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed) &&
+                        !isAllowedRoutinePrompt(key, root, path, element)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
@@ -414,6 +424,24 @@ object AidenBotPrivateResponseValidator {
             if (reachable.contains(remainder.length)) return true
         }
         return false
+    }
+
+    /**
+     * Revision 27: a routine proposal card and a routine suggestion carry the routine's own
+     * `prompt` (what the person approves), never a model prompt. Only those two shapes get it.
+     */
+    private fun isAllowedRoutinePrompt(
+        key: String,
+        root: String,
+        parentPath: List<String>,
+        parent: kotlinx.serialization.json.JsonObject
+    ): Boolean {
+        if (key != "prompt") return false
+        if (root == "botRoutineSuggestions") return parentPath == listOf("suggestions", "[]")
+        if (root !in botSessionRoots) return false
+        val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+        if (type != "routine_proposal") return false
+        return parentPath.lastOrNull() == "entry" || parentPath.takeLast(2) == listOf("entries", "[]")
     }
 
     private fun isAllowedKnownIdentityKey(
@@ -484,6 +512,11 @@ data class AidenRemoteCapability(val rawValue: String) {
         val RUNS_CONTROL = AidenRemoteCapability("runs:control")
         /** Contract revision 26: watch, tap and shut down shared simulators. */
         val SIMULATORS_MOBILE = AidenRemoteCapability("simulators:mobile")
+        /**
+         * Contract revision 27: this phone renders the `memory_update` and `routine_proposal`
+         * Bot session entries. It grants no authority.
+         */
+        val BOT_CARDS = AidenRemoteCapability("bot:cards")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -502,11 +535,14 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** The phone simulator grant, negotiable only behind `mobile-simulators-v1`. */
         val PHONE_SIMULATORS = listOf(SIMULATORS_MOBILE)
 
+        /** The Bot card rendering grant, negotiable behind `bot-memory-v1` or `bot-proactive-v1`. */
+        val PHONE_BOT_CARDS = listOf(BOT_CARDS)
+
         /** Every grant `POST /device/capabilities` may add. */
-        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
-        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS
     }
 }
 
@@ -568,6 +604,11 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val SCHEDULE_RUN_IN_PROGRESS = AidenRemoteErrorCode("schedule_run_in_progress")
         val SERVER_INTERRUPTED = AidenRemoteErrorCode("server_interrupted")
         val INTERNAL_ERROR = AidenRemoteErrorCode("internal_error")
+        /** Contract revision 27. */
+        val MEMORY_ENTRY_NOT_FOUND = AidenRemoteErrorCode("memory_entry_not_found")
+        val MEMORY_OVER_BUDGET = AidenRemoteErrorCode("memory_over_budget")
+        val MEMORY_BLOCKED = AidenRemoteErrorCode("memory_blocked")
+        val ROUTINE_PROPOSAL_NOT_FOUND = AidenRemoteErrorCode("routine_proposal_not_found")
 
         val V1_KNOWN = setOf(
             INVALID_REQUEST, PAYLOAD_TOO_LARGE, RATE_LIMITED, AUTHENTICATION_REQUIRED,
@@ -580,7 +621,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             STREAM_GONE, APPROVAL_ALREADY_RESOLVED, APPROVAL_EXPIRED, OPERATION_IN_PROGRESS,
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
-            SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED
+            SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED,
+            MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND
         )
     }
 }

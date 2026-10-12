@@ -64,8 +64,8 @@ const allowedExternalPackages = new Set([
 	"utf-8-validate",
 	// Optional debug output coloring.
 	"supports-color",
-	// Optional on-device speech engine (optionalDependencies); the parakeet
-	// engine requires it lazily and reports a load failure.
+	// Optional on-device speech engine (optionalDependencies); the local
+	// speech engine requires it lazily and reports a load failure.
 	"sherpa-onnx-node",
 	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
 	// lazily inside try/catch and only reached behind a Negotiate proxy.
@@ -579,6 +579,9 @@ if (prebuiltFailure === undefined) {
 await vendorGenerativeUiLibraries(resolve(pkgDir, "../.."));
 cpSync(resolve(pkgDir, "../../THIRD_PARTY_NOTICES.md"), join(appDir, "THIRD_PARTY_NOTICES.md"));
 cpSync(resolve(pkgDir, "../../resources/generative-ui"), join(appDir, "generative-ui"), { recursive: true });
+// Silero VAD model the speech worker uses to trim silence (see speech.ts).
+mkdirSync(join(appDir, "speech"), { recursive: true });
+cpSync(resolve(pkgDir, "../../resources/speech/silero_vad.onnx"), join(appDir, "speech", "silero_vad.onnx"));
 // Read with JSON.parse at runtime; the indentation in the checked-in copy is
 // a third of its size.
 writeFileSync(

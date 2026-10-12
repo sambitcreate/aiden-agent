@@ -3,6 +3,7 @@ import test from "node:test";
 import { GEMINI_TRANSCRIPTION_MODEL } from "../../renderer/shared/voice-models.js";
 import {
   buildGeminiTranscriptionRequest,
+  buildOpenAITranscriptionForm,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
   startTranscriptionDeadline,
@@ -102,4 +103,32 @@ test("transcription deadlines grow with audio size up to a cap", () => {
   assert.ok(short >= 120_000 && short < long);
   assert.equal(transcriptionTimeoutMs(1024 * 1024 * 1024), 5 * 60_000);
   assert.equal(transcriptionTimeoutMs(Number.NaN), transcriptionTimeoutMs(0));
+});
+
+test("Gemini batch requests carry a language hint only when one is chosen", () => {
+  const hinted = buildGeminiTranscriptionRequest({ audioBase64: "AA==", mimeType: "audio/wav", language: "de" });
+  assert.deepEqual(hinted.generation_config.transcription_config, {
+    mode: { type: "verbatim" },
+    language_codes: ["de"],
+  });
+  const automatic = buildGeminiTranscriptionRequest({ audioBase64: "AA==", mimeType: "audio/wav" });
+  assert.equal("language_codes" in automatic.generation_config.transcription_config, false);
+});
+
+test("OpenAI transcription forms send the language field only when one is chosen", async () => {
+  const hinted = buildOpenAITranscriptionForm({
+    bytes: new Uint8Array([1, 2, 3]),
+    mimeType: "audio/ogg",
+    model: "gpt-4o-transcribe",
+    language: "fr",
+  });
+  assert.equal(hinted.get("model"), "gpt-4o-transcribe");
+  assert.equal(hinted.get("language"), "fr");
+  const file = hinted.get("file") as File;
+  assert.equal(file.type, "audio/ogg");
+  assert.deepEqual([...new Uint8Array(await file.arrayBuffer())], [1, 2, 3]);
+
+  const automatic = buildOpenAITranscriptionForm({ bytes: new Uint8Array([1]), mimeType: "", model: "whisper-1" });
+  assert.equal(automatic.has("language"), false);
+  assert.equal((automatic.get("file") as File).type, "audio/webm");
 });
