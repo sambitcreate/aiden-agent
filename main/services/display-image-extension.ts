@@ -11,6 +11,7 @@ import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-co
 import { isImageAttachmentPath, readPickedAttachments } from "./attachments.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { isVisualSnapshotAttachmentId } from "../../renderer/shared/visual-snapshots.js";
 
 export const DISPLAY_IMAGE_EXTENSION_ID = "aiden.gui.display-image";
 export const DISPLAY_IMAGE_TOOL_NAME = "display_image";
@@ -97,7 +98,8 @@ export function displayedAssistantImageUsage(
       if (
         attachment.kind !== "image" ||
         !Number.isSafeInteger(attachment.size) ||
-        attachment.size < 1
+        attachment.size < 1 ||
+        isVisualSnapshotAttachmentId((attachment as { id?: unknown }).id)
       ) {
         continue;
       }

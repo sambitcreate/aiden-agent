@@ -228,3 +228,15 @@
 .oa-wsp-chat .oa-bar { height: 4px; }
 .oa-wsp-branch { display: flex; align-items: center; gap: 3px; color: var(--text-tertiary); font-size: 7px; line-height: 8px; }
 .oa-wsp-branch .oa-icon { width: 7px; height: 7px; }
+
+/* Inline Visuals */
+.oa-visual-text { padding: 0 10px; }
+.oa-visual-card { display: grid; gap: 7px; margin: 9px 10px 0; padding: 8px; border-radius: 9px; background: var(--oa-surface); }
+.oa-visual-tabs { display: flex; gap: 2px; width: max-content; padding: 2px; border-radius: 6px; background: var(--oa-fill); font-size: 8px; }
+.oa-visual-tabs span { padding: 1px 7px; border-radius: 4px; color: var(--text-secondary); }
+.oa-visual-tabs .oa-selected { background: var(--surface-popover); color: var(--text-primary); font-weight: 600; }
+.oa-visual-stat { display: grid; gap: 3px; }
+.oa-visual-number { font-size: 15px; font-weight: 650; line-height: 1; color: var(--text-primary); }
+.oa-visual-chart { display: flex; align-items: flex-end; gap: 6px; height: 74px; padding-top: 4px; }
+.oa-visual-chart i { flex: 1; border-radius: 3px 3px 0 0; background: var(--oa-bar-soft); }
+.oa-visual-chart i[data-accent] { background: var(--oa-tint); }

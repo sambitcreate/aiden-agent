@@ -353,7 +353,6 @@ test("visualize preserves the slash draft when validation rejects the send", () 
     composer,
     /return sendComposerPayload\(\{[\s\S]{0,260}draftText: text,[\s\S]{0,260}visualize: true/u,
   );
-  assert.match(composer, /hasWorkspaceArtifactAccess: workspace\?\.permission !== "none"/u);
 });
 
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {

@@ -462,6 +462,42 @@ const CODE_LINES: readonly (readonly [string, number][])[] = [
 ];
 const INDENTS = [0, 0, 0, 0, 7, 7, 7, 14, 0, 7, 14, 14, 7, 14, 0, 0, 0, 7, 7, 0];
 
+const VISUAL_BARS = [42, 64, 50, 86, 72] as const;
+
+export function InlineVisualsArt() {
+  return (
+    <ArtWindow style={{ left: 12, top: 10, width: 194, height: 250 }}>
+      <div className="oa-ws-reply oa-visual-text">
+        <Bar width="88%" tone="soft" />
+        <Bar width="64%" tone="soft" />
+      </div>
+      <div className="oa-visual-card">
+        <div className="oa-visual-tabs">
+          <span>Solo</span>
+          <span className="oa-selected">Team</span>
+        </div>
+        <div className="oa-visual-stat">
+          <Bar width={34} tone="soft" />
+          <span className="oa-visual-number">$60</span>
+        </div>
+        <div className="oa-visual-chart">
+          {VISUAL_BARS.map((height, index) => (
+            <i
+              key={index}
+              className="oa-anim-pop"
+              data-accent={index === 3 || undefined}
+              style={{ height: `${height}%`, animationDelay: `${0.15 * index}s` }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="oa-ws-reply oa-visual-text">
+        <Bar width="76%" tone="soft" />
+      </div>
+    </ArtWindow>
+  );
+}
+
 export function FilesEditorArt() {
   return (
     <ArtWindow className="oa-files-window" style={{ left: 6, top: 10, width: 182, height: 250 }}>

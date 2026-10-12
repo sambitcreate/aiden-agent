@@ -275,4 +275,10 @@ test("parseParams keeps bounded generation selectors and creates empty authorita
   );
   assert.deepEqual(parseParams({ ...base, visualize: true }).visualize, true);
   assert.throws(() => parseParams({ ...base, visualize: false }), /Invalid generation fields/);
+  for (const inlineVisuals of ["automatic", "on_request", "off"] as const) {
+    assert.equal(parseParams({ ...base, inlineVisuals }).inlineVisuals, inlineVisuals);
+  }
+  assert.equal(parseParams(base).inlineVisuals, undefined);
+  assert.throws(() => parseParams({ ...base, inlineVisuals: "sometimes" }), /Invalid generation fields/);
+  assert.throws(() => parseParams({ ...base, inlineVisuals: 1 }), /Invalid generation fields/);
 });

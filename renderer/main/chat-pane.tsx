@@ -12,7 +12,12 @@ import { QueuedMessages } from "../components/queued-messages";
 import {
   saveComposerDraftText,
   seedComposerAttachments,
+  stageComposerText,
 } from "../lib/composer-draft-store";
+import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
+import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
+import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { primeInlineVisualPreview, type GuestPromptHandler } from "../components/html-artifact-frame";
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
@@ -139,7 +144,7 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
-import { RENDER_ARTIFACT_TOOL_NAME } from "../shared/generative-ui";
+import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 import {
   CODEX_THINKING_LEVELS,
   normalizeCodexThinkingLevel,
@@ -205,6 +210,11 @@ const ANTHROPIC_PROVIDER_ID = "anthropic";
  * that bursty providers do not flap the label mid-prose.
  */
 const TEXT_STREAMING_IDLE_MS = 2_000;
+/** Stable so idle frames don't rebuild the transcript artifact plan. */
+const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
+const NO_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const NO_UI_DRAFTS: UiDrafts = new Map();
+const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 
@@ -526,6 +536,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamingArtifacts, setStreamingArtifacts] = React.useState<ChatArtifactV1[]>([]);
+  const [streamingArtifactPlacements, setStreamingArtifactPlacements] = React.useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const [streamingWideVisuals, setStreamingWideVisuals] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [visualDrafts, setVisualDrafts] = React.useState<VisualDrafts>(NO_VISUAL_DRAFTS);
+  const [streamingUiVisuals, setStreamingUiVisuals] = React.useState<readonly ChatUiVisualV1[]>(NO_UI_VISUALS);
+  const [uiDrafts, setUiDrafts] = React.useState<UiDrafts>(NO_UI_DRAFTS);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [persistedHandoffMessageId, setPersistedHandoffMessageId] = React.useState<string | null>(
     null,
@@ -708,6 +727,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingReasoning(null);
     clearTextStreaming();
     setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     streamingArtifactsRef.current = [];
     setStreamComplete(false);
     setPersistedHandoffMessageId(null);
@@ -796,7 +818,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const displayedStreamingArtifacts =
     streamingArtifacts.length > 0
       ? streamingArtifacts
-      : (visibleDetachedProjection?.artifacts ?? []);
+      : (visibleDetachedProjection?.artifacts ?? NO_STREAMING_ARTIFACTS);
+  const displayedStreamingUiVisuals =
+    streamingUiVisuals.length > 0 ? streamingUiVisuals : (visibleDetachedProjection?.uiVisuals ?? NO_UI_VISUALS);
   const displayedGenerationTimeline =
     generationTimeline ?? visibleDetachedProjection?.timeline ?? null;
   const displayedLiveSubagents = React.useMemo(
@@ -1191,6 +1215,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setStreamingReasoning(null);
       clearTextStreaming();
       setStreamingArtifacts([]);
+      setVisualDrafts(NO_VISUAL_DRAFTS);
+      setStreamingUiVisuals(NO_UI_VISUALS);
+      setUiDrafts(NO_UI_DRAFTS);
       streamingArtifactsRef.current = [];
       setStreamComplete(false);
       setPersistedHandoffMessageId(null);
@@ -1235,6 +1262,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           providerId,
           model,
           ...(visualize ? { visualize: true as const } : {}),
+          inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
             : codexThinkingSupported
@@ -1270,6 +1298,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
           onArtifactEvent: (event) => {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            setVisualDrafts((current) => reduceVisualDrafts(current, event));
+            setUiDrafts((current) => reduceUiDrafts(current, event));
+            setStreamingUiVisuals((current) => reduceUiVisuals(current, event));
+            if (event.operation === "draft" || event.operation === "draft_end") return;
+            if (event.operation === "ui" || event.operation === "ui_draft") {
+              if (event.operation === "ui") setIsModelLoading(false);
+              return;
+            }
             if (event.operation === "reset") {
               setStreamingArtifacts([]);
               streamingArtifactsRef.current = [];
@@ -1277,7 +1313,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            // Seed main's ready preview before the frame mounts so the final
+            // visual replaces its draft without a loading placeholder.
+            if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
+            if (artifact.kind === "html" && event.toolCallId) {
+              const toolCallId = event.toolCallId;
+              // mediaIds are unique per generation, so this map only grows;
+              // entries for artifacts no longer shown are never looked up.
+              setStreamingArtifactPlacements((current) =>
+                current.get(artifact.mediaId) === toolCallId
+                  ? current
+                  : new Map(current).set(artifact.mediaId, toolCallId),
+              );
+            }
             if (artifact.kind === "html") {
+              // The latest presentation wins, so a revision can widen or narrow.
+              const wide = event.layout === "wide";
+              setStreamingWideVisuals((current) => {
+                if (current.has(artifact.mediaId) === wide) return current;
+                const next = new Set(current);
+                if (wide) next.add(artifact.mediaId);
+                else next.delete(artifact.mediaId);
+                return next;
+              });
               const index = streamingArtifactsRef.current.findIndex(
                 (candidate) => candidate.kind === "html" && candidate.mediaId === artifact.mediaId,
               );
@@ -1408,6 +1466,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setStreamingText(null);
               setStreamingReasoning(null);
               setStreamingArtifacts([]);
+              setVisualDrafts(NO_VISUAL_DRAFTS);
+              setStreamingUiVisuals(NO_UI_VISUALS);
+              setUiDrafts(NO_UI_DRAFTS);
               streamingArtifactsRef.current = [];
               streamedTextRef.current = "";
               streamedReasoningRef.current = "";
@@ -1489,6 +1550,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 );
                 if (updatedChat) {
                   setStreamingArtifacts([]);
+                  setVisualDrafts(NO_VISUAL_DRAFTS);
+                  setStreamingUiVisuals(NO_UI_VISUALS);
+                  setUiDrafts(NO_UI_DRAFTS);
                   streamingArtifactsRef.current = [];
                 }
                 setIsStoppingGeneration(false);
@@ -1693,6 +1757,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  /** Anything that makes an immediate send unsafe; refreshed below once the queue is known. */
+  const visualPromptBusyRef = React.useRef(false);
+  /** The user clicked Send (or Add to draft) on a visual's follow-up chip. */
+  const handleVisualPrompt = React.useCallback<GuestPromptHandler>(
+    (text) => {
+      if (visualPromptBusyRef.current) {
+        stageComposerText(chatId, text);
+        return;
+      }
+      // Same path as typed input: queue/steer rules, permissions, and a
+      // visible user bubble all apply.
+      void handleSend(text, []).catch((error: unknown) => {
+        stageComposerText(chatId, text);
+        toast.error(error instanceof Error ? error.message : "Could not send the visual's follow-up.");
+      });
+    },
+    [chatId, handleSend],
+  );
+
   const handleStop = React.useCallback(() => {
     if (visibleDetachedProjection && !generationRef.current && !isStoppingGeneration) {
       const { streamId } = visibleDetachedProjection;
@@ -1759,6 +1842,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
     },
   });
+  // A visual's follow-up must never race a starting run, a detached run, or
+  // queued messages; in those states it is staged instead of sent.
+  const visualPromptBusy =
+    isGenerating ||
+    isStartingGeneration ||
+    visibleDetachedProjection !== null ||
+    queuedState.messages.length > 0;
+  React.useLayoutEffect(() => {
+    visualPromptBusyRef.current = visualPromptBusy;
+  }, [visualPromptBusy]);
 
   // Main refuses a fork's sends while its summary is pending or failed, so
   // follow-ups wait in the queue until the summary is ready or skipped.
@@ -1886,6 +1979,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamingText(null);
     setStreamingReasoning(null);
     setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -2394,7 +2490,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     toolActivity,
   });
   const visualizingLive =
-    hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) &&
+    (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
+      hasActiveToolStep(displayedGenerationTimeline, RENDER_UI_TOOL_NAME)) &&
     !streamComplete && !visibleDetachedProjection;
   const timelineActivity = visualizingLive &&
     agentActivity?.phase !== "waiting" && agentActivity?.phase !== "stopping"
@@ -2411,7 +2508,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
       chronologicalLiveRows?.some((row) => row.kind === "reasoning" && row.step.finishedAt === undefined) === true,
     visualizingVisible:
       visualizingLive && chronologicalLiveRows?.some((row) => row.kind === "activity" &&
-        row.steps.some((step) => step.kind === "tool" && step.toolName === RENDER_ARTIFACT_TOOL_NAME)) === true,
+        row.steps.some((step) => step.kind === "tool" &&
+          (step.toolName === RENDER_ARTIFACT_TOOL_NAME || step.toolName === RENDER_UI_TOOL_NAME))) === true,
     toolVisible:
       chronologicalLiveRows?.some((row) => row.kind === "activity" &&
         row.steps.some((step) => step.kind === "tool" &&
@@ -2975,6 +3073,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingText={displayedStreamingText}
             streamingReasoning={displayedStreamingReasoning}
             streamingArtifacts={displayedStreamingArtifacts}
+            streamingArtifactPlacements={streamingArtifactPlacements}
+            streamingWideVisuals={streamingWideVisuals}
+            onVisualPrompt={handleVisualPrompt}
+            visualFollowUpBusy={visualPromptBusy}
+            streamingVisualDrafts={visualDrafts}
+            streamingUiVisuals={displayedStreamingUiVisuals}
+            streamingUiDrafts={uiDrafts}
             streamComplete={streamComplete || visibleDetachedProjection !== null}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}

@@ -46,6 +46,27 @@ function textRow(
 }
 
 /**
+ * Main stamps a new step at the full streamed length before the renderer's
+ * frame-buffered text delta lands, so a live step can briefly point past the
+ * visible text. Pin such offsets to the visible end so the chronological
+ * layout (and any visual mounted in it) holds still until the text catches up.
+ */
+export function clampLiveTimelineToContent(
+  timeline: GenerationTimeline | null | undefined,
+  contentLength: number,
+): GenerationTimeline | null | undefined {
+  if (!timeline?.steps.some((step) => (step.contentOffset ?? 0) > contentLength)) return timeline;
+  return {
+    ...timeline,
+    steps: timeline.steps.map((step) =>
+      step.contentOffset !== undefined && step.contentOffset > contentLength
+        ? { ...step, contentOffset: contentLength }
+        : step,
+    ),
+  };
+}
+
+/**
  * Rebuild the chronological visible response from renderer-safe text offsets.
  * Legacy or malformed timelines return null so callers can retain the prior
  * activity-first layout without guessing where private Pi events belonged.

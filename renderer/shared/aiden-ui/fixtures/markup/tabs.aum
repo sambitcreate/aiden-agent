@@ -1,0 +1,21 @@
+<Visual title="Plan options" state={{plan: "team", seats: 5, annual: false, note: ""}}>
+  <Tabs bind="plan" label="Plan" options={[{value:"solo",label:"Solo"},{value:"team",label:"Team"}]} />
+  <If test={$plan == "solo"}>
+    <Card title="Solo">
+      <Stat label="Price" value={12} format="currency" caption="per month" />
+    </Card>
+  </If>
+  <If test={$plan == "team"}>
+    <Card title="Team" tone="accent">
+      <Stat label="Price" value={$seats == 5 ? 60 : 110} format="currency" caption="per month" />
+      <RadioGroup bind="seats" label="Seats" options={[{value:5,label:"5"},{value:10,label:"10"}]} />
+      <Checkbox bind="annual" label="Bill annually" />
+    </Card>
+  </If>
+  <ButtonGroup>
+    <Button variant="accent" action={sendPrompt("Start the " + $plan + " plan")} icon="rocket">Choose plan</Button>
+    <Button variant="muted" action={copy("Plan: " + $plan)}>Copy</Button>
+    <Button variant="transparent" action={openUrl("https://example.com/pricing")}>Pricing page</Button>
+  </ButtonGroup>
+  <TextInput bind="note" label="Note" placeholder="Anything else?" />
+</Visual>

@@ -1211,6 +1211,8 @@ export const chatsApi = {
       foreground?: string;
       secondary?: string;
       accent?: string;
+      /** Allowlisted semantic tokens; main sanitizes them again. */
+      vars?: Record<string, string>;
     },
   ) =>
     invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
@@ -1218,6 +1220,9 @@ export const chatsApi = {
       mediaId,
       theme,
     }),
+  /** Remember a native visual's local state (tabs, filters, sliders) on its message. */
+  updateUiVisualState: (chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) =>
+    invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,

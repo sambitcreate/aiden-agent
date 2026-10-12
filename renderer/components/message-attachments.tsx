@@ -157,6 +157,7 @@ export function MessageAttachments({
   role: "user" | "assistant";
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
+  if (attachments.length === 0) return null;
   if (!controller) {
     return (
       <MessageAttachmentPreviewProvider>

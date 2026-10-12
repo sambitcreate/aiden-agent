@@ -69,6 +69,7 @@ import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentImageValidation
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
 import sbtbiswas.AidenOnTheGo.models.AidenChatRole
+import sbtbiswas.AidenOnTheGo.models.AidenChatVisual
 import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
@@ -153,15 +154,33 @@ internal enum class AidenMessageMediaEdge {
     }
 }
 
+/**
+ * True for an image the Mac stored as a visual's snapshot: named by one of
+ * [visuals], or carrying the snapshot id prefix even when its visual was
+ * dropped. Snapshots show inside their visual row, never in the attachment list.
+ */
+internal fun aidenIsVisualSnapshot(attachment: AidenMessageAttachment, visuals: List<AidenChatVisual>): Boolean =
+    attachment.id.startsWith(AidenChatVisual.SNAPSHOT_ATTACHMENT_PREFIX) ||
+        visuals.any { it.snapshotAttachmentId == attachment.id }
+
+/** A message's attachments as the attachment list shows them: snapshots removed. */
+internal fun aidenVisibleMessageAttachments(
+    attachments: List<AidenMessageAttachment>,
+    visuals: List<AidenChatVisual>
+): List<AidenMessageAttachment> = attachments.filterNot { aidenIsVisualSnapshot(it, visuals) }
+
+internal fun aidenIsEligibleImage(attachment: AidenMessageAttachment): Boolean =
+    attachment.kind == AidenAttachmentKind.IMAGE &&
+        (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png") &&
+        attachment.size in 1..AidenAttachmentImageValidation.MAXIMUM_BYTES
+
 internal fun aidenEligibleImageAttachments(
-    attachments: List<AidenMessageAttachment>
+    attachments: List<AidenMessageAttachment>,
+    visuals: List<AidenChatVisual> = emptyList()
 ): List<AidenMessageAttachment> {
     val counts = attachments.groupingBy { it.id }.eachCount()
-    return attachments.filter {
-        it.kind == AidenAttachmentKind.IMAGE &&
-            (it.mimeType == "image/jpeg" || it.mimeType == "image/png") &&
-            it.size in 1..AidenAttachmentImageValidation.MAXIMUM_BYTES &&
-            counts[it.id] == 1
+    return aidenVisibleMessageAttachments(attachments, visuals).filter {
+        aidenIsEligibleImage(it) && counts[it.id] == 1
     }.take(20)
 }
 
@@ -211,6 +230,67 @@ internal fun AidenMessageImageAttachments(
             initialPage = start,
             loadData = loadData,
             onDismiss = { galleryStart = null }
+        )
+    }
+}
+
+/**
+ * The shape of a visual snapshot's row: the decoded image's own width/height
+ * ratio, so a tall visual is drawn at full width rather than shrunk into a
+ * box, and a placeholder shape (16:9 for wide visuals, else 4:3) until then.
+ */
+internal object AidenVisualSnapshotFrame {
+    /** Snapshots hold text, so they decode sharper than photo thumbnails. */
+    const val MAXIMUM_PIXEL_SIZE = 1_600
+
+    fun aspectRatio(imageWidth: Int?, imageHeight: Int?, wide: Boolean): Float =
+        if (imageWidth != null && imageHeight != null && imageWidth > 0 && imageHeight > 0) {
+            imageWidth.toFloat() / imageHeight.toFloat()
+        } else if (wide) 16f / 9f else 4f / 3f
+}
+
+/**
+ * A visual's snapshot, described by the visual's [title] rather than the
+ * attachment's file name. Tapping opens the same full-screen viewer as photos.
+ */
+@Composable
+internal fun AidenVisualSnapshotImage(
+    attachment: AidenMessageAttachment,
+    title: String,
+    wide: Boolean,
+    loadData: suspend (AidenMessageAttachment) -> ByteArray?,
+    modifier: Modifier = Modifier
+) {
+    var galleryOpen by remember { mutableStateOf(false) }
+    // An image this session already decoded sizes the row on its first frame.
+    var imageSize by remember(attachment.id) {
+        mutableStateOf(
+            AidenAttachmentBitmapCache.peek(attachment, AidenVisualSnapshotFrame.MAXIMUM_PIXEL_SIZE)
+                ?.let { it.width to it.height }
+        )
+    }
+    val snapshotState = stringResource(R.string.chat_visual_snapshot_description)
+    val openLabel = stringResource(R.string.chat_visual_snapshot_open)
+    AidenAttachmentImage(
+        attachment = attachment,
+        maximumPixelSize = AidenVisualSnapshotFrame.MAXIMUM_PIXEL_SIZE,
+        loadData = loadData,
+        description = title,
+        onImageSize = { width, height -> imageSize = width to height },
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(AidenVisualSnapshotFrame.aspectRatio(imageSize?.first, imageSize?.second, wide))
+            .semantics { stateDescription = snapshotState }
+            .clickable(onClickLabel = openLabel, role = Role.Button) { galleryOpen = true },
+        alignment = Alignment.CenterStart,
+        imageCornerRadius = 16.dp
+    )
+    if (galleryOpen) {
+        AidenAttachmentGallery(
+            attachments = listOf(attachment),
+            initialPage = 0,
+            loadData = loadData,
+            onDismiss = { galleryOpen = false }
         )
     }
 }
@@ -397,7 +477,9 @@ private fun AidenAttachmentImage(
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.Center,
-    imageCornerRadius: Dp = 0.dp
+    imageCornerRadius: Dp = 0.dp,
+    description: String = attachment.name,
+    onImageSize: ((width: Int, height: Int) -> Unit)? = null
 ) {
     var attempt by remember { mutableIntStateOf(0) }
     // An image already decoded this session renders on the first frame, so scrolling a
@@ -417,7 +499,12 @@ private fun AidenAttachmentImage(
             failed = false
             val bytes = loadData(attachment)
             val decoded = bytes?.let { AidenAttachmentBitmapCache.decode(it, maximumPixelSize, attachment) }
-            if (decoded == null) failed = true else bitmap = decoded
+            if (decoded == null) {
+                failed = true
+            } else {
+                bitmap = decoded
+                onImageSize?.invoke(decoded.width, decoded.height)
+            }
         }
     }
 
@@ -436,7 +523,7 @@ private fun AidenAttachmentImage(
                 }
                 Image(
                     bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = attachment.name,
+                    contentDescription = description,
                     contentScale = ContentScale.Fit,
                     modifier = fitted.clip(RoundedCornerShape(imageCornerRadius))
                 )
@@ -455,7 +542,7 @@ private fun AidenAttachmentImage(
             }
             // The image's own box, shaped like the image, stands in until it decodes.
             else -> {
-                val loadingDescription = stringResource(R.string.chat_images_loading, attachment.name)
+                val loadingDescription = stringResource(R.string.chat_images_loading, description)
                 AidenSkeletonBlock(
                     modifier = Modifier
                         .fillMaxSize()
