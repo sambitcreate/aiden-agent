@@ -1,0 +1,126 @@
+{
+  "evidenceKind": "managed-attended-tool-removal-options-reproduction",
+  "generatedAt": "2026-10-11T20:12:44.285Z",
+  "node": "v22.22.3",
+  "rows": [
+    {
+      "refreshAfterRecovery": false,
+      "foregroundCalls": 3,
+      "toolCalls": 2,
+      "hiddenSummaryCalls": 1,
+      "checkpoints": 1,
+      "outcomeKind": "completed",
+      "outcomeEmergency": {
+        "kind": "history_removed",
+        "removedHistoryMessages": 5,
+        "requiresDurableCheckpoint": true
+      },
+      "requests": [
+        {
+          "tools": [
+            "broken"
+          ],
+          "hasOriginalIntent": true,
+          "hasRecoveryInstruction": false,
+          "messages": 2
+        },
+        {
+          "tools": [
+            "broken"
+          ],
+          "hasOriginalIntent": true,
+          "hasRecoveryInstruction": false,
+          "messages": 4
+        },
+        {
+          "tools": [],
+          "hasOriginalIntent": false,
+          "hasRecoveryInstruction": true,
+          "messages": 2
+        }
+      ],
+      "projections": [
+        {
+          "tokens": 10526,
+          "tools": 1,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 11128,
+          "tools": 1,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7772,
+          "tools": 0,
+          "shouldCompact": false
+        }
+      ],
+      "reductions": [
+        {
+          "removedHistory": 5,
+          "before": 11796,
+          "after": 4092,
+          "kind": "history_removed"
+        }
+      ],
+      "preservedOriginalHash": "6f60a1df8ee18bc34dedcb6d0618580e233e222d09b9e31c64e5bcbacd2e276d"
+    },
+    {
+      "refreshAfterRecovery": true,
+      "foregroundCalls": 3,
+      "toolCalls": 2,
+      "hiddenSummaryCalls": 0,
+      "checkpoints": 0,
+      "outcomeKind": "completed",
+      "requests": [
+        {
+          "tools": [
+            "broken"
+          ],
+          "hasOriginalIntent": true,
+          "hasRecoveryInstruction": false,
+          "messages": 2
+        },
+        {
+          "tools": [
+            "broken"
+          ],
+          "hasOriginalIntent": true,
+          "hasRecoveryInstruction": false,
+          "messages": 4
+        },
+        {
+          "tools": [],
+          "hasOriginalIntent": true,
+          "hasRecoveryInstruction": true,
+          "messages": 8
+        }
+      ],
+      "projections": [
+        {
+          "tokens": 10526,
+          "tools": 1,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 11128,
+          "tools": 1,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7772,
+          "tools": 0,
+          "shouldCompact": false
+        }
+      ],
+      "reductions": [],
+      "preservedOriginalHash": "6f60a1df8ee18bc34dedcb6d0618580e233e222d09b9e31c64e5bcbacd2e276d"
+    }
+  ],
+  "limitations": [
+    "Synthetic large tool schema/user fixture with two failed tools and unreported provider usage; prevalence in ordinary attended tool sets is not established.",
+    "The candidate arm changes only research host-hook ordering; production remains unchanged.",
+    "Fake foreground and summary streams, in-memory journal, no credential reads/network/effects or actual paid-cost claim."
+  ]
+}

@@ -1,0 +1,29 @@
+--- a/generation-context.ts
++++ b/generation-context.ts
+@@ -399,13 +399,25 @@
+     return { message, truncated: false };
+   }
+   const images = message.content.filter((part) => part.type === "image");
++  const recovery = toolOutputRecoveryMarker(message);
++  let truncatedText = truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS);
++  if (recovery && !text.endsWith(recovery)) {
++    // Text-only image projection can append a notice after the preview part.
++    // Preserve that notice and move the one bounded recovery suffix to the end,
++    // rather than losing it when text parts are joined and later elided.
++    const marker = recovery.slice(1);
++    const markerIndex = text.lastIndexOf(marker);
++    const start = markerIndex > 0 && text[markerIndex - 1] === "\n" ? markerIndex - 1 : markerIndex;
++    const withoutMarker = text.slice(0, start) + text.slice(markerIndex + marker.length);
++    truncatedText = truncateText(withoutMarker, TOOL_RESULT_TEXT_LIMIT_CHARS - recovery.length) + recovery;
++  }
+   return {
+     message: {
+       ...message,
+       content: [
+         {
+           type: "text",
+-          text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS),
++          text: truncatedText,
+         },
+         ...images,
+       ],

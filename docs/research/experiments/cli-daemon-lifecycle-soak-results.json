@@ -1,0 +1,2424 @@
+{
+  "version": 1,
+  "evidenceKind": "offline-lifecycle-soak",
+  "startedAt": "2026-10-11T20:09:15.127Z",
+  "durationSeconds": 5400,
+  "intervalSeconds": 30,
+  "node": "v22.22.3",
+  "platform": "darwin/arm64",
+  "forcedGcAvailable": true,
+  "sourceSha256": {
+    "packages/cli/src/daemon-chats.ts": "1226eff0f6792d47558be7087b41e4b3d4497cd7d932b4f84931b9448dca124c",
+    "packages/cli/src/extensions/todo.ts": "c7ce99135dbd5717063af2503fae4c3a574e51c78b5064dfe389e43392a75c26",
+    "packages/cli/dist/parity-test-api.js": "a5b7313f971ae2cdcdd1033e1e82671febfc81310060e579d093cdfe2791a7fc"
+  },
+  "status": "passed",
+  "counts": {
+    "requests": 1360,
+    "binds": 680,
+    "shutdowns": 680,
+    "disposals": 680,
+    "completedTurns": 680,
+    "cycles": 170
+  },
+  "receipts": [
+    {
+      "cycle": 1,
+      "elapsedMs": 3218,
+      "cycleDurationMs": 2482.1367499999997,
+      "rss": 197558272,
+      "heapTotal": 99926016,
+      "heapUsed": 60550568,
+      "external": 16584296,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 2,
+      "elapsedMs": 35006,
+      "cycleDurationMs": 1780.9307499999995,
+      "rss": 185450496,
+      "heapTotal": 85245952,
+      "heapUsed": 62047088,
+      "external": 5702482,
+      "arrayBuffers": 1425832,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 3,
+      "elapsedMs": 66880,
+      "cycleDurationMs": 1871.2922080000062,
+      "rss": 176226304,
+      "heapTotal": 83673088,
+      "heapUsed": 62665856,
+      "external": 4273238,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 4,
+      "elapsedMs": 100084,
+      "cycleDurationMs": 3200.4740830000082,
+      "rss": 175685632,
+      "heapTotal": 80527360,
+      "heapUsed": 58695976,
+      "external": 4263076,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 5,
+      "elapsedMs": 132247,
+      "cycleDurationMs": 2161.121125000005,
+      "rss": 175947776,
+      "heapTotal": 83148800,
+      "heapUsed": 58731744,
+      "external": 4583555,
+      "arrayBuffers": 217566,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 6,
+      "elapsedMs": 164159,
+      "cycleDurationMs": 1910.2360000000044,
+      "rss": 176029696,
+      "heapTotal": 83410944,
+      "heapUsed": 58816728,
+      "external": 4552303,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 7,
+      "elapsedMs": 198122,
+      "cycleDurationMs": 3961.4832080000197,
+      "rss": 176144384,
+      "heapTotal": 83935232,
+      "heapUsed": 58881688,
+      "external": 5660278,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 8,
+      "elapsedMs": 230017,
+      "cycleDurationMs": 1888.211209000001,
+      "rss": 176209920,
+      "heapTotal": 82100224,
+      "heapUsed": 58881216,
+      "external": 4260889,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 9,
+      "elapsedMs": 261939,
+      "cycleDurationMs": 1920.350207999989,
+      "rss": 176340992,
+      "heapTotal": 83935232,
+      "heapUsed": 59139672,
+      "external": 5700176,
+      "arrayBuffers": 1480228,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 10,
+      "elapsedMs": 293781,
+      "cycleDurationMs": 1839.2291250000126,
+      "rss": 176570368,
+      "heapTotal": 83148800,
+      "heapUsed": 59243272,
+      "external": 5683795,
+      "arrayBuffers": 1590319,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 11,
+      "elapsedMs": 325694,
+      "cycleDurationMs": 1910.5376249999972,
+      "rss": 176635904,
+      "heapTotal": 83410944,
+      "heapUsed": 59302656,
+      "external": 4548904,
+      "arrayBuffers": 248235,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 12,
+      "elapsedMs": 357457,
+      "cycleDurationMs": 1761.5007500000065,
+      "rss": 176717824,
+      "heapTotal": 84197376,
+      "heapUsed": 59334048,
+      "external": 4308246,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 13,
+      "elapsedMs": 389301,
+      "cycleDurationMs": 1841.5869170000078,
+      "rss": 176783360,
+      "heapTotal": 84197376,
+      "heapUsed": 59383088,
+      "external": 4587461,
+      "arrayBuffers": 225818,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 14,
+      "elapsedMs": 421171,
+      "cycleDurationMs": 1867.106832999969,
+      "rss": 176832512,
+      "heapTotal": 85245952,
+      "heapUsed": 59402904,
+      "external": 4349060,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 15,
+      "elapsedMs": 453076,
+      "cycleDurationMs": 1903.0154160000384,
+      "rss": 176832512,
+      "heapTotal": 83935232,
+      "heapUsed": 59470912,
+      "external": 5682624,
+      "arrayBuffers": 1424884,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 16,
+      "elapsedMs": 484939,
+      "cycleDurationMs": 1859.9936669999734,
+      "rss": 176865280,
+      "heapTotal": 84983808,
+      "heapUsed": 59477360,
+      "external": 5698230,
+      "arrayBuffers": 1437694,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 17,
+      "elapsedMs": 516789,
+      "cycleDurationMs": 1845.4419169999892,
+      "rss": 177012736,
+      "heapTotal": 84721664,
+      "heapUsed": 59530416,
+      "external": 4583821,
+      "arrayBuffers": 246618,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 18,
+      "elapsedMs": 550645,
+      "cycleDurationMs": 3853.3830409999937,
+      "rss": 177111040,
+      "heapTotal": 82886656,
+      "heapUsed": 59515152,
+      "external": 4259842,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 19,
+      "elapsedMs": 583999,
+      "cycleDurationMs": 3351.3676670000423,
+      "rss": 177111040,
+      "heapTotal": 83935232,
+      "heapUsed": 59624640,
+      "external": 5584900,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 20,
+      "elapsedMs": 615899,
+      "cycleDurationMs": 1889.9643749999814,
+      "rss": 177160192,
+      "heapTotal": 83935232,
+      "heapUsed": 59636704,
+      "external": 4261078,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 21,
+      "elapsedMs": 647605,
+      "cycleDurationMs": 1703.3390409999993,
+      "rss": 177225728,
+      "heapTotal": 85245952,
+      "heapUsed": 59765632,
+      "external": 4306260,
+      "arrayBuffers": 220662,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 22,
+      "elapsedMs": 679337,
+      "cycleDurationMs": 1728.9451669999398,
+      "rss": 177504256,
+      "heapTotal": 83935232,
+      "heapUsed": 59764040,
+      "external": 4392550,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 23,
+      "elapsedMs": 710946,
+      "cycleDurationMs": 1606.7241250000661,
+      "rss": 177668096,
+      "heapTotal": 84459520,
+      "heapUsed": 59838360,
+      "external": 5682424,
+      "arrayBuffers": 1420436,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 24,
+      "elapsedMs": 743028,
+      "cycleDurationMs": 2079.938167000073,
+      "rss": 177848320,
+      "heapTotal": 86032384,
+      "heapUsed": 59841032,
+      "external": 5707710,
+      "arrayBuffers": 1450534,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 25,
+      "elapsedMs": 774775,
+      "cycleDurationMs": 1744.920083999983,
+      "rss": 178077696,
+      "heapTotal": 84459520,
+      "heapUsed": 59956152,
+      "external": 5582476,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 26,
+      "elapsedMs": 806529,
+      "cycleDurationMs": 1751.9167080000043,
+      "rss": 178176000,
+      "heapTotal": 84721664,
+      "heapUsed": 59987464,
+      "external": 4298744,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 27,
+      "elapsedMs": 838261,
+      "cycleDurationMs": 1729.3072079999838,
+      "rss": 178176000,
+      "heapTotal": 85508096,
+      "heapUsed": 60010288,
+      "external": 5458804,
+      "arrayBuffers": 1325493,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 28,
+      "elapsedMs": 870059,
+      "cycleDurationMs": 1793.4028749999125,
+      "rss": 178241536,
+      "heapTotal": 86032384,
+      "heapUsed": 60065744,
+      "external": 5490388,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 29,
+      "elapsedMs": 901657,
+      "cycleDurationMs": 1593.169082999928,
+      "rss": 178241536,
+      "heapTotal": 84459520,
+      "heapUsed": 60071712,
+      "external": 4262410,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 30,
+      "elapsedMs": 933493,
+      "cycleDurationMs": 1833.4050419999985,
+      "rss": 178257920,
+      "heapTotal": 85508096,
+      "heapUsed": 60082096,
+      "external": 5717134,
+      "arrayBuffers": 1387072,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 31,
+      "elapsedMs": 965101,
+      "cycleDurationMs": 1604.8639579999726,
+      "rss": 178274304,
+      "heapTotal": 84983808,
+      "heapUsed": 60100640,
+      "external": 5442876,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 32,
+      "elapsedMs": 996979,
+      "cycleDurationMs": 1874.5484169999836,
+      "rss": 178323456,
+      "heapTotal": 84459520,
+      "heapUsed": 60076040,
+      "external": 4262410,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 33,
+      "elapsedMs": 1028823,
+      "cycleDurationMs": 1840.8642919999547,
+      "rss": 178323456,
+      "heapTotal": 84721664,
+      "heapUsed": 60150768,
+      "external": 5461204,
+      "arrayBuffers": 208902,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 34,
+      "elapsedMs": 1060593,
+      "cycleDurationMs": 1767.31324999989,
+      "rss": 178487296,
+      "heapTotal": 85245952,
+      "heapUsed": 60143528,
+      "external": 4549605,
+      "arrayBuffers": 388594,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 35,
+      "elapsedMs": 1092203,
+      "cycleDurationMs": 1607.5162500001024,
+      "rss": 178618368,
+      "heapTotal": 84983808,
+      "heapUsed": 60198336,
+      "external": 4555005,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 36,
+      "elapsedMs": 1123923,
+      "cycleDurationMs": 1717.1507089999504,
+      "rss": 178831360,
+      "heapTotal": 85508096,
+      "heapUsed": 60201512,
+      "external": 4515854,
+      "arrayBuffers": 247458,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 37,
+      "elapsedMs": 1155667,
+      "cycleDurationMs": 1740.7959159999155,
+      "rss": 178847744,
+      "heapTotal": 85508096,
+      "heapUsed": 60221472,
+      "external": 4544553,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 38,
+      "elapsedMs": 1187536,
+      "cycleDurationMs": 1866.9236669999082,
+      "rss": 178847744,
+      "heapTotal": 83935232,
+      "heapUsed": 60197232,
+      "external": 4261946,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 39,
+      "elapsedMs": 1219341,
+      "cycleDurationMs": 1801.8430830000434,
+      "rss": 178831360,
+      "heapTotal": 84459520,
+      "heapUsed": 60250816,
+      "external": 4261582,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 40,
+      "elapsedMs": 1251263,
+      "cycleDurationMs": 1919.4618329999503,
+      "rss": 178847744,
+      "heapTotal": 84197376,
+      "heapUsed": 60238976,
+      "external": 4260878,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 41,
+      "elapsedMs": 1283751,
+      "cycleDurationMs": 2485.9565000000875,
+      "rss": 178880512,
+      "heapTotal": 84197376,
+      "heapUsed": 60287872,
+      "external": 4326614,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 42,
+      "elapsedMs": 1315385,
+      "cycleDurationMs": 1628.2390840000007,
+      "rss": 178962432,
+      "heapTotal": 85770240,
+      "heapUsed": 60282168,
+      "external": 4517454,
+      "arrayBuffers": 266402,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 43,
+      "elapsedMs": 1347257,
+      "cycleDurationMs": 1870.4120000000112,
+      "rss": 178978816,
+      "heapTotal": 85508096,
+      "heapUsed": 60313896,
+      "external": 4521326,
+      "arrayBuffers": 236422,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 44,
+      "elapsedMs": 1379127,
+      "cycleDurationMs": 1865.6029580000322,
+      "rss": 178978816,
+      "heapTotal": 84197376,
+      "heapUsed": 60292800,
+      "external": 4260878,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 45,
+      "elapsedMs": 1410725,
+      "cycleDurationMs": 1596.2869579999242,
+      "rss": 178978816,
+      "heapTotal": 84459520,
+      "heapUsed": 60349344,
+      "external": 4261150,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 46,
+      "elapsedMs": 1442664,
+      "cycleDurationMs": 1930.9574579999316,
+      "rss": 178978816,
+      "heapTotal": 86818816,
+      "heapUsed": 60366264,
+      "external": 5700482,
+      "arrayBuffers": 1433918,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 47,
+      "elapsedMs": 1474319,
+      "cycleDurationMs": 1653.7089159998577,
+      "rss": 178978816,
+      "heapTotal": 85770240,
+      "heapUsed": 60401072,
+      "external": 5444948,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 48,
+      "elapsedMs": 1508377,
+      "cycleDurationMs": 4055.456917000003,
+      "rss": 178978816,
+      "heapTotal": 85508096,
+      "heapUsed": 60390160,
+      "external": 4330913,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 49,
+      "elapsedMs": 1540914,
+      "cycleDurationMs": 2533.14291699999,
+      "rss": 178995200,
+      "heapTotal": 85245952,
+      "heapUsed": 60387424,
+      "external": 4337471,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 50,
+      "elapsedMs": 1573055,
+      "cycleDurationMs": 2136.414666000055,
+      "rss": 178995200,
+      "heapTotal": 84459520,
+      "heapUsed": 60393520,
+      "external": 4261278,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 51,
+      "elapsedMs": 1604660,
+      "cycleDurationMs": 1595.0417919999454,
+      "rss": 179077120,
+      "heapTotal": 84459520,
+      "heapUsed": 60406464,
+      "external": 4261078,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 52,
+      "elapsedMs": 1636247,
+      "cycleDurationMs": 1583.4514999999665,
+      "rss": 179191808,
+      "heapTotal": 84197376,
+      "heapUsed": 60377296,
+      "external": 4261725,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 53,
+      "elapsedMs": 1668475,
+      "cycleDurationMs": 2227.0550829998683,
+      "rss": 179224576,
+      "heapTotal": 85508096,
+      "heapUsed": 60452496,
+      "external": 5586568,
+      "arrayBuffers": 1268701,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 54,
+      "elapsedMs": 1700062,
+      "cycleDurationMs": 1582.6464580001775,
+      "rss": 179224576,
+      "heapTotal": 85245952,
+      "heapUsed": 60438200,
+      "external": 5452604,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 55,
+      "elapsedMs": 1731632,
+      "cycleDurationMs": 1567.4902089999523,
+      "rss": 179224576,
+      "heapTotal": 84459520,
+      "heapUsed": 60449832,
+      "external": 4260750,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 56,
+      "elapsedMs": 1763513,
+      "cycleDurationMs": 1878.0599169998895,
+      "rss": 179240960,
+      "heapTotal": 84459520,
+      "heapUsed": 60432072,
+      "external": 4622869,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 57,
+      "elapsedMs": 1795268,
+      "cycleDurationMs": 1753.8644169999752,
+      "rss": 179290112,
+      "heapTotal": 84983808,
+      "heapUsed": 60475224,
+      "external": 4260878,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 58,
+      "elapsedMs": 1827121,
+      "cycleDurationMs": 1851.052125000162,
+      "rss": 179355648,
+      "heapTotal": 85770240,
+      "heapUsed": 60455520,
+      "external": 5684824,
+      "arrayBuffers": 1507412,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 59,
+      "elapsedMs": 1858998,
+      "cycleDurationMs": 1873.4619579999708,
+      "rss": 179355648,
+      "heapTotal": 85245952,
+      "heapUsed": 60462432,
+      "external": 4311302,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 60,
+      "elapsedMs": 1890726,
+      "cycleDurationMs": 1723.7171249999665,
+      "rss": 179175424,
+      "heapTotal": 86294528,
+      "heapUsed": 60496256,
+      "external": 5697358,
+      "arrayBuffers": 1367496,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 61,
+      "elapsedMs": 1922643,
+      "cycleDurationMs": 1914.2593749999069,
+      "rss": 179208192,
+      "heapTotal": 84721664,
+      "heapUsed": 60488080,
+      "external": 4260714,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 62,
+      "elapsedMs": 1954569,
+      "cycleDurationMs": 1922.5578749999404,
+      "rss": 179257344,
+      "heapTotal": 84721664,
+      "heapUsed": 60465000,
+      "external": 4260950,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 63,
+      "elapsedMs": 1986448,
+      "cycleDurationMs": 1875.5470410000999,
+      "rss": 179257344,
+      "heapTotal": 85508096,
+      "heapUsed": 60507480,
+      "external": 4261906,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 64,
+      "elapsedMs": 2018449,
+      "cycleDurationMs": 1998.171582999872,
+      "rss": 179273728,
+      "heapTotal": 85770240,
+      "heapUsed": 60482752,
+      "external": 4520645,
+      "arrayBuffers": 217978,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 65,
+      "elapsedMs": 2050291,
+      "cycleDurationMs": 1838.9522499998566,
+      "rss": 179421184,
+      "heapTotal": 84983808,
+      "heapUsed": 60521160,
+      "external": 4261762,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 66,
+      "elapsedMs": 2082154,
+      "cycleDurationMs": 1861.9432079999242,
+      "rss": 179421184,
+      "heapTotal": 84721664,
+      "heapUsed": 60503312,
+      "external": 4261997,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 67,
+      "elapsedMs": 2114024,
+      "cycleDurationMs": 1865.8799169999547,
+      "rss": 179421184,
+      "heapTotal": 85508096,
+      "heapUsed": 60534120,
+      "external": 5442404,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 68,
+      "elapsedMs": 2145911,
+      "cycleDurationMs": 1886.322208000347,
+      "rss": 179421184,
+      "heapTotal": 85770240,
+      "heapUsed": 60557640,
+      "external": 5683424,
+      "arrayBuffers": 1457876,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 69,
+      "elapsedMs": 2177856,
+      "cycleDurationMs": 1939.9949580002576,
+      "rss": 179421184,
+      "heapTotal": 84721664,
+      "heapUsed": 60548232,
+      "external": 4262194,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 70,
+      "elapsedMs": 2209728,
+      "cycleDurationMs": 1869.0169999999925,
+      "rss": 179421184,
+      "heapTotal": 85770240,
+      "heapUsed": 60536768,
+      "external": 4555241,
+      "arrayBuffers": 232002,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 71,
+      "elapsedMs": 2241586,
+      "cycleDurationMs": 1855.5937920003198,
+      "rss": 179470336,
+      "heapTotal": 85245952,
+      "heapUsed": 60585024,
+      "external": 5452604,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 72,
+      "elapsedMs": 2273491,
+      "cycleDurationMs": 1900.848166000098,
+      "rss": 179486720,
+      "heapTotal": 84721664,
+      "heapUsed": 60531832,
+      "external": 4260878,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 73,
+      "elapsedMs": 2305409,
+      "cycleDurationMs": 1916.9755420000292,
+      "rss": 179486720,
+      "heapTotal": 86032384,
+      "heapUsed": 60576848,
+      "external": 4516654,
+      "arrayBuffers": 270402,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 74,
+      "elapsedMs": 2337285,
+      "cycleDurationMs": 1873.4004160002805,
+      "rss": 179486720,
+      "heapTotal": 86556672,
+      "heapUsed": 60623360,
+      "external": 4299340,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 75,
+      "elapsedMs": 2369409,
+      "cycleDurationMs": 2122.6578750000335,
+      "rss": 179503104,
+      "heapTotal": 86556672,
+      "heapUsed": 60644560,
+      "external": 5697866,
+      "arrayBuffers": 1461518,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 76,
+      "elapsedMs": 2401183,
+      "cycleDurationMs": 1772.1947920001112,
+      "rss": 179503104,
+      "heapTotal": 85770240,
+      "heapUsed": 60619104,
+      "external": 4517454,
+      "arrayBuffers": 244402,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 77,
+      "elapsedMs": 2433007,
+      "cycleDurationMs": 1821.7870829999447,
+      "rss": 179503104,
+      "heapTotal": 84721664,
+      "heapUsed": 60662280,
+      "external": 4261150,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 78,
+      "elapsedMs": 2464924,
+      "cycleDurationMs": 1913.9990829997696,
+      "rss": 179503104,
+      "heapTotal": 85770240,
+      "heapUsed": 60649792,
+      "external": 4583605,
+      "arrayBuffers": 269002,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 79,
+      "elapsedMs": 2496832,
+      "cycleDurationMs": 1904.3902500001714,
+      "rss": 179503104,
+      "heapTotal": 84459520,
+      "heapUsed": 60657072,
+      "external": 4261618,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 80,
+      "elapsedMs": 2529525,
+      "cycleDurationMs": 2690.974124999717,
+      "rss": 179503104,
+      "heapTotal": 85770240,
+      "heapUsed": 60691808,
+      "external": 4552277,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 81,
+      "elapsedMs": 2561462,
+      "cycleDurationMs": 1934.0661670002155,
+      "rss": 179503104,
+      "heapTotal": 84721664,
+      "heapUsed": 60695064,
+      "external": 4262086,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 82,
+      "elapsedMs": 2593347,
+      "cycleDurationMs": 1883.5006669997238,
+      "rss": 179503104,
+      "heapTotal": 86294528,
+      "heapUsed": 60702640,
+      "external": 5406408,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 83,
+      "elapsedMs": 2625292,
+      "cycleDurationMs": 1942.8738329997286,
+      "rss": 179503104,
+      "heapTotal": 85508096,
+      "heapUsed": 60752376,
+      "external": 5442276,
+      "arrayBuffers": 223910,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 84,
+      "elapsedMs": 2657132,
+      "cycleDurationMs": 1837.438542000018,
+      "rss": 179552256,
+      "heapTotal": 86032384,
+      "heapUsed": 60756504,
+      "external": 4546733,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 85,
+      "elapsedMs": 2688990,
+      "cycleDurationMs": 1852.6742500001565,
+      "rss": 179552256,
+      "heapTotal": 86556672,
+      "heapUsed": 60801832,
+      "external": 5698158,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 86,
+      "elapsedMs": 2720787,
+      "cycleDurationMs": 1795.2753750002012,
+      "rss": 179552256,
+      "heapTotal": 85245952,
+      "heapUsed": 60759024,
+      "external": 4260750,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 87,
+      "elapsedMs": 2752626,
+      "cycleDurationMs": 1836.7082919999957,
+      "rss": 179568640,
+      "heapTotal": 86294528,
+      "heapUsed": 60818424,
+      "external": 4478710,
+      "arrayBuffers": 380618,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 88,
+      "elapsedMs": 2784467,
+      "cycleDurationMs": 1839.2513749999925,
+      "rss": 179601408,
+      "heapTotal": 85245952,
+      "heapUsed": 60777640,
+      "external": 4261850,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 89,
+      "elapsedMs": 2816283,
+      "cycleDurationMs": 1812.0655420003459,
+      "rss": 179601408,
+      "heapTotal": 85770240,
+      "heapUsed": 60835144,
+      "external": 4262194,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 90,
+      "elapsedMs": 2848129,
+      "cycleDurationMs": 1845.305583000183,
+      "rss": 179601408,
+      "heapTotal": 87343104,
+      "heapUsed": 60860136,
+      "external": 5698858,
+      "arrayBuffers": 1469910,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 91,
+      "elapsedMs": 2879970,
+      "cycleDurationMs": 1838.5687500000931,
+      "rss": 179601408,
+      "heapTotal": 85508096,
+      "heapUsed": 60835328,
+      "external": 4260986,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 92,
+      "elapsedMs": 2911740,
+      "cycleDurationMs": 1766.8169580004178,
+      "rss": 179601408,
+      "heapTotal": 85508096,
+      "heapUsed": 60826008,
+      "external": 4263457,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 93,
+      "elapsedMs": 2943545,
+      "cycleDurationMs": 1803.5816669999622,
+      "rss": 179601408,
+      "heapTotal": 85245952,
+      "heapUsed": 60874336,
+      "external": 4260878,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 94,
+      "elapsedMs": 2975348,
+      "cycleDurationMs": 1801.7992920000106,
+      "rss": 179699712,
+      "heapTotal": 85770240,
+      "heapUsed": 60878112,
+      "external": 4261162,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 95,
+      "elapsedMs": 3007290,
+      "cycleDurationMs": 1940.1203330000862,
+      "rss": 179683328,
+      "heapTotal": 85245952,
+      "heapUsed": 60937424,
+      "external": 4262050,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 96,
+      "elapsedMs": 3039116,
+      "cycleDurationMs": 1823.6973749999888,
+      "rss": 179716096,
+      "heapTotal": 87605248,
+      "heapUsed": 60957056,
+      "external": 5697830,
+      "arrayBuffers": 1310279,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 97,
+      "elapsedMs": 3070994,
+      "cycleDurationMs": 1873.8501249998808,
+      "rss": 179748864,
+      "heapTotal": 86818816,
+      "heapUsed": 60950136,
+      "external": 4550261,
+      "arrayBuffers": 235422,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 98,
+      "elapsedMs": 3103215,
+      "cycleDurationMs": 2217.7669999999925,
+      "rss": 179781632,
+      "heapTotal": 85770240,
+      "heapUsed": 60951960,
+      "external": 5447404,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 99,
+      "elapsedMs": 3135050,
+      "cycleDurationMs": 1832.2598749999888,
+      "rss": 179781632,
+      "heapTotal": 86294528,
+      "heapUsed": 60965840,
+      "external": 5446004,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 100,
+      "elapsedMs": 3166854,
+      "cycleDurationMs": 1802.198874999769,
+      "rss": 179781632,
+      "heapTotal": 85508096,
+      "heapUsed": 60928096,
+      "external": 4260889,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 101,
+      "elapsedMs": 3198705,
+      "cycleDurationMs": 1848.3342909999192,
+      "rss": 179798016,
+      "heapTotal": 85508096,
+      "heapUsed": 60983368,
+      "external": 4261809,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 102,
+      "elapsedMs": 3230608,
+      "cycleDurationMs": 1898.5435830000788,
+      "rss": 179798016,
+      "heapTotal": 85508096,
+      "heapUsed": 60973016,
+      "external": 5444425,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 103,
+      "elapsedMs": 3262499,
+      "cycleDurationMs": 1886.695374999661,
+      "rss": 179830784,
+      "heapTotal": 85508096,
+      "heapUsed": 61004104,
+      "external": 4622695,
+      "arrayBuffers": 398203,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 104,
+      "elapsedMs": 3294313,
+      "cycleDurationMs": 1812.4643329996616,
+      "rss": 179830784,
+      "heapTotal": 85508096,
+      "heapUsed": 61012384,
+      "external": 4261609,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 105,
+      "elapsedMs": 3326205,
+      "cycleDurationMs": 1891.528249999974,
+      "rss": 179863552,
+      "heapTotal": 85770240,
+      "heapUsed": 61044432,
+      "external": 4262297,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 106,
+      "elapsedMs": 3358041,
+      "cycleDurationMs": 1831.7774169999175,
+      "rss": 179879936,
+      "heapTotal": 85508096,
+      "heapUsed": 60992856,
+      "external": 4260925,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 107,
+      "elapsedMs": 3389896,
+      "cycleDurationMs": 1851.3452500002459,
+      "rss": 179896320,
+      "heapTotal": 86818816,
+      "heapUsed": 61043264,
+      "external": 4515665,
+      "arrayBuffers": 255807,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 108,
+      "elapsedMs": 3421814,
+      "cycleDurationMs": 1916.2537920000032,
+      "rss": 179896320,
+      "heapTotal": 86294528,
+      "heapUsed": 61035608,
+      "external": 5575497,
+      "arrayBuffers": 209591,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 109,
+      "elapsedMs": 3453686,
+      "cycleDurationMs": 1869.1109159998596,
+      "rss": 179896320,
+      "heapTotal": 86032384,
+      "heapUsed": 61047512,
+      "external": 5455297,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 110,
+      "elapsedMs": 3485565,
+      "cycleDurationMs": 1876.573416000232,
+      "rss": 179896320,
+      "heapTotal": 85245952,
+      "heapUsed": 61041568,
+      "external": 4261737,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 111,
+      "elapsedMs": 3517476,
+      "cycleDurationMs": 1907.7304159998894,
+      "rss": 179896320,
+      "heapTotal": 85770240,
+      "heapUsed": 61086296,
+      "external": 4260997,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 112,
+      "elapsedMs": 3549308,
+      "cycleDurationMs": 1829.3214579997584,
+      "rss": 179896320,
+      "heapTotal": 85245952,
+      "heapUsed": 61035296,
+      "external": 4261341,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 113,
+      "elapsedMs": 3581180,
+      "cycleDurationMs": 1868.3339999997988,
+      "rss": 179896320,
+      "heapTotal": 86556672,
+      "heapUsed": 61099272,
+      "external": 5583097,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 114,
+      "elapsedMs": 3612950,
+      "cycleDurationMs": 1767.8060000003316,
+      "rss": 179912704,
+      "heapTotal": 87867392,
+      "heapUsed": 61092880,
+      "external": 5697379,
+      "arrayBuffers": 1443851,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 115,
+      "elapsedMs": 3644866,
+      "cycleDurationMs": 1912.751792000141,
+      "rss": 179912704,
+      "heapTotal": 85508096,
+      "heapUsed": 61074376,
+      "external": 4261161,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 116,
+      "elapsedMs": 3676776,
+      "cycleDurationMs": 1907.0906250001863,
+      "rss": 179912704,
+      "heapTotal": 85245952,
+      "heapUsed": 61064352,
+      "external": 4622695,
+      "arrayBuffers": 385347,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 117,
+      "elapsedMs": 3708604,
+      "cycleDurationMs": 1827.3354170001112,
+      "rss": 179912704,
+      "heapTotal": 86032384,
+      "heapUsed": 61114824,
+      "external": 4261881,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 118,
+      "elapsedMs": 3740528,
+      "cycleDurationMs": 1920.9555420000106,
+      "rss": 179929088,
+      "heapTotal": 85508096,
+      "heapUsed": 61080272,
+      "external": 4622695,
+      "arrayBuffers": 325629,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 119,
+      "elapsedMs": 3772415,
+      "cycleDurationMs": 1884.2105829999782,
+      "rss": 179929088,
+      "heapTotal": 85770240,
+      "heapUsed": 61142560,
+      "external": 4261305,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 120,
+      "elapsedMs": 3804289,
+      "cycleDurationMs": 1871.4136250000447,
+      "rss": 179929088,
+      "heapTotal": 85508096,
+      "heapUsed": 61133848,
+      "external": 4262693,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 121,
+      "elapsedMs": 3836158,
+      "cycleDurationMs": 1860.6962919998914,
+      "rss": 179929088,
+      "heapTotal": 85770240,
+      "heapUsed": 61140696,
+      "external": 4260889,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 122,
+      "elapsedMs": 3868059,
+      "cycleDurationMs": 1897.2046669996344,
+      "rss": 179929088,
+      "heapTotal": 85770240,
+      "heapUsed": 61124056,
+      "external": 4277513,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 123,
+      "elapsedMs": 3899921,
+      "cycleDurationMs": 1859.9116250001825,
+      "rss": 179929088,
+      "heapTotal": 85508096,
+      "heapUsed": 61138216,
+      "external": 4261557,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 124,
+      "elapsedMs": 3931790,
+      "cycleDurationMs": 1868.1666659996845,
+      "rss": 179929088,
+      "heapTotal": 85508096,
+      "heapUsed": 61109200,
+      "external": 4261809,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 125,
+      "elapsedMs": 3963600,
+      "cycleDurationMs": 1807.0470839999616,
+      "rss": 179929088,
+      "heapTotal": 86556672,
+      "heapUsed": 61172016,
+      "external": 4549326,
+      "arrayBuffers": 387547,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 126,
+      "elapsedMs": 3995423,
+      "cycleDurationMs": 1821.157500000205,
+      "rss": 180060160,
+      "heapTotal": 86818816,
+      "heapUsed": 61225760,
+      "external": 4553891,
+      "arrayBuffers": 221614,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 127,
+      "elapsedMs": 4027297,
+      "cycleDurationMs": 1869.8729159999639,
+      "rss": 180076544,
+      "heapTotal": 85770240,
+      "heapUsed": 61198056,
+      "external": 4261427,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 128,
+      "elapsedMs": 4059213,
+      "cycleDurationMs": 1913.7574579999782,
+      "rss": 180076544,
+      "heapTotal": 85770240,
+      "heapUsed": 61193896,
+      "external": 4622929,
+      "arrayBuffers": 381181,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 129,
+      "elapsedMs": 4091130,
+      "cycleDurationMs": 1913.7557079996914,
+      "rss": 180076544,
+      "heapTotal": 86294528,
+      "heapUsed": 61235064,
+      "external": 4262399,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 130,
+      "elapsedMs": 4122974,
+      "cycleDurationMs": 1841.0819580000825,
+      "rss": 180076544,
+      "heapTotal": 86818816,
+      "heapUsed": 61213008,
+      "external": 5448926,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 131,
+      "elapsedMs": 4154861,
+      "cycleDurationMs": 1885.0003750002943,
+      "rss": 180076544,
+      "heapTotal": 86556672,
+      "heapUsed": 61250216,
+      "external": 4477555,
+      "arrayBuffers": 297246,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 132,
+      "elapsedMs": 4186611,
+      "cycleDurationMs": 1746.6954590003006,
+      "rss": 180076544,
+      "heapTotal": 85770240,
+      "heapUsed": 61209840,
+      "external": 4262111,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 133,
+      "elapsedMs": 4218477,
+      "cycleDurationMs": 1864.6403330005705,
+      "rss": 180076544,
+      "heapTotal": 86032384,
+      "heapUsed": 61262040,
+      "external": 4261211,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 134,
+      "elapsedMs": 4250250,
+      "cycleDurationMs": 1768.6835420001298,
+      "rss": 180092928,
+      "heapTotal": 85508096,
+      "heapUsed": 61207176,
+      "external": 4260775,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 135,
+      "elapsedMs": 4282058,
+      "cycleDurationMs": 1807.5389580000192,
+      "rss": 180092928,
+      "heapTotal": 86032384,
+      "heapUsed": 61251384,
+      "external": 5602258,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 136,
+      "elapsedMs": 4313901,
+      "cycleDurationMs": 1839.555499999784,
+      "rss": 180109312,
+      "heapTotal": 85770240,
+      "heapUsed": 61196272,
+      "external": 4261895,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 137,
+      "elapsedMs": 4345769,
+      "cycleDurationMs": 1865.0142500000075,
+      "rss": 180109312,
+      "heapTotal": 87605248,
+      "heapUsed": 61307728,
+      "external": 5697572,
+      "arrayBuffers": 1480024,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 138,
+      "elapsedMs": 4377654,
+      "cycleDurationMs": 1883.3171660006046,
+      "rss": 180125696,
+      "heapTotal": 85508096,
+      "heapUsed": 61293192,
+      "external": 4258503,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 139,
+      "elapsedMs": 4409556,
+      "cycleDurationMs": 1899.7759170001373,
+      "rss": 180125696,
+      "heapTotal": 86032384,
+      "heapUsed": 61268992,
+      "external": 4262075,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 140,
+      "elapsedMs": 4441447,
+      "cycleDurationMs": 1888.8594169998541,
+      "rss": 180125696,
+      "heapTotal": 86818816,
+      "heapUsed": 61228064,
+      "external": 4520751,
+      "arrayBuffers": 253086,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 141,
+      "elapsedMs": 4473293,
+      "cycleDurationMs": 1842.5868750000373,
+      "rss": 180125696,
+      "heapTotal": 86032384,
+      "heapUsed": 61262712,
+      "external": 4260903,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 142,
+      "elapsedMs": 4505162,
+      "cycleDurationMs": 1867.6209170008078,
+      "rss": 151666688,
+      "heapTotal": 86032384,
+      "heapUsed": 61253816,
+      "external": 4261175,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 143,
+      "elapsedMs": 4536987,
+      "cycleDurationMs": 1820.9435840006918,
+      "rss": 151666688,
+      "heapTotal": 86818816,
+      "heapUsed": 61279400,
+      "external": 4551855,
+      "arrayBuffers": 209346,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 144,
+      "elapsedMs": 4568915,
+      "cycleDurationMs": 1926.5178749999031,
+      "rss": 151666688,
+      "heapTotal": 86032384,
+      "heapUsed": 61244168,
+      "external": 4260903,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 145,
+      "elapsedMs": 4600786,
+      "cycleDurationMs": 1867.3247079998255,
+      "rss": 151666688,
+      "heapTotal": 85770240,
+      "heapUsed": 61292096,
+      "external": 4260703,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 146,
+      "elapsedMs": 4632686,
+      "cycleDurationMs": 1897.5265419995412,
+      "rss": 151666688,
+      "heapTotal": 86556672,
+      "heapUsed": 61288168,
+      "external": 5449326,
+      "arrayBuffers": 210066,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 147,
+      "elapsedMs": 4664610,
+      "cycleDurationMs": 1920.816916000098,
+      "rss": 151666688,
+      "heapTotal": 86294528,
+      "heapUsed": 61309320,
+      "external": 4484115,
+      "arrayBuffers": 229014,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 148,
+      "elapsedMs": 4696433,
+      "cycleDurationMs": 1820.492041000165,
+      "rss": 151699456,
+      "heapTotal": 86294528,
+      "heapUsed": 61285296,
+      "external": 5584814,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 149,
+      "elapsedMs": 4728215,
+      "cycleDurationMs": 1781.1860830001533,
+      "rss": 151699456,
+      "heapTotal": 85508096,
+      "heapUsed": 61310008,
+      "external": 4622929,
+      "arrayBuffers": 379381,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 150,
+      "elapsedMs": 4760116,
+      "cycleDurationMs": 1898.5462920004502,
+      "rss": 151699456,
+      "heapTotal": 85770240,
+      "heapUsed": 61277352,
+      "external": 4261011,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 151,
+      "elapsedMs": 4791856,
+      "cycleDurationMs": 1738.5038750004023,
+      "rss": 151699456,
+      "heapTotal": 86032384,
+      "heapUsed": 61302584,
+      "external": 4262383,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 152,
+      "elapsedMs": 4823737,
+      "cycleDurationMs": 1879.4984579999,
+      "rss": 151699456,
+      "heapTotal": 87343104,
+      "heapUsed": 61311912,
+      "external": 4520679,
+      "arrayBuffers": 242470,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 153,
+      "elapsedMs": 4855632,
+      "cycleDurationMs": 1891.7168340003118,
+      "rss": 151699456,
+      "heapTotal": 86294528,
+      "heapUsed": 61352288,
+      "external": 5581326,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 154,
+      "elapsedMs": 4887499,
+      "cycleDurationMs": 1863.5250000003725,
+      "rss": 151699456,
+      "heapTotal": 85770240,
+      "heapUsed": 61317632,
+      "external": 4261931,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 155,
+      "elapsedMs": 4919436,
+      "cycleDurationMs": 1934.5250420002267,
+      "rss": 151699456,
+      "heapTotal": 86032384,
+      "heapUsed": 61347304,
+      "external": 4260775,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 156,
+      "elapsedMs": 4951306,
+      "cycleDurationMs": 1867.9798750001937,
+      "rss": 151699456,
+      "heapTotal": 86556672,
+      "heapUsed": 61331904,
+      "external": 4281927,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 157,
+      "elapsedMs": 4983176,
+      "cycleDurationMs": 1866.3873330000788,
+      "rss": 151699456,
+      "heapTotal": 87080960,
+      "heapUsed": 61353792,
+      "external": 4557691,
+      "arrayBuffers": 210678,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 158,
+      "elapsedMs": 5015099,
+      "cycleDurationMs": 1914.8989169998094,
+      "rss": 151715840,
+      "heapTotal": 87605248,
+      "heapUsed": 61307256,
+      "external": 4584855,
+      "arrayBuffers": 342806,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 159,
+      "elapsedMs": 5046961,
+      "cycleDurationMs": 1859.1189169995487,
+      "rss": 151715840,
+      "heapTotal": 86818816,
+      "heapUsed": 61410888,
+      "external": 4549219,
+      "arrayBuffers": 304786,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 160,
+      "elapsedMs": 5078869,
+      "cycleDurationMs": 1903.0193340005353,
+      "rss": 151715840,
+      "heapTotal": 86556672,
+      "heapUsed": 61378816,
+      "external": 4545947,
+      "arrayBuffers": 230670,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 161,
+      "elapsedMs": 5110679,
+      "cycleDurationMs": 1808.5468330001459,
+      "rss": 151715840,
+      "heapTotal": 86556672,
+      "heapUsed": 61370800,
+      "external": 5441254,
+      "arrayBuffers": 1292570,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 162,
+      "elapsedMs": 5142587,
+      "cycleDurationMs": 1902.2969159996137,
+      "rss": 151715840,
+      "heapTotal": 87080960,
+      "heapUsed": 61378440,
+      "external": 5698008,
+      "arrayBuffers": 1526596,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 163,
+      "elapsedMs": 5174554,
+      "cycleDurationMs": 1963.6211670003831,
+      "rss": 151715840,
+      "heapTotal": 86556672,
+      "heapUsed": 61376240,
+      "external": 5582326,
+      "arrayBuffers": 207942,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 164,
+      "elapsedMs": 5206458,
+      "cycleDurationMs": 1901.338957999833,
+      "rss": 151715840,
+      "heapTotal": 87343104,
+      "heapUsed": 61340184,
+      "external": 4518951,
+      "arrayBuffers": 411158,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 165,
+      "elapsedMs": 5238333,
+      "cycleDurationMs": 1874.1404579998925,
+      "rss": 151715840,
+      "heapTotal": 86032384,
+      "heapUsed": 61375648,
+      "external": 4260903,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 166,
+      "elapsedMs": 5270249,
+      "cycleDurationMs": 1912.040916999802,
+      "rss": 151715840,
+      "heapTotal": 85770240,
+      "heapUsed": 61340520,
+      "external": 4260975,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 167,
+      "elapsedMs": 5302174,
+      "cycleDurationMs": 1922.1463329996914,
+      "rss": 151748608,
+      "heapTotal": 85770240,
+      "heapUsed": 61380000,
+      "external": 4260975,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 168,
+      "elapsedMs": 5334134,
+      "cycleDurationMs": 1956.0939579997212,
+      "rss": 151748608,
+      "heapTotal": 87867392,
+      "heapUsed": 61419168,
+      "external": 5698604,
+      "arrayBuffers": 1439356,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 169,
+      "elapsedMs": 5366009,
+      "cycleDurationMs": 1871.9883750006557,
+      "rss": 151748608,
+      "heapTotal": 86294528,
+      "heapUsed": 61400088,
+      "external": 4262579,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 170,
+      "elapsedMs": 5397819,
+      "cycleDurationMs": 1807.4558340003714,
+      "rss": 151748608,
+      "heapTotal": 85770240,
+      "heapUsed": 61387176,
+      "external": 4260703,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    }
+  ],
+  "limitations": [
+    "Scripted loopback responses measure lifecycle invariants, not model decisions or quality.",
+    "Post-GC heap and active resource trends are diagnostics; RSS growth alone does not prove a leak.",
+    "The temporary workspace is replaced each cycle; this does not emulate a single ever-growing production transcript.",
+    "Private chats, credentials and real providers are not accessed. No default policy or rollout setting changes."
+  ],
+  "finishedAt": "2026-10-11T21:39:15.142Z",
+  "finalResources": [
+    "TCPServerWrap",
+    "TCPSocketWrap"
+  ],
+  "finalMemory": {
+    "rss": 151748608,
+    "heapTotal": 84983808,
+    "heapUsed": 61272432,
+    "external": 4165074,
+    "arrayBuffers": 167104
+  }
+}

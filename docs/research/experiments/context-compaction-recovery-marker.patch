@@ -1,0 +1,34 @@
+--- a/generation-context.ts
++++ b/generation-context.ts
+@@ -333,14 +333,30 @@
+   return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
+ }
+ 
++/**
++ * Retain only the bounded, complete suffix emitted by boundedToolOutput. The
++ * reference remains untrusted tool data: only read_tool_output's chat/scope
++ * checks grant access. Do not preserve surrounding output as instructions.
++ */
++function toolOutputRecoveryMarker(message: ToolResultMessage): string {
++  for (let index = message.content.length - 1; index >= 0; index -= 1) {
++    const part = message.content[index];
++    if (part.type !== "text") continue;
++    const match = /(?:^|\n)(\[Output preview\. Read retained output with read_tool_output handle=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}; offsets are UTF-16 characters\. Retained [0-9]{1,10} of [0-9]{1,10} characters, for up to 7 days subject to storage limits\.\])$/u.exec(part.text.slice(-400));
++    if (match) return `\n${match[1]}`;
++  }
++  return "";
++}
++
+ function compactedToolResult(message: ToolResultMessage): ToolResultMessage {
++  const recovery = toolOutputRecoveryMarker(message);
+   const outcome = message.isError ? "error payload" : "result payload";
+   return {
+     ...message,
+     content: [
+       {
+         type: "text",
+-        text: `[Earlier ${message.toolName} ${outcome} omitted to stay within the model context window. This tool call already completed; do not repeat it solely because its payload was omitted.]`,
++        text: `[Earlier ${message.toolName} ${outcome} omitted to stay within the model context window. This tool call already completed; do not repeat it solely because its payload was omitted.]${recovery}`,
+       },
+     ],
+   };

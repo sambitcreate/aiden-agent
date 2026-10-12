@@ -1,0 +1,106 @@
+{
+  "evidenceKind": "local-research-validation-summary",
+  "generatedAt": "2026-10-11T22:06:34.750471+00:00",
+  "status": "passed",
+  "baselineCommit": "203a8f2082aaa60c3d22bc8b464a7f29541606dd",
+  "implementationPatchSha256": "81cdd9350c85cc8f38a0955039457f4e4e3db5ef838dd4c1736c613e22b8c2a6",
+  "sourceFilesMatchManifest": true,
+  "typescript": {
+    "total": 8449,
+    "passed": 8447,
+    "existingSkips": 2
+  },
+  "cli": {
+    "passed": 85,
+    "includedInRootTestChain": true
+  },
+  "androidFocused": {
+    "passed": 102
+  },
+  "iosSimulatorFocused": {
+    "passed": 4
+  },
+  "electron": {
+    "expandedPassed": 24,
+    "compactionQueuePassed": 2,
+    "foregroundSmoke": "passed",
+    "retries": 0,
+    "scope": "Earlier relevant built revision; final MCP marker change covered by actual-store regression and final full root chain."
+  },
+  "finalContextComparisons": 11520,
+  "offlineTaskOracles": {
+    "tasks": 6,
+    "acceptedValidControls": 7,
+    "rejectedInvalidControls": 22
+  },
+  "soaks": {
+    "freshWorkspace": {
+      "status": "passed",
+      "startedAt": "2026-10-11T20:09:15.127Z",
+      "finishedAt": "2026-10-11T21:39:15.142Z",
+      "counts": {
+        "requests": 1360,
+        "binds": 680,
+        "shutdowns": 680,
+        "disposals": 680,
+        "completedTurns": 680,
+        "cycles": 170
+      }
+    },
+    "persistentJournals": {
+      "status": "passed",
+      "startedAt": "2026-10-11T20:46:26.167Z",
+      "finishedAt": "2026-10-11T22:05:00.209Z",
+      "counts": {
+        "cycles": 104,
+        "completedTurns": 210,
+        "requests": 420,
+        "binds": 210,
+        "shutdowns": 210,
+        "disposals": 210,
+        "restarts": 1,
+        "wholePromptChecks": 420,
+        "journalChecks": 210,
+        "compactionEntries": 0
+      }
+    }
+  },
+  "checks": {
+    "rootTypes": "passed",
+    "researchTypes": "passed",
+    "eslint54Files": "passed",
+    "productionBuild": "passed",
+    "pythonSyntax": "passed",
+    "jsonParse": "passed",
+    "diffWhitespace": "passed"
+  },
+  "receiptSha256": {
+    "implementation-manifest.json": "f0b1af30a4187b55cf27044bf562111fc4ca9a99dfedf79346d716307994f0f5",
+    "context-independent-campaign-final-marker-results.json": "590b9d4a41ee6ae9ffd57c57241a399df5f3a9629e0c4df460df8a3ce52037b9",
+    "cli-daemon-lifecycle-soak-results.json": "30cc1568e9aa6c7d76e814ae4b0c289ee37f4f5741efedcef86acd812e99e870",
+    "cli-daemon-persistent-soak-results.json": "0dbfe26c5d76b51b1c8f0c04f3206c9907389b0f39445e46f383835b6d9d1503",
+    "task-quality-fixtures/validation-results.json": "7165f304035bf0878591dd48bb1bf9ab0c268cf8008ce189c9b711272d4c9fbf",
+    "task-quality-fixtures/pilot-manifest.json": "fcbde7d8fe5a33afcb590572f53279f4932cd46bb570e520ab76a887bf0765a7"
+  },
+  "localLogSha256": {
+    "/tmp/aiden-harness-research-full-tests-6.log": "2da5fd6edea596487eb01a3b6e169e2d35c13175e8f6cf5148419593be339f96",
+    "/tmp/aiden-context-final-marker-types.log": "07a852086e1c3c979726733c374270be1edce62a3d2e8d011692a872c5cf2b27",
+    "/tmp/aiden-harness-research-production-build-3.log": "874b64d53bbedefde55ee7134282771aeb25bd09e8cb2a65c5116203baba1ecf",
+    "/tmp/aiden-harness-final-artifact-types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/aiden-harness-final-artifact-lint.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/aiden-harness-ios-tests.log": "f8e1bf171e225700582f5408e68630765804df2501e6973435fc4cf732cab171",
+    "/tmp/aiden-harness-android-tests.log": "455cd89092e8cba4b421570ed1a94e496048b14cc76146295bffcbd97da7640e",
+    "/tmp/aiden-harness-tool-turns-electron.log": "cdc34c9bf1b36a5016fd795207abf4f6d91557b57dc0a3c7bf95d27b4bce6645",
+    "/tmp/aiden-harness-compaction-electron.log": "1f1ba173afe4cd6a5e298050c74a84360d10b18fc8644ce87d2d84560a4c0796",
+    "/tmp/aiden-harness-foreground-electron.log": "707ed9c543e03ec256a4be899770ed7d81dd5ec80d046d52b70bda1e45b9653e",
+    "/tmp/aiden-cli-daemon-lifecycle-soak.log": "5277ae1d42fa2b7e4725f67791e7334f52d2d2af61c5e4d3502a903a2a0a4a6a",
+    "/tmp/aiden-cli-daemon-persistent-soak.log": "f30e163eb895ae919142f1c239f85dd00069684769149c3b377654bdef992348"
+  },
+  "limitations": [
+    "Local uncommitted work; no hosted CI, signed release or rollout acceptance.",
+    "Synthetic providers and fixtures do not measure Astra task success, billed cost or generalization.",
+    "Native tests used a simulator/unit tests, not physical devices.",
+    "Earlier timing receipts retain their earlier source hashes; final optimization equivalence applies the correctness repair to both arms.",
+    "Soak resource samples are diagnostics, not a general leak-freedom proof."
+  ]
+}

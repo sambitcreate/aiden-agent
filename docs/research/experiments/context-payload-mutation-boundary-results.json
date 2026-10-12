@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-10-11T20:24:13.432Z",
+  "evidenceKind": "offline-managed-postprojection-payload-mutation",
+  "node": "v22.22.3",
+  "sourceSha256": "96ce402e2f62ada87026c69ce8d5dea633f06f3703eaccfea625caf0326680ca",
+  "rows": [
+    {
+      "payloadExpansion": 0,
+      "projections": [
+        12
+      ],
+      "streamCalls": 1,
+      "trace": [
+        "extension-payload",
+        "host-payload"
+      ],
+      "capturedChars": 216,
+      "payloadSha256": "7a5c57c27640105c28b721a91d5ff724b3adc2ef5c03c93e61e706c0a152655f",
+      "outcomeKind": "provider_failed"
+    },
+    {
+      "payloadExpansion": 40000,
+      "projections": [
+        12
+      ],
+      "streamCalls": 1,
+      "trace": [
+        "extension-payload",
+        "host-payload"
+      ],
+      "capturedChars": 40276,
+      "payloadSha256": "f2d4c8ff44f113e31e824d60110e549769191265dfaa82fcee8d7187cf8289f8",
+      "outcomeKind": "provider_failed"
+    }
+  ],
+  "networkDispatches": 0,
+  "limitations": [
+    "Trusted synthetic extension exercises an existing intentional capability, not an untrusted prompt injection or newly established production defect.",
+    "Final capture deliberately causes a provider failure before dispatch; no successful inference, token count, or billing result measured.",
+    "Payload character count is not a provider tokenizer; opaque payload-transform strata require distinct accounting before staged-elision savings claims."
+  ]
+}

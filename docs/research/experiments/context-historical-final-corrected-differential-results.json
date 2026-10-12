@@ -1,0 +1,26 @@
+{
+  "evidenceKind": "exact-baseline-differential",
+  "seed": 260920805,
+  "cases": 1515,
+  "pruningCases": 1018,
+  "fallbackCases": 59,
+  "baselineModuleSha256": "629adad876fd24c73c1c5a01635643f7d11fc1e97fbb197c8cc608f999b64910",
+  "candidateModuleSha256": "873cabae72d8caa85960aafb941c975d8848fb67d26224decab7fb0ecb241173",
+  "outputSetSha256": "ddba98928c3c3437f9ec0b701a2799d74667e4037f7c2cdc0381e9cec7deff5c",
+  "elapsedMs": 1788.398416,
+  "coverage": [
+    "zero and matching/mismatched usage",
+    "anchor at first/middle/last assistant",
+    "leading checkpoint/system/non-user prefix",
+    "system section revisions",
+    "tool batches and error results",
+    "active large tool result",
+    "Unicode",
+    "zero/few/many historical turns",
+    "oversized active user fallback",
+    "reserve boundary neighbors",
+    "exact total-input budget -1/0/+1",
+    "duplicate anchor identity in history/prefix/active"
+  ],
+  "limitations": "Synthetic valid histories and exact old-code comparison; no real-model quality or billed-token inference."
+}

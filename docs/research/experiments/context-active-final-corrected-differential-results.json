@@ -1,0 +1,12 @@
+{
+  "evidenceKind": "exact-active-path-differential",
+  "seed": 260920806,
+  "cases": 466,
+  "baselineModuleSha256": "cf1f93c31c978de927265bc613bd082da75688b4781206b6e268f8ff38c7dc5d",
+  "candidateModuleSha256": "873cabae72d8caa85960aafb941c975d8848fb67d26224decab7fb0ecb241173",
+  "replacementCases": 450,
+  "batchRemovalCases": 264,
+  "fallbackCases": 64,
+  "outputSetSha256": "c32332d8ba80e80c36d085def499d08293ce3021d628c2030319d533ddcfa8f6",
+  "limitations": "Synthetic exact equivalence, includes signed-growth nonmonotonic control, mixed tiny/large/error/image/recovery evidence, system patches, fractional ratios and parallel-result batches; no live model claims."
+}
