@@ -92,23 +92,25 @@ test("the shortcut footnote steps aside while a custom answer is being written",
   assert.deepEqual(responses, []);
 });
 
+// The composer moves focus on the next animation frame. Compare by identity: a
+// failing assert.equal would try to print the whole happy-dom node graph.
+function expectFocusOn(role: "button" | "textbox", name: RegExp) {
+  return waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole(role, { name }),
+      `focus is on <${document.activeElement?.tagName}> ${document.activeElement?.textContent ?? ""}`,
+    ),
+  );
+}
+
 test("moving to the next question keeps focus in the card so shortcuts keep working", async () => {
   const { responses } = mount([question("Database"), question("Region")]);
-  // Compare by identity: a failing assert.equal would try to print the whole happy-dom node graph.
-  const expectFocusOn = (name: RegExp) =>
-    waitFor(() =>
-      assert.ok(
-        document.activeElement === screen.getByRole("button", { name }),
-        `focus is on <${document.activeElement?.tagName}> ${document.activeElement?.textContent ?? ""}`,
-      ),
-    );
-  // The composer moves focus on the next animation frame.
-  await expectFocusOn(/Database A/u);
+  await expectFocusOn("button", /Database A/u);
 
   fireEvent.keyDown(document.activeElement!, { key: "1" });
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
   // Keys reach the card only through the focused element, so focus must not fall to the body.
-  await expectFocusOn(/Region A/u);
+  await expectFocusOn("button", /Region A/u);
 
   fireEvent.keyDown(document.activeElement!, { key: "2" });
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
@@ -118,4 +120,15 @@ test("moving to the next question keeps focus in the card so shortcuts keep work
       { questionIndex: 1, kind: "option", answer: "Region B" },
     ],
   ]);
+});
+
+test("closing a custom answer with Esc hands focus back to the options", async () => {
+  mount([question("Database")]);
+  fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
+  await expectFocusOn("textbox", /Custom answer/u);
+
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  await expectFocusOn("button", /Database A/u);
+  fireEvent.keyDown(document.activeElement!, { key: "2" });
+  assert.equal(screen.getByRole("button", { name: /Database B/u }).getAttribute("aria-pressed"), "true");
 });

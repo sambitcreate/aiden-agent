@@ -40,16 +40,16 @@ export function AskUserQuestionComposer({
     setCustomOpen(false);
   }, [prompt.promptId]);
 
-  // Advancing replaces the focused row when the next question's labels differ, so
-  // focus would fall to the body and the card's shortcuts would stop working.
-  // Tab-strip navigation keeps focus on its tab and is left alone.
+  // Advancing replaces the focused row when the next question's labels differ, and
+  // closing the custom field removes it, so focus would fall to the body and the
+  // card's shortcuts would stop working. Focus already in the card is left alone.
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
       if (cardRef.current?.contains(document.activeElement)) return;
       (customRef.current ?? optionRefs.current[0])?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [prompt.promptId, activeIndex]);
+  }, [prompt.promptId, activeIndex, customOpen]);
 
   const response = React.useCallback(
     (cancelled: boolean, resolvedAnswers = answers) =>
