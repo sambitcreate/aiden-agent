@@ -101,15 +101,5 @@ test("declining an attended proposal tells the model to continue the conversatio
   assert.match(client, /Okay—what else should we do\?/u);
 });
 
-test("repeated attended tool errors are bounded before they can loop indefinitely", () => {
-  const client = source("../llm-client.ts");
-  assert.match(client, /prepareNextTurnWithContext/u);
-  assert.match(client, /advanceAttendedToolErrorState/u);
-  assert.match(client, /recoverAttendedToolErrorContext\(nextContext\)/u);
-  assert.doesNotMatch(client, /candidate\?\.abort\(\)/u);
-
-  const guard = source("./tool-loop-guard.ts");
-  assert.match(guard, /MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS = 2/u);
-  assert.match(guard, /result\.isError === true/u);
-  assert.match(guard, /tools: \[\]/u);
-});
+// Attended retry limits and final recovery requests are exercised through the
+// real managed runtime in tool-loop-guard.test.ts.

@@ -87,6 +87,25 @@ test("executable replays emit the complete passing scorecard from observed outco
   );
 });
 
+test("replay rejects a summary that loses a decision available only in old history", async () => {
+  let historicalDecisionObserved = false;
+  const measurements = await runPiUpgradeReplayCases({
+    transformSummary: (text) => {
+      if (text.includes("HISTORY-long_coding_chat")) historicalDecisionObserved = true;
+      return text.split("HISTORY-long_coding_chat").join("[decision omitted]");
+    },
+  });
+  assert.equal(historicalDecisionObserved, true, "the summarizer received the old decision");
+  const coding = measurements.find(({ caseId }) => caseId === "long_coding_chat")!;
+  assert.equal(coding.continuationCorrect, false);
+  assert.equal(coding.pendingReferencesExpected - coding.pendingReferencesRetained, 1);
+  assert.equal(measurements.filter(({ continuationCorrect }) => !continuationCorrect).length, 1);
+  const report = evaluatePiUpgradeReplay(measurements);
+  assert.equal(report.passed, false);
+  assert.ok(report.failures.includes("continuation_correctness"));
+  assert.ok(report.failures.includes("pending_reference_retention"));
+});
+
 test("rollout eligibility is staged and the exact-zero rollback is fail-closed", () => {
   const oldChat = { createdAt: 1_000, messages: Array.from({ length: 150 }, () => ({})) } as never;
   const newChat = { createdAt: 3_000, messages: [] } as never;

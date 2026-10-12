@@ -333,14 +333,30 @@ function projectRequestMessages(messages: readonly AgentMessage[], supportsImage
   return limitBrowserSnapshotImages(limitComputerUseImages(projectMessagesForModel(messages, supportsImages)));
 }
 
+/**
+ * Retain only the bounded, complete suffix emitted by boundedToolOutput. The
+ * reference remains untrusted tool data: only read_tool_output's chat/scope
+ * checks grant access. Do not preserve surrounding output as instructions.
+ */
+function toolOutputRecoveryMarker(message: ToolResultMessage): string {
+  for (let index = message.content.length - 1; index >= 0; index -= 1) {
+    const part = message.content[index];
+    if (part.type !== "text") continue;
+    const match = /(?:^|\n)(\[Output preview\. Read retained output with read_tool_output handle=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}; offsets are UTF-16 characters\. Retained [0-9]{1,10} of [0-9]{1,10} characters, for up to 7 days subject to storage limits\.\])$/u.exec(part.text.slice(-400));
+    if (match) return `\n${match[1]}`;
+  }
+  return "";
+}
+
 function compactedToolResult(message: ToolResultMessage): ToolResultMessage {
+  const recovery = toolOutputRecoveryMarker(message);
   const outcome = message.isError ? "error payload" : "result payload";
   return {
     ...message,
     content: [
       {
         type: "text",
-        text: `[Earlier ${message.toolName} ${outcome} omitted to stay within the model context window. This tool call already completed; do not repeat it solely because its payload was omitted.]`,
+        text: `[Earlier ${message.toolName} ${outcome} omitted to stay within the model context window. This tool call already completed; do not repeat it solely because its payload was omitted.]${recovery}`,
       },
     ],
   };
@@ -383,13 +399,25 @@ function truncateToolResult(message: ToolResultMessage): {
     return { message, truncated: false };
   }
   const images = message.content.filter((part) => part.type === "image");
+  const recovery = toolOutputRecoveryMarker(message);
+  let truncatedText = truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS);
+  if (recovery && !text.endsWith(recovery)) {
+    // Text-only image projection can append a notice after the preview part.
+    // Preserve that notice and move the one bounded recovery suffix to the end,
+    // rather than losing it when text parts are joined and later elided.
+    const marker = recovery.slice(1);
+    const markerIndex = text.lastIndexOf(marker);
+    const start = markerIndex > 0 && text[markerIndex - 1] === "\n" ? markerIndex - 1 : markerIndex;
+    const withoutMarker = text.slice(0, start) + text.slice(markerIndex + marker.length);
+    truncatedText = truncateText(withoutMarker, TOOL_RESULT_TEXT_LIMIT_CHARS - recovery.length) + recovery;
+  }
   return {
     message: {
       ...message,
       content: [
         {
           type: "text",
-          text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS),
+          text: truncatedText,
         },
         ...images,
       ],
@@ -531,21 +559,38 @@ export function chatContextPressureFromProjection(
   };
 }
 
-function removeOldHistoricalTurn(
+function removeOldHistoricalTurns(
   messages: AgentMessage[],
   preserveUserTurns: number,
+  usageAnchor: AgentMessage | undefined,
+  overBudget: (candidate: AgentMessage[]) => boolean,
 ): number {
-  const currentUser = lastUserIndex(messages);
-  if (currentUser <= 0) return 0;
   const userIndexes = messages
     .map((message, index) => (message.role === "user" ? index : -1))
     .filter((index) => index >= 0);
   if (userIndexes.length <= preserveUserTurns) return 0;
-  const nextUser = userIndexes[1];
-  if (nextUser === undefined || nextUser > currentUser) return 0;
   const firstUser = userIndexes[0];
-  if (firstUser === undefined) return 0;
-  const removed = nextUser - firstUser;
+  // System updates have already been consolidated before this stage. Removing
+  // complete oldest turns only decreases the unchanged token estimate, even
+  // when it drops the usage anchor. Find the same first fitting prefix without
+  // rescanning and splicing the whole transcript once per historical turn.
+  const prefix = messages.slice(0, firstUser);
+  let low = 1;
+  let high = userIndexes.length - preserveUserTurns;
+  // A repeated object reference can move indexOf(usageAnchor) to a later
+  // occurrence when a prefix is removed, making the estimate nonmonotone.
+  // Keep the original first-fitting scan for this uncommon in-memory shape.
+  if (usageAnchor && messages.indexOf(usageAnchor) !== messages.lastIndexOf(usageAnchor)) {
+    while (low < high && overBudget([...prefix, ...messages.slice(userIndexes[low])])) low += 1;
+  } else {
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = [...prefix, ...messages.slice(userIndexes[middle])];
+      if (overBudget(candidate)) low = middle + 1;
+      else high = middle;
+    }
+  }
+  const removed = userIndexes[low] - firstUser;
   messages.splice(firstUser, removed);
   return removed;
 }
@@ -593,7 +638,11 @@ function protectedRecentToolResults(
   return protectedIndexes;
 }
 
-function removeOldestCurrentTurnBatch(messages: AgentMessage[]): number {
+function removeOldestCurrentTurnBatches(
+  messages: AgentMessage[],
+  usageAnchor: AgentMessage | undefined,
+  overBudget: (candidate: AgentMessage[]) => boolean,
+): number {
   const currentUser = lastUserIndex(messages);
   if (currentUser < 0) return 0;
   const assistantIndexes: number[] = [];
@@ -602,10 +651,45 @@ function removeOldestCurrentTurnBatch(messages: AgentMessage[]): number {
   }
   if (assistantIndexes.length <= 1) return 0;
   const start = assistantIndexes[0];
-  const end = assistantIndexes[1];
-  if (start === undefined || end === undefined) return 0;
-  messages.splice(start, end - start);
-  return end - start;
+  const prefix = messages.slice(0, start);
+  let low = 1;
+  let high = assistantIndexes.length - 1;
+  if (usageAnchor && messages.indexOf(usageAnchor) !== messages.lastIndexOf(usageAnchor)) {
+    while (low < high && overBudget([...prefix, ...messages.slice(assistantIndexes[low])])) low += 1;
+  } else {
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (overBudget([...prefix, ...messages.slice(assistantIndexes[middle])])) low = middle + 1;
+      else high = middle;
+    }
+  }
+  const removed = assistantIndexes[low] - start;
+  messages.splice(start, removed);
+  return removed;
+}
+
+interface ActiveMessageCosts {
+  total: number;
+  prefix: number;
+  anchorIndex: number;
+}
+
+/** Only after system consolidation: retained system-update surcharges are zero. */
+function activeMessageCosts(messages: AgentMessage[], anchor: AgentMessage | undefined): ActiveMessageCosts | undefined {
+  const anchorIndex = anchor ? messages.indexOf(anchor) : -1;
+  let total = 0;
+  let prefix = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role === "system") {
+      if (index !== 0) return undefined;
+      continue;
+    }
+    const tokens = estimateTokens(message);
+    total += tokens;
+    if (index <= anchorIndex) prefix += tokens;
+  }
+  return { total, prefix, anchorIndex };
 }
 
 interface GenerationContextLimits {
@@ -784,21 +868,41 @@ export function compactGenerationContext(
   }
 
   let truncatedToolResults = 0;
-  const transformed = retained.map((message) => {
+  let transformed = retained.map((message) => {
     if (!isToolResult(message)) return message;
     const truncated = truncateToolResult(message);
     if (truncated.truncated) truncatedToolResults += 1;
     return truncated.message;
   });
-  const overBudget = () =>
-    estimatedTotalTokens(transformed) > inputBudgetTokens;
+  let activeCosts: ActiveMessageCosts | undefined;
+  const overBudget = () => {
+    if (!activeCosts) return estimatedTotalTokens(transformed) > inputBudgetTokens;
+    const heuristic = staticTokens + activeCosts.total;
+    const tokens = activeCosts.anchorIndex < 0 ? heuristic : Math.max(
+      heuristic,
+      staticTokens + activeCosts.prefix * providerPrefixRatio + (activeCosts.total - activeCosts.prefix),
+    );
+    return Math.ceil(tokens) > inputBudgetTokens;
+  };
+  const replaceResult = (index: number): boolean => {
+    const old = transformed[index];
+    if (!old || !isToolResult(old)) return false;
+    const before = activeCosts ? estimateTokens(old) : 0;
+    if (!replaceToolResult(transformed, index)) return false;
+    if (activeCosts) {
+      const delta = estimateTokens(transformed[index]) - before;
+      activeCosts.total += delta;
+      if (index <= activeCosts.anchorIndex) activeCosts.prefix += delta;
+    }
+    return true;
+  };
   // A refreshed AGENTS/browser/MCP section may sit between historical turns.
   // Replay the effective prompt and tool state before any history is removed.
   if (overBudget()) {
     const currentSystem = getCurrentSystemMessage(transformed);
     if (currentSystem) {
-      transformed.splice(0, transformed.length, currentSystem,
-        ...transformed.filter((message) => message.role !== "system"));
+      transformed = [currentSystem,
+        ...transformed.filter((message) => message.role !== "system")];
     }
   }
   let removedHistoryMessages = 0;
@@ -807,13 +911,17 @@ export function compactGenerationContext(
   let usedContextFallback = false;
 
   // Match OpenCode's preference for keeping the two newest user turns.
-  while (overBudget()) {
-    const removed = removeOldHistoricalTurn(transformed, 2);
-    if (!removed) break;
-    removedHistoryMessages += removed;
+  if (overBudget()) {
+    removedHistoryMessages += removeOldHistoricalTurns(
+      transformed,
+      2,
+      usageAnchor,
+      (candidate) => estimatedTotalTokens(candidate) > inputBudgetTokens,
+    );
   }
 
   if (overBudget()) {
+    activeCosts = activeMessageCosts(transformed, usageAnchor);
     const toolIndexes = currentTurnToolResultIndexes(transformed);
     const recentBudget = Math.min(
       RECENT_TOOL_OUTPUT_BUDGET_TOKENS,
@@ -828,15 +936,16 @@ export function compactGenerationContext(
     for (const index of toolIndexes) {
       if (!overBudget()) break;
       if (protectedIndexes.has(index)) continue;
-      if (replaceToolResult(transformed, index)) compactedToolResults += 1;
+      if (replaceResult(index)) compactedToolResults += 1;
     }
 
     const newestProtected = [...protectedIndexes].sort(
       (left, right) => left - right,
     );
-    while (overBudget() && newestProtected.length > MIN_RECENT_TOOL_RESULTS) {
-      const index = newestProtected.shift();
-      if (index !== undefined && replaceToolResult(transformed, index)) {
+    let protectedCursor = 0;
+    while (overBudget() && newestProtected.length - protectedCursor > MIN_RECENT_TOOL_RESULTS) {
+      const index = newestProtected[protectedCursor++];
+      if (index !== undefined && replaceResult(index)) {
         compactedToolResults += 1;
       }
     }
@@ -859,14 +968,18 @@ export function compactGenerationContext(
       const start = Math.max(systemPrefixEnd, checkpointIndex >= 0 ? checkpointIndex + 1 : 0);
       const removed = currentUser - start;
       transformed.splice(start, removed);
+      if (activeCosts) activeCosts = activeMessageCosts(transformed, usageAnchor);
       removedHistoryMessages += removed;
     }
   }
 
-  while (overBudget()) {
-    const removed = removeOldestCurrentTurnBatch(transformed);
-    if (!removed) break;
-    removedCurrentTurnMessages += removed;
+  if (overBudget()) {
+    removedCurrentTurnMessages += removeOldestCurrentTurnBatches(
+      transformed,
+      usageAnchor,
+      (candidate) => estimatedTotalTokens(candidate) > inputBudgetTokens,
+    );
+    if (activeCosts) activeCosts = activeMessageCosts(transformed, usageAnchor);
   }
 
   // This is an extreme fallback for small-context local models: keep the latest
@@ -882,7 +995,7 @@ export function compactGenerationContext(
         message.content[0]?.type === "text" &&
         !message.content[0].text.includes("payload omitted to stay within")
       ) {
-        if (replaceToolResult(transformed, index)) compactedToolResults += 1;
+        if (replaceResult(index)) compactedToolResults += 1;
       }
     }
   }

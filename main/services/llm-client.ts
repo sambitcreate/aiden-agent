@@ -270,10 +270,7 @@ import {
   assertScheduledProviderFingerprint,
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
-import {
-  advanceAttendedToolErrorState,
-  recoverAttendedToolErrorContext,
-} from "./assistant/tool-loop-guard.js";
+import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
@@ -2247,7 +2244,6 @@ export const llmClient = {
     }
 
     const deniedToolCalls = new Set<string>();
-    let consecutiveAttendedToolErrorTurns = 0;
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
       sendGeneration(streamId, "chat:timeline", {
         streamId,
@@ -3007,34 +3003,25 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        prepareNextTurnWithContext: async ({ toolResults, context }, requestSignal) => {
-          let nextContext = await prepareCustomModelToolContext(
-            context,
-            browserDiscovery?.prepare.bind(browserDiscovery),
-            runtime.provider.modelMetadata?.[model.id]?.overrides,
-          );
-          if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
-          let changed = nextContext !== context;
-          if (changed) {
-            updateGenerationContextOptions(generationContextOptions, nextContext);
-          }
-          if (attendedAssistant) {
-            const state = advanceAttendedToolErrorState(
-              consecutiveAttendedToolErrorTurns,
-              toolResults,
+        prepareNextTurnWithContext: createPiTurnContextPreparation({
+          generationOptions: generationContextOptions,
+          attended: attendedAssistant,
+          prepareContext: async (context, requestSignal) => {
+            let prepared = await prepareCustomModelToolContext(
+              context,
+              browserDiscovery?.prepare.bind(browserDiscovery),
+              runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
-            consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
-            if (state.shouldStop) {
-              logger.warn(
-                "pi",
-                `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
-              );
-              nextContext = recoverAttendedToolErrorContext(nextContext);
-              changed = true;
-            }
-          }
-          return changed ? { context: nextContext } : undefined;
-        },
+            if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
+            return prepared;
+          },
+          onRecovery: () => {
+            logger.warn(
+              "pi",
+              `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+            );
+          },
+        }),
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
           timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);

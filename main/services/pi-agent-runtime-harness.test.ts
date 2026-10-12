@@ -3570,3 +3570,39 @@ test("deferred MCP schemas stay outside provider requests while discovery and ap
   const fresh = testHarness([], { initialState: { tools: [codemode] } }).harness;
   assert.deepEqual(fresh.getCallableTools().map((tool) => tool.name), ["codemode"]);
 });
+
+test("a persisted system-only prefix adds no hidden summary before bounded active fallback", async () => {
+  const requests: string[] = [];
+  for (const persistSystem of [false, true]) {
+    let summaryCalls = 0;
+    const systemPrompt = "Required policy ".padEnd(44_000, "s");
+    const currentUser: AgentMessage = { role: "user", content: "CURRENT_REQUEST_47 ".padEnd(4_000, "u"), timestamp: 2 };
+    const messages: AgentMessage[] = persistSystem
+      ? [{ role: "system", content: systemPrompt, timestamp: 1 }, currentUser]
+      : [currentUser];
+    const { core, harness, session } = await managedTestHarness([
+      (context) => {
+        const users = context.messages.filter((message) => message.role === "user");
+        requests.push(JSON.stringify(users.map((message) => message.content)));
+        return fauxAssistantMessage("bounded fallback acknowledged");
+      },
+    ], {
+      initialSystemPrompt: systemPrompt, initialMessages: messages, contextWindow: 16_000,
+      generationContextTransform: true,
+      summaryResponses: [() => { summaryCalls += 1; return fauxAssistantMessage("Do not summarize an empty conversation"); }],
+    });
+    await appendPiMessages(session, messages);
+    const before = await session.getEntries();
+    const outcome = await harness.runManaged({ kind: "continue-durable-tail" });
+    assert.equal(outcome.kind, "completed");
+    assert.equal(outcome.emergencyProjection?.kind, "active_payload_replaced");
+    assert.equal(summaryCalls, 0, `persisted system=${persistSystem}`);
+    assert.equal(core.state.callCount, 1);
+    const after = await session.getEntries();
+    assert.deepEqual(after.slice(0, before.length), before, "original durable evidence remains intact");
+    assert.equal(after.some((entry) => entry.type === "compaction"), false);
+  }
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0], requests[1], "provider-facing bounded user fallback is independent of persisted system placement");
+  assert.doesNotMatch(requests[0], /CURRENT_REQUEST_47/u, "the oversized active user was replaced rather than silently truncated");
+});
