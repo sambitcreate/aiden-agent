@@ -15,6 +15,10 @@ import {
 import { normalizeComputerUseArgs } from "./safety.js";
 import { createComputerUseAgentTool } from "./tool.js";
 import { authorizeAllowedComputerUseAction } from "./access-gate.js";
+import {
+  BOT_COMPUTER_USE_REVOKED_REASON,
+  botComputerUseApproval,
+} from "../bot-runtime/bot-computer-use-approval.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import {
   FakeCuaDriver,
@@ -1533,5 +1537,40 @@ test("in an allowed chat, input actions run without a card but keep target bindi
   );
   // Observations need no grant at all.
   await authorizeAllowedComputerUseAction(controller, "observe", { action: "list_apps" });
+  await controller.close();
+});
+
+test("a durable Bot's input action whose grant is revoked while its card waits never reaches the driver", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const click = { action: "click", element: 0 } as const;
+  let granted = true;
+  let revoked = 0;
+  const access = {
+    granted: async () => granted,
+    revoke: async () => {
+      revoked += 1;
+    },
+  };
+
+  const approval = await botComputerUseApproval(
+    controller,
+    { callId: "bot-click", args: click, signal: undefined },
+    access,
+  );
+  assert.ok(approval?.onAllow);
+  // Reset chat permissions runs while the card waits; then the person allows.
+  granted = false;
+  await assert.rejects(async () => approval.onAllow?.(), new RegExp(BOT_COMPUTER_USE_REVOKED_REASON));
+  await assert.rejects(() => controller.execute("bot-click", click), /not approved/u);
+  assert.equal(session.calls.some((call) => call.name === "click"), false);
+  assert.equal(revoked, 1);
+
+  // Later calls, observations included, are refused before any driver work.
+  await assert.rejects(
+    () => botComputerUseApproval(controller, { callId: "bot-list", args: { action: "list_apps" }, signal: undefined }, access),
+    new RegExp(BOT_COMPUTER_USE_REVOKED_REASON),
+  );
+  assert.equal(revoked, 2);
   await controller.close();
 });

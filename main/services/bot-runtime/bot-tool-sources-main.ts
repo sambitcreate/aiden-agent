@@ -26,7 +26,6 @@ import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
 import { computerUseStatus } from "../computer-use/status.js";
 import type { ComputerUseController } from "../computer-use/controller.js";
-import type { ComputerUseArgs } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
@@ -51,6 +50,7 @@ import {
   visionCandidate,
 } from "./bot-tool-candidates.js";
 import type { BotToolCall } from "./tool-adapter.js";
+import { botComputerUseApproval } from "./bot-computer-use-approval.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
@@ -368,20 +368,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
       const controller = controllers.get(botId);
       if (!controller) throw new Error("Computer Use is not enabled for this response.");
-      // A running turn keeps its controller, so re-check the grant on every
-      // call: Reset chat permissions or Always allow turning off must stop
-      // even an observation mid-turn.
-      if (!(await computerUseGranted(botId))) {
-        await closeController(botId);
-        throw new Error("Computer Use access was revoked. Ask the user to allow it again.");
-      }
-      const args = call.args as ComputerUseArgs;
-      const descriptor = await controller.approvalFor(args, call.signal);
-      if (!descriptor) return null;
-      return {
-        summary: descriptor.summary,
-        onAllow: () => controller.authorize(call.callId, args, descriptor),
-      };
+      return botComputerUseApproval(controller, call, {
+        granted: () => computerUseGranted(botId),
+        revoke: () => closeController(botId),
+      });
     },
 
     async shutdown() {
