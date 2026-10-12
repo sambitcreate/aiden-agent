@@ -9,6 +9,18 @@ function currentSystemVersion(): string {
   return electronProcess.getSystemVersion?.() ?? "0";
 }
 
+/**
+ * Cheap, synchronous checks for an OS or build where Computer Use can never
+ * run: the broker needs macOS 14.4+, and the driver bridge only verifies
+ * inside a signed packaged app. Readiness (permissions, driver integrity) is
+ * probed only when a call needs it.
+ */
+export function computerUseCanEverRun(): boolean {
+  return (
+    app.isPackaged && computerUsePlatformSupported(process.platform, currentSystemVersion())
+  );
+}
+
 /** Resolve and construct one authenticated, generation- or probe-owned driver host. */
 export async function createCuaDriverHost(signal: AbortSignal): Promise<CuaDriverHost> {
   if (!computerUsePlatformSupported(process.platform, currentSystemVersion())) {

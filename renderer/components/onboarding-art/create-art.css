@@ -127,7 +127,7 @@
 .oa-cu-pointer svg { width: 100%; height: 100%; fill: var(--accent); stroke: var(--accent-foreground); stroke-width: 1.5; }
 .oa-cu-approval { display: grid; gap: 6px; padding: 8px; }
 .oa-cu-approval .oa-strong { font-size: 8px; line-height: 10px; }
-.oa-cu-shield {
+.oa-cu-badge {
   display: grid;
   place-items: center;
   width: 17px;
@@ -137,7 +137,7 @@
   background: var(--status-warning-surface);
   color: var(--status-warning);
 }
-.oa-cu-shield .oa-icon { width: 9px; height: 9px; }
+.oa-cu-badge .oa-icon { width: 9px; height: 9px; }
 
 /* Native Subagents */
 .oa-sub-window { padding: 2px 5px; }

@@ -426,6 +426,8 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  /** Clear every chat's Computer Use grant and turn off Always allow. */
+  resetChatGrants: () => invoke<{ cleared: number }>("computerUse:resetChatGrants"),
 };
 
 export const formFillApi = {

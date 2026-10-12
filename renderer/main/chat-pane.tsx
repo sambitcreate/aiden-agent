@@ -2666,13 +2666,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 // without a chatId reset of its own.
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-                readinessSettingsSection={
-                  !chatReadinessMessage
-                    ? modelReadinessMessage
-                      ? "providers"
-                      : undefined
-                    : undefined
-                }
+                readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
                     ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."

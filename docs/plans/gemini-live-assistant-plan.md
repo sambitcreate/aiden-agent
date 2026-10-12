@@ -390,7 +390,9 @@ tool catalog is unchanged.
 - Review remediation adds the missing user-owned authority control to Live
   setup: Computer Use is visibly off by default, reads global helper readiness,
   and changes only the exact active hidden Assistant chat through
-  `chats:setComputerUse`. Ordinary Assistant streaming and pending automation
+  `chats:setComputerUse` (since removed with the per-chat composer toggle; see
+  [Computer Use on request](computer-use-on-request-plan.md), where chats ask
+  once on first use). Ordinary Assistant streaming and pending automation
   approvals disable both setup entry and confirmation with an explicit recovery
   message, while exact-session Live approvals remain visible. Revoking either
   Computer Use gate now terminates the whole Live session consistently:

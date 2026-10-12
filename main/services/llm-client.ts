@@ -170,6 +170,7 @@ import {
   authorizeAllowedComputerUseAction,
   COMPUTER_USE_ACCESS_SUMMARY,
   createComputerUseAccessGate,
+  type ComputerUseAccessDecision,
 } from "./computer-use/access-gate.js";
 import {
   COMPUTER_USE_ACCESS_APPROVAL_KIND,
@@ -221,7 +222,7 @@ import {
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
 import type { PiSessionPort } from "./pi-session-port.js";
-import { createComputerUseController } from "./computer-use/runtime.js";
+import { computerUseCanEverRun, createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
@@ -258,6 +259,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
+  activateComputerUseStream,
   activatedComputerUseStreamIds,
   cancelComputerUseAndSettle,
   ComputerUseGenerationGate,
@@ -505,6 +507,8 @@ interface ActiveGeneration {
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
   computerUse?: ComputerUseController;
+  /** Set when a computer_use or fill_form call first reaches the access gate. */
+  computerUseActivated?: boolean;
   formFill?: FormFillService;
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
@@ -797,7 +801,7 @@ async function prepareGeneration(
   botContext: BotGenerationAuthorityContext | undefined,
   signal: AbortSignal,
   computerUseGateSnapshot: number,
-  activatedComputerUse: (controller: ComputerUseController) => void,
+  ownComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
   rendererOwner: boolean,
   browserOwner: ChatGenerationOwner,
@@ -1008,28 +1012,23 @@ async function prepareGeneration(
     model,
     params.thinkingLevel ?? savedThinkingLevel,
   );
-  if (chat.computerUsePendingContinue === true) {
-    // Any new turn in the chat supersedes the post-restart Continue callout.
-    try {
-      await chatStore.setComputerUsePendingContinue(chat.id, false);
-    } catch (error) {
-      logger.warn("pi", "Could not clear the chat's Computer Use continue marker.", error);
-    }
-  }
-  // With the beta on, the model always gets the tool. Access is asked once per
-  // chat on its first call (see computer-use/access-gate.ts), and the
+  // With the beta on, the model always gets the tool on a build and OS that
+  // can run it (a cheap static check; no driver probe here). Access is asked
+  // once per chat on its first call (see computer-use/access-gate.ts), and the
   // controller only starts its driver host on first use, so readiness is
-  // checked there rather than here.
+  // checked there rather than here. Offering the tool does not count as using
+  // Computer Use: the stream is activated only on its first call.
   let computerUse: ComputerUseController | undefined;
   if (
     computerUseSupported() &&
+    computerUseCanEverRun() &&
     options.allowComputerUse !== false &&
     (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
   ) {
     computerUse = createComputerUseController(streamId, supportsImages);
-    activatedComputerUse(computerUse);
+    ownComputerUse(computerUse);
   }
   // The Form Fill Specialist is layered on Computer Use: it exists only when
   // CU itself is available and ready for this generation, the user enabled the
@@ -2294,9 +2293,35 @@ export const llmClient = {
           grantAlways: () => configStore.setSettings({ computerUseAlwaysAllow: true }),
           setPendingContinue: (pending) =>
             chatStore.setComputerUsePendingContinue(params.chatId, pending),
+          cancellationOrigin: () =>
+            active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin,
           warn: (message, error) => logger.warn("pi", message, error),
         })
       : undefined;
+    // computer_use and fill_form share the access gate. The first call marks
+    // the stream as using Computer Use, so only such streams are cancelled
+    // when the beta, Form Fill or its model goes away.
+    const authorizeComputerUseAccess = async (
+      toolCallId: string,
+      accessSignal?: AbortSignal,
+    ): Promise<ComputerUseAccessDecision> => {
+      if (!computerUseAccess) {
+        return { allowed: false, reason: "Computer Use is not enabled for this response." };
+      }
+      if (
+        !activateComputerUseStream(
+          computerUseGenerationGate,
+          computerUseGateSnapshot,
+          active.get(streamId),
+        )
+      ) {
+        return {
+          allowed: false,
+          reason: "Computer Use was turned off during this response. Ask again to use it.",
+        };
+      }
+      return computerUseAccess.authorize(toolCallId, accessSignal);
+    };
     if (formFill) {
       formFill.progressSink = (toolCallId, completed, total) =>
         timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
@@ -3124,10 +3149,10 @@ export const llmClient = {
               }
               return { block: true, reason };
             };
-            if (!computerUse || !computerUseAccess) {
+            if (!computerUse) {
               return blockComputerUse("Computer Use is not enabled for this response.");
             }
-            const access = await computerUseAccess.authorize(context.toolCall.id, signal);
+            const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) return blockComputerUse(access.reason);
             // The chat is allowed, so input actions run without a per-action card.
             try {
@@ -3152,6 +3177,15 @@ export const llmClient = {
                 block: true,
                 reason: "The Form Fill Specialist is not enabled or its model is not ready.",
               };
+            }
+            // Form Fill drives the computer, so it needs the same chat access.
+            const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
+            if (!access.allowed) {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason: access.reason };
             }
             try {
               const descriptor = await formFill.approvalFor(context.args, signal);
@@ -3987,6 +4021,16 @@ export const llmClient = {
         params.workspaceId,
       );
       return false;
+    }
+
+    if (generationChat.computerUsePendingContinue === true) {
+      // A new turn that actually started supersedes the post-restart Continue
+      // callout. Cleared only now, so a start that fails keeps it.
+      try {
+        await chatStore.setComputerUsePendingContinue(params.chatId, false);
+      } catch (error) {
+        logger.warn("pi", "Could not clear the chat's Computer Use continue marker.", error);
+      }
     }
 
     // Accepted steer input that Pi never emitted into the visible chat (Stop,

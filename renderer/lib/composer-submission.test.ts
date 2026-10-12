@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { composerSubmissionAllowed, type ComposerSubmissionStateInput } from "./computer-use-control.js";
+import { composerSubmissionAllowed, type ComposerSubmissionStateInput } from "./composer-submission.js";
 
 const readyState: ComposerSubmissionStateInput = {
   ready: true,

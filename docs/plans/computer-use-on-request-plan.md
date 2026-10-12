@@ -1,6 +1,8 @@
 # Computer Use on request (remove the composer toggle)
 
-Status: proposed (2026-10-12, revised after owner review)
+Status: implemented on `feature/remove-computer-use-button-48b6ae` (2026-10-12),
+PR pending. Revised after owner review and after the first code review (the
+"Review revisions" section at the end records what changed).
 
 ## Goal
 
@@ -47,8 +49,14 @@ setting on, platform supported, bot capability, and `allowComputerUse`.
 - The per-chat flag and readiness move out of the gate.
 - The controller is created lazily. Its driver host starts only on the first
   call, so creating it before permissions are granted is safe.
-- An unsupported platform or build (an old macOS, an unsigned dev build) still
-  hides the tool, because no permission can fix those.
+- An unsupported platform or build (macOS older than 14.4, an unpackaged dev
+  build) still hides the tool, because no permission can fix those. This is a
+  cheap static check at generation start (`computerUseCanEverRun()` in
+  `computer-use/runtime.ts`); the driver probe runs only at call time.
+- Offering the tool does not count as using Computer Use. A stream is marked
+  as using it (`computerUseActivated`) only when its first `computer_use` or
+  `fill_form` call reaches the access gate, and only such streams are
+  cancelled when the beta, Form Fill or the Form Fill model goes away.
 - `COMPUTER_USE_AGENT_GUIDANCE` gains one line: the first use in a chat asks the
   user, and a declined request must not be retried in that chat until the user
   asks for it.
@@ -66,10 +74,14 @@ In `beforeToolCall`, before the per-action path:
   - Summary: "Use your computer in this chat". Details: screenshots and
     accessibility text go to the selected model, and Aiden can click and type
     in your apps. This replaces the composer privacy notice.
-  - **Allow for this chat** persists the grant on the chat record. Rename
-    `chat.computerUseEnabled` to `chat.computerUseAllowed`, with no migration
-    because this is pre-1.0.
-  - **Always allow** sets the new global setting `computerUseAlwaysAllow`.
+  - **Allow for this chat** (scope `chat`) persists the grant on the chat
+    record. Rename `chat.computerUseEnabled` to `chat.computerUseAllowed`,
+    with no migration because this is pre-1.0.
+  - **Always allow** (scope `always`) sets the new global setting
+    `computerUseAlwaysAllow`.
+  - A bare allow or scope `once` (what a phone's **Allow once** sends) covers
+    only this response and persists nothing.
+  - `fill_form` passes the same gate before its own plan card.
   - **Deny** blocks the call with "The user declined Computer Use in this
     chat." The denial holds for the rest of that response, so the model can't
     nag. The next user message can raise the card again.
@@ -104,8 +116,15 @@ relaunches itself.
 
 - When main raises the card while status isn't ready, it persists
   `chat.computerUsePendingContinue = true`.
-- An allow or deny decision clears the marker. So does the start of the next
-  generation in that chat.
+- A deny clears the marker. An allow clears it only if the Mac is ready when
+  the decision lands; otherwise the call is blocked with the setup reason and
+  the marker stays. The start of the next generation in that chat clears it
+  once that generation has actually started.
+- **Stop** during the card clears the marker. Only an app quit (and a detached
+  renderer) keeps it.
+- A granted chat whose Mac is not ready (permissions revoked later, or a
+  parallel call after an allow) does not raise the card again: it sets the
+  marker and blocks with "Finish Computer Use setup on your Mac".
 - After relaunch, a chat with the marker shows a callout above the composer.
   - When status is ready: "Computer Use is ready. Continue where Aiden left
     off?" with **Continue** and **Dismiss**.
@@ -122,10 +141,19 @@ are blocked without a card, and the next user message can raise it again.
 - New row "Always allow in every chat" (a switch), bound to
   `computerUseAlwaysAllow`. Off by default, and set from the card or here.
   Turning it off does not revoke chats that were allowed individually.
+- **Reset chat permissions** calls `computerUseApi.resetChatGrants()`
+  (`computerUse:resetChatGrants`, returns `{ cleared }`). It clears every
+  chat's grant, turns off Always allow, and cancels streams already using
+  Computer Use.
+- Turning the beta off also turns off Always allow, so re-enabling the beta
+  never silently means "always".
+- Revocations (reset, Always allow off, beta off) bump a grant revision. A
+  running response re-reads its grant on its next call. Once a response has
+  seen a granted chat on a ready Mac, later calls skip the readiness probe.
 - Remove "Restore privacy notice" along with the notice.
 - Turning the beta off still cancels live Computer Use streams.
-  `ChatComputerUseMutationGate` and the `computer_use_disabled` cancel reason
-  stay.
+  `ComputerUseGenerationGate` and the `computer_use_disabled` cancel reason
+  stay; `ChatComputerUseMutationGate` was deleted with the toggle.
 
 ### 6. Delete the toggle plumbing
 
@@ -169,7 +197,12 @@ This is checked in the running app at 900, 600, 520 and 420px.
 ### 8. Native clients and onboarding
 
 - Remote: the access request is an ordinary `PendingApproval` with
-  `scopes: ["chat","always"]`, so no wire change is needed.
+  `scopes: ["chat","always"]`, so no wire change is needed. A phone may allow
+  it from a host-run (`aiden-remote-host-runs.ts`). Phone-owned streams start
+  with `allowComputerUse: false`, so they never raise it.
+- Bots: durable Bot runs cannot show the card and keep the per-action model.
+  Always allow, or a grant on the Bot's chat, enables Computer Use for that
+  Bot's runs (with the beta on and a ready Mac).
 - iOS and Android: check that both render a scopes-only card (no "once") and
   that their decision payloads omit `once`. Run `AidenChatTests` and
   `AidenChatTest`.
@@ -203,3 +236,19 @@ This is checked in the running app at 900, 600, 520 and 420px.
 - Delete the tests for the deleted code: `computer-use-notice`,
   `chat-computer-use-setting`, `computerUseControlState`, and the draft and
   first-message params cases.
+
+## Review revisions (2026-10-12)
+
+- Only streams that actually used Computer Use are cancelled by the beta, Form
+  Fill or model-removal paths (`activateComputerUseStream` in
+  `generation-gate.ts`); a disable that races a start still wins.
+- `fill_form` goes through the access gate.
+- A bare or "once" allow grants only the current response.
+- Stop clears the continue marker; app quit keeps it.
+- Reset chat permissions, the grant revision, and beta-off clearing Always
+  allow were added.
+- The tool is hidden on builds and OS versions that can never run it, with no
+  per-generation driver probe.
+- The packaged acceptance script now gates on the beta plus a chat grant or
+  Always allow, and its operator steps answer the access card instead of the
+  composer toggle and per-action cards.

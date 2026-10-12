@@ -585,6 +585,11 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
+    if (next.computerUseAlwaysAllow === false) {
+      // Live streams drop a cached grant on their next Computer Use call.
+      const { revokeComputerUseGrants } = await import("../services/computer-use/access-gate.js");
+      revokeComputerUseGrants();
+    }
     if (next.aidenLiveEnabled === false) {
       // A disabled feature must not keep an attended session running in any window.
       const { geminiLiveService } = await import("../services/gemini-live/service-main.js");

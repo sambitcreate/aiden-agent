@@ -7,10 +7,13 @@ import { COMPUTER_USE_ACCESS_SCOPES } from "../../../renderer/shared/computer-us
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
 import { createChatStore } from "../chat-store-core.js";
 import { ToolApprovalCoordinator, type ToolApprovalPrompt } from "../tool-approval.js";
+import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import {
   COMPUTER_USE_DECLINED_REASON,
   COMPUTER_USE_SETUP_REASON,
   createComputerUseAccessGate,
+  resetComputerUseGrants,
+  revokeComputerUseGrants,
 } from "./access-gate.js";
 
 const READY = { ready: true, available: true, detail: "Ready." };
@@ -33,6 +36,7 @@ async function desktop(t: TestContext) {
   const cards: ToolApprovalPrompt[] = [];
   let status: { ready: boolean; available: boolean; detail: string } = READY;
   const forcedStatusReads: boolean[] = [];
+  let cancellationOrigin: GenerationCancellationOrigin | undefined;
   let answer: (prompt: ToolApprovalPrompt) => void = () => undefined;
   const approvals = new ToolApprovalCoordinator((prompt) => {
     cards.push(prompt);
@@ -74,6 +78,7 @@ async function desktop(t: TestContext) {
           settings.computerUseAlwaysAllow = true;
         },
         setPendingContinue: (pending) => chatStore.setComputerUsePendingContinue(chatId, pending),
+        cancellationOrigin: () => cancellationOrigin,
         warn: () => undefined,
       }),
     };
@@ -88,6 +93,11 @@ async function desktop(t: TestContext) {
     stream,
     setStatus(next: typeof status) {
       status = next;
+    },
+    /** Stop or quit: record the origin, then cancel the stream's card. */
+    cancel(streamId: string, origin: GenerationCancellationOrigin) {
+      cancellationOrigin = origin;
+      approvals.cancelStream(streamId);
     },
     /** The user answers every later card this way. */
     willAnswer(allowed: boolean, scope?: ToolApprovalScope) {
@@ -173,15 +183,25 @@ test("always allow sets the global setting and skips the card in a new chat", as
   assert.equal((await d.chatStore.get(fresh.id))?.computerUseAllowed, undefined);
 });
 
-test("a bare allow from a client that sends no scope grants this chat", async (t) => {
-  const d = await desktop(t);
-  const chat = await d.chatStore.create({ title: "Notes" });
-  d.willAnswer(true);
+for (const scope of [undefined, "once"] as const) {
+  test(`a ${scope ?? "bare"} allow (a phone's Allow once) covers only this response and saves nothing`, async (t) => {
+    const d = await desktop(t);
+    const chat = await d.chatStore.create({ title: "Notes" });
+    d.willAnswer(true, scope);
+    const { gate } = d.stream(chat.id);
 
-  assert.deepEqual(await d.stream(chat.id).gate.authorize("call-1"), { allowed: true });
-  assert.equal((await d.chatStore.get(chat.id))?.computerUseAllowed, true);
-  assert.equal(d.settings.computerUseAlwaysAllow, undefined);
-});
+    assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+    assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+    assert.equal(d.cards.length, 1);
+    assert.equal((await d.chatStore.get(chat.id))?.computerUseAllowed, undefined);
+    assert.equal(d.settings.computerUseAlwaysAllow, undefined);
+
+    // The next response in the same chat asks again.
+    d.willAnswer(false);
+    assert.equal((await d.stream(chat.id).gate.authorize("call-3")).allowed, false);
+    assert.equal(d.cards.length, 2);
+  });
+}
 
 test("missing permissions mark the chat to continue; an allow before setup finishes still blocks", async (t) => {
   const d = await desktop(t);
@@ -197,10 +217,15 @@ test("missing permissions mark the chat to continue; an allow before setup finis
   d.approvals.decide(d.cards[0]!.approvalId, true, undefined, { scope: "chat" });
   assert.deepEqual(await pending, { allowed: false, reason: COMPUTER_USE_SETUP_REASON });
   const stored = await d.chatStore.get(chat.id);
-  assert.equal(stored?.computerUsePendingContinue, undefined);
+  // Still not ready, so the chat keeps its Continue marker for after setup.
+  assert.equal(stored?.computerUsePendingContinue, true);
   assert.equal(stored?.computerUseAllowed, true);
   // The decision re-probes rather than trusting the status cached before the card.
   assert.equal(d.forcedStatusReads[d.forcedStatusReads.length - 1], true);
+
+  // A later (or parallel) call in the same response does not raise the card again.
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: false, reason: COMPUTER_USE_SETUP_REASON });
+  assert.equal(d.cards.length, 1);
 });
 
 test("an allow after the user finishes setup during the card lets the call run", async (t) => {
@@ -220,24 +245,27 @@ test("an allow after the user finishes setup during the card lets the call run",
   assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
 });
 
-test("a granted chat on a Mac that is not ready asks again and keeps the grant", async (t) => {
+test("a granted chat on a Mac that lost its permissions asks for setup without another card", async (t) => {
   const d = await desktop(t);
   const chat = await d.chatStore.create({ title: "Notes" });
   await d.chatStore.setComputerUseAllowed(chat.id, true);
   d.setStatus(NEEDS_PERMISSIONS);
   d.willAnswer(false);
+  const { gate } = d.stream(chat.id);
 
-  assert.deepEqual(await d.stream(chat.id).gate.authorize("call-1"), {
-    allowed: false,
-    reason: COMPUTER_USE_DECLINED_REASON,
-  });
-  assert.equal(d.cards.length, 1);
+  const decisions = await Promise.all([gate.authorize("call-1"), gate.authorize("call-2")]);
+
+  assert.deepEqual(decisions, [
+    { allowed: false, reason: COMPUTER_USE_SETUP_REASON },
+    { allowed: false, reason: COMPUTER_USE_SETUP_REASON },
+  ]);
+  assert.equal(d.cards.length, 0);
   const stored = await d.chatStore.get(chat.id);
   assert.equal(stored?.computerUseAllowed, true);
-  assert.equal(stored?.computerUsePendingContinue, undefined);
+  assert.equal(stored?.computerUsePendingContinue, true);
 });
 
-test("a card cancelled by Stop or app quit leaves the continue marker for after restart", async (t) => {
+test("app quit during a setup card keeps the continue marker for after restart", async (t) => {
   const d = await desktop(t);
   const chat = await d.chatStore.create({ title: "Notes" });
   d.setStatus(NEEDS_PERMISSIONS);
@@ -246,13 +274,98 @@ test("a card cancelled by Stop or app quit leaves the continue marker for after 
 
   const pending = gate.authorize("call-1");
   while (d.cards.length === 0) await new Promise((resolve) => setImmediate(resolve));
-  d.approvals.cancelStream(streamId);
+  d.cancel(streamId, "application_shutdown");
 
   const decision = await pending;
   assert.equal(decision.allowed, false);
   assert.match((decision as { reason: string }).reason, /cancelled/u);
   assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
   assert.equal((await d.chatStore.get(chat.id))?.computerUseAllowed, undefined);
+});
+
+test("Stop during a setup card clears the continue marker", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.setStatus(NEEDS_PERMISSIONS);
+  d.willWait();
+  const { gate, streamId } = d.stream(chat.id);
+
+  const pending = gate.authorize("call-1");
+  while (d.cards.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
+  d.cancel(streamId, "user_stop");
+
+  assert.equal((await pending).allowed, false);
+  const stored = await d.chatStore.get(chat.id);
+  assert.equal(stored?.computerUsePendingContinue, undefined);
+  assert.equal(stored?.computerUseAllowed, undefined);
+});
+
+test("once a response runs Computer Use on a ready Mac, later calls skip the readiness probe", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  await d.chatStore.setComputerUseAllowed(chat.id, true);
+  const { gate } = d.stream(chat.id);
+
+  assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+  const probes = d.forcedStatusReads.length;
+  d.setStatus(NEEDS_PERMISSIONS);
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+  assert.equal(d.forcedStatusReads.length, probes);
+});
+
+test("revoking grants makes a running response ask again on its next call", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.willAnswer(true, "always");
+  const { gate } = d.stream(chat.id);
+  assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+  assert.equal(d.cards.length, 1);
+
+  // Settings turns Always allow off.
+  d.settings.computerUseAlwaysAllow = false;
+  revokeComputerUseGrants();
+  d.willAnswer(false);
+
+  assert.deepEqual(await gate.authorize("call-2"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.equal(d.cards.length, 2);
+});
+
+test("reset chat permissions clears every chat's grant and Always allow, and stops live Computer Use", async (t) => {
+  const d = await desktop(t);
+  const first = await d.chatStore.create({ title: "First" });
+  const second = await d.chatStore.create({ title: "Second" });
+  const untouched = await d.chatStore.create({ title: "Untouched" });
+  await d.chatStore.setComputerUseAllowed(first.id, true);
+  await d.chatStore.setComputerUseAllowed(second.id, true);
+  d.settings.computerUseAlwaysAllow = true;
+  const { gate } = d.stream(first.id);
+  assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+  let cancelled = 0;
+
+  const result = await resetComputerUseGrants({
+    cancelActivatedStreams: () => {
+      cancelled += 1;
+    },
+    clearAlwaysAllow: async () => {
+      d.settings.computerUseAlwaysAllow = false;
+    },
+    clearChatGrants: () => d.chatStore.clearAllComputerUseAllowed(),
+  });
+
+  assert.deepEqual(result, { cleared: 2 });
+  assert.equal(cancelled, 1);
+  assert.equal(d.settings.computerUseAlwaysAllow, false);
+  for (const chat of [first, second, untouched]) {
+    assert.equal((await d.chatStore.get(chat.id))?.computerUseAllowed, undefined);
+  }
+  // A stream that already ran Computer Use asks again.
+  d.willAnswer(false);
+  assert.equal((await gate.authorize("call-2")).allowed, false);
+  assert.equal(d.cards.length, 1);
 });
 
 test("an unsupported Mac or build blocks with its own detail and never raises a card", async (t) => {

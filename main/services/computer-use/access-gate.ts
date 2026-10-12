@@ -1,3 +1,4 @@
+import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
 import type { ToolApprovalOutcome } from "../tool-approval.js";
 import type { ComputerUseStatus } from "../types.js";
@@ -28,6 +29,43 @@ const UNDECIDED_REASONS: Record<
 export type ComputerUseAccessDecision =
   { allowed: true } | { allowed: false; reason: string };
 
+/**
+ * Bumped whenever grants are revoked (Reset chat permissions, Always allow
+ * turned off, the beta turned off). A stream that cached a grant re-reads it
+ * when the revision moved, so a revocation takes effect on the next call.
+ */
+let grantRevision = 0;
+
+export function computerUseGrantRevision(): number {
+  return grantRevision;
+}
+
+export function revokeComputerUseGrants(): void {
+  grantRevision += 1;
+}
+
+export interface ComputerUseGrantResetDependencies {
+  /** Cancel streams already using Computer Use (same path as the beta turning off). */
+  cancelActivatedStreams(): void;
+  clearAlwaysAllow(): Promise<unknown>;
+  /** Clear every chat's grant; returns how many chats held one. */
+  clearChatGrants(): Promise<number>;
+}
+
+/**
+ * Settings → Computer Use → Reset chat permissions: every chat asks again and
+ * Always allow turns off. Live streams drop their cached grant immediately,
+ * and streams already using Computer Use are stopped.
+ */
+export async function resetComputerUseGrants(
+  deps: ComputerUseGrantResetDependencies,
+): Promise<{ cleared: number }> {
+  revokeComputerUseGrants();
+  deps.cancelActivatedStreams();
+  await deps.clearAlwaysAllow();
+  return { cleared: await deps.clearChatGrants() };
+}
+
 export interface ComputerUseAccessGateDependencies {
   /** Live grant: "Always allow" is on, or this chat was allowed. Read at call time. */
   readGrant(): Promise<boolean>;
@@ -46,6 +84,12 @@ export interface ComputerUseAccessGateDependencies {
   grantChat(): Promise<unknown>;
   grantAlways(): Promise<unknown>;
   setPendingContinue(pending: boolean): Promise<unknown>;
+  /**
+   * Why the stream was cancelled, read when the card settles as cancelled.
+   * Only an application shutdown keeps the continue marker; a user Stop (or
+   * any other known origin) clears it.
+   */
+  cancellationOrigin(): GenerationCancellationOrigin | undefined;
   warn(message: string, error: unknown): void;
 }
 
@@ -54,12 +98,19 @@ export interface ComputerUseAccessGateDependencies {
  * before every `computer_use` call: a granted chat on a ready Mac passes
  * silently; otherwise it raises one access card. A deny holds for the rest of
  * the stream, so the model cannot raise the card again until the next turn.
+ *
+ * Scopes: "chat" persists the chat's grant, "always" turns on the global
+ * setting, and a bare allow or "once" (what phones send) grants only this
+ * stream and persists nothing.
  */
 export function createComputerUseAccessGate(
   deps: ComputerUseAccessGateDependencies,
 ) {
   let declined = false;
-  let granted = false;
+  /** Grant revision at which this stream knew it was granted. */
+  let grantedAt: number | null = null;
+  /** Grant revision at which this stream saw granted && ready; later calls skip the probe. */
+  let establishedAt: number | null = null;
 
   const persist = async (label: string, write: () => Promise<unknown>) => {
     try {
@@ -91,21 +142,34 @@ export function createComputerUseAccessGate(
     }
   };
 
+  const setPending = (pending: boolean) =>
+    persist(
+      pending
+        ? "Could not mark the chat to continue Computer Use."
+        : "Could not clear the chat's Computer Use continue marker.",
+      () => deps.setPendingContinue(pending),
+    );
+
   const decide = async (
     toolCallId: string,
     signal?: AbortSignal,
   ): Promise<ComputerUseAccessDecision> => {
     if (declined)
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
+    const revision = grantRevision;
+    // Once this stream saw a granted chat on a ready Mac, skip the status
+    // probe; a later permission loss surfaces as a driver error instead.
+    if (establishedAt === revision) return { allowed: true };
     const status = await readStatus(signal);
     if (!status) return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
     // Nothing the user can grant fixes an unsupported OS, an unsigned build or
     // a broken driver, so those block with the status detail and no card.
     if (!status.ready && !status.available)
       return { allowed: false, reason: status.detail };
-    if (!granted) {
+    if (grantedAt !== revision) {
+      grantedAt = null;
       try {
-        granted = await deps.readGrant();
+        if (await deps.readGrant()) grantedAt = revision;
       } catch (error) {
         deps.warn(
           "Could not read the Computer Use grant; asking instead.",
@@ -113,15 +177,20 @@ export function createComputerUseAccessGate(
         );
       }
     }
-    if (granted && status.ready) return { allowed: true };
+    if (grantedAt === revision) {
+      if (status.ready) {
+        establishedAt = revision;
+        return { allowed: true };
+      }
+      // Granted, but macOS permissions are missing (or were revoked later).
+      // The card would add nothing, so mark the chat and ask for setup.
+      await setPending(true);
+      return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
+    }
     if (signal?.aborted)
       return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
 
-    if (!status.ready) {
-      await persist("Could not mark the chat to continue Computer Use.", () =>
-        deps.setPendingContinue(true),
-      );
-    }
+    if (!status.ready) await setPending(true);
     const { outcome, scope } = await deps.requestAccess(toolCallId, signal);
     if (outcome === "allowed") {
       if (scope === "always") {
@@ -129,35 +198,38 @@ export function createComputerUseAccessGate(
           "Could not save Always allow for Computer Use.",
           deps.grantAlways,
         );
-      } else {
-        // "chat", or a bare allow from a client that does not send scopes.
+      } else if (scope === "chat") {
         await persist(
           "Could not save the chat's Computer Use grant.",
           deps.grantChat,
         );
       }
-      granted = true;
-      await persist(
-        "Could not clear the chat's Computer Use continue marker.",
-        () => deps.setPendingContinue(false),
-      );
+      // A bare allow or "once" grants this response only.
+      grantedAt = revision;
       const current = status.ready ? status : await readStatus(signal, true);
       if (!current)
         return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
+      // Still not ready: keep the continue marker so the chat can resume
+      // after setup (and a restart, if macOS needs one).
       if (!current.ready)
         return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
+      if (!status.ready) await setPending(false);
+      establishedAt = revision;
       return { allowed: true };
     }
     if (outcome === "denied") {
       declined = true;
-      await persist(
-        "Could not clear the chat's Computer Use continue marker.",
-        () => deps.setPendingContinue(false),
-      );
+      if (!status.ready) await setPending(false);
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
     }
-    // Cancelled, detached or unavailable: keep any continue marker so the
-    // chat can offer Continue after the user restarts Aiden.
+    if (outcome === "cancelled" && !status.ready) {
+      // Keep the marker across an app quit so the chat can offer Continue
+      // after restart; a user Stop ends the request.
+      const origin = deps.cancellationOrigin();
+      if (origin !== undefined && origin !== "application_shutdown")
+        await setPending(false);
+    }
+    // Detached or unavailable keep any continue marker.
     return { allowed: false, reason: UNDECIDED_REASONS[outcome] };
   };
 

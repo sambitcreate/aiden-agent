@@ -287,7 +287,7 @@ export function ComputerUseArt() {
       </span>
       <ArtWindow raised className="oa-cu-approval" style={{ left: 8, top: 112, width: 176 }}>
         <div className="oa-row" style={{ gap: 5, alignItems: "flex-start" }}>
-          <span className="oa-cu-shield">
+          <span className="oa-cu-badge">
             <ArtIcon icon={MousePointer2} />
           </span>
           <span className="oa-stack" style={{ gap: 3, flex: 1, paddingTop: 1 }}>

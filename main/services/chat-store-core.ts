@@ -1575,6 +1575,27 @@ export function createChatStore(
     },
 
     /**
+     * Revoke every chat's Computer Use grant. Each chat is a locked
+     * read-modify-write that rewrites only chats that held a grant; chats
+     * removed while this runs are skipped. Returns how many grants it cleared.
+     */
+    async clearAllComputerUseAllowed(): Promise<number> {
+      let cleared = 0;
+      for (const meta of await this.list()) {
+        try {
+          await updateComputerUseAccess(meta.id, (chat) => {
+            if (chat.computerUseAllowed === undefined) return;
+            delete chat.computerUseAllowed;
+            cleared += 1;
+          });
+        } catch (error) {
+          if (await this.get(meta.id).catch(() => null)) throw error;
+        }
+      }
+      return cleared;
+    },
+
+    /**
      * Mark (or clear) a Computer Use access request that is waiting on macOS
      * setup, so the chat can offer Continue after a restart.
      */

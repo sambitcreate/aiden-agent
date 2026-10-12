@@ -231,13 +231,7 @@ function offeredScopes(value: unknown): ToolApprovalScope[] | undefined {
 }
 
 function approvalIsHostOnly(details: ToolApprovalDetails | undefined): boolean {
-  // The Computer Use access card is a plain yes/no for the chat; main re-checks
-  // that the Mac is ready before any allow takes effect.
-  return (
-    details !== undefined &&
-    details.kind !== "scheduled-task" &&
-    details.kind !== "computer-use-access"
-  );
+  return details !== undefined && details.kind !== "scheduled-task";
 }
 
 function terminal(state: AidenRemoteStreamState): boolean {

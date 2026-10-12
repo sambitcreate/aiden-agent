@@ -4,6 +4,7 @@ import {
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
+import { isComputerUseAccessApprovalDetails } from "../../renderer/shared/computer-use-access.js";
 import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
@@ -208,7 +209,7 @@ function phoneMayAllow(payload: Record<string, unknown>): boolean {
   return (
     details === undefined ||
     details.kind === "scheduled-task" ||
-    details.kind === "computer-use-access"
+    isComputerUseAccessApprovalDetails(details)
   );
 }
 

@@ -533,8 +533,6 @@ test.describe("with a workspace", () => {
   test("composer footer controls share one row and collapse instead of wrapping", async ({ aiden }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
-    // Computer Use is requested by the model per chat; the composer has no toggle for it.
-    await expect(page.locator(".composer-shell").getByRole("button", { name: /computer/iu })).toHaveCount(0);
     const composer = page.locator(".composer-responsive");
     const permission = page.getByRole("button", { name: /^Workspace access: Full access/u });
     const controls = [
@@ -569,7 +567,6 @@ test.describe("with a workspace", () => {
         return label ? label.getBoundingClientRect().width > 0 : false;
       });
       expect(labelVisible, `Full access label at ${width}px`).toBe(width > 560);
-      await composer.screenshot({ path: test.info().outputPath(`composer-footer-${width}.png`) });
     }
   });
 });

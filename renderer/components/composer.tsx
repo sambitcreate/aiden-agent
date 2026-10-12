@@ -51,7 +51,7 @@ import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed } from "../lib/computer-use-control";
+import { composerSubmissionAllowed } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
   acceptComposerAttachments,
@@ -127,7 +127,8 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
-  readinessSettingsSection?: SettingsSection;
+  /** Offer a Connect provider action beside the readiness message. */
+  readinessSettingsSection?: "providers";
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
@@ -2103,7 +2104,7 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? CONNECT_PROVIDER_ACTION : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{CONNECT_PROVIDER_ACTION}</Button> : null}
               </Text>
             ) : null}
             <div className="composer-footer-row mt-1.5 flex min-w-0 flex-nowrap items-center justify-between gap-x-1.5 gap-y-1">

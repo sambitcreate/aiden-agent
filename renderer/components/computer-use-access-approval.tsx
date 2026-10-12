@@ -4,14 +4,11 @@ import { CheckCircle2, CircleAlert, Loader2, MousePointer2 } from "lucide-react"
 import { Button, Text } from "./ui";
 import { computerUseApi, type ApprovalPrompt } from "../lib/ipc";
 import { userFacingErrorMessage } from "../lib/ipc-error";
-import { computerUseReadinessReady } from "../lib/computer-use-control";
+import { computerUseReadinessReady } from "../lib/computer-use-readiness";
 import { queryKeys, useComputerUseStatus } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import type { ComputerUseStatus } from "../lib/types";
 import type { ChatApprovalDecisionOptions } from "./chat-approval-card";
-
-/** How often a surface waiting on macOS permissions re-checks Computer Use status. */
-export const COMPUTER_USE_STATUS_POLL_MS = 2_000;
 
 export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
   "Allow Computer Use in every chat. Turn this off in Settings → Computer Use.";
@@ -19,11 +16,45 @@ export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
 export const COMPUTER_USE_RESTART_NOTE =
   "If macOS asks you to quit and reopen Aiden, do that, then click Continue in this chat.";
 
-/** Live local readiness: re-checks on window focus and polls until status is ready. */
+/**
+ * Live local readiness for a surface waiting on macOS permissions. A failed
+ * check stops the automatic re-checks; stale cached readiness never counts as
+ * ready after one.
+ */
 export function useLiveComputerUseReadiness(enabled: boolean) {
-  const status = useComputerUseStatus(enabled, { pollUntilReadyMs: COMPUTER_USE_STATUS_POLL_MS });
+  const status = useComputerUseStatus(enabled, { liveUntilReady: true });
   const ready = computerUseReadinessReady(status.data?.ready === true, status.isError);
   return { status, ready };
+}
+
+/**
+ * Opens the macOS permission prompts and stores the status that comes back.
+ * `request` resolves to the new status, to null while a request is already in
+ * flight, and rethrows a failure after recording it in `error`.
+ */
+export function useRequestComputerUsePermissions() {
+  const queryClient = useQueryClient();
+  const pendingRef = React.useRef(false);
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState<unknown>(null);
+  const request = React.useCallback(async (): Promise<ComputerUseStatus | null> => {
+    if (pendingRef.current) return null;
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const next = await computerUseApi.requestPermissions();
+      queryClient.setQueryData(queryKeys.computerUseStatus, next);
+      return next;
+    } catch (caught) {
+      setError(caught);
+      throw caught;
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }, [queryClient]);
+  return { request, pending, error };
 }
 
 const PERMISSION_ROWS = [
@@ -44,30 +75,24 @@ function permissionStateLabel(granted: boolean | null | undefined): string {
  */
 export function ComputerUsePermissionChecklist({
   status,
-  failed,
+  checkError,
+  checking = false,
+  onCheckAgain,
   id,
 }: {
   status: ComputerUseStatus | undefined;
-  failed: boolean;
+  /** Why the last readiness check failed; automatic checks stop until Check again. */
+  checkError?: unknown;
+  checking?: boolean;
+  onCheckAgain?: () => void;
   id?: string;
 }) {
-  const queryClient = useQueryClient();
-  const [requesting, setRequesting] = React.useState(false);
-  const [requestError, setRequestError] = React.useState<string | null>(null);
-  const requestPermissions = async () => {
-    if (requesting) return;
-    setRequesting(true);
-    setRequestError(null);
-    try {
-      queryClient.setQueryData(queryKeys.computerUseStatus, await computerUseApi.requestPermissions());
-    } catch (error) {
-      setRequestError(userFacingErrorMessage(error, "Couldn’t open System Settings."));
-    } finally {
-      setRequesting(false);
-    }
-  };
+  const request = useRequestComputerUsePermissions();
+  const failed = checkError != null;
+  const requestError =
+    request.error != null ? userFacingErrorMessage(request.error, "Couldn’t open System Settings.") : null;
   const detail = failed
-    ? "Aiden couldn’t check Computer Use. Open Settings → Computer Use and try again."
+    ? userFacingErrorMessage(checkError, "Aiden couldn’t check Computer Use.")
     : (status?.detail ?? "Checking Computer Use…");
   return (
     <div id={id} className="mt-2.5 space-y-2.5 rounded-control bg-well px-3 py-2.5">
@@ -109,18 +134,32 @@ export function ComputerUsePermissionChecklist({
           {requestError}
         </Text>
       ) : null}
-      {status?.canRequestPermissions ? (
-        <div className="flex justify-end">
-          <Button
-            size="small"
-            variant="filled"
-            onClick={() => void requestPermissions()}
-            disabled={requesting}
-            aria-busy={requesting || undefined}
-          >
-            {requesting ? <Loader2 className="animate-spin" /> : null}
-            Open System Settings
-          </Button>
+      {failed || status?.canRequestPermissions ? (
+        <div className="flex justify-end gap-2">
+          {failed && onCheckAgain ? (
+            <Button
+              size="small"
+              variant="transparent"
+              onClick={onCheckAgain}
+              disabled={checking}
+              aria-busy={checking || undefined}
+            >
+              {checking ? <Loader2 className="animate-spin" /> : null}
+              Check again
+            </Button>
+          ) : null}
+          {status?.canRequestPermissions && !failed ? (
+            <Button
+              size="small"
+              variant="filled"
+              onClick={() => void request.request().catch(() => undefined)}
+              disabled={request.pending}
+              aria-busy={request.pending || undefined}
+            >
+              {request.pending ? <Loader2 className="animate-spin" /> : null}
+              Open System Settings
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -164,9 +203,11 @@ export function ComputerUseAccessApproval({
   const canAllow = pending.canAllow !== false;
   const allowBlockedReason =
     local && !ready
-      ? status.isLoading
-        ? "Checking whether Computer Use is ready."
-        : "Allow Accessibility and Screen Recording for Aiden first."
+      ? status.isError
+        ? "Aiden couldn’t check whether Computer Use is ready."
+        : status.isLoading
+          ? "Checking whether Computer Use is ready."
+          : "Allow Accessibility and Screen Recording for Aiden first."
       : undefined;
   const disabled = deciding || disabledReason !== undefined;
   const allowDisabled = disabled || allowBlockedReason !== undefined;
@@ -205,7 +246,13 @@ export function ComputerUseAccessApproval({
         </div>
         {local ? (
           showChecklist ? (
-            <ComputerUsePermissionChecklist id={checklistId} status={status.data} failed={status.isError} />
+            <ComputerUsePermissionChecklist
+              id={checklistId}
+              status={status.data}
+              checkError={status.isError ? status.error : undefined}
+              checking={status.isFetching}
+              onCheckAgain={() => void status.refetch()}
+            />
           ) : null
         ) : (
           <Text variant="small" color="secondary" as="p" role="note" className="mt-2.5">
@@ -317,7 +364,14 @@ export function ComputerUseContinueCallout({
           </Text>
         </div>
       </div>
-      {!ready ? <ComputerUsePermissionChecklist status={status.data} failed={status.isError} /> : null}
+      {!ready ? (
+        <ComputerUsePermissionChecklist
+          status={status.data}
+          checkError={status.isError ? status.error : undefined}
+          checking={status.isFetching}
+          onCheckAgain={() => void status.refetch()}
+        />
+      ) : null}
       {ready && continueDisabledReason ? (
         <Text variant="small" color="secondary" as="p" id={blockedId} role="note" className="mt-2.5">
           {continueDisabledReason}

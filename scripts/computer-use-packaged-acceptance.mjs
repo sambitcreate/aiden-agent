@@ -12,6 +12,7 @@ import {
   ACCEPTANCE_TOOL_COUNT,
   acceptanceChatCompletionPath,
   acceptanceFixture,
+  acceptanceGateEvidence,
   acceptanceToolCall,
   evaluateAcceptanceRequests,
   openAiToolCallChunks,
@@ -79,11 +80,17 @@ export async function startAcceptanceModel({ capability, expectedTitles, readGat
       const turn = requests.length;
       requests.push(body);
       if (turn === 0) {
+        // The access card appears on the first computer_use call, so only the
+        // beta can be on before the prompt is sent.
+        if (!(await readGates()).globalEnabled) {
+          throw new Error("Turn on Computer Use in Settings before sending.");
+        }
+      }
+      if (turn === 1) {
+        // The first computer_use call ran, so the operator allowed the chat.
         gateEvidence = await readGates();
-        if (!gateEvidence.globalEnabled || !gateEvidence.chatEnabled) {
-          throw new Error(
-            "Enable Computer Use in Settings and in the acceptance chat before sending.",
-          );
+        if (!gateEvidence.accessGranted) {
+          throw new Error("Choose Allow for this chat on the Computer Use access card.");
         }
       }
       if (turn === 2) target = resolveAcceptanceTarget(body, expectedTitles);
@@ -163,10 +170,7 @@ async function readAcceptanceGates(userData) {
     readFile(path.join(userData, "config.json"), "utf8").then(JSON.parse),
     readFile(path.join(userData, "chats", "computer-use-acceptance.json"), "utf8").then(JSON.parse),
   ]);
-  return {
-    globalEnabled: config?.settings?.computerUseEnabled === true,
-    chatEnabled: chat?.computerUseEnabled === true,
-  };
+  return acceptanceGateEvidence(config, chat);
 }
 
 async function processTable() {
@@ -702,12 +706,11 @@ async function runAcceptance() {
     console.log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
     console.log("1. In Settings → Computer Use, turn on the global beta gate.");
     console.log("2. Request access if macOS reports missing permissions.");
-    console.log("3. Return to the acceptance chat and enable its Computer Use composer control.");
-    console.log("4. Send: “Run the packaged Computer Use acceptance sequence.”");
-    console.log("5. Choose Allow once for the TextEdit type and save-key prompts.");
-    console.log("6. The stale click must be rejected without an approval prompt.");
-    console.log("7. When the 30-second wait starts, press Stop but keep Aiden open.");
-    console.log("8. Quit Aiden normally only after this terminal confirms Stop teardown.");
+    console.log("3. Return to the acceptance chat and send: “Run the packaged Computer Use acceptance sequence.”");
+    console.log("4. On the Computer Use access card, choose Allow for this chat.");
+    console.log("5. The type, save-key and stale click run without further cards; the stale click must be rejected.");
+    console.log("6. When the 30-second wait starts, press Stop but keep Aiden open.");
+    console.log("7. Quit Aiden normally only after this terminal confirms Stop teardown.");
     console.log("No model data leaves this Mac; the provider listens only on 127.0.0.1.");
     console.log(
       "macOS TCC grants persist after this test; revoke them in System Settings if you no longer want Aiden Computer Use access.\n",
@@ -731,9 +734,9 @@ async function runAcceptance() {
       throw new Error(`Only ${model.issuedCalls.length} scripted Computer Use calls were issued.`);
     }
     const gateEvidence = model.gateEvidence();
-    if (!gateEvidence?.globalEnabled || !gateEvidence?.chatEnabled) {
+    if (!gateEvidence?.globalEnabled || !gateEvidence?.accessGranted) {
       throw new Error(
-        "The operator did not persist both normal Computer Use gates before sending.",
+        "The operator did not turn on Computer Use and allow the acceptance chat.",
       );
     }
     const resolvedTarget = model.target();
@@ -755,24 +758,24 @@ async function runAcceptance() {
     await writeComputerUseAcceptanceReceipt(
       JSON.stringify(
         {
-          schemaVersion: 2,
+          schemaVersion: 3,
           completedAt: new Date().toISOString(),
           artifact,
           modelTransport: "capability_authenticated_loopback",
           checks: [
             "global_gate_enabled_through_settings",
-            "chat_gate_enabled_through_composer",
+            "chat_access_allowed_through_access_card",
             "exact_disposable_textedit_target",
             "list_apps",
             "list_windows",
             "capture_ax",
             "capture_vision",
             "capture_som",
-            "allow_once_type",
+            "type",
             "capture_after",
-            "allow_once_save_key",
+            "save_key",
             "saved_file_marker",
-            "stale_element_rejected_before_approval",
+            "stale_element_rejected",
             "explicit_renderer_user_stop_event",
             "stop_teardown_before_quit",
             "normal_app_quit",

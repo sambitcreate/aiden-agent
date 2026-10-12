@@ -48,14 +48,16 @@ function mountCard({
   host,
   initial,
   afterRequest,
+  statusHandler,
 }: {
   host?: "local" | "remote";
   initial?: ComputerUseStatus;
   afterRequest?: ComputerUseStatus;
+  statusHandler?: () => ComputerUseStatus;
 }) {
   const decisions: Array<{ decision: "allow" | "deny"; options?: ChatApprovalDecisionOptions }> = [];
   const calls = installBotTestIpc({
-    "computerUse:status": () => initial ?? status(),
+    "computerUse:status": statusHandler ?? (() => initial ?? status()),
     "computerUse:requestPermissions": () => afterRequest ?? initial ?? status(),
   });
   render(
@@ -134,6 +136,31 @@ test("without a permission prompt to offer, the checklist explains what is wrong
   await screen.findByText("The signed Computer Use helper is missing.");
   assert.equal(screen.queryByRole("button", { name: "Open System Settings" }), null);
   assert.equal((button("Allow for this chat") as HTMLButtonElement).disabled, true);
+});
+
+test("a failed readiness check stops checking until Check again forces a fresh probe", async () => {
+  let failing = true;
+  const { calls } = mountCard({
+    statusHandler: () => {
+      if (failing) throw new Error("The Computer Use helper did not respond.");
+      return status();
+    },
+  });
+  await screen.findByText(/The Computer Use helper did not respond/u);
+  assert.equal((button("Allow for this chat") as HTMLButtonElement).disabled, true);
+  const statusChecks = () => calls.filter((call) => call.channel === "computerUse:status");
+  assert.equal(statusChecks().length, 1);
+
+  failing = false;
+  fireEvent.click(button("Check again"));
+  await waitFor(() => assert.equal((button("Allow for this chat") as HTMLButtonElement).disabled, false));
+  assert.equal(statusChecks().length, 2);
+  // Every check bypasses the main process's cached status.
+  assert.deepEqual(
+    statusChecks().map((call) => call.args[0]),
+    [true, true],
+  );
+  assert.equal(screen.queryByRole("button", { name: "Check again" }), null);
 });
 
 test("a remote viewer leaves setup to the host Mac and never checks this Mac", async () => {

@@ -3,8 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Switch, Text, toast } from "../ui";
 import { computerUseApi, formFillApi, settingsApi } from "../../lib/ipc";
-import { reduceComputerUseRefreshState } from "../../lib/computer-use-control";
-import { queryKeys, useComputerUseStatus, useFormFillStatus, useSettings } from "../../lib/queries";
+import { reduceComputerUseRefreshState } from "../../lib/computer-use-readiness";
+import { useRequestComputerUsePermissions } from "../computer-use-access-approval";
+import {
+  queryKeys,
+  useComputerUseStatus,
+  useFormFillStatus,
+  useSettings,
+} from "../../lib/queries";
 import type {
   AppSettings,
   ComputerUseStatus,
@@ -69,6 +75,39 @@ function AlwaysAllowField() {
   );
 }
 
+function ResetChatGrantsField() {
+  const queryClient = useQueryClient();
+  const [resetting, setResetting] = React.useState(false);
+  const reset = async () => {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      const { cleared } = await computerUseApi.resetChatGrants();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+      toast.success(`Reset Computer Use permissions for ${cleared} ${cleared === 1 ? "chat" : "chats"}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t reset chat permissions.");
+    } finally {
+      setResetting(false);
+    }
+  };
+  return (
+    <Field
+      label="Reset chat permissions"
+      description="Every chat asks again before Aiden uses your computer, and Always allow turns off."
+    >
+      <Button size="small" variant="transparent" onClick={() => void reset()} disabled={resetting}>
+        {resetting ? "Resetting…" : "Reset"}
+      </Button>
+    </Field>
+  );
+}
+
 function FormFillSpecialistField() {
   const queryClient = useQueryClient();
   const formFillQuery = useFormFillStatus();
@@ -107,7 +146,8 @@ export function ComputerUseSettings() {
   const [enableError, setEnableError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
-  const [requesting, setRequesting] = React.useState(false);
+  const permissionRequest = useRequestComputerUsePermissions();
+  const requesting = permissionRequest.pending;
   const [refreshState, updateRefreshState] = React.useReducer(reduceComputerUseRefreshState, {
     refreshing: false,
     error: null,
@@ -181,16 +221,13 @@ export function ComputerUseSettings() {
   };
 
   const requestPermissions = async () => {
-    if (requesting) return;
-    setRequesting(true);
     try {
-      const next = await computerUseApi.requestPermissions();
+      const next = await permissionRequest.request();
+      if (!next) return;
       commitStatus(next);
       if (!next.ready) toast.info(next.detail);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't request access.");
-    } finally {
-      setRequesting(false);
     }
   };
 
@@ -277,6 +314,7 @@ export function ComputerUseSettings() {
           </Callout>
         </Field>
         {enabled ? <AlwaysAllowField /> : null}
+        {enabled ? <ResetChatGrantsField /> : null}
         <FormFillSpecialistField />
       </FieldSet>
 

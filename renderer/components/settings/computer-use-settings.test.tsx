@@ -34,6 +34,10 @@ function mount(settings: Partial<AppSettings>) {
     },
     "computerUse:status": () => computerUseStatus(current.computerUseEnabled === true),
     "formFill:status": () => ({ enabled: false, status: { state: "not-downloaded" } }),
+    "computerUse:resetChatGrants": () => {
+      current = { ...current, computerUseAlwaysAllow: false };
+      return { cleared: 2 };
+    },
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
@@ -72,9 +76,21 @@ test("a saved Always allow shows as on and can be turned off", async () => {
   );
 });
 
-test("Always allow is hidden while the beta is off", async () => {
+test("Always allow and resetting chat permissions are hidden while the beta is off", async () => {
   mount({ computerUseEnabled: false, computerUseAlwaysAllow: true });
   await screen.findByRole("switch", { name: "Enable Computer Use beta" });
   await waitFor(() => assert.ok(screen.getByText("Off")));
   assert.equal(screen.queryByRole("switch", { name: alwaysAllowName }), null);
+  assert.equal(screen.queryByRole("button", { name: "Reset" }), null);
+});
+
+test("resetting chat permissions clears grants and shows Always allow as off again", async () => {
+  const calls = mount({ computerUseEnabled: true, computerUseAlwaysAllow: true });
+  const toggle = await screen.findByRole("switch", { name: alwaysAllowName });
+  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "true"));
+  const settingsReads = calls.filter((call) => call.channel === "settings:get").length;
+  fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+  await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "false"));
+  assert.equal(calls.filter((call) => call.channel === "computerUse:resetChatGrants").length, 1);
+  assert.ok(calls.filter((call) => call.channel === "settings:get").length > settingsReads);
 });
