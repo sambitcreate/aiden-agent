@@ -33,3 +33,9 @@ test("messages without math delimiters never use the math plugins", async () => 
   assert.match(markup, /<table>/u);
   assert.doesNotMatch(markup, /class="katex/u);
 });
+
+test("ordinary chat Markdown still shows remote images and links directly", () => {
+  const markup = renderToStaticMarkup(<Markdown content={"![chart](https://example.test/chart.png) [docs](https://example.test/docs)"} />);
+  assert.match(markup, /<img[^>]+src="https:\/\/example\.test\/chart\.png"/u);
+  assert.match(markup, /<a href="https:\/\/example\.test\/docs"/u);
+});

@@ -55,6 +55,7 @@ const featureAssetPaths = [
   "features/voice-dictation.png",
   "features/web-search.png",
   "features/workspaces-worktrees.png",
+  "features/inline-visuals.png",
 ] as const;
 
 function sourceSection(startMarker: string, endMarker: string): string {
@@ -406,7 +407,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 27);
+  assert.equal(featureAssetPaths.length, 28);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.ok(featureAssetPaths.includes("features/bots.png"));

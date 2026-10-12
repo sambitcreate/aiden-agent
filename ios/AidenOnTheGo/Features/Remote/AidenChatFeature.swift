@@ -501,6 +501,36 @@ enum AidenChatTitleReconciliation {
     static let retryMilliseconds = [400, 800, 1_200, 2_000, 3_000, 3_500, 3_500]
 }
 
+/// The Mac captures visual snapshots only after a reply commits (serially, up
+/// to a few seconds each), so the phone's settling read usually lands first and
+/// nothing pushes the later revision. A just-settled reply still missing a
+/// snapshot is therefore re-read a bounded number of times, then left alone.
+enum AidenVisualSnapshotReconciliation {
+    /// Waits between re-reads: about 4 s, 10 s and 20 s after the reply settled.
+    static let retryDelays: [Duration] = [.seconds(4), .seconds(6), .seconds(10)]
+    /// Only a reply that settled this recently is still worth waiting for.
+    static let recentReplyWindow: TimeInterval = 120
+
+    /// The reply whose snapshots may still be arriving: the newest assistant message.
+    static func awaitedMessage(in messages: [AidenChatMessage]) -> AidenChatMessage? {
+        messages.last { $0.role == .assistant }
+    }
+
+    /// The wait before re-read number `attempt` (from 0), or nil when the
+    /// reply has every snapshot, is no longer recent, or the tries are spent.
+    static func nextDelay(for message: AidenChatMessage?, attempt: Int, now: Date) -> Duration? {
+        guard let message, message.role == .assistant, retryDelays.indices.contains(attempt),
+              let visuals = message.visuals,
+              visuals.contains(where: { AidenChatVisualPresentation.snapshotAttachment(for: $0, in: message) == nil })
+        else { return nil }
+        // A long reply is judged by when it finished. A Mac clock ahead of the
+        // phone reads as recent; the try count still bounds it.
+        let settledAt = message.timeline?.finishedAt.map { Date(timeIntervalSince1970: $0 / 1_000) } ?? message.createdAt
+        guard now.timeIntervalSince(settledAt) <= recentReplyWindow else { return nil }
+        return retryDelays[attempt]
+    }
+}
+
 struct AidenTerminalReplayGate {
     private(set) var hasReplayedTerminalCursor = false
 
@@ -1160,6 +1190,14 @@ final class AidenChatViewModel {
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshID: UUID?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
+    /// Bounded re-reads for a just-settled reply whose visual snapshots the
+    /// Mac is still capturing (they land after the reply commits).
+    @ObservationIgnored private(set) var visualSnapshotRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var visualSnapshotRefreshID: UUID?
+    // Deterministic test seam for the wait between snapshot re-reads.
+    @ObservationIgnored var visualSnapshotRefreshSleep: @MainActor (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
     private var activeStreamID: String? {
         didSet {
             // An owned stream supersedes observation of a foreign run.
@@ -1388,6 +1426,7 @@ final class AidenChatViewModel {
         streamTask?.cancel()
         progressTask?.cancel()
         titleRefreshTask?.cancel()
+        visualSnapshotRefreshTask?.cancel()
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
@@ -1417,6 +1456,7 @@ final class AidenChatViewModel {
         streamTask?.cancel()
         terminalReconciliationTask?.cancel()
         titleRefreshTask?.cancel()
+        stopVisualSnapshotRefresh()
         stopProgressObservation()
         clearProgressState()
         let removedForeignRunID = foreignRunIsLive ? foreignRun?.runId : nil
@@ -1531,6 +1571,13 @@ final class AidenChatViewModel {
 
     func setChatForegrounded(_ foregrounded: Bool) {
         isChatForegrounded = foregrounded
+        // A full-screen viewer also takes the chat off screen; coming back
+        // re-arms the wait, which the recent-reply window still bounds.
+        if !foregrounded {
+            stopVisualSnapshotRefresh()
+        } else if !isReadOnlyFixture, !isRemoved, let context = try? coordinator.requestContext(for: instanceId) {
+            scheduleVisualSnapshotRefresh(context: context)
+        }
         // Foreground-enter quiets the ambient surface: the Live Activity marks
         // stale (matching Android dismissing its posted notification) and
         // recovers on the next published update.
@@ -2576,6 +2623,7 @@ final class AidenChatViewModel {
         titleRefreshTask?.cancel()
         titleRefreshTask = nil
         titleRefreshID = nil
+        stopVisualSnapshotRefresh()
         isStarting = true
         defer {
             isStarting = false
@@ -4217,7 +4265,70 @@ final class AidenChatViewModel {
         ) else { return false }
         hasOlderMessages = hasOlder
         hasSettledTranscriptWindow = true
+        scheduleVisualSnapshotRefresh(context: context)
         return true
+    }
+
+    /// Re-read the open chat a few times while its newest reply still lacks a
+    /// visual snapshot the Mac is capturing. One schedule runs at a time; the
+    /// re-reads it makes come back through here and are absorbed by it.
+    private func scheduleVisualSnapshotRefresh(context: AidenRemoteRequestContext) {
+        guard visualSnapshotRefreshTask == nil, nextVisualSnapshotRefreshDelay(attempt: 0) != nil else { return }
+        let refreshID = UUID()
+        visualSnapshotRefreshID = refreshID
+        visualSnapshotRefreshTask = Task { [weak self] in
+            var attempt = 0
+            while true {
+                guard !Task.isCancelled,
+                      let delay = self?.nextVisualSnapshotRefreshDelay(attempt: attempt),
+                      let sleep = self?.visualSnapshotRefreshSleep else { break }
+                attempt += 1
+                // The model is held only for the read, never across the wait.
+                do { try await sleep(delay) } catch { break }
+                guard !Task.isCancelled, let model = self,
+                      await model.rereadForVisualSnapshots(context: context) else { break }
+            }
+            guard let model = self, model.visualSnapshotRefreshID == refreshID else { return }
+            model.visualSnapshotRefreshTask = nil
+            model.visualSnapshotRefreshID = nil
+        }
+    }
+
+    private func nextVisualSnapshotRefreshDelay(attempt: Int) -> Duration? {
+        AidenVisualSnapshotReconciliation.nextDelay(
+            for: AidenVisualSnapshotReconciliation.awaitedMessage(in: chat.messages),
+            attempt: attempt,
+            now: Date()
+        )
+    }
+
+    /// One snapshot re-read through the normal newest-transcript path. False
+    /// stops the schedule: the chat changed, closed, or a turn took over.
+    private func rereadForVisualSnapshots(context: AidenRemoteRequestContext) async -> Bool {
+        guard !isRemoved, coordinator.isCurrent(context), activeStreamID == nil, !isStarting else { return false }
+        let generation = transcriptGeneration
+        let writeToken = cache.reserveChatWrite()
+        do {
+            let latest = try await fetchLatestTranscript(context: context)
+            guard !Task.isCancelled, !isRemoved, coordinator.isCurrent(context) else { return false }
+            guard generation == transcriptGeneration, activeStreamID == nil, !isStarting else { return false }
+            await acceptLatestTranscript(latest, context: context, writeToken: writeToken)
+            return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return false }
+            // A missed snapshot is cosmetic; the next normal refresh shows it.
+            return !isRemoved && coordinator.isCurrent(context)
+        }
+    }
+
+    /// Stop waiting for late snapshots: the chat left the screen, the app went
+    /// to the background, or a new turn started. The next load re-arms it.
+    func stopVisualSnapshotRefresh() {
+        visualSnapshotRefreshTask?.cancel()
+        visualSnapshotRefreshTask = nil
+        visualSnapshotRefreshID = nil
     }
 
     /// Page back one window from the oldest message on screen. If the Mac no
@@ -4864,6 +4975,8 @@ struct AidenChatDetailView: View {
                 model.startProgressObservation()
             case .suspend:
                 model.stopProgressObservation()
+                // The return to the foreground reloads and re-arms it.
+                model.stopVisualSnapshotRefresh()
             case .none:
                 // `.inactive` is transient; progress keeps streaming.
                 break
@@ -5687,9 +5800,12 @@ private struct AidenMessageView: View, Equatable {
                let rows = AidenChronologicalProjection.rows(
                    text: message.text,
                    reasoning: message.reasoning ?? "",
-                   timeline: message.timeline
+                   timeline: message.timeline,
+                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
                ) {
-                AidenChronologicalTranscript(rows: rows, active: false)
+                AidenChronologicalTranscript(rows: rows, active: false) { visual in
+                    AnyView(visualRow(visual))
+                }
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
@@ -5705,14 +5821,19 @@ private struct AidenMessageView: View, Equatable {
             if !visibleText.isEmpty {
                 messageText
             }
+            // Without a chronological timeline, visuals follow the reply text.
+            if message.role == .assistant {
+                ForEach(AidenChatVisualPresentation.rowVisuals(in: message)) { visual in
+                    visualRow(visual)
+                }
             }
-            if let attachments = message.attachments, !attachments.isEmpty {
+            }
+            // Snapshots appear once, inline at their visual, never in the strip.
+            let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
+            if !attachments.isEmpty {
                 let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
                 let imageAttachments = attachments.filter { attachment in
-                    attachment.kind == .image
-                        && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
-                        && attachment.size > 0
-                        && attachment.size <= AidenAttachmentImageValidation.maximumBytes
+                    AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
                         && identifierCounts[attachment.id] == 1
                 }
                 if !imageAttachments.isEmpty {
@@ -5751,8 +5872,9 @@ private struct AidenMessageView: View, Equatable {
                     .accessibilityElement(children: .combine)
                 }
             }
-            if message.role == .assistant, let artifacts = message.htmlArtifacts, !artifacts.isEmpty {
-                ForEach(artifacts, id: \.id) { artifact in
+            if message.role == .assistant {
+                // A visual's snapshot replaces the card for the artifact it shows.
+                ForEach(AidenChatVisualPresentation.unviewableHtmlArtifacts(in: message), id: \.id) { artifact in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(artifact.title)
                             .font(.subheadline.weight(.semibold))
@@ -5772,6 +5894,14 @@ private struct AidenMessageView: View, Equatable {
                 AidenMessageOutcomeView(outcome: outcome)
             }
         }
+    }
+
+    private func visualRow(_ visual: AidenChatVisual) -> some View {
+        AidenVisualRowView(
+            visual: visual,
+            snapshot: AidenChatVisualPresentation.snapshotAttachment(for: visual, in: message),
+            loadData: loadAttachmentImage
+        )
     }
 
     private var messageText: some View {
@@ -6282,6 +6412,7 @@ private struct AidenAttachmentThumbnailView: View {
     var showsBackground = true
     var imageCornerRadius: CGFloat = 0
     var imageAlignment: Alignment = .center
+    var onImageLoaded: ((UIImage) -> Void)? = nil
     @State private var state: LoadState = .loading
 
     var body: some View {
@@ -6328,6 +6459,7 @@ private struct AidenAttachmentThumbnailView: View {
                 return
             }
             state = .image(image)
+            onImageLoaded?(image)
         }
     }
 }
@@ -7474,6 +7606,8 @@ private struct AidenChronologicalTranscript: View {
     @Environment(\.aidenPalette) private var palette
     let rows: [AidenChronologicalRow]
     let active: Bool
+    /// Draws a committed message's visual rows; the live stream has none.
+    var visualContent: ((AidenChatVisual) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -7500,7 +7634,114 @@ private struct AidenChronologicalTranscript: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                case .visual(let visual):
+                    visualContent?(visual)
                 }
+            }
+        }
+    }
+}
+
+/// One inline visual in a committed reply: the Mac's snapshot image when the
+/// message carries it, then the visual's text description; the description
+/// alone without a snapshot; and the title alone when there is neither.
+private struct AidenVisualRowView: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let visual: AidenChatVisual
+    let snapshot: AidenMessageAttachment?
+    let loadData: (AidenMessageAttachment) async -> Data?
+    @State private var imageAspectRatio: CGFloat?
+    @State private var gallerySelection: AidenAttachmentGallerySelection?
+    @State private var isDescriptionExpanded = false
+    @State private var limitedDescriptionHeight: CGFloat = 0
+    @State private var fullDescriptionHeight: CGFloat = 0
+
+    private static let collapsedDescriptionLines = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let snapshot {
+                snapshotImage(snapshot)
+            }
+            if let description = visual.fallbackText {
+                descriptionText(description)
+            } else if snapshot == nil {
+                Text(visual.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func snapshotImage(_ attachment: AidenMessageAttachment) -> some View {
+        AidenAttachmentThumbnailView(
+            attachment: attachment,
+            loadData: loadData,
+            contentMode: .fit,
+            imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
+            imageAlignment: .leading,
+            onImageLoaded: { image in
+                guard image.size.width > 0, image.size.height > 0 else { return }
+                imageAspectRatio = image.size.width / image.size.height
+            }
+        )
+        // Hold a typical landscape frame until the image reports its own shape.
+        .aspectRatio(imageAspectRatio ?? 16 / 9, contentMode: .fit)
+        .frame(maxWidth: visual.layout == .wide ? .infinity : 560, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(visual.title)
+        .accessibilityHint("Double-tap to open the image viewer")
+        .accessibilityAddTraits([.isImage, .isButton])
+        .accessibilityAction { gallerySelection = AidenAttachmentGallerySelection(id: attachment.id) }
+        .fullScreenCover(item: $gallerySelection) { selection in
+            AidenAttachmentGalleryView(
+                attachments: [attachment],
+                initialAttachmentID: selection.id,
+                loadData: loadData
+            )
+        }
+    }
+
+    private func descriptionText(_ description: String) -> some View {
+        let isTruncated = fullDescriptionHeight > limitedDescriptionHeight + 1
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(description)
+                .font(.callout)
+                // Secondary beneath a snapshot; the primary content without one.
+                .foregroundStyle(snapshot == nil ? palette.foreground : palette.secondary)
+                .lineLimit(isDescriptionExpanded ? nil : Self.collapsedDescriptionLines)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { limitedDescriptionHeight = $0 }
+                .background(alignment: .topLeading) {
+                    // Measures the untruncated description at the same width.
+                    Text(description)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .hidden()
+                        .accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullDescriptionHeight = $0 }
+                }
+            if isDescriptionExpanded || isTruncated {
+                Button(isDescriptionExpanded ? "Show less" : "Show more") {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                        isDescriptionExpanded.toggle()
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .buttonStyle(.plain)
+                .accessibilityLabel(isDescriptionExpanded
+                    ? "Show less of \(visual.title)"
+                    : "Show more of \(visual.title)")
             }
         }
     }

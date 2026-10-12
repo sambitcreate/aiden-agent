@@ -20,7 +20,7 @@ import {
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
 import { chatSurface, parseChatOwnerV1, type ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
-import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import type { Attachment, Chat, ChatMessage, ChatMeta } from "./types.js";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
   forkSummaryHoldsSend,
@@ -36,6 +36,9 @@ import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
+import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
 import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
@@ -846,6 +849,8 @@ export function createChatStore(
           assistant && message.htmlArtifacts
             ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
             : undefined,
+        uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
+        visualSnapshots: assistant ? parseVisualSnapshots(message.visualSnapshots) : undefined,
         reasoning:
           assistant &&
           typeof message.reasoning === "string" &&
@@ -922,7 +927,8 @@ export function createChatStore(
         message.role === "assistant" &&
         (message.content.trim().length > 0 ||
           (message.attachments?.length ?? 0) > 0 ||
-          (message.htmlArtifacts?.length ?? 0) > 0) &&
+          (message.htmlArtifacts?.length ?? 0) > 0 ||
+          (message.uiVisuals?.length ?? 0) > 0) &&
         Number.isSafeInteger(message.createdAt) &&
         message.createdAt >= 0,
       );
@@ -1402,6 +1408,7 @@ export function createChatStore(
             charge(artifact.title);
             charge(artifact.mediaId);
           }
+          for (const visual of message.uiVisuals ?? []) charge(JSON.stringify(visual));
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
@@ -1426,6 +1433,17 @@ export function createChatStore(
                     mediaId: remappedHtmlArtifactMediaId(newChatId, placement.mediaId),
                     toolCallId: placement.toolCallId,
                     ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
+                  }))
+                : undefined,
+            uiVisuals:
+              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+            visualSnapshots:
+              message.role === "assistant" && message.visualSnapshots?.length
+                ? message.visualSnapshots.map((ref) => ({
+                    visualId: (message.htmlArtifacts ?? []).some((artifact) => artifact.mediaId === ref.visualId)
+                      ? remappedHtmlArtifactMediaId(newChatId, ref.visualId)
+                      : ref.visualId,
+                    attachmentId: ref.attachmentId,
                   }))
                 : undefined,
             skill:
@@ -1603,6 +1621,72 @@ export function createChatStore(
     },
 
     /**
+     * Attach offscreen snapshots of a message's visuals as reserved image
+     * attachments. A newer snapshot of the same visual replaces the older one;
+     * snapshots that would exceed the per-message attachment limits are
+     * skipped. Returns whether anything was stored.
+     */
+    async addVisualSnapshots(
+      chatId: string,
+      messageId: string,
+      snapshots: readonly { visualId: string; attachment: Attachment }[],
+    ): Promise<boolean> {
+      return shared([chatId], true, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        if (!chat || !message) return false;
+        const visualIds = new Set([
+          ...(message.htmlArtifacts ?? []).map((artifact) => artifact.mediaId),
+          ...(message.uiVisuals ?? []).map((visual) => visual.id),
+        ]);
+        let attachments = [...(message.attachments ?? [])];
+        let refs = [...(message.visualSnapshots ?? [])];
+        let stored = false;
+        for (const snapshot of snapshots) {
+          if (!visualIds.has(snapshot.visualId) || !isVisualSnapshotAttachmentId(snapshot.attachment.id)) continue;
+          const [attachment] = safeStoredAttachments([snapshot.attachment]) ?? [];
+          if (!attachment || attachment.kind !== "image") continue;
+          const previous = refs.find((ref) => ref.visualId === snapshot.visualId)?.attachmentId;
+          const remaining = attachments.filter((existing) => existing.id !== previous && existing.id !== attachment.id);
+          const bytes = remaining.reduce((total, existing) => total + existing.size, 0) + attachment.size;
+          if (remaining.length >= MAX_ATTACHMENTS_PER_MESSAGE || bytes > MAX_ATTACHMENT_INLINE_BYTES) continue;
+          attachments = [...remaining, attachment];
+          refs = [...refs.filter((ref) => ref.visualId !== snapshot.visualId), { visualId: snapshot.visualId, attachmentId: attachment.id }];
+          stored = true;
+        }
+        if (!stored) return false;
+        message.attachments = attachments;
+        message.visualSnapshots = refs;
+        await writeChatAndMeta(chat);
+        return true;
+      });
+    },
+
+    /**
+     * Remember a native visual's local state (tabs, filters, sliders) so it
+     * survives a reload. Returns false when the visual is not on that
+     * assistant message or the state does not validate.
+     */
+    async updateUiVisualState(
+      chatId: string,
+      messageId: string,
+      visualId: string,
+      state: Record<string, unknown>,
+    ): Promise<boolean> {
+      return shared([chatId], false, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "assistant");
+        const current = message?.uiVisuals?.find((visual) => visual.id === visualId);
+        if (!chat || !message || !current) return false;
+        const next = parseChatUiVisualV1({ ...current, state });
+        if (!next) return false;
+        message.uiVisuals = message.uiVisuals!.map((visual) => (visual.id === visualId ? next : visual));
+        await writeChat(chat);
+        return true;
+      });
+    },
+
+    /**
      * Empty a chat's transcript in place, keeping its identity, title, owner
      * and model. Returns false when the chat is missing or already empty.
      */
@@ -1707,6 +1791,10 @@ export function createChatStore(
             message.role === "assistant" && message.htmlArtifacts
               ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
               : undefined,
+          uiVisuals:
+            message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
+          visualSnapshots:
+            message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)

@@ -395,6 +395,12 @@ import {
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { createUiDraftSession } from "./aiden-ui-draft.js";
+import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
+import { visualSnapshotImages } from "./visual-snapshot-core.js";
+import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
@@ -478,6 +484,8 @@ export interface GenerationExecutionOptions {
   onTurnAccepted?: () => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
+  /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
+  visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
   /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
@@ -828,10 +836,13 @@ async function prepareGeneration(
   const displayedHtmlIds = new Set<string>();
   /** mediaId → the render_artifact call it renders after. */
   const htmlArtifactPlacements = createArtifactPlacementLedger();
+  const displayedUiVisuals: ChatUiVisualV1[] = [];
+  /** visual id → the render_ui call it renders after. */
+  const uiVisualPlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -840,7 +851,7 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => message.attachments ?? []);
+      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
   const shareImage = (attachment: Attachment) => {
@@ -887,6 +898,8 @@ async function prepareGeneration(
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages: runtimeSupportsImages(designModel),
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
@@ -1532,7 +1545,7 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,
@@ -1780,6 +1793,21 @@ async function prepareGeneration(
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
+      ...(options.visualAudience ? { audience: options.visualAudience } : {}),
+      existingChatUiCount: displayedAssistantUiCount(chat.messages),
+      onUiVisual: (visual, context) => {
+        uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
+        const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+        const placed: ChatUiVisualV1 = toolCallId ? { ...visual, toolCallId } : visual;
+        const index = displayedUiVisuals.findIndex((item) => item.id === visual.id);
+        if (index >= 0) displayedUiVisuals[index] = placed;
+        else displayedUiVisuals.push(placed);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual: placed },
+        });
+        return true;
+      },
       onArtifact: async (artifact, html, context) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
@@ -1860,6 +1888,8 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     htmlArtifactPlacements,
+    displayedUiVisuals,
+    uiVisualPlacements,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -2223,6 +2253,8 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -2296,16 +2328,41 @@ export const llmClient = {
     }
     // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     // Drafts only stream when render_artifact is really registered this turn
     // (not when visuals are Off, or for surfaces that never get the tool).
     const visualsRegistered = generationExtensions.some(
       (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
     );
-    const visualDrafts = createGenerativeUiDraftSession({
+    const htmlVisualDrafts = createGenerativeUiDraftSession({
       enabled: visualsRegistered,
       publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
       send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
     });
+    const uiVisualDrafts = createUiDraftSession({
+      enabled: visualsRegistered,
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
+    // Each session ignores tool calls that are not its own.
+    const visualDrafts = {
+      delta(rawToolCallId: string, toolName: string, args: unknown) {
+        htmlVisualDrafts.delta(rawToolCallId, toolName, args);
+        uiVisualDrafts.delta(rawToolCallId, toolName, args);
+      },
+      end(rawToolCallId: string) {
+        htmlVisualDrafts.end(rawToolCallId);
+        uiVisualDrafts.end(rawToolCallId);
+      },
+      cancel(rawToolCallId: string) {
+        htmlVisualDrafts.cancel(rawToolCallId);
+        uiVisualDrafts.cancel(rawToolCallId);
+      },
+      dispose() {
+        htmlVisualDrafts.dispose();
+        uiVisualDrafts.dispose();
+      },
+    };
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -2326,7 +2383,8 @@ export const llmClient = {
         !subagents &&
         !providerFailure &&
         assistantAttachments.length === 0 &&
-        displayedHtmlArtifacts.length === 0
+        displayedHtmlArtifacts.length === 0 &&
+        displayedUiVisuals.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -2363,6 +2421,12 @@ export const llmClient = {
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
             htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
+            uiVisuals: displayedUiVisuals.length
+              ? displayedUiVisuals.map((visual) => {
+                  const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+                  return toolCallId ? { ...visual, toolCallId } : visual;
+                })
+              : undefined,
           },
           {
             providerId: params.providerId,
@@ -2396,6 +2460,30 @@ export const llmClient = {
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
+        }
+        if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
+          // Snapshots for clients that cannot draw visuals; never delays this reply.
+          enqueueVisualSnapshots({
+            chatId: params.chatId,
+            messageId,
+            visuals: [
+              ...displayedHtmlArtifacts.map((artifact) => ({
+                kind: "html" as const,
+                visualId: artifact.mediaId,
+                title: artifact.title,
+                ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+              })),
+              ...displayedUiVisuals.map((visual) => ({
+                kind: "ui" as const,
+                visualId: visual.id,
+                title: visual.title,
+                visual,
+                // The same images the saved message draws beside this visual.
+                attachments: visualSnapshotImages(visual, assistantAttachments),
+                ...(visual.layout === "wide" ? { layout: "wide" as const } : {}),
+              })),
+            ],
+          });
         }
         return { chat, error: undefined, messageId };
       } catch (error) {
@@ -4209,6 +4297,7 @@ export const llmClient = {
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
+              displayedUiVisuals.length +
               (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled

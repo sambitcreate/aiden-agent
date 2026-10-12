@@ -100,6 +100,10 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Contract revision 25: phones may view and control the Mac's shared
     /// iOS Simulators after negotiating `simulators:mobile`.
     static let mobileSimulatorsFeature = "mobile-simulators-v1"
+    /// Contract revision 27: assistant messages may carry `visuals`, each
+    /// shown as the Mac's snapshot at its tool step. The field is additive, so
+    /// the transcript renders visuals whenever a message carries them.
+    static let chatVisualsFeature = "chat-visuals-v1"
 
     let protocolVersion: Int
     let instanceId: String

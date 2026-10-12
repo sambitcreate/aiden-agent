@@ -7,6 +7,8 @@ import {
 } from "../shared/subagent-runs";
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { reduceUiVisuals } from "./ui-visual-transcript";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import {
   restoreUndeliveredGuidance,
@@ -45,6 +47,8 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
   reasoning: string;
   timeline: GenerationTimeline | null;
   artifacts: readonly ChatArtifactV1[];
+  /** Native (render_ui) visuals, kept beside the artifacts. */
+  uiVisuals?: readonly ChatUiVisualV1[];
   subagents: readonly SubagentRunSnapshot[];
 }
 
@@ -302,6 +306,7 @@ export function rememberDetachedLifecycleStream(
     reasoning: (seed?.reasoning ?? "").slice(0, MAX_DETACHED_REASONING_CHARS),
     timeline: timeline?.generationId === owner.streamId ? timeline : null,
     artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
+    uiVisuals: (seed?.uiVisuals ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
     subagents: mergeSubagentSnapshots([], seed?.subagents ?? [], owner),
   });
   while (detachedLifecycleStreams.size > MAX_DETACHED_STREAMS) {
@@ -638,7 +643,11 @@ export function subscribeDetachedTerminalChats(
     const event = parseChatArtifactEventV1(parsed.payload.event);
     if (!event) return;
     updateDetachedProjection(parsed.streamId, (current) => {
-      if (event.operation === "reset") return { ...current, artifacts: [] };
+      if (event.operation === "reset") return { ...current, artifacts: [], uiVisuals: [] };
+      if (event.operation === "ui") {
+        const uiVisuals = reduceUiVisuals(current.uiVisuals ?? [], event);
+        return uiVisuals.length > MAX_DETACHED_ARTIFACTS ? current : { ...current, uiVisuals };
+      }
       // Detached views show settled artifacts only; live drafts are per-window.
       if (event.operation !== "present") return current;
       const identity = chatArtifactIdentity(event.artifact);

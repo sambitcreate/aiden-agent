@@ -32,6 +32,7 @@ import {
   UserRound,
   UsersRound,
   Wand2,
+  ChartColumn,
   type LucideIcon,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -122,6 +123,7 @@ const FEATURE_ILLUSTRATIONS = {
   telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
     .href,
   aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url).href,
+  inlineVisuals: new URL("../assets/onboarding/features/inline-visuals.png", import.meta.url).href,
 } as const;
 
 const providerChoices: Array<{
@@ -234,6 +236,16 @@ const featureBentos: FeatureBento[] = [
       "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
     icon: Globe2,
     imageUrl: FEATURE_ILLUSTRATIONS.browser,
+    size: "standard",
+  },
+  {
+    id: "inlineVisuals",
+    group: "create",
+    title: "Inline Visuals",
+    description:
+      "Ask for a chart, dashboard, or checklist and Aiden draws it right in the reply with the app's own components. Tabs, filters, and sliders work without another message.",
+    icon: ChartColumn,
+    imageUrl: FEATURE_ILLUSTRATIONS.inlineVisuals,
     size: "standard",
   },
   {

@@ -15,6 +15,7 @@ import {
 } from "./memory-store.js";
 import type { Chat } from "./types.js";
 import type { ToolApprovalOutcome } from "./tool-approval.js";
+import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 
 export const MEMORY_EXTENSION_ID = "aiden.durable-memory";
 export const RECALL_MEMORY_TOOL_NAME = "recall_memory";
@@ -72,7 +73,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         sourceId: message.id,
       });
     }
-    for (const attachment of message.attachments ?? []) {
+    for (const attachment of withoutVisualSnapshots(message.attachments ?? [])) {
       documents.push({
         id: metadataId(chat.id, "attachment", attachment.id),
         kind: "artifact",
@@ -81,6 +82,15 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         ),
         chatId: chat.id,
         sourceId: attachment.id,
+      });
+    }
+    for (const visual of message.uiVisuals ?? []) {
+      documents.push({
+        id: metadataId(chat.id, "ui-visual", visual.id),
+        kind: "artifact",
+        text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
+        chatId: chat.id,
+        sourceId: visual.id,
       });
     }
     for (const artifact of message.htmlArtifacts ?? []) {

@@ -241,6 +241,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
         label: "Render artifact",
         detail: safeDetail(values.title),
       };
+    case "render_ui":
+      return { label: "Draw visual", detail: safeDetail(values.title) };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":

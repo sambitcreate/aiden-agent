@@ -16,6 +16,8 @@ import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
@@ -326,6 +328,10 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
+  uiVisuals?: ChatUiVisualV1[];
+  /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
+  visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */

@@ -43,6 +43,7 @@ import {
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE,
   AIDEN_REMOTE_CHAT_FORK_FEATURE,
   AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
+  AIDEN_REMOTE_CHAT_VISUALS_FEATURE,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -1748,6 +1749,7 @@ export function createAidenRemoteRequestHandler(
             ...(dependencies.chats?.messagesWindow
               ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
               : []),
+            ...(dependencies.chats ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
             ...(dependencies.chats?.fork && dependencies.chats.supportsForks === true
               ? [AIDEN_REMOTE_CHAT_FORK_FEATURE]
               : []),

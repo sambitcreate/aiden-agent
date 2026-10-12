@@ -1,8 +1,16 @@
 package sbtbiswas.AidenOnTheGo.models
 
 import androidx.compose.runtime.Immutable
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
@@ -256,13 +264,26 @@ data class AidenChronologicalRow(
     val id: String,
     val kind: Kind,
     val text: String = "",
-    val steps: List<AidenAgentStep> = emptyList()
+    val steps: List<AidenAgentStep> = emptyList(),
+    /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
+    val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL }
+    enum class Kind { TEXT, REASONING, TOOL, VISUAL }
 }
 
 object AidenChronologicalProjection {
-    fun rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?): List<AidenChronologicalRow>? {
+    /**
+     * The reply in reading order. Each of [visuals] follows the tool step whose
+     * `toolCallId` drew it (a run of same-offset tool steps splits there), and
+     * visuals no step claims trail at the end. A live reply passes no visuals:
+     * snapshots exist only once the reply commits.
+     */
+    fun rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: List<AidenChatVisual> = emptyList()
+    ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
         var hasSpan = false
@@ -275,7 +296,15 @@ object AidenChronologicalProjection {
         }
         if ((reasoning.isNotEmpty() && !hasSpan) || reasoning.substring(reasoningCursor).isNotBlank()) return null
         val steps = timeline.steps
+        val toolCallIds = steps.mapNotNullTo(HashSet()) { step ->
+            step.toolCallId.takeIf { step.kind == AidenAgentStep.Kind.TOOL }
+        }
+        val visualsByCall = visuals.filter { it.toolCallId in toolCallIds }.groupBy { it.toolCallId }
         val result = mutableListOf<AidenChronologicalRow>()
+        fun emitVisuals(drawn: List<AidenChatVisual>) {
+            drawn.forEach { result += AidenChronologicalRow("visual-${it.id}", AidenChronologicalRow.Kind.VISUAL, visual = it) }
+        }
+        val emittedCalls = HashSet<String>()
         var cursor = 0
         var index = 0
         while (index < steps.size) {
@@ -295,10 +324,16 @@ object AidenChronologicalProjection {
                 index++
             } else {
                 val group = mutableListOf<AidenAgentStep>()
+                var drawn: List<AidenChatVisual> = emptyList()
                 while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL && steps[index].contentOffset == offset) {
-                    group += steps[index++]
+                    val step = steps[index++]
+                    group += step
+                    val callId = step.toolCallId
+                    drawn = if (callId != null && emittedCalls.add(callId)) visualsByCall[callId].orEmpty() else emptyList()
+                    if (drawn.isNotEmpty()) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+                emitVisuals(drawn)
             }
             cursor = offset
         }
@@ -306,6 +341,7 @@ object AidenChronologicalProjection {
             val slice = text.substring(cursor)
             if (slice.isNotBlank()) result += AidenChronologicalRow("text-$cursor", AidenChronologicalRow.Kind.TEXT, slice)
         }
+        emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
 }
@@ -624,6 +660,12 @@ data class AidenChatMessage(
     val reasoning: String? = null,
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
+    /**
+     * Inline visuals in reply order (contract revision 27). Entries this
+     * version cannot use are dropped; the message itself survives.
+     */
+    @Serializable(with = AidenChatVisualListSerializer::class)
+    val visuals: List<AidenChatVisual>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
@@ -639,6 +681,8 @@ data class AidenChatMessage(
                 (attachments?.all { it.isWireSafe } ?: true) &&
                 (htmlArtifacts?.size ?: 0) <= 40 &&
                 (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
+                (visuals?.size ?: 0) <= AidenChatVisual.MAX_PER_MESSAGE &&
+                (visuals?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
 }
@@ -654,6 +698,73 @@ data class AidenHtmlArtifact(
                 id.length <= 256 &&
                 title.isNotEmpty() &&
                 title.length <= 120
+}
+
+/**
+ * One inline visual of an assistant reply (contract revision 27): a native
+ * `render_ui` visual or a sandboxed `render_artifact` HTML visual. Phones never
+ * draw it; they show the Mac's snapshot image, else [fallbackText], else [title].
+ */
+@Serializable
+@Immutable
+data class AidenChatVisual(
+    val id: String,
+    /** `ui` or `html`; kept as a string so an unknown kind drops only this visual. */
+    val kind: String,
+    val title: String,
+    /** The timeline tool step that drew this visual. */
+    val toolCallId: String? = null,
+    /** A text description of a native visual. */
+    val fallbackText: String? = null,
+    /** An image attachment on the same message holding the Mac's snapshot. */
+    val snapshotAttachmentId: String? = null,
+    /** `wide`, or absent. */
+    val layout: String? = null
+) {
+    val isWireSafe: Boolean
+        get() = IDENTIFIER.matches(id) &&
+                (kind == KIND_UI || kind == KIND_HTML) &&
+                title.isNotEmpty() && title.trim() == title &&
+                title.codePointCount(0, title.length) <= MAX_TITLE_LENGTH &&
+                (toolCallId == null || (toolCallId.length <= 128 && toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID))) &&
+                (fallbackText == null || (fallbackText.isNotEmpty() &&
+                    fallbackText.codePointCount(0, fallbackText.length) <= MAX_FALLBACK_TEXT_LENGTH)) &&
+                (snapshotAttachmentId == null || IDENTIFIER.matches(snapshotAttachmentId)) &&
+                (layout == null || layout == LAYOUT_WIDE)
+
+    companion object {
+        const val KIND_UI = "ui"
+        const val KIND_HTML = "html"
+        const val LAYOUT_WIDE = "wide"
+        const val MAX_PER_MESSAGE = 40
+        const val MAX_TITLE_LENGTH = 120
+        const val MAX_FALLBACK_TEXT_LENGTH = 4_000
+        /** Prefix of the attachment ids the Mac gives visual snapshots. */
+        const val SNAPSHOT_ATTACHMENT_PREFIX = "visual-snapshot_"
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,256}$")
+    }
+}
+
+/**
+ * Decodes `visuals` one entry at a time, keeping the first of each id and
+ * skipping any entry this version cannot use, so one odd visual never fails
+ * its message. Additive keys inside an entry are ignored.
+ */
+object AidenChatVisualListSerializer : KSerializer<List<AidenChatVisual>> {
+    private val delegate = ListSerializer(AidenChatVisual.serializer())
+    private val entryJson = Json { ignoreUnknownKeys = true }
+    override val descriptor: SerialDescriptor = delegate.descriptor
+    override fun serialize(encoder: Encoder, value: List<AidenChatVisual>) = delegate.serialize(encoder, value)
+    override fun deserialize(decoder: Decoder): List<AidenChatVisual> {
+        val json = decoder as? JsonDecoder ?: return delegate.deserialize(decoder)
+        val entries = json.decodeJsonElement() as? JsonArray ?: return emptyList()
+        val seen = HashSet<String>()
+        return entries.mapNotNull { entry ->
+            runCatching { entryJson.decodeFromJsonElement(AidenChatVisual.serializer(), entry) }
+                .getOrNull()
+                ?.takeIf { it.isWireSafe && seen.add(it.id) }
+        }
+    }
 }
 
 @Serializable

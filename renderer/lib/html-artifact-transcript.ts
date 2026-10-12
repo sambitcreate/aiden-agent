@@ -32,6 +32,9 @@ export function reduceVisualDrafts(drafts: VisualDrafts, event: ChatArtifactEven
       next.delete(toolCallId);
       return next;
     }
+    default:
+      // Native (render_ui) visuals keep their own draft state.
+      return drafts;
   }
 }
 

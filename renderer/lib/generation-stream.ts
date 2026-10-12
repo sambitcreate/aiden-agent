@@ -4,6 +4,8 @@
 import { parseAgentsInstructionNotices } from "../shared/agents-instructions-notice";
 import { parseAskUserQuestionPrompt, type AskUserQuestionPromptV1 } from "../shared/ask-user-question";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
+import { reduceUiVisuals } from "./ui-visual-transcript";
 import { parseChatContextPressureNotification } from "../shared/context-pressure";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../shared/subagent-runs";
@@ -80,6 +82,8 @@ export interface GenerationStreamProjection {
   reasoning: string;
   timeline: GenerationTimeline | null;
   artifacts: ChatArtifactV1[];
+  /** Native (render_ui) visuals presented so far. */
+  uiVisuals?: ChatUiVisualV1[];
   subagents: SubagentRunSnapshot[];
 }
 
@@ -98,6 +102,7 @@ export function subscribeGenerationStream(
   let projectedReasoning = "";
   let projectedTimeline: GenerationTimeline | null = null;
   let projectedArtifacts: ChatArtifactV1[] = [];
+  let projectedUiVisuals: ChatUiVisualV1[] = [];
   let projectedSubagents: SubagentRunSnapshot[] = [];
   const unsubs: Array<() => void> = [];
   const dispose = () => {
@@ -182,6 +187,9 @@ export function subscribeGenerationStream(
         if (!event) return;
         if (event.operation === "reset") {
           projectedArtifacts = [];
+          projectedUiVisuals = [];
+        } else if (event.operation === "ui") {
+          projectedUiVisuals = [...reduceUiVisuals(projectedUiVisuals, event)];
         } else if (event.operation === "present") {
           const identity = chatArtifactIdentity(event.artifact);
           const index = projectedArtifacts.findIndex(
@@ -256,6 +264,7 @@ export function subscribeGenerationStream(
       reasoning: projectedReasoning,
       timeline: projectedTimeline,
       artifacts: projectedArtifacts,
+      uiVisuals: projectedUiVisuals,
       subagents: projectedSubagents,
     }),
   };

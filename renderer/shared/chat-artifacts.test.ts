@@ -3,6 +3,39 @@ import test from "node:test";
 import { parseChatArtifactEventV1, parseChatArtifactV1, parseHtmlArtifactPlacements } from "./chat-artifacts.js";
 import { MAX_HTML_ARTIFACT_BYTES } from "./generative-ui.js";
 
+const UI_VISUAL = {
+  version: 1,
+  kind: "ui",
+  id: "ui-1",
+  toolCallId: "call-2",
+  title: "Board",
+  catalogVersion: 1,
+  tree: { t: "Visual", k: "0", c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }] },
+  fallbackText: "Hi",
+};
+
+test("native visual events carry a validated visual", () => {
+  assert.deepEqual(parseChatArtifactEventV1({ version: 1, operation: "ui", visual: UI_VISUAL }), {
+    version: 1,
+    operation: "ui",
+    visual: UI_VISUAL,
+  });
+  assert.deepEqual(parseChatArtifactEventV1({ version: 1, operation: "ui_draft", toolCallId: "call-2", visual: UI_VISUAL }), {
+    version: 1,
+    operation: "ui_draft",
+    toolCallId: "call-2",
+    visual: UI_VISUAL,
+  });
+  for (const bad of [
+    { version: 1, operation: "ui", visual: { ...UI_VISUAL, tree: undefined } },
+    { version: 1, operation: "ui", visual: UI_VISUAL, extra: 1 },
+    { version: 1, operation: "ui_draft", visual: UI_VISUAL },
+    { version: 1, operation: "ui_draft", toolCallId: "", visual: UI_VISUAL },
+  ]) {
+    assert.equal(parseChatArtifactEventV1(bad), undefined, JSON.stringify(bad));
+  }
+});
+
 const IMAGE = {
   version: 1 as const,
   kind: "image" as const,

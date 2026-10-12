@@ -98,6 +98,8 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
+import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { designProjectStore, designRunService } from "./services/design/main.js";
@@ -154,7 +156,8 @@ import { botSkillContentWatcher } from "./services/bot-capability-services-main.
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
-import { shouldQuitAfterAllWindowsClose } from "./application-lifecycle-core.js";
+import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
+import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 
@@ -1705,6 +1708,19 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("second-instance", () => showMainWindow());
+  // A hidden snapshot window must not keep a closing app alive.
+  app.on("browser-window-created", (_event, created) => {
+    created.on("closed", () => {
+      if (isAuxiliaryWindow(created)) return;
+      const remaining = BrowserWindow.getAllWindows()
+        .filter((window) => !window.isDestroyed())
+        .map((window) => ({ auxiliary: isAuxiliaryWindow(window) }));
+      if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
+        disposeVisualSnapshots();
+      }
+    });
+  });
+
   app.on("window-all-closed", () => {
     const backgroundServiceRunning = aidenRemoteServiceKeepsApplicationAlive();
     logger.info("electron-lifecycle", "All application windows closed", {
@@ -1749,6 +1765,7 @@ if (!ownsSingleInstanceLock) {
 
   app.on("will-quit", () => {
     logger.info("electron-lifecycle", "Application will-quit");
+    disposeVisualSnapshots();
     cleanupApplication();
   });
   app.on("quit", (_event, exitCode) => {
@@ -1881,6 +1898,13 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      // Phones and other clients that cannot draw a visual get its snapshot.
+      installVisualSnapshotQueue(
+        createMainVisualSnapshotQueue({
+          htmlFor: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
+          addVisualSnapshots: (chatId, messageId, snapshots) => chatStore.addVisualSnapshots(chatId, messageId, snapshots),
+        }),
+      );
       await startStudioAssets({
         enabled: studioAssetsEnabled(),
         store: studioAssetStore,

@@ -1,3 +1,5 @@
+import type { ChatUiVisualV1 } from "./aiden-ui/types.js";
+import { parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attachment-contract.js";
 import {
   HTML_ARTIFACT_MIME_TYPE,
@@ -85,6 +87,19 @@ export type ChatArtifactEventV1 =
       version: typeof CHAT_ARTIFACT_EVENT_VERSION;
       operation: "draft_end";
       toolCallId: string;
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A native (render_ui) visual was presented or revised. */
+      operation: "ui";
+      visual: ChatUiVisualV1;
+    }
+  | {
+      version: typeof CHAT_ARTIFACT_EVENT_VERSION;
+      /** A render_ui call is still streaming; `visual` is its partial tree. */
+      operation: "ui_draft";
+      toolCallId: string;
+      visual: ChatUiVisualV1;
     };
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
@@ -94,6 +109,8 @@ const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
 const PRESENT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "artifact", "toolCallId", "src", "layout"]);
 const DRAFT_EVENT_REQUIRED_KEYS = ["version", "operation", "toolCallId", "src"] as const;
+const UI_EVENT_KEYS = new Set(["version", "operation", "visual"]);
+const UI_DRAFT_EVENT_KEYS = new Set(["version", "operation", "toolCallId", "visual"]);
 const DRAFT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "toolCallId", "title", "src", "layout"]);
 const DRAFT_END_EVENT_KEYS = new Set(["version", "operation", "toolCallId"]);
 const MAX_PLACEMENTS = 40;
@@ -250,6 +267,18 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
   if (event.version !== CHAT_ARTIFACT_EVENT_VERSION) return undefined;
   if (event.operation === "reset" && hasExactKeys(event, RESET_EVENT_KEYS)) {
     return { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "reset" };
+  }
+  if (event.operation === "ui") {
+    if (!hasExactKeys(event, UI_EVENT_KEYS)) return undefined;
+    const visual = parseChatUiVisualV1(event.visual);
+    return visual ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual } : undefined;
+  }
+  if (event.operation === "ui_draft") {
+    if (!hasExactKeys(event, UI_DRAFT_EVENT_KEYS) || !isToolCallId(event.toolCallId)) return undefined;
+    const visual = parseChatUiVisualV1(event.visual);
+    return visual
+      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui_draft", toolCallId: event.toolCallId, visual }
+      : undefined;
   }
   if (event.operation === "draft_end") {
     return hasExactKeys(event, DRAFT_END_EVENT_KEYS) && isToolCallId(event.toolCallId)

@@ -1,3 +1,4 @@
+import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { ChatStartParams, ScheduledMcpServerBinding, ScheduledTaskPermission } from "./types.js";
 
@@ -58,6 +59,8 @@ export interface RemoteGenerationSurfaceInput {
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   botAudienceId?: string;
   excludeToolNames?: ReadonlySet<string>;
+  /** The Mac's Settings → Appearance choice; automatic when absent. */
+  inlineVisuals?: InlineVisualsMode;
   onTurnAccepted(): void;
 }
 
@@ -73,9 +76,8 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       providerId: input.providerId,
       model: input.model,
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-      // Phones cannot render inline visuals until snapshots and native
-      // renderers ship (inline generative UI Phases 3–4).
-      inlineVisuals: "off" as const,
+      // Paired devices see each visual as its snapshot image.
+      ...(input.inlineVisuals ? { inlineVisuals: input.inlineVisuals } : {}),
       messages: [],
     } satisfies ChatStartParams,
     options: {
@@ -83,6 +85,7 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       allowComputerUse: false as const,
       usageSource: "chat" as const,
       turnId: input.turnId,
+      visualAudience: "remote" as const,
       ...(input.botAudienceId ? { botAudienceId: input.botAudienceId } : {}),
       ...(input.excludeToolNames ? { excludeToolNames: input.excludeToolNames } : {}),
       onTurnAccepted: input.onTurnAccepted,

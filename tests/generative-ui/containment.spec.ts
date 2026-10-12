@@ -508,6 +508,41 @@ test("theme messages from the parent update guest variables without reloading", 
   }
 });
 
+test("a still-image document draws charts at their final values at once", async ({ page }) => {
+  const chartSource = await fs.readFile(path.join(process.cwd(), "resources", "generative-ui", "chart.umd.min.js"), "utf8");
+  const guest = `<div style="height:240px"><canvas id="c"></canvas></div><script>
+    const chart = new Chart(document.getElementById("c"), {
+      type: "bar",
+      data: { labels: ["Q1"], datasets: [{ label: "Sales", data: [3] }] },
+      options: { responsive: true, maintainAspectRatio: false },
+    });
+    const bar = chart.getDatasetMeta(0).data[0];
+    window.__atFinal = Math.abs(bar.getProps(["y"]).y - bar.getProps(["y"], true).y) < 0.5;
+  </script>`;
+  const documentFor = (stillImage: boolean) =>
+    wrapGenerativeUiHtml(guest, "Chart still", undefined, { inline: true, stillImage }).replace(
+      '<script src="aiden-genui://chart.js"></script>',
+      `<script>\n${chartSource}\n</script>`,
+    );
+  let body = "";
+  const site = await listen((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(body);
+  });
+  try {
+    const atFinal = async (stillImage: boolean) => {
+      body = documentFor(stillImage);
+      await page.goto(site.origin, { waitUntil: "load" });
+      return page.evaluate(() => (window as unknown as { __atFinal?: boolean }).__atFinal);
+    };
+    // An ordinary visual animates its bars in; a snapshot must not catch them mid-way.
+    expect(await atFinal(false)).toBe(false);
+    expect(await atFinal(true)).toBe(true);
+  } finally {
+    await site.close();
+  }
+});
+
 test("theme messages recolor chart datasets that were colored from aiden.series()", async ({ page }) => {
   // The real vendored Chart.js, inlined by the standalone export the app uses for libraries.
   const chartSource = await fs.readFile(path.join(process.cwd(), "resources", "generative-ui", "chart.umd.min.js"), "utf8");

@@ -37,6 +37,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { Progress } from "./ui-primitives";
 import {
   AlertCircle,
   CheckCircle2,
@@ -645,19 +646,11 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
       </div>
       <p className="mt-2 text-small text-secondary">{description}</p>
       {displayedSnapshot.status === "downloading" && displayedSnapshot.percent !== null ? (
-        <div
-          className="mt-2 h-1 overflow-hidden rounded-full bg-control"
-          role="progressbar"
-          aria-label="Update download progress"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.floor(displayedSnapshot.percent)}
-        >
-          <div
-            className="h-full rounded-full bg-accent transition-[width] duration-150"
-            style={{ width: `${displayedSnapshot.percent}%` }}
-          />
-        </div>
+        <Progress
+          className="mt-2"
+          label="Update download progress"
+          value={displayedSnapshot.percent}
+        />
       ) : null}
       <div className="mt-2 flex items-center justify-end gap-1">
         <Button

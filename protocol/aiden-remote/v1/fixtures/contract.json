@@ -1,5 +1,5 @@
 {
-  "contractRevision": 26,
+  "contractRevision": 27,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -87,6 +87,7 @@
     ],
     "features": [
       "chat-summaries-v1",
+      "chat-visuals-v1",
       "chat-tasks-v1",
       "chat-agents-v1",
       "chat-run-input-v1",
@@ -183,7 +184,7 @@
     "modelId": "model_fixture",
     "messages": [
       { "id": "message_fixture_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
-      { "id": "message_fixture_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+      { "id": "message_fixture_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z", "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}], "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}], "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}], "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]} }
     ],
     "createdAt": "2026-08-18T18:59:00.000Z",
     "updatedAt": "2026-08-18T19:00:01.000Z",
@@ -1472,7 +1473,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 26,
+    "contractRevision": 27,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -1496,7 +1497,11 @@
         "id": "message_fixture_assistant_01",
         "role": "assistant",
         "text": "Starting the review.",
-        "createdAt": "2026-08-18T19:00:01.000Z"
+        "createdAt": "2026-08-18T19:00:01.000Z",
+        "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}],
+        "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}],
+        "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}],
+        "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]}
       }
     ],
     "hasOlder": true,

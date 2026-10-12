@@ -8142,6 +8142,57 @@
               "additionalProperties": false
             }
           },
+          "visuals": {
+            "description": "Additive in contract revision 27 (feature chat-visuals-v1): inline visuals in reply order. Clients show the snapshot image (an attachment on this message) after the matching timeline tool step, else fallbackText, and drop entries they cannot parse.",
+            "type": "array",
+            "maxItems": 40,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "title"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,256}$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "ui",
+                    "html"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "toolCallId": {
+                  "type": "string",
+                  "pattern": "^call-[1-9][0-9]*$"
+                },
+                "fallbackText": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "snapshotAttachmentId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,256}$"
+                },
+                "layout": {
+                  "type": "string",
+                  "enum": [
+                    "wide"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
