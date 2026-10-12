@@ -35,6 +35,11 @@ export type ComputerUseAccessDecision =
  * when the revision moved, so a revocation takes effect on the next call.
  */
 let grantRevision = 0;
+/** Resets still clearing stored grants; no grant is honoured until they finish. */
+let resetsInProgress = 0;
+
+export const COMPUTER_USE_RESETTING_REASON =
+  "Computer Use permissions are being reset. Ask again in a moment.";
 
 export function computerUseGrantRevision(): number {
   return grantRevision;
@@ -60,10 +65,18 @@ export interface ComputerUseGrantResetDependencies {
 export async function resetComputerUseGrants(
   deps: ComputerUseGrantResetDependencies,
 ): Promise<{ cleared: number }> {
+  resetsInProgress += 1;
   revokeComputerUseGrants();
-  deps.cancelActivatedStreams();
-  await deps.clearAlwaysAllow();
-  return { cleared: await deps.clearChatGrants() };
+  try {
+    deps.cancelActivatedStreams();
+    await deps.clearAlwaysAllow();
+    return { cleared: await deps.clearChatGrants() };
+  } finally {
+    resetsInProgress -= 1;
+    // Fence the closing edge too: anything cached while the stored grants
+    // were still being cleared is re-read against the cleared state.
+    revokeComputerUseGrants();
+  }
 }
 
 export interface ComputerUseAccessGateDependencies {
@@ -156,6 +169,8 @@ export function createComputerUseAccessGate(
   ): Promise<ComputerUseAccessDecision> => {
     if (declined)
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
+    if (resetsInProgress > 0)
+      return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
     const revision = grantRevision;
     // Once this stream saw a granted chat on a ready Mac, skip the status
     // probe; a later permission loss surfaces as a driver error instead.

@@ -170,14 +170,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
    * controller lives across the Bot's turns until it is no longer allowed,
    * the Bot is deleted, or the app quits.
    */
-  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+  async function computerUseGranted(botId: string): Promise<boolean> {
     const chat = await chatStore.get(await deps.canonicalChatId(botId));
     const settings = await configStore.getSettings();
-    const enabled =
+    return (
       computerUseSupported() &&
       settings.computerUseEnabled === true &&
-      (settings.computerUseAlwaysAllow === true || chat?.computerUseAllowed === true);
-    if (!enabled) {
+      (settings.computerUseAlwaysAllow === true || chat?.computerUseAllowed === true)
+    );
+  }
+
+  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+    if (!(await computerUseGranted(botId))) {
       await closeController(botId);
       return undefined;
     }
@@ -364,6 +368,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
       const controller = controllers.get(botId);
       if (!controller) throw new Error("Computer Use is not enabled for this response.");
+      // A running turn keeps its controller, so re-check the grant on every
+      // call: Reset chat permissions or Always allow turning off must stop
+      // even an observation mid-turn.
+      if (!(await computerUseGranted(botId))) {
+        await closeController(botId);
+        throw new Error("Computer Use access was revoked. Ask the user to allow it again.");
+      }
       const args = call.args as ComputerUseArgs;
       const descriptor = await controller.approvalFor(args, call.signal);
       if (!descriptor) return null;

@@ -10,6 +10,7 @@ import { ToolApprovalCoordinator, type ToolApprovalPrompt } from "../tool-approv
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import {
   COMPUTER_USE_DECLINED_REASON,
+  COMPUTER_USE_RESETTING_REASON,
   COMPUTER_USE_SETUP_REASON,
   createComputerUseAccessGate,
   resetComputerUseGrants,
@@ -366,6 +367,37 @@ test("reset chat permissions clears every chat's grant and Always allow, and sto
   d.willAnswer(false);
   assert.equal((await gate.authorize("call-2")).allowed, false);
   assert.equal(d.cards.length, 1);
+});
+
+test("a response that starts while reset is still clearing grants cannot keep a cleared grant", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  await d.chatStore.setComputerUseAllowed(chat.id, true);
+  let releaseClear: () => void = () => undefined;
+  const clearing = new Promise<void>((resolve) => {
+    releaseClear = resolve;
+  });
+
+  const reset = resetComputerUseGrants({
+    cancelActivatedStreams: () => undefined,
+    clearAlwaysAllow: async () => undefined,
+    clearChatGrants: async () => {
+      await clearing;
+      return d.chatStore.clearAllComputerUseAllowed();
+    },
+  });
+  // Admitted after reset began, while the chat's grant is still stored.
+  const { gate } = d.stream(chat.id);
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  releaseClear();
+  await reset;
+
+  d.willAnswer(false);
+  assert.equal((await gate.authorize("call-2")).allowed, false);
+  assert.equal(d.cards.length, 1, "after reset the chat asks again instead of reusing the old grant");
 });
 
 test("an unsupported Mac or build blocks with its own detail and never raises a card", async (t) => {
