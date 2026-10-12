@@ -80,6 +80,7 @@ export function ImageGenerationSettings() {
   // Keys of the actions in flight, e.g. `fetch:fal`, `key:replicate`, `model:fal::id`.
   const [pending, setPending] = React.useState<ReadonlySet<string>>(() => new Set());
   const pendingRef = React.useRef(new Set<string>());
+  const overlappedRef = React.useRef(false);
   const [notices, setNotices] = React.useState<
     Partial<Record<ImageGenerationProviderId, Notice>>
   >({});
@@ -110,6 +111,7 @@ export function ImageGenerationSettings() {
       action: () => Promise<ImageGenerationActionResult>,
     ): Promise<ImageGenerationActionResult | null> => {
       if (pendingRef.current.has(key)) return null;
+      if (pendingRef.current.size > 0) overlappedRef.current = true;
       pendingRef.current.add(key);
       setPending(new Set(pendingRef.current));
       try {
@@ -126,6 +128,12 @@ export function ImageGenerationSettings() {
       } finally {
         pendingRef.current.delete(key);
         setPending(new Set(pendingRef.current));
+        // Overlapping actions can resolve out of order, so the last state to
+        // arrive may be older than another; settle on a fresh read once idle.
+        if (pendingRef.current.size === 0 && overlappedRef.current) {
+          overlappedRef.current = false;
+          void load();
+        }
       }
     },
     [load],
