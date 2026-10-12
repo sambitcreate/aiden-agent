@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { compileAum } from "../../shared/aiden-ui/compile";
-import type { ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import type { AidenUiNodeV1, ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import type { Attachment } from "../../../main/services/types";
 import { visualSnapshotImages } from "../../../main/services/visual-snapshot-core";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui-block";
@@ -293,4 +293,92 @@ test("visual Markdown never loads a remote image or navigates a link directly", 
   // While the visual is still streaming, its link is visible but cannot act.
   view.rerender(<AidenUiBlock visual={visual} draft />);
   assert.equal((screen.getByRole("button", { name: "Open report" }) as HTMLButtonElement).disabled, true);
+});
+
+test("inherited names in a persisted tree draw nothing and the rest of the visual still shows", () => {
+  // A stored tree is parsed on its own, so it can carry names the compiler would have refused.
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-inherited-names",
+    title: "Inherited names",
+    catalogVersion: 1,
+    tree: {
+      t: "Visual",
+      k: "0",
+      c: [
+        { t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Still here" }] },
+        { t: "constructor", k: "0.1", c: [{ t: "#text", k: "0.1.0", s: "Dropped" }] },
+        { t: "toString", k: "0.2" },
+        { t: "Text", k: "0.3", p: { tone: { op: "lit", v: "constructor" } }, c: [{ t: "#text", k: "0.3.0", s: "Plain tone" }] },
+      ],
+    },
+    fallbackText: "Still here",
+  };
+  const view = render(<AidenUiBlock visual={visual} />);
+  assert.ok(screen.getByText("Still here"));
+  assert.ok(screen.getByText("Plain tone"));
+  assert.equal(screen.queryByText("Dropped"), null);
+  assert.equal(view.container.querySelector("[data-aiden-ui-failed]") === null, true);
+});
+
+test("a computed icon name that resolves to an inherited member draws no icon and does not throw", () => {
+  const compiled = compileAum(
+    `<Visual><Text>Still here</Text><Icon name={"constr" + "uctor"} /><ListRow title="Row" icon={"constr" + "uctor"} /></Visual>`,
+  );
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.ok(compiled.tree);
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-computed-icon",
+    title: "Computed icon",
+    catalogVersion: 1,
+    tree: compiled.tree,
+    fallbackText: compiled.fallbackText,
+  };
+  const view = render(<AidenUiBlock visual={visual} />);
+  assert.ok(screen.getByText("Still here"));
+  assert.equal(view.container.querySelector("[data-aiden-ui-failed]") === null, true);
+  // The only icon left is the caption's Copy button; neither inherited name drew one.
+  assert.equal(view.container.querySelectorAll("svg").length, 1);
+});
+
+test("a bound key that is an inherited member starts unset", () => {
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-inherited-bind",
+    title: "Inherited bind",
+    catalogVersion: 1,
+    tree: {
+      t: "Visual",
+      k: "0",
+      c: [{ t: "Switch", k: "0.0", p: { bind: { op: "lit", v: "constructor" }, label: { op: "lit", v: "Flag" } } }],
+    },
+    fallbackText: "Flag",
+  };
+  render(<AidenUiBlock visual={visual} />);
+  assert.equal(screen.getByRole("switch", { name: "Flag" }).getAttribute("aria-checked"), "false");
+});
+
+test("a visual that fails to draw shows its fallback text while the transcript keeps rendering", () => {
+  const visual: ChatUiVisualV1 = {
+    version: 1,
+    kind: "ui",
+    id: "ui-broken-tree",
+    title: "Broken visual",
+    catalogVersion: 1,
+    // A malformed child makes the visual's own render throw; the boundary contains it.
+    tree: { t: "Visual", k: "0", c: [null as unknown as AidenUiNodeV1] },
+    fallbackText: "Fallback words",
+  };
+  render(
+    <div>
+      <AidenUiBlock visual={visual} />
+      <p>Transcript continues</p>
+    </div>,
+  );
+  assert.ok(screen.getByText("Fallback words"));
+  assert.ok(screen.getByText("Transcript continues"));
 });

@@ -1,4 +1,5 @@
 import { evaluate, formatValue, truthy, type AidenUiScope } from "./evaluate.js";
+import { ownRecord } from "./own.js";
 import { AIDEN_UI_LIMITS, type AidenUiExprV1, type AidenUiNodeV1, type AidenUiPropValueV1 } from "./types.js";
 
 /**
@@ -85,9 +86,8 @@ function formatted(value: unknown, format: unknown, scope: AidenUiScope): string
   return str(value);
 }
 
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
+/** Own entries only: a model-written column or label key never reads an inherited member. */
+const record = ownRecord;
 
 function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
   if (node.t === "#text") return node.s ?? "";

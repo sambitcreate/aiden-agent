@@ -1,3 +1,4 @@
+import { hasOwn } from "./own.js";
 import type { AidenUiExprV1 } from "./types.js";
 
 /**
@@ -20,10 +21,6 @@ const MAX_LIST_ITEMS = 10_000;
 const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 class BudgetExceeded extends Error {}
-
-function hasOwn(target: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(target, key);
-}
 
 export function truthy(value: unknown): boolean {
   if (typeof value === "number") return value !== 0 && !Number.isNaN(value);

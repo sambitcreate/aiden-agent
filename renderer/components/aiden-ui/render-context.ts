@@ -1,5 +1,6 @@
 import * as React from "react";
 import { evaluate, type AidenUiScope } from "../../shared/aiden-ui/evaluate";
+import { ownRecord } from "../../shared/aiden-ui/own";
 import type { AidenUiActionV1, AidenUiExprV1, AidenUiNodeV1, AidenUiPropValueV1 } from "../../shared/aiden-ui/types";
 
 /** What a catalog component may ask the block to do. */
@@ -48,9 +49,8 @@ export function asNumber(value: unknown, fallback: number): number {
   return fallback;
 }
 
-export function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
+/** Own entries only, so a model-written key never reads an inherited member such as `constructor`. */
+export const asRecord = ownRecord;
 
 export interface NormalizedOption {
   /** String identity for primitives that only take string values. */

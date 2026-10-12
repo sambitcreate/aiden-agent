@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { truthy } from "../../shared/aiden-ui/evaluate";
+import { ownEntry, ownField } from "../../shared/aiden-ui/own";
 import type { AidenUiIconName } from "../../shared/aiden-ui/catalog";
 import type { AidenUiNodeV1 } from "../../shared/aiden-ui/types";
 import { cn } from "../../lib/ui-utils";
@@ -71,8 +72,9 @@ const ICONS: Record<AidenUiIconName, LucideIcon> = {
   wrench: Wrench, x: X, zap: Zap,
 };
 
+/** Only the icon names in ICONS draw; any other name, including an inherited one, draws nothing. */
 function iconFor(name: unknown, className = "size-4"): React.ReactNode {
-  const Icon = typeof name === "string" ? ICONS[name as AidenUiIconName] : undefined;
+  const Icon = ownEntry<LucideIcon>(ICONS as Readonly<Record<string, LucideIcon>>, name);
   return Icon ? <Icon aria-hidden="true" className={cn("shrink-0", className)} /> : null;
 }
 
@@ -164,7 +166,7 @@ const CARD_TONE: Record<string, string> = {
 const Card: CatalogComponent = ({ node, ctx }) => {
   const title = asString(read(node, ctx, "title"));
   return (
-    <section className={cn("flex min-w-0 flex-col gap-2 rounded-card bg-well p-3", CARD_TONE[asString(read(node, ctx, "tone"))])}>
+    <section className={cn("flex min-w-0 flex-col gap-2 rounded-card bg-well p-3", ownEntry(CARD_TONE, asString(read(node, ctx, "tone"))))}>
       {title ? <h4 className="m-0 text-small-strong text-primary">{title}</h4> : null}
       {ctx.renderChildren(node.c)}
     </section>
@@ -193,8 +195,8 @@ const Text: CatalogComponent = ({ node, ctx }) => (
   <p
     className={cn(
       "m-0 min-w-0 break-words",
-      TEXT_SIZE[asString(read(node, ctx, "size"))] ?? "text-regular",
-      TONE_CLASS[asString(read(node, ctx, "tone"))] ?? "text-primary",
+      ownEntry(TEXT_SIZE, asString(read(node, ctx, "size"))) ?? "text-regular",
+      ownEntry(TONE_CLASS, asString(read(node, ctx, "tone"))) ?? "text-primary",
       read(node, ctx, "weight") === "strong" && "font-semibold",
     )}
   >
@@ -429,11 +431,15 @@ const ImageComponent: CatalogComponent = ({ node, ctx }) => {
   return <img src={source} alt={alt} className="block max-h-96 max-w-full rounded-card object-contain" />;
 };
 
-const IconComponent: CatalogComponent = ({ node, ctx }) => (
-  <span className={cn("inline-flex align-middle", TONE_CLASS[asString(read(node, ctx, "tone"))] ?? "text-secondary")}>
-    {iconFor(read(node, ctx, "name"))}
-  </span>
-);
+const IconComponent: CatalogComponent = ({ node, ctx }) => {
+  const icon = iconFor(read(node, ctx, "name"));
+  if (!icon) return null;
+  return (
+    <span className={cn("inline-flex align-middle", ownEntry(TONE_CLASS, asString(read(node, ctx, "tone"))) ?? "text-secondary")}>
+      {icon}
+    </span>
+  );
+};
 
 const LinkCard: CatalogComponent = ({ node, ctx }) => {
   const url = asString(read(node, ctx, "url"));
@@ -461,9 +467,16 @@ const LinkCard: CatalogComponent = ({ node, ctx }) => {
   );
 };
 
+const CHART_KINDS = new Set<string>(["bar", "line", "area", "pie", "donut", "scatter"]);
+
+/** Unknown or missing chart kinds draw as a bar chart rather than handing the name to the chart library. */
+function chartKind(kind: string): ChartProps["kind"] {
+  return CHART_KINDS.has(kind) ? (kind as ChartProps["kind"]) : "bar";
+}
+
 const ChartComponent: CatalogComponent = ({ node, ctx }) => (
   <AidenUiChart
-    kind={(asString(read(node, ctx, "kind")) || "bar") as ChartProps["kind"]}
+    kind={chartKind(asString(read(node, ctx, "kind")))}
     data={read(node, ctx, "data")}
     x={asString(read(node, ctx, "x"))}
     y={read(node, ctx, "y")}
@@ -509,7 +522,7 @@ const SegmentedComponent: CatalogComponent = ({ node, ctx }) => {
     <Segmented
       aria-label={asString(read(node, ctx, "label")) || key}
       disabled={ctx.draft}
-      value={optionKey(options, ctx.state[key])}
+      value={optionKey(options, ownField(ctx.state, key))}
       onValueChange={(next) => {
         const option = options.find((candidate) => candidate.key === next);
         if (option) ctx.setState(key, option.value);
@@ -525,7 +538,7 @@ const TabsComponent: CatalogComponent = ({ node, ctx }) => {
   return (
     <Tabs
       aria-label={asString(read(node, ctx, "label")) || key}
-      value={optionKey(options, ctx.state[key])}
+      value={optionKey(options, ownField(ctx.state, key))}
       onValueChange={(next) => {
         if (ctx.draft) return;
         const option = options.find((candidate) => candidate.key === next);
@@ -541,7 +554,7 @@ const SwitchComponent: CatalogComponent = ({ node, ctx }) => {
   const id = useLabelId();
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <Switch id={id} checked={truthy(ctx.state[key])} disabled={ctx.draft} onCheckedChange={(next) => ctx.setState(key, next)} />
+      <Switch id={id} checked={truthy(ownField(ctx.state, key))} disabled={ctx.draft} onCheckedChange={(next) => ctx.setState(key, next)} />
       <label htmlFor={id} className="min-w-0 text-small text-primary">{asString(read(node, ctx, "label"))}</label>
     </div>
   );
@@ -551,7 +564,7 @@ const CheckboxComponent: CatalogComponent = ({ node, ctx }) => {
   const key = bindKey(node, ctx);
   return (
     <Checkbox
-      checked={truthy(ctx.state[key])}
+      checked={truthy(ownField(ctx.state, key))}
       disabled={ctx.draft}
       onCheckedChange={(next) => ctx.setState(key, next)}
       label={asString(read(node, ctx, "label"))}
@@ -571,7 +584,7 @@ const RadioGroupComponent: CatalogComponent = ({ node, ctx }) => {
         aria-labelledby={label ? `${groupId}-label` : undefined}
         aria-label={label ? undefined : key}
         disabled={ctx.draft}
-        value={optionKey(options, ctx.state[key])}
+        value={optionKey(options, ownField(ctx.state, key))}
         onValueChange={(next) => {
           const option = options.find((candidate) => candidate.key === next);
           if (option) ctx.setState(key, option.value);
@@ -595,7 +608,7 @@ const SelectComponent: CatalogComponent = ({ node, ctx }) => {
   const label = asString(read(node, ctx, "label")) || key;
   return (
     <Select
-      value={optionKey(options, ctx.state[key]) || undefined}
+      value={optionKey(options, ownField(ctx.state, key)) || undefined}
       disabled={ctx.draft}
       onValueChange={(next) => {
         const option = options.find((candidate) => candidate.key === next);
@@ -621,7 +634,7 @@ const SliderComponent: CatalogComponent = ({ node, ctx }) => {
   const min = asNumber(read(node, ctx, "min"), 0);
   const max = Math.max(asNumber(read(node, ctx, "max"), 100), min + 1);
   const step = Math.max(asNumber(read(node, ctx, "step"), 1), 0.0001);
-  const value = Math.min(Math.max(asNumber(ctx.state[key], min), min), max);
+  const value = Math.min(Math.max(asNumber(ownField(ctx.state, key), min), min), max);
   return (
     <Slider
       label={asString(read(node, ctx, "label")) || key}
@@ -644,7 +657,7 @@ const TextInput: CatalogComponent = ({ node, ctx }) => {
       <label htmlFor={id} className="text-small text-secondary">{asString(read(node, ctx, "label"))}</label>
       <Input
         id={id}
-        value={asString(ctx.state[key])}
+        value={asString(ownField(ctx.state, key))}
         placeholder={asString(read(node, ctx, "placeholder")) || undefined}
         disabled={ctx.draft}
         maxLength={500}

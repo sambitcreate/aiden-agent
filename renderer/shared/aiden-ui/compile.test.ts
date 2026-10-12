@@ -114,6 +114,24 @@ test("literal props carrying wire-unsafe keys are dropped", () => {
   assert.ok(compiled.diagnostics.some((diagnostic) => diagnostic.code === "invalid_literal"));
 });
 
+test("inherited Object.prototype names are never catalog components or props", () => {
+  for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf"]) {
+    const compiled = compileAum(`<Visual><Text>Kept</Text><${name} /></Visual>`);
+    assert.ok(
+      compiled.diagnostics.some((diagnostic) => diagnostic.code === "unknown_element" && diagnostic.at === name),
+      `${name} is reported as an unknown element`,
+    );
+    assert.equal(names(compiled.tree).includes(name), false, `${name} is not a node`);
+    assert.ok(names(compiled.tree).includes("Text"), `${name} keeps the sibling content`);
+  }
+  // A tag the parser reads as text never becomes a node, whatever its name.
+  const underscored = compileAum("<Visual><__proto__ /><Text>Kept</Text></Visual>");
+  assert.equal(names(underscored.tree).includes("__proto__"), false);
+  const prop = compileAum(`<Visual><Text toString="x">Kept</Text></Visual>`);
+  assert.ok(prop.diagnostics.some((diagnostic) => diagnostic.code === "unknown_prop" && diagnostic.message.includes("toString")));
+  assert.equal(Object.keys(prop.tree!.c![0]!.p ?? {}).includes("toString"), false);
+});
+
 test("node and depth caps truncate with a limit diagnostic", () => {
   const many = `<Visual>${"<Separator />".repeat(AIDEN_UI_LIMITS.nodes + 500)}</Visual>`;
   const wide = compileAum(many);

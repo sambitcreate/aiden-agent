@@ -1,6 +1,7 @@
 import { AIDEN_UI_CATALOG, isAidenUiIcon, PRESERVE_WHITESPACE, type CatalogEntry, type PropKind } from "./catalog.js";
 import { parseExpression } from "./expression.js";
 import { fallbackTextFor } from "./fallback-text.js";
+import { hasOwn, ownEntry } from "./own.js";
 import { parseAum, type AumAttr, type AumElement, type AumNode } from "./parse.js";
 import {
   AIDEN_UI_LIMITS,
@@ -149,7 +150,7 @@ function compileProp(
 function compileProps(element: AumElement, entry: CatalogEntry, context: Context): Record<string, AidenUiPropValueV1> | undefined {
   const props: Record<string, AidenUiPropValueV1> = {};
   for (const attr of element.attrs) {
-    const kind = entry.props[attr.name];
+    const kind = ownEntry(entry.props, attr.name);
     if (!kind) {
       const hint = EVENT_OR_STYLE_PROP.test(attr.name) ? " (use catalog props and actions; styling and handlers are not supported)" : "";
       report(context, { code: "unknown_prop", message: `${element.name}.${attr.name} is not a known prop${hint}`, at: element.name });
@@ -161,7 +162,7 @@ function compileProps(element: AumElement, entry: CatalogEntry, context: Context
   }
   if (!context.draft && entry.required) {
     for (const name of entry.required) {
-      if (!(name in props)) {
+      if (!hasOwn(props, name)) {
         report(context, { code: "invalid_literal", message: `${element.name} needs the ${name} prop`, at: element.name });
       }
     }
@@ -272,7 +273,7 @@ function compileChildren(
       collectData(node, context);
       continue;
     }
-    const entry = AIDEN_UI_CATALOG[node.name];
+    const entry = ownEntry(AIDEN_UI_CATALOG, node.name);
     if (!entry || node.name === "Visual") {
       // Unknown element: drop it but keep what it contained.
       if (!context.unknownReported.has(node.name)) {

@@ -2,9 +2,10 @@ import * as React from "react";
 import { Copy, X } from "lucide-react";
 import { AIDEN_UI_LIMITS, type AidenUiActionV1, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import { evaluate, truthy, type AidenUiScope } from "../../shared/aiden-ui/evaluate";
+import { ownEntry, ownField } from "../../shared/aiden-ui/own";
 import { MAX_GUEST_PROMPT_CHARS } from "../../shared/generative-ui-bridge";
 import { cn } from "../../lib/ui-utils";
-import { Button, Dialog, toast, TooltipProvider } from "../ui";
+import { Button, Dialog, ErrorBoundary, toast, TooltipProvider } from "../ui";
 import { CATALOG_COMPONENTS } from "./components";
 import { AidenUiContext, asString, type AidenUiRenderContext } from "./render-context";
 
@@ -71,20 +72,13 @@ function renderNode(node: AidenUiNodeV1, ctx: AidenUiRenderContext, key: string)
     }
     return <React.Fragment key={key}>{items}</React.Fragment>;
   }
-  const Component = CATALOG_COMPONENTS[node.t];
+  // Only catalog names draw; an inherited name such as `constructor` is not a component.
+  const Component = ownEntry(CATALOG_COMPONENTS, node.t);
   if (!Component) return null;
   return <Component key={key} node={node} ctx={ctx} />;
 }
 
-export function AidenUiBlock({
-  visual,
-  draft = false,
-  onAction,
-  onStateChange,
-  attachments,
-  hideCaption = false,
-  followUpBusy = false,
-}: {
+export interface AidenUiBlockProps {
   visual: ChatUiVisualV1;
   /** A visual still being written: shown, but inert. */
   draft?: boolean;
@@ -97,7 +91,37 @@ export function AidenUiBlock({
   hideCaption?: boolean;
   /** A reply is running: confirming a follow-up adds it to the draft instead. */
   followUpBusy?: boolean;
-}) {
+}
+
+/**
+ * A visual sits outside the prose error boundary, so one that fails to draw
+ * is contained here: it shows its plain-text rendering and the transcript keeps going.
+ */
+export function AidenUiBlock(props: AidenUiBlockProps) {
+  return (
+    <ErrorBoundary fallback={<AidenUiFallback visual={props.visual} />} resetKey={props.visual}>
+      <AidenUiVisualBody {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function AidenUiFallback({ visual }: { visual: ChatUiVisualV1 }) {
+  return (
+    <section role="figure" aria-label={visual.title} data-aiden-ui-failed="" className="aiden-inline-visual min-w-0 p-0 text-primary">
+      <p className="m-0 whitespace-pre-wrap break-words text-small text-secondary">{visual.fallbackText || visual.title}</p>
+    </section>
+  );
+}
+
+function AidenUiVisualBody({
+  visual,
+  draft = false,
+  onAction,
+  onStateChange,
+  attachments,
+  hideCaption = false,
+  followUpBusy = false,
+}: AidenUiBlockProps) {
   const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
   const stateRef = React.useRef(state);
   /** True once the user changed something here; saved state then merges instead of replacing. */
@@ -129,7 +153,7 @@ export function AidenUiBlock({
     (key: string, value: unknown) => {
       if (draft) return;
       const current = stateRef.current;
-      if (Object.is(current[key], value)) return;
+      if (Object.is(ownField(current, key), value)) return;
       const next = { ...current, [key]: value };
       stateRef.current = next;
       touchedRef.current = true;
