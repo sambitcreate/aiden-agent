@@ -209,14 +209,6 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
             return String(localized: "Approve actions, manage scheduled work, use voice, and follow private usage from your iPhone or iPad.")
         }
     }
-
-    var imageName: String {
-        switch self {
-        case .build: return "OnboardingBuild"
-        case .extend: return "OnboardingExtend"
-        case .control: return "OnboardingControl"
-        }
-    }
 }
 
 enum AidenMobileOnboardingLayout {
@@ -225,10 +217,19 @@ enum AidenMobileOnboardingLayout {
     static let maximumActionWidth: CGFloat = 360
     static let actionHorizontalPadding: CGFloat = 24
     static let actionBottomPadding: CGFloat = 12
-    static let artworkSide: CGFloat = 232
+    static let maximumArtworkWidth: CGFloat = 320
+    static let artworkHorizontalPadding: CGFloat = 24
 
     static func contentWidth(for availableWidth: CGFloat) -> CGFloat {
         max(0, min(availableWidth, maximumContentWidth))
+    }
+
+    /// The art tile keeps the vignette canvas's aspect ratio and shrinks with
+    /// narrow windows instead of cropping more of it.
+    static func artworkSize(for contentWidth: CGFloat) -> CGSize {
+        let canvas = AidenOnboardingArtwork.canvas
+        let width = max(0, min(maximumArtworkWidth, contentWidth - 2 * artworkHorizontalPadding))
+        return CGSize(width: width, height: width * canvas.height / canvas.width)
     }
 
     static func contentHeight(for availableHeight: CGFloat) -> CGFloat {
@@ -423,7 +424,12 @@ struct AidenPairingView: View {
 
                 TabView(selection: $selectedOnboardingPhase) {
                     ForEach(AidenMobileOnboardingPhase.allCases) { phase in
-                        onboardingPhasePage(phase)
+                        onboardingPhasePage(
+                            phase,
+                            artworkSize: AidenMobileOnboardingLayout.artworkSize(
+                                for: AidenMobileOnboardingLayout.contentWidth(for: proxy.size.width)
+                            )
+                        )
                             .tag(phase)
                     }
                 }
@@ -449,44 +455,27 @@ struct AidenPairingView: View {
         .navigationBarHidden(true)
     }
 
-    private func onboardingPhasePage(_ phase: AidenMobileOnboardingPhase) -> some View {
+    private func onboardingPhasePage(_ phase: AidenMobileOnboardingPhase, artworkSize: CGSize) -> some View {
         ViewThatFits(in: .vertical) {
             VStack(spacing: 0) {
                 Spacer(minLength: 16)
-                onboardingPhaseContent(phase)
+                onboardingPhaseContent(phase, artworkSize: artworkSize)
                 Spacer(minLength: 16)
             }
 
             ScrollView {
-                onboardingPhaseContent(phase)
+                onboardingPhaseContent(phase, artworkSize: artworkSize)
                     .padding(.vertical, 16)
             }
             .scrollIndicators(.hidden)
         }
     }
 
-    private func onboardingPhaseContent(_ phase: AidenMobileOnboardingPhase) -> some View {
+    private func onboardingPhaseContent(_ phase: AidenMobileOnboardingPhase, artworkSize: CGSize) -> some View {
         VStack(spacing: 22) {
-            ZStack {
-                Circle()
-                    .fill(palette.accent.opacity(0.07))
-                    .frame(
-                        width: AidenMobileOnboardingLayout.artworkSide,
-                        height: AidenMobileOnboardingLayout.artworkSide
-                    )
-                Circle()
-                    .stroke(palette.accent.opacity(0.14), lineWidth: 1)
-                    .frame(width: 196, height: 196)
-                Image(phase.imageName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(
-                        maxWidth: AidenMobileOnboardingLayout.artworkSide,
-                        maxHeight: AidenMobileOnboardingLayout.artworkSide
-                    )
-                    .accessibilityHidden(true)
-            }
-            .frame(maxWidth: .infinity)
+            AidenOnboardingArtwork(phase: phase, isActive: phase == selectedOnboardingPhase)
+                .frame(width: artworkSize.width, height: artworkSize.height)
+                .frame(maxWidth: .infinity)
 
             VStack(spacing: 10) {
                 Text(phase.eyebrow)
