@@ -16,6 +16,7 @@ import {
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
 
+import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { parseProducedFile } from "../../renderer/shared/produced-file.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
@@ -245,6 +246,13 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":
       return { label: "Share image", target: path };
+    case "generate_image":
+      // Only the requested shape, from a closed set: the prompt never leaves the
+      // host. Paired phones size their in-progress placeholder from this detail.
+      return {
+        label: "Generate image",
+        detail: isImageAspectRatio(values.aspectRatio) ? values.aspectRatio : undefined,
+      };
     case "web_search":
       return { label: "Web search", detail: safeDetail(values.query) };
     case "schedule_task":

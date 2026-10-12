@@ -169,7 +169,9 @@ internal fun aidenEligibleImageAttachments(
 internal fun AidenMessageImageAttachments(
     attachments: List<AidenMessageAttachment>,
     edge: AidenMessageMediaEdge,
-    loadData: suspend (AidenMessageAttachment) -> ByteArray?
+    loadData: suspend (AidenMessageAttachment) -> ByteArray?,
+    revealsArrival: Boolean = false,
+    onArrivalRevealed: () -> Unit = {}
 ) {
     if (attachments.isEmpty()) return
     var galleryStart by remember { mutableStateOf<Int?>(null) }
@@ -191,7 +193,9 @@ internal fun AidenMessageImageAttachments(
                     .aspectRatio(1f)
                     .clickable { galleryStart = 0 },
                 alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
-                imageCornerRadius = 16.dp
+                imageCornerRadius = 16.dp,
+                revealsArrival = revealsArrival,
+                onArrivalRevealed = onArrivalRevealed
             )
         } else {
             AidenInlineImageCardDeck(
@@ -200,7 +204,9 @@ internal fun AidenMessageImageAttachments(
                 selection = selection,
                 onSelectionChange = { selection = it },
                 onOpen = { galleryStart = selection },
-                loadData = loadData
+                loadData = loadData,
+                revealsArrival = revealsArrival,
+                onArrivalRevealed = onArrivalRevealed
             )
         }
     }
@@ -222,7 +228,9 @@ private fun AidenInlineImageCardDeck(
     selection: Int,
     onSelectionChange: (Int) -> Unit,
     onOpen: () -> Unit,
-    loadData: suspend (AidenMessageAttachment) -> ByteArray?
+    loadData: suspend (AidenMessageAttachment) -> ByteArray?,
+    revealsArrival: Boolean = false,
+    onArrivalRevealed: () -> Unit = {}
 ) {
     var rawDrag by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -300,6 +308,8 @@ private fun AidenInlineImageCardDeck(
                     attachment = attachment,
                     maximumPixelSize = 960,
                     loadData = loadData,
+                    revealsArrival = revealsArrival,
+                    onArrivalRevealed = onArrivalRevealed,
                     alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
                     modifier = Modifier
                         .fillMaxSize()
@@ -397,7 +407,9 @@ private fun AidenAttachmentImage(
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.Center,
-    imageCornerRadius: Dp = 0.dp
+    imageCornerRadius: Dp = 0.dp,
+    revealsArrival: Boolean = false,
+    onArrivalRevealed: () -> Unit = {}
 ) {
     var attempt by remember { mutableIntStateOf(0) }
     // An image already decoded this session renders on the first frame, so scrolling a
@@ -438,7 +450,9 @@ private fun AidenAttachmentImage(
                     bitmap = bitmap!!.asImageBitmap(),
                     contentDescription = attachment.name,
                     contentScale = ContentScale.Fit,
-                    modifier = fitted.clip(RoundedCornerShape(imageCornerRadius))
+                    modifier = fitted
+                        .clip(RoundedCornerShape(imageCornerRadius))
+                        .aidenImageArrivalReveal(revealsArrival, AidenTheme.palette, onArrivalRevealed)
                 )
             }
             failed -> Column(

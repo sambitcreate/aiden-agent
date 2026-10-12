@@ -10590,3 +10590,154 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
         return data
     }
 }
+
+final class AidenImageGenerationPlaceholderTests: XCTestCase {
+    private func imageStep(
+        _ status: AidenAgentStepStatus,
+        detail: String? = nil,
+        index: Int = 1,
+        updatedAt: Double = 2_000
+    ) -> AidenAgentStep {
+        AidenAgentStep(
+            id: "tool-\(index)",
+            order: index - 1,
+            kind: .tool,
+            toolCallId: "call-\(index)",
+            toolName: "generate_image",
+            label: "Generate image",
+            status: status,
+            startedAt: 1_000,
+            updatedAt: updatedAt,
+            finishedAt: status == .completed ? updatedAt : nil,
+            contentOffset: 0,
+            durationMs: nil,
+            target: nil,
+            detail: detail,
+            lineChanges: nil
+        )
+    }
+
+    private func timeline(
+        _ steps: [AidenAgentStep],
+        status: AidenGenerationTimelineStatus = .running
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "generation-1",
+            status: status,
+            startedAt: 1_000,
+            finishedAt: status == .running ? nil : 9_000,
+            steps: steps
+        )
+    }
+
+    func testRunningCallShowsPlaceholderInItsRequestedShape() {
+        let items = AidenImageGenerationPlaceholderState.items(
+            timeline([imageStep(.running, detail: "16:9", updatedAt: 4_000)])
+        )
+        XCTAssertEqual(items, [
+            AidenImageGenerationPlaceholderItem(
+                id: "call-1",
+                aspectRatio: .landscape16x9,
+                runningSince: Date(timeIntervalSince1970: 4)
+            ),
+        ])
+        XCTAssertEqual(items.first.map { Double($0.aspectRatio.value) } ?? 0, 16.0 / 9.0, accuracy: 1e-9)
+    }
+
+    func testMissingOrUnknownShapeFallsBackToSquare() {
+        let items = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, detail: nil, index: 1),
+            imageStep(.running, detail: "21:9", index: 2),
+        ]))
+        XCTAssertEqual(items.map(\.aspectRatio), [.square, .square])
+    }
+
+    func testCallsBeforeApprovalOrThatEndedWithoutAnImageShowNoPlaceholder() {
+        for status in [AidenAgentStepStatus.pending, .awaitingApproval, .failed, .blocked, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(status, detail: "1:1")])),
+                [],
+                "\(status)"
+            )
+        }
+    }
+
+    func testCompletedCallHoldsUntilTheTurnSettlesThenClears() {
+        // The image reaches the phone with the settled message, so a finished
+        // call keeps its placeholder while the turn still streams.
+        XCTAssertEqual(
+            AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed, detail: "3:4")])).map(\.aspectRatio),
+            [.portrait3x4]
+        )
+        for status in [AidenGenerationTimelineStatus.completed, .failed, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed)], status: status)),
+                []
+            )
+        }
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(nil), [])
+    }
+
+    func testOtherToolsNeverShowAPlaceholder() {
+        let step = AidenAgentStep(
+            id: "tool-1", order: 0, kind: .tool, toolCallId: "call-1", toolName: "display_image",
+            label: "Display image", status: .running, startedAt: 1_000, updatedAt: 1_000, finishedAt: nil,
+            contentOffset: 0, durationMs: nil, target: nil, detail: "16:9", lineChanges: nil
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(timeline([step])), [])
+    }
+
+    func testArrivalRevealIsArmedOnlyForGenerationsWatchedRunning() {
+        XCTAssertEqual(
+            AidenImageGenerationPlaceholderState.arrivalRevealGenerationID(timeline([imageStep(.running)])),
+            "generation-1"
+        )
+        XCTAssertEqual(
+            AidenImageGenerationPlaceholderState.arrivalRevealGenerationID(
+                timeline([imageStep(.completed)], status: .completed)
+            ),
+            "generation-1"
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealGenerationID(timeline([imageStep(.awaitingApproval)])))
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealGenerationID(timeline([imageStep(.blocked)])))
+    }
+
+    func testReduceMotionAndLowPowerHoldTheStillPose() {
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: false), .animated)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: true, lowPowerMode: false), .still)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: true), .still)
+        // The still lens rests around 40% of the placeholder.
+        let height: CGFloat = 100
+        let lensCenter = AidenImagePlaceholderSpec.stillLensTop(height: height)
+            + height * AidenImagePlaceholderSpec.lensHeightFraction / 2
+        XCTAssertEqual(Double(lensCenter / height), 0.4, accuracy: 0.05)
+    }
+
+    func testLensTravelsTopToBottomThenRests() {
+        let height: CGFloat = 200
+        let lens = height * AidenImagePlaceholderSpec.lensHeightFraction
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0), height: height), -lens)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0.78), height: height), height)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensProgress(phase: 0.9), 1)
+        let early = AidenImagePlaceholderSpec.lensProgress(phase: 0.2)
+        let late = AidenImagePlaceholderSpec.lensProgress(phase: 0.6)
+        XCTAssertLessThan(early, late)
+        // Eases in: the first fifth of the travel covers less than a fifth of the distance.
+        XCTAssertLessThan(AidenImagePlaceholderSpec.lensProgress(phase: 0.78 * 0.2), 0.2)
+    }
+
+    func testLongRunsSlowDownAndSayStillGenerating() {
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 12.7), "Generating · 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: -3), "Generating · 0s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 72), "Still generating · 1m 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 65), "Still generating · 1m 05s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 59), 2.8)
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 60), 5.2)
+    }
+
+    func testGenerateImageActivityLineNamesTheShape() {
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.running, detail: "16:9")), "Generating image 16:9")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.completed)), "Generated image")
+    }
+}

@@ -213,6 +213,24 @@ test("projects display_image as a safe relative GUI artifact action", () => {
   });
 });
 
+test("projects generate_image with only a known aspect ratio, never the prompt", () => {
+  const descriptor = safeToolDescriptor("generate_image", {
+    provider: "fal",
+    model: "fal-ai/flux",
+    prompt: "SECRET PROMPT",
+    aspectRatio: "16:9",
+  });
+  assert.deepEqual(descriptor, { label: "Generate image", detail: "16:9" });
+  assert.deepEqual(safeToolDescriptor("generate_image", { prompt: "x", aspectRatio: "21:9" }), {
+    label: "Generate image",
+    detail: undefined,
+  });
+  assert.deepEqual(safeToolDescriptor("generate_image", { prompt: "x" }), {
+    label: "Generate image",
+    detail: undefined,
+  });
+});
+
 test("terminal cancellation settles active steps", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
