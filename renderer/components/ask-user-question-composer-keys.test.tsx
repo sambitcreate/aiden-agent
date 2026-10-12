@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   ASK_USER_QUESTION_VERSION,
   type AskUserQuestionPromptV1,
@@ -90,4 +90,32 @@ test("the shortcut footnote steps aside while a custom answer is being written",
   fireEvent.keyDown(card, { key: "1" });
   assert.equal(screen.getByRole("button", { name: /Database A/u }).getAttribute("aria-pressed"), "false");
   assert.deepEqual(responses, []);
+});
+
+test("moving to the next question keeps focus in the card so shortcuts keep working", async () => {
+  const { responses } = mount([question("Database"), question("Region")]);
+  // Compare by identity: a failing assert.equal would try to print the whole happy-dom node graph.
+  const expectFocusOn = (name: RegExp) =>
+    waitFor(() =>
+      assert.ok(
+        document.activeElement === screen.getByRole("button", { name }),
+        `focus is on <${document.activeElement?.tagName}> ${document.activeElement?.textContent ?? ""}`,
+      ),
+    );
+  // The composer moves focus on the next animation frame.
+  await expectFocusOn(/Database A/u);
+
+  fireEvent.keyDown(document.activeElement!, { key: "1" });
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+  // Keys reach the card only through the focused element, so focus must not fall to the body.
+  await expectFocusOn(/Region A/u);
+
+  fireEvent.keyDown(document.activeElement!, { key: "2" });
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+  assert.deepEqual(responses.map((response) => response.answers), [
+    [
+      { questionIndex: 0, kind: "option", answer: "Database A" },
+      { questionIndex: 1, kind: "option", answer: "Region B" },
+    ],
+  ]);
 });

@@ -12,6 +12,8 @@ Composer: the dock wrapper uses Composer's `pb-4 pt-3 sm:pb-5`. Key handling:
 - ⌘/Ctrl+Enter commits.
 - Esc skips the current question, which submits on the last one.
 - None of these apply while the custom textarea is open.
+- When the active question changes and focus has left the card (the focused row was replaced), focus moves to the open custom field or the first option. Tab-strip arrow navigation keeps focus on its tab.
+- In happy-dom tests, compare focused elements by identity inside `assert.ok`. A failing `assert.equal` on two nodes hangs while Node inspects the DOM graph.
 
 Aiden Remote contract revision 28 (provisional; reclaim at merge) adds `questionnaire` to `GenerationToolStep` in `openapi.json`. An Ajv test checks that the schema and the runtime parser agree. The shared fixture's timeline event carries a recap, and desktop, iOS (`AidenRemotePhase0Tests`) and Android (`AidenChatTest`) each decode it.
 

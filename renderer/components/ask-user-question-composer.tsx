@@ -28,6 +28,7 @@ export function AskUserQuestionComposer({
   );
   const optionRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   const customRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const cardRef = React.useRef<HTMLElement | null>(null);
   const question = prompt.questions[activeIndex]!;
   const answer = answers.get(activeIndex);
   const customDraft = customDrafts.get(activeIndex) ?? "";
@@ -39,12 +40,16 @@ export function AskUserQuestionComposer({
     setCustomOpen(false);
   }, [prompt.promptId]);
 
+  // Advancing replaces the focused row when the next question's labels differ, so
+  // focus would fall to the body and the card's shortcuts would stop working.
+  // Tab-strip navigation keeps focus on its tab and is left alone.
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      optionRefs.current[0]?.focus({ preventScroll: true });
+      if (cardRef.current?.contains(document.activeElement)) return;
+      (customRef.current ?? optionRefs.current[0])?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [prompt.promptId]);
+  }, [prompt.promptId, activeIndex]);
 
   const response = React.useCallback(
     (cancelled: boolean, resolvedAnswers = answers) =>
@@ -154,6 +159,7 @@ export function AskUserQuestionComposer({
       className="aiden-dock-inset chat-content-column min-w-0 pb-4 pt-3 sm:pb-5"
     >
       <section
+        ref={cardRef}
         className="composer-shell ask-user-question-shell relative z-10 -mt-1 flex max-h-[min(60dvh,36rem)] min-w-0 flex-col overflow-hidden bg-popover p-2.5 shadow-composer"
         aria-labelledby={`ask-user-question-title-${prompt.promptId}`}
         aria-busy={submitting}
