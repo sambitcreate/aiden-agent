@@ -126,8 +126,8 @@ class AidenQuestionnaireRecapUiTest {
                     liveText = "Hello",
                     reasoning = "Thinking about the answers",
                     tools = listOf(
-                        // The stream numbers live tools itself; these ids never match the step's call id.
-                        AidenLiveTool(id = "tool_1", name = "ask_user_question", status = "succeeded"),
+                        // tool_started carries the agent's call id, which matches the step's.
+                        AidenLiveTool(id = "tool_1", name = "ask_user_question", status = "succeeded", callId = "call-1"),
                         AidenLiveTool(id = "tool_2", name = "read_file", status = null)
                     ),
                     activityTimeline = timeline,

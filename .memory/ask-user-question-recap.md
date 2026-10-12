@@ -23,6 +23,8 @@ Native clients:
 - Both drop an invalid recap and keep the step, while the desktop rejects the whole timeline.
 - Both get a `questionnaire` chronological row kind and leave questionnaire steps out of the activity tally.
 
+**Live question fallback pairing**: Android's `ActiveStreamingCard` fallback hides a live `ask_user_question` row whose call the timeline shows as a recap. Live rows' `tool_N` ids are the stream's own counter, so `chat:tool` now carries `toolCallId` and `tool_started` forwards it as optional `callId` (revision 28, omitted when over 128 characters). `liveToolsWithoutRecaps` matches `callId` against recapped steps' `toolCallId`. Pairing by count or order was wrong: after snapshot recovery the phone misses earlier tool events, and a question can succeed without a recap.
+
 Bot quick-reply questionnaires do not produce a recap yet.
 
 Validation: `npm run test:ask-user-question`; `npx tsx --test renderer/lib/agent-steps.test.ts main/services/generation-timeline.test.ts`; `main/services/aiden-remote-protocol.test.ts` for the openapi schema and revision.

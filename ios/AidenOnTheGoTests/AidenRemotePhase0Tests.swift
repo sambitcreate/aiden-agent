@@ -157,6 +157,27 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(recap.outcome, .answered)
         XCTAssertEqual(recap.items.map(\.kind), [.option, .skipped])
         XCTAssertEqual(recap.items.map { $0.answer(for: recap.outcome) }, [.chosen("Plain text"), .unanswered("Skipped")])
+        // Revision 28: tool_started may carry the agent's call id, which matches its timeline step.
+        XCTAssertEqual(fixture.events.first { $0.type == .toolStarted }?.payload?.callId, "call-1")
+        func toolStarted(_ payload: String) -> Data {
+            Data("""
+            {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z",\
+            "type":"tool_started","terminal":false,"payload":\(payload)}
+            """.utf8)
+        }
+        XCTAssertNil(
+            try AidenRemoteJSONDecoder.decode(
+                AidenRemoteStreamEvent.self,
+                from: toolStarted(#"{"toolId":"tool_1","name":"read"}"#)
+            ).payload?.callId
+        )
+        for invalid in [
+            #"{"toolId":"tool_1","name":"read","callId":"\#(String(repeating: "c", count: 129))"}"#,
+            #"{"name":"read","callId":"call-1"}"#,
+            #"{"toolId":"tool_1","name":"read","args":"{}"}"#,
+        ] {
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenRemoteStreamEvent.self, from: toolStarted(invalid)))
+        }
         XCTAssertEqual(fixture.taskProgress?.chatId, fixture.chat.id)
         XCTAssertEqual(fixture.taskProgress?.tasks.count, 3)
         XCTAssertEqual(fixture.agentRoster?.chatId, fixture.chat.id)

@@ -43,6 +43,7 @@ data class AidenRemoteEventPayload(
     val text: String? = null,
     val toolId: String? = null,
     val name: String? = null,
+    val callId: String? = null,
     val status: String? = null,
     val label: String? = null,
     val timeline: AidenGenerationTimeline? = null,
@@ -72,6 +73,7 @@ data class AidenRemoteEventPayload(
             "text" -> text?.let { JsonPrimitive(it) }
             "toolId" -> toolId?.let { JsonPrimitive(it) }
             "name" -> name?.let { JsonPrimitive(it) }
+            "callId" -> callId?.let { JsonPrimitive(it) }
             "status" -> status?.let { JsonPrimitive(it) }
             "label" -> label?.let { JsonPrimitive(it) }
             "approvalId" -> approvalId?.let { JsonPrimitive(it) }
@@ -369,12 +371,14 @@ class AidenSSEParser {
                 AidenRemoteEventType.HEARTBEAT -> emptySet()
                 else -> emptySet()
             }
+            val optionalKeys: Set<String> =
+                if (type == AidenRemoteEventType.TOOL_STARTED) setOf("callId") else emptySet()
 
-            val unsupported = presentKeys - allowedKeys
+            val unsupported = presentKeys - allowedKeys - optionalKeys
             if (unsupported.isNotEmpty()) {
                 throw AidenRemoteContractException.UnsafePayloadField(unsupported.first())
             }
-            if (presentKeys != allowedKeys) {
+            if (presentKeys - optionalKeys != allowedKeys) {
                 throw AidenRemoteContractException.UnsafePayloadField("missing-required-field")
             }
 
@@ -389,6 +393,14 @@ class AidenSSEParser {
                 val nextSeq = payloadObj["nextSequence"]?.jsonPrimitive?.longOrNull
                 if (nextSeq == null || nextSeq !in 1..AidenRemoteProtocol.MAX_SAFE_INTEGER) {
                     throw AidenRemoteContractException.UnsafePayloadField("nextSequence")
+                }
+            }
+            if (type == AidenRemoteEventType.TOOL_STARTED && "callId" in payloadObj) {
+                val callId = (payloadObj["callId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                if (callId.isNullOrEmpty() ||
+                    callId.codePointCount(0, callId.length) > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH
+                ) {
+                    throw AidenRemoteContractException.UnsafePayloadField("callId")
                 }
             }
             if (type == AidenRemoteEventType.TOOL_FINISHED) {

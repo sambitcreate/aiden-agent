@@ -2166,6 +2166,10 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   heartbeat: [],
 };
 
+const OPTIONAL_EVENT_PAYLOAD_KEYS: Partial<Record<AidenRemoteEventType, readonly string[]>> = {
+  tool_started: ["callId"],
+};
+
 const TERMINAL_EVENT_TYPES = new Set<AidenRemoteEventType>(["done", "error", "cancelled"]);
 
 function assertExactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
@@ -4563,7 +4567,7 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     return;
   }
   const keys = EVENT_PAYLOAD_KEYS[type];
-  assertExactKeys(payload, keys, `${type} payload`);
+  assertExactKeys(payload, [...keys, ...(OPTIONAL_EVENT_PAYLOAD_KEYS[type] ?? [])], `${type} payload`);
   for (const key of keys) {
     if (!(key in payload)) throw new Error(`${type} payload is missing required field ${key}.`);
   }
@@ -4579,6 +4583,7 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
   } else if (type === "tool_started") {
     assertBoundedString(payload, "toolId", 128);
     assertBoundedString(payload, "name", 120);
+    if ("callId" in payload) assertBoundedString(payload, "callId", 128);
   } else if (type === "tool_finished") {
     assertBoundedString(payload, "toolId", 128);
     if (!["succeeded", "failed", "cancelled"].includes(requiredString(payload, "status"))) throw new Error("tool status is invalid.");

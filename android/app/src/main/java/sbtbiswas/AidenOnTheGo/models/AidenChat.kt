@@ -604,18 +604,18 @@ object AidenAgentActivityPresentation {
 
     /**
      * Live tool rows without the questionnaires the timeline already shows as a
-     * recap. Live rows carry the stream's own `tool_N` ids, unrelated to the
-     * timeline's tool-call ids, so they pair by order: each recap stands for the
-     * next question call that finished successfully.
+     * recap, matched by the call id `tool_started` carries. Pairing by id rather
+     * than order keeps the right rows when snapshot recovery skipped earlier tool
+     * events; rows without a call id always stay.
      */
     fun liveToolsWithoutRecaps(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): List<AidenLiveTool> {
-        var recaps = timeline?.steps?.count { it.questionnaireRecap != null } ?: 0
-        if (recaps == 0) return tools
-        return tools.filterNot { tool ->
-            val recapped = recaps > 0 && tool.name == AidenQuestionnaireRecap.TOOL_NAME && tool.status == "succeeded"
-            if (recapped) recaps -= 1
-            recapped
-        }
+        if (timeline == null) return tools
+        val recappedCallIds = timeline.steps
+            .filter { it.questionnaireRecap != null }
+            .mapNotNull { it.toolCallId }
+            .toSet()
+        if (recappedCallIds.isEmpty()) return tools
+        return tools.filterNot { it.callId in recappedCallIds }
     }
 
     fun summary(timeline: AidenGenerationTimeline): String {
@@ -1511,7 +1511,8 @@ object AidenPendingApprovalResolution {
 data class AidenLiveTool(
     val id: String,
     val name: String,
-    var status: String? = null
+    var status: String? = null,
+    val callId: String? = null
 )
 
 @Serializable

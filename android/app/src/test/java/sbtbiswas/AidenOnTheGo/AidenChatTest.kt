@@ -551,17 +551,19 @@ class AidenChatTest {
     @Test
     fun liveToolRowsDropOnlyTheQuestionCallTheRecapStandsFor() {
         val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
-        // Live rows use the stream's tool_N ids, which never match the timeline's call ids.
+        // After snapshot recovery the live rows can start mid-turn, so only the
+        // call id says which row the recap stands for.
         val tools = listOf(
-            AidenLiveTool("tool_1", "ask_user_question", "failed"),
-            AidenLiveTool("tool_2", "read_file", "succeeded"),
-            AidenLiveTool("tool_3", "ask_user_question", "succeeded"),
-            AidenLiveTool("tool_4", "ask_user_question", null),
-            AidenLiveTool("tool_5", "run_command", "succeeded")
+            AidenLiveTool("tool_1", "ask_user_question", "failed", "call-0"),
+            AidenLiveTool("tool_2", "read_file", "succeeded", "call-1"),
+            AidenLiveTool("tool_3", "ask_user_question", "succeeded", "call-2"),
+            AidenLiveTool("tool_4", "ask_user_question", "succeeded", "call-9"),
+            AidenLiveTool("tool_5", "ask_user_question", null, null),
+            AidenLiveTool("tool_6", "run_command", "succeeded", "call-3")
         )
 
-        // One recap: the failed call and the still-open question keep their rows.
-        assertEquals(listOf("tool_1", "tool_2", "tool_4", "tool_5"),
+        // Only the recapped call drops; a later question answered without a recap keeps its row.
+        assertEquals(listOf("tool_1", "tool_2", "tool_4", "tool_5", "tool_6"),
             AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, timeline).map { it.id })
         assertEquals(tools, AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, null))
     }

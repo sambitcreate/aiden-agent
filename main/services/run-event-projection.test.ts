@@ -126,6 +126,48 @@ test("tool calls and results pair by name in call order", () => {
   });
 });
 
+test("tool_started includes callId when present and omits when absent", () => {
+  const state = createRunProjectionState();
+  const project = (payload: Record<string, unknown>) =>
+    projectRunContentNotification(state, "chat:tool", payload, context());
+
+  // With valid callId
+  assert.deepEqual(project({ phase: "call", toolName: "read_file", toolCallId: "call_12345" }), {
+    kind: "event",
+    type: "tool_started",
+    payload: { toolId: "tool_1", name: "read_file", callId: "call_12345" },
+    terminal: false,
+    state: "running",
+  });
+
+  // Without callId
+  assert.deepEqual(project({ phase: "call", toolName: "write_file" }), {
+    kind: "event",
+    type: "tool_started",
+    payload: { toolId: "tool_2", name: "write_file" },
+    terminal: false,
+    state: "running",
+  });
+
+  // With empty callId (treated as absent)
+  assert.deepEqual(project({ phase: "call", toolName: "grep", toolCallId: "" }), {
+    kind: "event",
+    type: "tool_started",
+    payload: { toolId: "tool_3", name: "grep" },
+    terminal: false,
+    state: "running",
+  });
+
+  // An oversized id is left out rather than truncated into one that matches nothing.
+  assert.deepEqual(project({ phase: "call", toolName: "list_dir", toolCallId: "call_" + "x".repeat(130) }), {
+    kind: "event",
+    type: "tool_started",
+    payload: { toolId: "tool_4", name: "list_dir" },
+    terminal: false,
+    state: "running",
+  });
+});
+
 test("tool projection state is per run", () => {
   const first = createRunProjectionState();
   const second = createRunProjectionState();

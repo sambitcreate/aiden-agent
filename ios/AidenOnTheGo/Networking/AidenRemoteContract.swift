@@ -1205,6 +1205,8 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     let text: String?
     let toolId: String?
     let name: String?
+    /// The agent's tool call id, matching the call's timeline step `toolCallId`.
+    let callId: String?
     let status: String?
     let label: String?
     let timeline: AidenGenerationTimeline?
@@ -1261,6 +1263,12 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
             maxLength: AidenRemoteProtocol.maxToolNameLength,
             field: "name"
         )
+        callId = try boundedString(
+            values,
+            forKey: .callId,
+            maxLength: AidenRemoteProtocol.maxIdentifierLength,
+            field: "callId"
+        )
         status = try boundedString(values, forKey: .status, maxLength: 32, field: "status")
         label = try boundedString(
             values,
@@ -1302,7 +1310,7 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case chatId, turnId, nextSequence, state, text, toolId, name, status, label, timeline
+        case chatId, turnId, nextSequence, state, text, toolId, name, callId, status, label, timeline
         case approvalId, summary, expiresAt, messageId, code, message, source
     }
 }
@@ -1456,11 +1464,14 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         }
         let decodedPayload = try values.decode(AidenRemoteEventPayload.self, forKey: .payload)
         let allowedKeys: Set<String>
+        var optionalKeys: Set<String> = []
         switch type {
         case .snapshot: allowedKeys = ["chatId", "turnId", "nextSequence"]
         case .status: allowedKeys = ["state"]
         case .textDelta, .reasoningDelta: allowedKeys = ["text"]
-        case .toolStarted: allowedKeys = ["toolId", "name"]
+        case .toolStarted:
+            allowedKeys = ["toolId", "name"]
+            optionalKeys = ["callId"]
         case .toolFinished: allowedKeys = ["toolId", "status"]
         case .timeline: allowedKeys = ["timeline"]
         case .approvalRequired: allowedKeys = ["approvalId", "summary", "expiresAt"]
@@ -1470,10 +1481,10 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         case .heartbeat: allowedKeys = []
         default: allowedKeys = []
         }
-        if let unsupported = decodedPayload.presentKeys.subtracting(allowedKeys).first {
+        if let unsupported = decodedPayload.presentKeys.subtracting(allowedKeys.union(optionalKeys)).first {
             throw AidenRemoteContractError.unsafePayloadField(unsupported)
         }
-        guard decodedPayload.presentKeys == allowedKeys else {
+        guard decodedPayload.presentKeys.subtracting(optionalKeys) == allowedKeys else {
             throw AidenRemoteContractError.unsafePayloadField("missing-required-field")
         }
         if type == .status,
