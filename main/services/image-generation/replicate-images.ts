@@ -31,6 +31,7 @@ import {
   type AdapterDeps,
   type Fetch,
   type RequestScope,
+  requestedAspectRatio,
 } from "./adapter-core.js";
 
 export const REPLICATE_IMAGES_API = "replicate-images";
@@ -162,6 +163,8 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
 
         const references = referencesFromContext(context);
         const input: Record<string, unknown> = { ...(meta.input ?? {}), prompt };
+        const aspectRatio = requestedAspectRatio(options);
+        if (aspectRatio && meta.aspectRatios?.includes(aspectRatio)) input.aspect_ratio = aspectRatio;
         if (references.length > 0) {
           const field = meta.referenceField;
           if (!field) throw new ImageAdapterError(NO_REFERENCES);

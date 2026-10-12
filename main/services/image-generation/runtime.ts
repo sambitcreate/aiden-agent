@@ -12,6 +12,7 @@ import {
   type CredentialStore,
   type ImageApi,
   type ImageModel,
+  type ImagesOptions,
   type Models,
   type MutableModels,
 } from "@earendil-works/pi-ai";
@@ -39,6 +40,7 @@ import {
   type ImageModelRef,
   type ReplicateReferenceField,
 } from "../../../renderer/shared/image-generation/types.js";
+import { requestedAspectRatio } from "./adapter-core.js";
 import { createImageCredentialView } from "./credential-view.js";
 import { CatalogFetchError, fetchImageModels, IMAGE_CATALOG_FETCH_TIMEOUT_MS } from "./catalog-fetch.js";
 import { FAL_IMAGES_API, falImagesApi } from "./fal-images.js";
@@ -270,6 +272,32 @@ export function customEntry(request: ImageGenerationAddCustomModelRequest): Imag
   });
 }
 
+/**
+ * Translate Aiden's provider-neutral `metadata.aspectRatio` for the provider.
+ * Replicate and fal adapters read the metadata themselves (and send it only
+ * where the model supports it). OpenRouter's Pi adapter has no option for it,
+ * so it is added to the outgoing body as `image_config.aspect_ratio`, which
+ * OpenRouter forwards to models that support it and ignores otherwise.
+ */
+export function imageRequestOptions(provider: string, options: ImagesOptions | undefined): ImagesOptions | undefined {
+  const aspectRatio = requestedAspectRatio(options);
+  if (provider !== "openrouter" || !aspectRatio) return options;
+  const callerOnPayload = options?.onPayload;
+  return {
+    ...options,
+    onPayload: async (payload, model) => {
+      const replaced = await callerOnPayload?.(payload, model);
+      const body = (replaced === undefined ? payload : replaced) as Record<string, unknown> | null;
+      if (body === null || typeof body !== "object" || Array.isArray(body)) return replaced;
+      const imageConfig =
+        body.image_config !== null && typeof body.image_config === "object" && !Array.isArray(body.image_config)
+          ? (body.image_config as Record<string, unknown>)
+          : {};
+      return { ...body, image_config: { ...imageConfig, aspect_ratio: aspectRatio } };
+    },
+  };
+}
+
 export class ImageGenerationRuntime {
   readonly credentials: CredentialStore;
   private readonly native: MutableModels;
@@ -316,7 +344,7 @@ export class ImageGenerationRuntime {
             timestamp: Date.now(),
           };
         }
-        return native.generateImages(registered, context, options);
+        return native.generateImages(registered, context, imageRequestOptions(registered.provider, options));
       },
     };
   }

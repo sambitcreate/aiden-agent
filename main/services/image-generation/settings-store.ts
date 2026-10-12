@@ -16,6 +16,12 @@ import {
   type ImageModelRef,
   type ReplicateReferenceField,
 } from "../../../renderer/shared/image-generation/types.js";
+import {
+  isImageAspectRatio,
+  supportedImageAspectRatios,
+  type FalAspectRatioSupport,
+  type ImageAspectRatio,
+} from "../../../renderer/shared/image-generation/aspect-ratio.js";
 import { isFalEndpointId } from "./fal-images.js";
 
 export const IMAGE_GENERATION_SETTINGS_FILE = "image-generation-settings.json";
@@ -74,6 +80,22 @@ function maxReferences(value: unknown): number | undefined {
     : fail();
 }
 
+function aspectRatios(value: unknown): readonly ImageAspectRatio[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || !value.every(isImageAspectRatio)) fail();
+  const ratios = supportedImageAspectRatios(value as unknown[]);
+  if (ratios.length !== value.length) fail();
+  return ratios;
+}
+
+function falAspectRatio(value: unknown): FalAspectRatioSupport | undefined {
+  if (value === undefined) return undefined;
+  const support = record(value);
+  if (support.field === "image_size") return { field: "image_size" };
+  if (support.field !== "aspect_ratio") fail();
+  return { field: "aspect_ratio", values: aspectRatios(support.values) ?? fail() };
+}
+
 function parseAdapter(provider: ImageGenerationProviderId, id: string, value: unknown): ImageModelAdapter {
   const adapter = record(value);
   if (adapter.kind !== provider) fail();
@@ -101,11 +123,13 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
     }
     const version = adapter.version;
     if (version !== undefined && (typeof version !== "string" || !REPLICATE_VERSION_ID.test(version))) fail();
+    const ratios = aspectRatios(adapter.aspectRatios);
     return {
       kind: "replicate",
       ...(field ? { referenceField: field as ReplicateReferenceField, ...(max ? { maxReferences: max } : {}) } : {}),
       ...(input ? { input } : {}),
       ...(typeof version === "string" ? { version } : {}),
+      ...(ratios ? { aspectRatios: ratios } : {}),
     };
   }
   if (adapter.textEndpoint !== id) fail();
@@ -113,6 +137,7 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
   if (edit !== undefined && (typeof edit !== "string" || !isFalEndpointId(edit))) fail();
   const field = adapter.referenceField;
   if (field !== undefined && !(FAL_REFERENCE_FIELDS as readonly unknown[]).includes(field)) fail();
+  const aspectRatio = falAspectRatio(adapter.aspectRatio);
   return {
     kind: "fal",
     textEndpoint: id,
@@ -123,6 +148,7 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
           ...(max ? { maxReferences: max } : {}),
         }
       : {}),
+    ...(aspectRatio ? { aspectRatio } : {}),
   };
 }
 

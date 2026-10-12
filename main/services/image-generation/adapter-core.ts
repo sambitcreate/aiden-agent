@@ -13,6 +13,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { readBoundedBody } from "../../shared/bounded-body.js";
 import {
+  isImageAspectRatio,
+  type ImageAspectRatio,
+} from "../../../renderer/shared/image-generation/aspect-ratio.js";
+import {
   MAX_GENERATED_IMAGE_BYTES,
   MAX_GENERATED_IMAGES,
   parseGeneratedImages,
@@ -64,6 +68,15 @@ export function requestScope(options: ImagesOptions | undefined, deps: AdapterDe
     callerAborted: () => options?.signal?.aborted === true,
     fetch: options?.fetch ?? deps.fetch ?? globalThis.fetch,
   };
+}
+
+/**
+ * The aspect ratio a caller asked for, carried as `options.metadata.aspectRatio`
+ * (see `imageRequestOptions`). Anything other than a known ratio is ignored.
+ */
+export function requestedAspectRatio(options: ImagesOptions | undefined): ImageAspectRatio | undefined {
+  const value = options?.metadata?.aspectRatio;
+  return isImageAspectRatio(value) ? value : undefined;
 }
 
 export function sleep(ms: number, signal: AbortSignal): Promise<void> {

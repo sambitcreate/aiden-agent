@@ -436,3 +436,106 @@ test("a bulk request naming an unlisted model is rejected without writing any ch
   assert.deepEqual(await runtime.getState(), before);
   await assert.rejects(fs.readFile(path.join(root, IMAGE_GENERATION_SETTINGS_FILE), "utf8"), { code: "ENOENT" });
 });
+
+test("a requested aspect ratio reaches each provider only in a field that model understands", async (t) => {
+  const delivery = "https://replicate.delivery/out.png";
+  const falQueue = "https://queue.fal.run/fal-ai/requests/r1";
+  const pngUri = `data:image/png;base64,${Buffer.from(png(3)).toString("base64")}`;
+  const { fetch, requests } = fakeFetch((request) => {
+    if (request.url === delivery) return bytes(png(2));
+    if (request.url.startsWith("https://api.replicate.com/")) return json({ id: "p1", status: "succeeded", output: delivery });
+    if (request.url === `${falQueue}/status`) return json({ status: "COMPLETED" });
+    if (request.url === falQueue) return json({ images: [{ url: pngUri }] });
+    if (request.url.startsWith("https://queue.fal.run/"))
+      return json({ request_id: "r1", status_url: `${falQueue}/status`, response_url: falQueue, cancel_url: `${falQueue}/cancel` });
+    return json({
+      id: "gen-1",
+      object: "chat.completion",
+      created: 1,
+      model: "x",
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "", images: [{ type: "image_url", image_url: { url: pngUri } }] } }],
+    });
+  });
+  const { runtime } = await setup(t, {
+    env: {
+      AIDEN_IMAGE_REPLICATE_API_TOKEN: "r8_env_image_key",
+      AIDEN_IMAGE_FAL_KEY: "fal-env-key-123",
+      AIDEN_IMAGE_OPENROUTER_API_KEY: "sk-or-image-key",
+    },
+    fetch,
+  });
+  await runtime.ready();
+  const generate = async (provider: string, id: string, aspectRatio?: string) => {
+    const model = runtime.models.getModelOfType("image", provider, id);
+    assert.ok(model, `${provider}/${id} is registered`);
+    const before = requests.length;
+    const result = await runtime.models.generateImages(
+      model,
+      { input: [{ type: "text", text: "a fox" }] },
+      { fetch, ...(aspectRatio ? { metadata: { aspectRatio } } : {}) },
+    );
+    assert.equal(result.stopReason, "stop", result.errorMessage);
+    const submit = requests.slice(before).find((request) => request.method === "POST")!;
+    return submit.body as Record<string, unknown> & { input?: Record<string, unknown> };
+  };
+
+  // Replicate: `aspect_ratio` input, only for a ratio the model accepts.
+  assert.equal((await generate("replicate", "black-forest-labs/flux-schnell", "16:9")).input?.aspect_ratio, "16:9");
+  assert.equal((await generate("replicate", "google/imagen-4-fast", "3:2")).input?.aspect_ratio, undefined);
+  assert.equal((await generate("replicate", "qwen/qwen-image-2-pro", "16:9")).input?.aspect_ratio, undefined);
+  // fal: `aspect_ratio` for models that take it, the `image_size` preset otherwise.
+  const banana = await generate("fal", "fal-ai/nano-banana-pro", "9:16");
+  assert.deepEqual([banana.aspect_ratio, banana.image_size], ["9:16", undefined]);
+  const schnell = await generate("fal", "fal-ai/flux/schnell", "16:9");
+  assert.deepEqual([schnell.aspect_ratio, schnell.image_size], [undefined, "landscape_16_9"]);
+  const noPreset = await generate("fal", "fal-ai/flux/schnell", "3:2");
+  assert.deepEqual([noPreset.aspect_ratio, noPreset.image_size], [undefined, undefined]);
+  // OpenRouter: `image_config.aspect_ratio` in the chat-completions body.
+  const routed = await generate("openrouter", "google/gemini-3.1-flash-image", "4:3");
+  assert.deepEqual(routed.image_config, { aspect_ratio: "4:3" });
+  assert.equal((await generate("openrouter", "google/gemini-3.1-flash-image")).image_config, undefined);
+  // Anything other than a known ratio is never forwarded.
+  assert.equal((await generate("replicate", "black-forest-labs/flux-schnell", "21:9")).input?.aspect_ratio, undefined);
+});
+
+test("a fetched Replicate model keeps the ratios its schema lists and sends them after a reload", async (t) => {
+  const delivery = "https://replicate.delivery/out.png";
+  const schema = {
+    components: {
+      schemas: {
+        Input: { properties: { prompt: { type: "string" }, aspect_ratio: { allOf: [{ $ref: "#/components/schemas/aspect_ratio" }] } } },
+        aspect_ratio: { type: "string", enum: ["1:1", "16:9", "21:9"] },
+      },
+    },
+  };
+  const { fetch, requests } = fakeFetch((request) => {
+    if (request.url.includes("/collections/"))
+      return json({ models: [{ owner: "acme", name: "painter", latest_version: { id: "a".repeat(64), openapi_schema: schema } }] });
+    if (request.url === delivery) return bytes(png(2));
+    return json({ id: "p1", status: "succeeded", output: delivery });
+  });
+  const first = await setup(t, { env: { AIDEN_IMAGE_REPLICATE_API_TOKEN: "r8_env_image_key" }, fetch });
+  await first.runtime.fetchModels("replicate");
+  await first.runtime.setModelEnabled("replicate", "acme/painter", true);
+
+  // A fresh runtime over the same settings file reads the stored adapter back.
+  const runtime = new ImageGenerationRuntime({
+    credentials: first.credentials,
+    settings: createImageGenerationSettingsStore(() => first.root),
+    openRouterModels: bundledOpenRouter,
+    authContext: { env: async (name) => (name === "AIDEN_IMAGE_REPLICATE_API_TOKEN" ? "r8_env_image_key" : undefined), fileExists: async () => false },
+    pollIntervalMs: 1,
+    fetch,
+  });
+  await runtime.ready();
+  const model = runtime.models.getModelOfType("image", "replicate", "acme/painter");
+  assert.ok(model);
+  const send = async (aspectRatio: string) => {
+    const before = requests.length;
+    const result = await runtime.models.generateImages(model, { input: [{ type: "text", text: "a fox" }] }, { metadata: { aspectRatio } });
+    assert.equal(result.stopReason, "stop", result.errorMessage);
+    return (requests.slice(before).find((request) => request.method === "POST")!.body as { input: Record<string, unknown> }).input;
+  };
+  assert.equal((await send("16:9")).aspect_ratio, "16:9");
+  assert.equal((await send("4:3")).aspect_ratio, undefined, "a ratio missing from the schema enum is omitted");
+});

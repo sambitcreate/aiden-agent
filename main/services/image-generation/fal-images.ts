@@ -2,6 +2,7 @@
 // Aiden-owned image API "fal-images". Never rejects.
 
 import type { ProviderImages } from "@earendil-works/pi-ai";
+import { falAspectRatioInput } from "../../../renderer/shared/image-generation/aspect-ratio.js";
 import type { ImageModelAdapter } from "../../../renderer/shared/image-generation/types.js";
 import {
   base64ByteLength,
@@ -27,6 +28,7 @@ import {
   type AdapterDeps,
   type Fetch,
   type RequestScope,
+  requestedAspectRatio,
 } from "./adapter-core.js";
 
 export const FAL_IMAGES_API = "fal-images";
@@ -105,6 +107,8 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
 
         const references = referencesFromContext(context);
         const body: Record<string, unknown> = { prompt, num_images: 1, sync_mode: true };
+        const shape = falAspectRatioInput(meta.aspectRatio, requestedAspectRatio(options));
+        if (shape) body[shape.field] = shape.value;
         let endpoint = meta.textEndpoint;
         if (references.length > 0) {
           if (!meta.editEndpoint) throw new ImageAdapterError(NO_REFERENCES);

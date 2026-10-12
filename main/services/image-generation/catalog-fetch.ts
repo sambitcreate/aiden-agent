@@ -15,6 +15,10 @@ import {
   type ImageGenerationProviderId,
   type ReplicateReferenceField,
 } from "../../../renderer/shared/image-generation/types.js";
+import {
+  supportedImageAspectRatios,
+  type ImageAspectRatio,
+} from "../../../renderer/shared/image-generation/aspect-ratio.js";
 import { isFalEndpointId } from "./fal-images.js";
 import { REPLICATE_VERSION_ID } from "./settings-store.js";
 
@@ -325,6 +329,40 @@ export function replicateReferenceField(
   return undefined;
 }
 
+/**
+ * The ratios a Replicate model accepts on its `aspect_ratio` input, read from
+ * the OpenAPI Input schema: an inline `enum`, or Cog's usual
+ * `allOf: [{ $ref: "#/components/schemas/aspect_ratio" }]`. Undefined when the
+ * model has no such enum or it holds none of Aiden's ratios.
+ */
+export function replicateAspectRatios(schema: unknown): ImageAspectRatio[] | undefined {
+  const schemas = record(record(record(schema)?.components)?.schemas);
+  const property = record(record(schemas?.Input)?.properties)?.aspect_ratio;
+  const enumOf = (value: unknown, depth: number): unknown[] | undefined => {
+    const node = record(value);
+    if (!node || depth > 3) return undefined;
+    if (Array.isArray(node.enum)) return node.enum;
+    const ref = node.$ref;
+    if (typeof ref === "string" && ref.startsWith("#/components/schemas/")) {
+      const name = ref.slice("#/components/schemas/".length);
+      return Object.prototype.hasOwnProperty.call(schemas ?? {}, name) ? enumOf(schemas![name], depth + 1) : undefined;
+    }
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const list = node[key];
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        const found = enumOf(item, depth + 1);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  const values = enumOf(property, 0);
+  if (!values) return undefined;
+  const ratios = supportedImageAspectRatios(values);
+  return ratios.length > 0 ? ratios : undefined;
+}
+
 export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
   const list = record(value)?.models;
   if (!Array.isArray(list)) throw invalid("Replicate");
@@ -341,6 +379,7 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
     const latest = record(model?.latest_version);
     const version = typeof latest?.id === "string" && REPLICATE_VERSION_ID.test(latest.id) ? latest.id : undefined;
     const reference = replicateReferenceField(latest?.openapi_schema);
+    const aspectRatios = replicateAspectRatios(latest?.openapi_schema);
     seen.add(id);
     const maker = inferImageModelMaker("replicate", id);
     entries.push({
@@ -354,6 +393,7 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
         ...(reference ? { referenceField: reference.field, maxReferences: reference.max } : {}),
         // Community models only run by version, so keep the one the schema came from.
         ...(version ? { version } : {}),
+        ...(aspectRatios ? { aspectRatios } : {}),
       },
     });
   }

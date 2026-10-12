@@ -8,6 +8,7 @@ import {
   pairFalModels,
   parseOpenRouterImageModels,
   parseReplicateCollection,
+  replicateAspectRatios,
   replicateReferenceField,
 } from "./catalog-fetch.js";
 import { normalizeImageGenerationSettings } from "./settings-store.js";
@@ -163,6 +164,23 @@ test("Replicate's reference field comes from the OpenAPI input schema", () => {
   assert.equal(replicateReferenceField(schema({ prompt: {}, image: { type: "array" } })), undefined);
   assert.equal(replicateReferenceField(schema({ prompt: {}, mask: { type: "string" } })), undefined);
   assert.equal(replicateReferenceField(undefined), undefined);
+});
+
+test("Replicate's aspect ratios are the schema enum's values Aiden can request", () => {
+  const schema = (aspect: unknown, extra: Record<string, unknown> = {}) => ({
+    components: { schemas: { Input: { properties: { prompt: {}, aspect_ratio: aspect } }, ...extra } },
+  });
+  assert.deepEqual(replicateAspectRatios(schema({ type: "string", enum: ["21:9", "16:9", "1:1", "custom"] })), ["1:1", "16:9"]);
+  assert.deepEqual(
+    replicateAspectRatios(
+      schema({ allOf: [{ $ref: "#/components/schemas/aspect_ratio" }] }, { aspect_ratio: { enum: ["9:16", "match_input_image"] } }),
+    ),
+    ["9:16"],
+  );
+  assert.equal(replicateAspectRatios(schema({ type: "string" })), undefined, "free text is not a known set");
+  assert.equal(replicateAspectRatios(schema({ enum: ["21:9", "custom"] })), undefined);
+  assert.equal(replicateAspectRatios(schema({ $ref: "#/components/schemas/missing" })), undefined);
+  assert.equal(replicateAspectRatios(undefined), undefined);
 });
 
 test("the Replicate collection needs a key and parses owner/name models", async () => {

@@ -9,6 +9,11 @@ import {
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
+import {
+  IMAGE_ASPECT_RATIOS,
+  isImageAspectRatio,
+  type ImageAspectRatio,
+} from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { MAX_GENERATED_IMAGES as MAX_IMAGES, parseGeneratedImages } from "./pi-model-image-output.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 
@@ -521,7 +526,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     name: "generate_image",
     label: "Generate image",
     description:
-      "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted.",
+      "Send a prompt to an image-generation model and display its generated images. Uses the image key saved in Settings → Image Generation and may incur charges. Use list_operation_models to choose an image model. To edit or use reference images, list_image_references returns IDs of images attached to this chat; pass up to four as referenceImageIds. No URLs or paths are accepted. When the user asks for a shape or orientation (square, wide, landscape, portrait, a phone wallpaper, a banner), pass aspectRatio as width:height; models that can't produce that shape use their default.",
     parameters: Type.Object(
       {
         ...identity,
@@ -532,6 +537,12 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
             uniqueItems: true,
           }),
         ),
+        aspectRatio: Type.Optional(
+          Type.Union(
+            IMAGE_ASPECT_RATIOS.map((ratio) => Type.Literal(ratio)),
+            { description: "Image shape as width:height. Omit for the model's default (usually square)." },
+          ),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -539,9 +550,12 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
       signal?.throwIfAborted();
       const input = fields(
         args,
-        ["provider", "model", "prompt", "referenceImageIds"],
+        ["provider", "model", "prompt", "referenceImageIds", "aspectRatio"],
         "image request",
       );
+      if (input.aspectRatio !== undefined && !isImageAspectRatio(input.aspectRatio))
+        throw new Error(`Aspect ratio must be one of ${IMAGE_ASPECT_RATIOS.join(", ")}.`);
+      const aspectRatio = input.aspectRatio as ImageAspectRatio | undefined;
       const provider = text(input.provider, 128, "provider"),
         modelId = text(input.model, 256, "model"),
         prompt = text(input.prompt, 16_384, "image prompt");
@@ -572,7 +586,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         host.imageModels.generateImages(
           model,
           { input: [{ type: "text", text: prompt }, ...references] },
-          { signal },
+          { signal, ...(aspectRatio ? { metadata: { aspectRatio } } : {}) },
         ),
       );
       if (result.stopReason !== "stop" || signal?.aborted)

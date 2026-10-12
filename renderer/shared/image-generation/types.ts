@@ -1,6 +1,8 @@
 // Shared, renderer-safe contract for Settings → Image Generation and the
 // main-process image registry. No Node or Electron imports.
 
+import type { FalAspectRatioSupport, ImageAspectRatio } from "./aspect-ratio.js";
+
 export const IMAGE_GENERATION_PROVIDER_IDS = ["openrouter", "replicate", "fal"] as const;
 export type ImageGenerationProviderId = (typeof IMAGE_GENERATION_PROVIDER_IDS)[number];
 
@@ -53,6 +55,11 @@ export type ImageModelAdapter =
        * can only be run through `POST /v1/predictions` with a version.
        */
       version?: string;
+      /**
+       * Ratios the model accepts on its `aspect_ratio` input. Absent means the
+       * model has no known `aspect_ratio` input and the field is never sent.
+       */
+      aspectRatios?: readonly ImageAspectRatio[];
     }
   | {
       kind: "fal";
@@ -60,6 +67,8 @@ export type ImageModelAdapter =
       editEndpoint?: string;
       referenceField?: FalReferenceField;
       maxReferences?: number;
+      /** How the model takes a requested shape; absent means it is never sent. */
+      aspectRatio?: FalAspectRatioSupport;
     };
 
 /** One curated, fetched or custom image model. */

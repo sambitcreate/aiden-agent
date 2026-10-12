@@ -77,6 +77,7 @@ function fixture() {
     classifyCalls: 0,
     listed: 0,
     imageSignal: undefined as AbortSignal | undefined,
+    imageMetadata: undefined as Record<string, unknown> | undefined,
     imageContext: undefined as unknown,
     classifierContext: undefined as unknown,
     classifierSignal: undefined as AbortSignal | undefined,
@@ -126,10 +127,11 @@ function fixture() {
     generateImages: async (
       _model: unknown,
       _context: unknown,
-      options: { signal?: AbortSignal },
+      options: { signal?: AbortSignal; metadata?: Record<string, unknown> },
     ) => {
       controls.imageCalls++;
       controls.imageSignal = options.signal;
+      controls.imageMetadata = options.metadata;
       controls.imageContext = _context;
       controls.imageEffect?.();
       return controls.imageResult;
@@ -245,6 +247,18 @@ test("image generation validates an entire batch before staging and carries usag
     [],
     "a later malformed image must not leave earlier images staged",
   );
+});
+
+test("a requested aspect ratio is validated and forwarded as request metadata", async () => {
+  const { get, controls } = fixture();
+  await get("generate_image").execute("wide", { ...imageRequest, aspectRatio: "16:9" });
+  assert.deepEqual(controls.imageMetadata, { aspectRatio: "16:9" });
+  await get("generate_image").execute("default", imageRequest);
+  assert.equal(controls.imageMetadata, undefined, "no ratio means no metadata, so the model keeps its default");
+  const calls = controls.imageCalls;
+  for (const aspectRatio of ["21:9", "16x9", 1.5])
+    await assert.rejects(get("generate_image").execute("bad", { ...imageRequest, aspectRatio }), /Aspect ratio must be one of/);
+  assert.equal(controls.imageCalls, calls, "an unknown ratio never reaches a provider");
 });
 
 test("model type and request validation reject endpoints, credentials, oversized input and wrong inventories before requests", async () => {
