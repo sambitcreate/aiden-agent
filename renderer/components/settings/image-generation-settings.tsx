@@ -1,7 +1,8 @@
 // Settings → Image Generation: dedicated provider keys, the default image
 // model, and the per-model inventory. Keys only go in; the state that comes
 // back never holds them. Every action replaces local state with the state the
-// main process returns, and one action runs at a time.
+// main process returns. Actions run independently: each one locks only its own
+// controls (one provider's key or fetch, one model row), never the whole page.
 
 import * as React from "react";
 import { KeyRound, Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
@@ -23,6 +24,7 @@ import {
   toast,
 } from "../ui";
 import { imageGenerationApi } from "../../lib/ipc";
+import { formatRelativeTime } from "../../lib/relative-time";
 import { ImageModelLogo, ImageProviderLogo } from "../image-model-logo";
 import {
   FAL_REFERENCE_FIELDS,
@@ -58,21 +60,8 @@ function parseModelKey(value: string): ImageModelRef | null {
     : null;
 }
 
-const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-const RELATIVE_UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
-  ["year", 365 * 24 * 3600],
-  ["month", 30 * 24 * 3600],
-  ["day", 24 * 3600],
-  ["hour", 3600],
-  ["minute", 60],
-];
-
-function relativeTime(epochMs: number, now = Date.now()): string {
-  const seconds = (epochMs - now) / 1000;
-  for (const [unit, size] of RELATIVE_UNITS) {
-    if (Math.abs(seconds) >= size) return RELATIVE_TIME.format(Math.round(seconds / size), unit);
-  }
-  return RELATIVE_TIME.format(0, "second");
+function reportFailure(result: ImageGenerationActionResult | null) {
+  if (result && !result.ok) toast.error(result.message);
 }
 
 function keyStatus(provider: ImageGenerationProviderView): {
@@ -88,8 +77,9 @@ function keyStatus(provider: ImageGenerationProviderView): {
 export function ImageGenerationSettings() {
   const [state, setState] = React.useState<ImageGenerationState | null>(null);
   const [loadError, setLoadError] = React.useState(false);
-  const [pending, setPending] = React.useState<string | null>(null);
-  const pendingRef = React.useRef<string | null>(null);
+  // Keys of the actions in flight, e.g. `fetch:fal`, `key:replicate`, `model:fal::id`.
+  const [pending, setPending] = React.useState<ReadonlySet<string>>(() => new Set());
+  const pendingRef = React.useRef(new Set<string>());
   const [notices, setNotices] = React.useState<
     Partial<Record<ImageGenerationProviderId, Notice>>
   >({});
@@ -110,15 +100,18 @@ export function ImageGenerationSettings() {
     void load();
   }, [load]);
 
-  /** Runs one action at a time and adopts the returned state as the source of truth. */
+  /**
+   * Runs an action unless the same action is already in flight, and adopts the
+   * returned state as the source of truth. Other actions keep running.
+   */
   const run = React.useCallback(
     async (
       key: string,
       action: () => Promise<ImageGenerationActionResult>,
     ): Promise<ImageGenerationActionResult | null> => {
-      if (pendingRef.current) return null;
-      pendingRef.current = key;
-      setPending(key);
+      if (pendingRef.current.has(key)) return null;
+      pendingRef.current.add(key);
+      setPending(new Set(pendingRef.current));
       try {
         const result = await action();
         if (result.ok) setState(result.state);
@@ -131,20 +124,23 @@ export function ImageGenerationSettings() {
           message: error instanceof Error ? error.message : "Aiden couldn’t save that change.",
         };
       } finally {
-        pendingRef.current = null;
-        setPending(null);
+        pendingRef.current.delete(key);
+        setPending(new Set(pendingRef.current));
       }
     },
     [load],
   );
 
-  const setNotice = (provider: ImageGenerationProviderId, notice: Notice | null) =>
-    setNotices((current) => {
-      const next = { ...current };
-      if (notice) next[provider] = notice;
-      else delete next[provider];
-      return next;
-    });
+  const setNotice = React.useCallback(
+    (provider: ImageGenerationProviderId, notice: Notice | null) =>
+      setNotices((current) => {
+        const next = { ...current };
+        if (notice) next[provider] = notice;
+        else delete next[provider];
+        return next;
+      }),
+    [],
+  );
 
   const saveKey = async (provider: ImageGenerationProviderId, key: string): Promise<boolean> => {
     setNotice(provider, null);
@@ -180,9 +176,21 @@ export function ImageGenerationSettings() {
     });
   };
 
-  const reportFailure = (result: ImageGenerationActionResult | null) => {
-    if (result && !result.ok) toast.error(result.message);
-  };
+  const toggleModel = React.useCallback(
+    (model: ImageGenerationModelView, enabled: boolean) =>
+      void run(`model:${modelKey(model)}`, () =>
+        imageGenerationApi.setModelEnabled(model.provider, model.id, enabled),
+      ).then(reportFailure),
+    [run],
+  );
+
+  const removeModel = React.useCallback(
+    (model: ImageGenerationModelView) =>
+      void run(`remove:${modelKey(model)}`, () =>
+        imageGenerationApi.removeCustomModel({ provider: model.provider, id: model.id }),
+      ).then(reportFailure),
+    [run],
+  );
 
   if (!state) {
     return (
@@ -201,7 +209,6 @@ export function ImageGenerationSettings() {
     );
   }
 
-  const busy = pending !== null;
   const removing = confirmRemove ? IMAGE_GENERATION_PROVIDER_NAMES[confirmRemove] : "";
 
   return (
@@ -219,8 +226,8 @@ export function ImageGenerationSettings() {
           <ProviderRow
             key={provider.id}
             provider={provider}
-            busy={busy}
-            pending={pending}
+            fetching={pending.has(`fetch:${provider.id}`)}
+            savingKey={pending.has(`key:${provider.id}`)}
             notice={notices[provider.id]}
             onSaveKey={(key) => saveKey(provider.id, key)}
             onRequestRemove={() => setConfirmRemove(provider.id)}
@@ -231,7 +238,7 @@ export function ImageGenerationSettings() {
 
       <DefaultModelGroup
         state={state}
-        busy={busy}
+        busy={pending.has("default")}
         onChange={(model) =>
           void run("default", () => imageGenerationApi.setDefaultModel(model)).then(reportFailure)
         }
@@ -239,21 +246,13 @@ export function ImageGenerationSettings() {
 
       <ModelsGroup
         state={state}
-        busy={busy}
-        onToggle={(model, enabled) =>
-          void run(`model:${modelKey(model)}`, () =>
-            imageGenerationApi.setModelEnabled(model.provider, model.id, enabled),
-          ).then(reportFailure)
-        }
-        onRemove={(model) =>
-          void run(`remove:${modelKey(model)}`, () =>
-            imageGenerationApi.removeCustomModel({ provider: model.provider, id: model.id }),
-          ).then(reportFailure)
-        }
+        pending={pending}
+        onToggle={toggleModel}
+        onRemove={removeModel}
       />
 
       <AddModelForm
-        busy={busy}
+        busy={pending.has("add")}
         onAdd={(request) => run("add", () => imageGenerationApi.addCustomModel(request))}
       />
 
@@ -266,7 +265,7 @@ export function ImageGenerationSettings() {
         description={`Aiden deletes the encrypted key from this Mac. Image generation through ${removing} stops until you add a key again. Your chat providers aren’t affected.`}
         confirmLabel="Remove key"
         confirmVariant="destructive"
-        busy={busy}
+        busy={confirmRemove !== null && pending.has(`key:${confirmRemove}`)}
         onConfirm={() => {
           const provider = confirmRemove;
           setConfirmRemove(null);
@@ -279,16 +278,18 @@ export function ImageGenerationSettings() {
 
 function ProviderRow({
   provider,
-  busy,
-  pending,
+  fetching,
+  savingKey,
   notice,
   onSaveKey,
   onRequestRemove,
   onFetch,
 }: {
   provider: ImageGenerationProviderView;
-  busy: boolean;
-  pending: string | null;
+  /** This provider's Fetch latest is running; it never locks the key controls. */
+  fetching: boolean;
+  /** This provider's key is being saved or removed. */
+  savingKey: boolean;
   notice: Notice | undefined;
   onSaveKey: (key: string) => Promise<boolean>;
   onRequestRemove: () => void;
@@ -300,8 +301,6 @@ function ProviderRow({
   const fetchHintId = React.useId();
   const status = keyStatus(provider);
   const stored = provider.key.source === "stored";
-  const fetching = pending === `fetch:${provider.id}`;
-  const savingKey = pending === `key:${provider.id}`;
   const fetchBlocked = provider.fetchRequiresKey && !provider.key.connected;
 
   React.useEffect(() => {
@@ -311,7 +310,7 @@ function ProviderRow({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const key = draft.trim();
-    if (!key || busy) return;
+    if (!key || savingKey) return;
     if (await onSaveKey(key)) {
       setDraft("");
       setEditing(false);
@@ -319,7 +318,7 @@ function ProviderRow({
   };
 
   const fetchedLine = provider.fetchedAt
-    ? `Last fetched ${relativeTime(provider.fetchedAt)} · ${provider.fetchedCount} ${provider.fetchedCount === 1 ? "model" : "models"}`
+    ? `Last fetched ${formatRelativeTime(provider.fetchedAt)} · ${provider.fetchedCount} ${provider.fetchedCount === 1 ? "model" : "models"}`
     : "Using the built-in list. Fetch latest to see newer models.";
 
   return (
@@ -341,7 +340,7 @@ function ProviderRow({
           <Button
             size="small"
             variant="muted"
-            disabled={busy}
+            disabled={savingKey}
             onClick={() => setEditing(true)}
             aria-label={`${stored ? "Replace" : "Add"} ${provider.name} key`}
           >
@@ -353,7 +352,7 @@ function ProviderRow({
           <Button
             size="small"
             variant="transparent"
-            disabled={busy}
+            disabled={savingKey}
             onClick={onRequestRemove}
             aria-label={`Remove ${provider.name} key`}
           >
@@ -363,7 +362,7 @@ function ProviderRow({
         <Button
           size="small"
           variant="transparent"
-          disabled={busy || fetchBlocked}
+          disabled={fetching || fetchBlocked}
           onClick={onFetch}
           aria-describedby={fetchBlocked ? fetchHintId : undefined}
           aria-label={`Fetch latest ${provider.name} models`}
@@ -402,9 +401,9 @@ function ProviderRow({
             placeholder={`Paste a ${provider.name} API key`}
             aria-label={`${provider.name} image API key`}
             aria-invalid={notice?.tone === "error" ? true : undefined}
-            disabled={busy}
+            disabled={savingKey}
           />
-          <Button type="submit" size="medium" disabled={busy || !draft.trim()}>
+          <Button type="submit" size="medium" disabled={savingKey || !draft.trim()}>
             {savingKey ? (
               <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
             ) : null}
@@ -413,7 +412,7 @@ function ProviderRow({
           <Button
             size="medium"
             variant="transparent"
-            disabled={busy}
+            disabled={savingKey}
             onClick={() => {
               setDraft("");
               setEditing(false);
@@ -482,7 +481,7 @@ function DefaultModelGroup({
         description={
           current && !currentAvailable
             ? "This model is off or its provider has no key, so Aiden picks automatically for now."
-            : "Used when a chat or Create Images doesn’t name a model. Automatic picks the first available one."
+            : "Chats use it unless you ask for another model, and new Generate Image steps in Create Images start with it. Automatic picks the first available one."
         }
       >
         <Select
@@ -530,12 +529,12 @@ function matchesQuery(model: ImageGenerationModelView, terms: readonly string[])
 
 function ModelsGroup({
   state,
-  busy,
+  pending,
   onToggle,
   onRemove,
 }: {
   state: ImageGenerationState;
-  busy: boolean;
+  pending: ReadonlySet<string>;
   onToggle: (model: ImageGenerationModelView, enabled: boolean) => void;
   onRemove: (model: ImageGenerationModelView) => void;
 }) {
@@ -566,9 +565,12 @@ function ModelsGroup({
   return (
     <FieldSet title="Models">
       <div className="flex flex-col gap-3 p-4">
-        <label className="flex h-8 items-center gap-2 rounded-control border border-field bg-input px-3 transition-[background-color] duration-(--motion-duration) ease-standard focus-within:bg-control motion-reduce:transition-none">
-          <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
-          <input
+        <label className="relative block">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-tertiary"
+          />
+          <Input
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -579,7 +581,7 @@ function ModelsGroup({
             }}
             placeholder="Search image models"
             aria-label="Search image models"
-            className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
+            className="pl-8"
           />
         </label>
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter models by provider">
@@ -601,7 +603,14 @@ function ModelsGroup({
       <div role="list" aria-label="Image models">
         {rows.map((model) => (
           <div role="listitem" key={modelKey(model)}>
-            <ModelRow model={model} busy={busy} onToggle={onToggle} onRemove={onRemove} />
+            <ModelRow
+              model={model}
+              busy={
+                pending.has(`model:${modelKey(model)}`) || pending.has(`remove:${modelKey(model)}`)
+              }
+              onToggle={onToggle}
+              onRemove={onRemove}
+            />
           </div>
         ))}
       </div>
@@ -634,13 +643,15 @@ function ModelsGroup({
   );
 }
 
-function ModelRow({
+/** One model's row. Memoized: typing a search or another row's pending state leaves it alone. */
+const ModelRow = React.memo(function ModelRow({
   model,
   busy,
   onToggle,
   onRemove,
 }: {
   model: ImageGenerationModelView;
+  /** This row's own switch or removal is in flight. */
   busy: boolean;
   onToggle: (model: ImageGenerationModelView, enabled: boolean) => void;
   onRemove: (model: ImageGenerationModelView) => void;
@@ -694,7 +705,7 @@ function ModelRow({
       </div>
     </Field>
   );
-}
+});
 
 const ID_PLACEHOLDERS: Record<ImageGenerationProviderId, string> = {
   openrouter: "vendor/model",

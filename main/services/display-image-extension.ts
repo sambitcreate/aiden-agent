@@ -73,27 +73,70 @@ export interface DisplayImageExtensionScope {
 
 /** Keep the GUI tool on ordinary attended workspace chat only. */
 export function shouldEnableDisplayImageExtension(scope: DisplayImageExtensionScope): boolean {
-  return (
-    shouldEnableImageGeneration(scope) &&
-    Boolean(scope.workspaceRoot) &&
-    scope.permission !== "none"
-  );
+  return shouldEnableImageGeneration(scope) && Boolean(scope.workspaceRoot);
 }
 
 /**
  * Image generation (and inline presentation of its results) runs in ordinary
- * attended chats, including conversations with no workspace folder. It reads no
- * workspace files, so it needs neither a workspace nor a file permission.
+ * attended chats. A workspace chat needs a file permission other than `none`;
+ * a conversation with no workspace folder reads no files, so it gets image
+ * generation regardless of the permission setting.
  */
 export function shouldEnableImageGeneration(
-  scope: Omit<DisplayImageExtensionScope, "workspaceRoot" | "permission">,
+  scope: Omit<DisplayImageExtensionScope, "workspaceRoot" | "permission"> &
+    Partial<Pick<DisplayImageExtensionScope, "workspaceRoot" | "permission">>,
 ): boolean {
   return (
     scope.usageSource === "chat" &&
     scope.interactionSurface !== "telegram" &&
     !scope.assistantMode &&
-    !scope.excluded
+    !scope.excluded &&
+    !(scope.workspaceRoot && scope.permission === "none")
   );
+}
+
+/** What a chat turn registers for model operations and image presentation. */
+export interface ModelOperationsChatPlan {
+  /** generate_image, list_operation_models, list_image_references and generated-image presentation. */
+  imageTools: boolean;
+  /** The classify tool (workspace chats only). */
+  classify: boolean;
+  /** The display_image tool (workspace chats only). */
+  displayImage: boolean;
+  /** Add only a one-line "image generation isn't set up" system prompt hint. */
+  setupHint: boolean;
+  /**
+   * Image staging is unavailable. In a workspace chat the turn fails with the
+   * repair instructions; a folderless chat logs this and skips only the image pieces.
+   */
+  staging: "ok" | "fail" | "skip";
+}
+
+/**
+ * Decide the model-operations wiring for one chat turn. Workspace chats keep
+ * every operation tool (`list_operation_models` explains a missing image key);
+ * folderless chats get only the image tools, and only when image generation is
+ * set up, so a staging problem or missing key never breaks an ordinary chat.
+ */
+export function planModelOperationsForChat(
+  scope: DisplayImageExtensionScope,
+  state: { imageGenerationAvailable: boolean; stagingAvailable: boolean },
+): ModelOperationsChatPlan {
+  const none: ModelOperationsChatPlan = {
+    imageTools: false,
+    classify: false,
+    displayImage: false,
+    setupHint: false,
+    staging: "ok",
+  };
+  if (!shouldEnableImageGeneration(scope)) return none;
+  if (scope.workspaceRoot) {
+    if (!state.stagingAvailable) return { ...none, staging: "fail" };
+    return { ...none, imageTools: true, classify: true, displayImage: true };
+  }
+  if (!state.imageGenerationAvailable) return { ...none, setupHint: true };
+  if (!state.stagingAvailable) return { ...none, staging: "skip" };
+  return { ...none, imageTools: true };
 }
 
 export function displayedAssistantImageUsage(

@@ -885,12 +885,38 @@ test("image operations use only the image registry and classification only the c
 });
 
 test("the operations prompt names the default image model, or says where image keys are added", () => {
-  const withDefault = piModelOperationsSystemPrompt({ provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell" });
+  const withDefault = piModelOperationsSystemPrompt({
+    defaultImageModel: { provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell" },
+  });
   assert.match(withDefault, /Default image model: fal\/fal-ai\/flux\/schnell \(FLUX schnell\)/);
   assert.match(withDefault, /Settings → Image Generation/);
+  assert.match(withDefault, /classify/);
   const without = piModelOperationsSystemPrompt();
   assert.doesNotMatch(without, /Default image model/);
   assert.match(without, /Add an image key in Settings → Image Generation\./);
+  const imageOnly = piModelOperationsSystemPrompt({ classifiers: false });
+  assert.doesNotMatch(imageOnly, /classif/i, "a chat without classify is not told about it");
+});
+
+test("without classifier models, only the image tools exist and listing is image-scoped", async () => {
+  const images = registry([{ type: "image", provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell", input: ["text"] }]);
+  const tools = createPiModelTools({
+    imageModels: images.models,
+    onImage: async () => {},
+    listImages: async () => [],
+  });
+  assert.deepEqual(
+    tools.map((tool) => tool.name).sort(),
+    ["generate_image", "list_image_references", "list_operation_models"],
+  );
+  const list = tools.find((tool) => tool.name === "list_operation_models")!;
+  const listed = await list.execute("list", {});
+  assert.deepEqual(listed.structuredContent, {
+    models: [{ provider: "fal", model: "fal-ai/flux/schnell", label: "FLUX schnell", type: "image", acceptsReferenceImages: false }],
+    truncated: false,
+  });
+  await assert.rejects(list.execute("list", { type: "classifier" }), /not available/);
+  assert.ok(!images.calls.lookups.some((lookup) => lookup.startsWith("classifier:")));
 });
 
 test("an image model without a key, or no image model at all, points to Settings → Image Generation", async () => {

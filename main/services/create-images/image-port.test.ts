@@ -45,6 +45,34 @@ test("listModels lists configured image models and hides auto routers", async ()
   ]);
 });
 
+test("listModels marks the Settings default and names each model's maker", async () => {
+  const fake = fakeImageModels({ models: [{ id: NANO, name: "Nano Banana 2" }, { id: "black-forest-labs/flux.2-pro", name: "FLUX.2 Pro" }] });
+  const images = createPiImageGenerationPort({
+    models: fake.models,
+    providerLabel: (id) => id,
+    defaultModel: async () => ({ provider: "openrouter", id: "black-forest-labs/flux.2-pro" }),
+    maker: (_provider, id) => (id.startsWith("google/") ? "google" : undefined),
+  });
+  const listed = await images.listModels();
+  assert.deepEqual(
+    listed.map(({ model, isDefault, maker }) => ({ model, isDefault, maker })),
+    [
+      { model: "black-forest-labs/flux.2-pro", isDefault: true, maker: undefined },
+      { model: NANO, isDefault: undefined, maker: "google" },
+    ],
+  );
+  assert.deepEqual(pickDefaultImageModel(listed), { provider: "openrouter", id: "black-forest-labs/flux.2-pro" });
+
+  const brokenDefault = createPiImageGenerationPort({
+    models: fake.models,
+    providerLabel: (id) => id,
+    defaultModel: async () => {
+      throw new Error("settings unreadable");
+    },
+  });
+  assert.equal((await brokenDefault.listModels()).length, 2, "a failed default lookup still lists models");
+});
+
 test("one generate is one provider call with maxRetries 0 and one usage record", async () => {
   const fake = port();
   const result = await fake.port.generate(request());
@@ -111,9 +139,13 @@ test("unknown and auto-router models are refused without a request", async () =>
   assert.equal(fake.usage.length, 0);
 });
 
-test("the default model is Nano Banana 2 when available, otherwise the first available", () => {
-  const option = (provider: string, model: string): ImageModelOption =>
-    ({ provider, providerLabel: provider, model, label: model, acceptsReferences: true, textOutput: true });
+test("the default model is the Settings default, else Nano Banana 2, else the first available", () => {
+  const option = (provider: string, model: string, isDefault?: boolean): ImageModelOption =>
+    ({ provider, providerLabel: provider, model, label: model, acceptsReferences: true, textOutput: true, ...(isDefault ? { isDefault } : {}) });
+  assert.deepEqual(
+    pickDefaultImageModel([option("openrouter", NANO), option("fal", "fal-ai/flux/schnell", true)]),
+    { provider: "fal", id: "fal-ai/flux/schnell" },
+  );
   assert.deepEqual(pickDefaultImageModel([option("openrouter", "flux"), option("openrouter", NANO)]), { provider: "openrouter", id: NANO });
   assert.deepEqual(pickDefaultImageModel([option("openrouter", "flux")]), { provider: "openrouter", id: "flux" });
   assert.equal(pickDefaultImageModel([]), undefined);

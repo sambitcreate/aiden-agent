@@ -223,3 +223,52 @@ test("custom models can be removed from their row", async () => {
     [{ provider: "openrouter", id: "acme/painter" }],
   ]);
 });
+
+test("a running fetch locks only that provider's fetch, not key controls or other providers", async () => {
+  let finish!: (result: ImageGenerationActionResult) => void;
+  const calls = mount({
+    "imageGeneration:fetchModels": () =>
+      new Promise<ImageGenerationActionResult>((resolve) => {
+        finish = resolve;
+      }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Fetch latest OpenRouter models" }));
+  await waitFor(() => assert.ok(screen.getByText("Fetching…")));
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+  assert.equal(button("Fetch latest OpenRouter models").disabled, true);
+  assert.equal(button("Fetch latest fal models").disabled, false);
+  assert.equal(button("Replace OpenRouter key").disabled, false);
+  assert.equal(button("Remove OpenRouter key").disabled, false);
+  assert.equal(button("Add Replicate key").disabled, false);
+  assert.equal((screen.getByRole("switch", { name: "Use FLUX.2 Pro" }) as HTMLButtonElement).disabled, false);
+
+  // A second click on the running fetch is not a second request.
+  fireEvent.click(button("Fetch latest OpenRouter models"));
+  fireEvent.click(button("Fetch latest fal models"));
+  await waitFor(() =>
+    assert.deepEqual(callsTo(calls, "imageGeneration:fetchModels"), [
+      [{ provider: "openrouter" }],
+      [{ provider: "fal" }],
+    ]),
+  );
+  finish(ok(baseState()));
+});
+
+test("switching two different models in quick succession sends both changes", async () => {
+  const resolvers: (() => void)[] = [];
+  const calls = mount({
+    "imageGeneration:setModelEnabled": () =>
+      new Promise<ImageGenerationActionResult>((resolve) => {
+        resolvers.push(() => resolve(ok(baseState())));
+      }),
+  });
+  fireEvent.click(await screen.findByRole("switch", { name: "Use FLUX.2 Pro" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Use Seedream 4" }));
+  await waitFor(() =>
+    assert.deepEqual(callsTo(calls, "imageGeneration:setModelEnabled"), [
+      [{ provider: "replicate", id: "black-forest-labs/flux-2-pro", enabled: false }],
+      [{ provider: "fal", id: "fal-ai/seedream/v4", enabled: false }],
+    ]),
+  );
+  for (const resolve of resolvers) resolve();
+});

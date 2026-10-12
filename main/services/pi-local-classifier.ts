@@ -8,7 +8,7 @@ import type { PiModelToolsHost } from "./pi-model-tools.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { StoredProvider } from "./types.js";
 
-type OperationModels = PiModelToolsHost["classifierModels"];
+type OperationModels = NonNullable<PiModelToolsHost["classifierModels"]>;
 type LocalModel = ClassifierModel<"llama-cpp-classify">;
 
 /** Strip only the explicitly configured chat route; preserve reverse-proxy prefixes. */

@@ -18,6 +18,7 @@ const keyOf = (provider: string, model: string) => `${provider}\u0000${model}`;
 function OptionLogo({ option }: { option: ImageModelOption }) {
   return (
     <ImageModelLogo
+      maker={option.maker}
       providerId={option.provider}
       modelId={option.model}
       label={option.label}

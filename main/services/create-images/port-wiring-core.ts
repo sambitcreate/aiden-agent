@@ -11,6 +11,10 @@ export interface ImagePortWiring {
   providerLabel(providerId: string): string;
   /** Loads the image registry from local settings. It must never contact a provider. */
   ready(): Promise<void>;
+  /** The Settings → Image Generation default model (cached, offline). */
+  defaultModel?(): Promise<{ provider: string; id: string } | undefined>;
+  /** Maker slug for a model's logo. */
+  maker?(providerId: string, modelId: string): string | undefined;
   recordUsage(record: UsageRequestRecord): Promise<void>;
 }
 
@@ -20,6 +24,8 @@ export function createWiredImagePort(wiring: ImagePortWiring): ImageGenerationPo
     models: wiring.models,
     providerLabel: wiring.providerLabel,
     prepare: () => wiring.ready(),
+    ...(wiring.defaultModel ? { defaultModel: wiring.defaultModel } : {}),
+    ...(wiring.maker ? { maker: wiring.maker } : {}),
     onUsage: async (record) => {
       // Image providers are always hosted; chat provider deployments never apply.
       await wiring.recordUsage(modelOperationUsageRecord(record, [], "create-images"));

@@ -679,6 +679,7 @@
         "renderer/components/settings/tool-approval-settings.test.tsx",
         "renderer/components/settings/tts-settings.test.tsx",
         "renderer/components/settings/image-generation-settings.test.tsx",
+        "renderer/lib/relative-time.test.ts",
         "renderer/components/image-model-logo.test.tsx",
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",

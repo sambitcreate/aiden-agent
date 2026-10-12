@@ -17,6 +17,7 @@ import {
   MAX_DISPLAY_IMAGES_PER_CHAT,
   shouldEnableDisplayImageExtension,
   shouldEnableImageGeneration,
+  planModelOperationsForChat,
 } from "./display-image-extension.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
@@ -342,7 +343,7 @@ test("scope and cumulative quotas keep the extension bounded to foreground works
   }
 });
 
-test("image generation runs in folderless chats while display_image still needs a workspace", () => {
+test("image generation runs in folderless chats while workspace chats still need a file permission", () => {
   const base = {
     usageSource: "chat",
     interactionSurface: undefined as string | undefined,
@@ -354,7 +355,7 @@ test("image generation runs in folderless chats while display_image still needs 
   const cases: { scope: typeof base; generation: boolean; display: boolean }[] = [
     { scope: base, generation: true, display: true },
     { scope: { ...base, workspaceRoot: undefined }, generation: true, display: false },
-    { scope: { ...base, permission: "none" }, generation: true, display: false },
+    { scope: { ...base, permission: "none" }, generation: false, display: false },
     { scope: { ...base, workspaceRoot: undefined, permission: "none" }, generation: true, display: false },
     { scope: { ...base, usageSource: "scheduled" }, generation: false, display: false },
     { scope: { ...base, interactionSurface: "telegram" }, generation: false, display: false },
@@ -365,6 +366,40 @@ test("image generation runs in folderless chats while display_image still needs 
     assert.equal(shouldEnableImageGeneration(scope), generation, JSON.stringify(scope));
     assert.equal(shouldEnableDisplayImageExtension(scope), display, JSON.stringify(scope));
   }
+});
+
+test("a chat turn's model-operations plan keeps folderless chats image-only and resilient", () => {
+  const workspace = {
+    usageSource: "chat",
+    interactionSurface: undefined,
+    assistantMode: false,
+    workspaceRoot: "/workspace" as string | undefined,
+    permission: "ask",
+    excluded: false,
+  };
+  const folderless = { ...workspace, workspaceRoot: undefined };
+  const ready = { imageGenerationAvailable: true, stagingAvailable: true };
+  const off = { imageTools: false, classify: false, displayImage: false, setupHint: false, staging: "ok" };
+
+  assert.deepEqual(planModelOperationsForChat(folderless, ready), { ...off, imageTools: true });
+  assert.deepEqual(
+    planModelOperationsForChat(folderless, { ...ready, imageGenerationAvailable: false }),
+    { ...off, setupHint: true },
+    "no image key: a prompt hint and no tools",
+  );
+  assert.deepEqual(
+    planModelOperationsForChat(folderless, { ...ready, stagingAvailable: false }),
+    { ...off, staging: "skip" },
+    "a broken staging file skips image pieces instead of failing the chat",
+  );
+  assert.deepEqual(planModelOperationsForChat({ ...workspace, permission: "none" }, ready), off);
+  assert.deepEqual(
+    planModelOperationsForChat(workspace, { ...ready, imageGenerationAvailable: false }),
+    { ...off, imageTools: true, classify: true, displayImage: true },
+    "workspace chats keep the tools so list_operation_models can explain setup",
+  );
+  assert.deepEqual(planModelOperationsForChat(workspace, { ...ready, stagingAvailable: false }), { ...off, staging: "fail" });
+  assert.deepEqual(planModelOperationsForChat({ ...folderless, usageSource: "scheduled" }, ready), off);
 });
 
 test("a runtime without a workspace presents generated images but offers no display_image tool", async () => {

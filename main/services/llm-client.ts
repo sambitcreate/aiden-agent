@@ -380,19 +380,21 @@ import {
   createPiModelTools,
   piModelOperationProviderLabel,
   piModelOperationsSystemPrompt,
+  IMAGE_GENERATION_UNAVAILABLE_PROMPT,
   piModelOperationUsage,
 } from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
   DISPLAY_IMAGE_TOOL_NAME,
-  shouldEnableDisplayImageExtension,
   shouldEnableImageGeneration,
+  planModelOperationsForChat,
 } from "./display-image-extension.js";
 import { imageGeneration } from "./image-generation/runtime-main.js";
 import {
   IMAGE_GENERATION_PROVIDER_NAMES,
   isImageGenerationProviderId,
+  type ImageGenerationSnapshot,
 } from "../../renderer/shared/image-generation/types.js";
 import {
   CHAT_ARTIFACT_EVENT_VERSION,
@@ -1624,33 +1626,52 @@ async function prepareGeneration(
       return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
     });
   }
-  // Image generation also runs in folderless conversations; only display_image
-  // (which reads workspace files) needs a workspace and its permission.
-  if (
-    !botContext &&
-    shouldEnableImageGeneration({
-      usageSource: options.usageSource,
-      interactionSurface: options.interactionSurface,
-      assistantMode,
-      excluded: false,
-    })
-  ) {
-    const displayImageWorkspaceRoot = shouldEnableDisplayImageExtension({
-      usageSource: options.usageSource,
-      interactionSurface: options.interactionSurface,
-      assistantMode,
-      workspaceRoot: folderPath,
-      permission,
-      excluded: false,
-    })
-      ? folderPath
-      : undefined;
-    const artifactStoreAvailability = displayImageArtifactStore.availability();
-    if (!artifactStoreAvailability.available) {
-      throw new Error(
-        `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
-      );
-    }
+  // Image generation also runs in folderless conversations (image tools only);
+  // workspace chats need a file permission and also get classify and display_image.
+  const modelOperationsScope = {
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    assistantMode,
+    workspaceRoot: folderPath,
+    permission,
+    // Bots never get model operations.
+    excluded: Boolean(botContext),
+  };
+  const modelOperationsEnabled = shouldEnableImageGeneration(modelOperationsScope);
+  // Image generation has its own registry and keys (Settings → Image Generation);
+  // it never uses chat provider credentials. The snapshot is cached and offline.
+  const imageSnapshot: ImageGenerationSnapshot = modelOperationsEnabled
+    ? await imageGeneration.snapshot().catch((error: unknown) => {
+        logger.warn("image-generation", "Could not load image generation settings for this chat.", error);
+        return { available: false };
+      })
+    : { available: false };
+  const artifactStoreAvailability = modelOperationsEnabled
+    ? displayImageArtifactStore.availability()
+    : ({ available: true } as const);
+  const modelOperationsPlan = planModelOperationsForChat(modelOperationsScope, {
+    imageGenerationAvailable: imageSnapshot.available,
+    stagingAvailable: artifactStoreAvailability.available,
+  });
+  if (!artifactStoreAvailability.available && modelOperationsPlan.staging === "fail") {
+    throw new Error(
+      `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
+    );
+  }
+  if (!artifactStoreAvailability.available && modelOperationsPlan.staging === "skip") {
+    logger.warn(
+      "image-generation",
+      `Image generation is off for this chat because image staging is unavailable: ${artifactStoreAvailability.reason}`,
+    );
+  }
+  if (modelOperationsPlan.setupHint) {
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: IMAGE_GENERATION_UNAVAILABLE_PROMPT,
+    });
+  }
+  if (modelOperationsPlan.imageTools) {
+    const displayImageWorkspaceRoot = modelOperationsPlan.displayImage ? folderPath : undefined;
     const existingUsage = displayedAssistantImageUsage(chat.messages);
     const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
     if (pendingUsage.count > 0) {
@@ -1714,18 +1735,15 @@ async function prepareGeneration(
       resolveRuntime: (providerId, modelId, requestSignal) => resolveModelRuntime(providerId, modelId, requestSignal, chat.id),
     });
     const operationProviders = [runtime.provider, ...savedOperationProviders];
-    // Image generation has its own registry and keys (Settings → Image Generation);
-    // it never uses chat provider credentials. Loading it is offline.
-    const defaultImageModel = await imageGeneration.defaultModel().catch((error: unknown) => {
-      logger.warn("image-generation", "Could not load image generation settings for this chat.", error);
-      return undefined;
-    });
     generationExtensions.push({
       id: "aiden.model-operations",
-      systemPrompt: piModelOperationsSystemPrompt(defaultImageModel),
+      systemPrompt: piModelOperationsSystemPrompt({
+        defaultImageModel: imageSnapshot.defaultModel,
+        classifiers: modelOperationsPlan.classify,
+      }),
       tools: createPiModelTools({
         imageModels: imageGeneration.models,
-        classifierModels: localClassifierModels.models,
+        ...(modelOperationsPlan.classify ? { classifierModels: localClassifierModels.models } : {}),
         providerLabel: (id, type) =>
           type === "image"
             ? isImageGenerationProviderId(id) ? IMAGE_GENERATION_PROVIDER_NAMES[id] : id

@@ -123,6 +123,20 @@ test("the model picker shows the selected model's maker mark", () => {
   assert.ok(marks.includes("google"));
 });
 
+test("the model picker uses the model's explicit maker for its mark", () => {
+  // A Replicate-hosted id whose owner prefix would not infer this maker.
+  const option = {
+    provider: "replicate", providerLabel: "Replicate", model: "someone/custom-finetune",
+    label: "Custom finetune", acceptsReferences: false, textOutput: false, maker: "black-forest-labs",
+  };
+  const picker = render(
+    <ModelPicker value={{ provider: "replicate", id: "someone/custom-finetune" }} models={[option]} onChange={noop} />,
+  );
+  const [trigger] = picker.buttons;
+  const marks = Array.from(trigger?.getElementsByTagName("span") ?? []).map((node) => node.getAttribute("data-image-logo"));
+  assert.ok(marks.includes("black-forest-labs"));
+});
+
 test("a Generate node shows its run status and disables Run from Here during a run", () => {
   const body = render(
     <GenerateImageNodeBody model={undefined} models={[]} attempt={attempt({ state: "interrupted", submittedAt: 1, mayHaveBeenBilled: true })} running onModel={noop} onRunFromHere={noop} />,

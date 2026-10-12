@@ -15,12 +15,31 @@ import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 export const IMAGE_GENERATION_SETUP_HINT =
   "Add an image key in Settings → Image Generation.";
 
-/** The model-operations extension prompt, naming the default image model when one is available. */
-export function piModelOperationsSystemPrompt(
-  defaultImageModel?: { provider: string; id: string; name: string },
-): string {
+/** System prompt for a folderless chat whose image generation is not set up (no image tools are registered). */
+export const IMAGE_GENERATION_UNAVAILABLE_PROMPT =
+  "Image generation isn't set up. If the user asks for an image, tell them to add an image key in Settings → Image Generation.";
+
+/** The default image model as the image runtime's cached snapshot reports it. */
+export interface PiModelOperationsDefaultImageModel {
+  provider: string;
+  id: string;
+  /** Prompt-safe display name (a curated name or the id), never fetched provider text. */
+  name: string;
+}
+
+/**
+ * The model-operations extension prompt. It names only the snapshot's default
+ * image model, and mentions classifiers only when `classify` is registered.
+ */
+export function piModelOperationsSystemPrompt(options: {
+  defaultImageModel?: PiModelOperationsDefaultImageModel;
+  classifiers?: boolean;
+} = {}): string {
+  const { defaultImageModel, classifiers = true } = options;
   return [
-    "Use list_operation_models to discover image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+    classifiers
+      ? "Use list_operation_models to discover image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat."
+      : "Use list_operation_models to discover image-generation models. generate_image sends data to the selected provider and requires explicit approval because it may incur charges. Generated images appear inline in this chat.",
     defaultImageModel
       ? `Default image model: ${defaultImageModel.provider}/${defaultImageModel.id} (${defaultImageModel.name}). Use it unless the user asks for another.`
       : `No image model is available yet. If the user asks for an image, tell them: ${IMAGE_GENERATION_SETUP_HINT}`,
@@ -61,8 +80,12 @@ export interface PiModelToolsHost {
    * keys, so image operations never see chat providers or their credentials.
    */
   imageModels: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">;
-  /** Chat-provider classifiers, including opted-in local llama.cpp classifiers. */
-  classifierModels: Pick<Models, "getAvailableOfType" | "getModelOfType" | "classify">;
+  /**
+   * Chat-provider classifiers, including opted-in local llama.cpp classifiers.
+   * Omitted (folderless chats), there is no `classify` tool and
+   * `list_operation_models` lists image models only.
+   */
+  classifierModels?: Pick<Models, "getAvailableOfType" | "getModelOfType" | "classify">;
   providerLabel?(providerId: string, type: "image" | "classifier"): string;
   onUsage?(record: {
     /** Which registry served the call; absent outside the chat tools. */
@@ -373,6 +396,7 @@ const questionSchema = Type.Union([
 
 /** Operations use only the supplied runtime's authenticated providers; tools accept no auth or URLs. */
 export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
+  const classifierModels = host.classifierModels;
   const account = async (
     record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0],
   ) => {
@@ -423,12 +447,15 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
   const list: AgentTool = {
     name: "list_operation_models",
     label: "List image and classifier models",
-    description:
-      "List available image-generation models (enabled in Settings → Image Generation, with a key) and configured classifier models. Does not refresh catalogs, download models or reveal credentials.",
+    description: classifierModels
+      ? "List available image-generation models (enabled in Settings → Image Generation, with a key) and configured classifier models. Does not refresh catalogs, download models or reveal credentials."
+      : "List available image-generation models (enabled in Settings → Image Generation, with a key). Does not refresh catalogs, download models or reveal credentials.",
     parameters: Type.Object(
       {
         type: Type.Optional(
-          Type.Union([Type.Literal("image"), Type.Literal("classifier")]),
+          classifierModels
+            ? Type.Union([Type.Literal("image"), Type.Literal("classifier")])
+            : Type.Literal("image"),
         ),
       },
       { additionalProperties: false },
@@ -442,14 +469,16 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
         input.type !== "classifier"
       )
         throw new Error("Model type must be image or classifier.");
+      if (input.type === "classifier" && !classifierModels)
+        throw new Error("Classifier models are not available in this chat.");
       const types: ("image" | "classifier")[] = input.type
         ? [input.type]
-        : ["image", "classifier"];
+        : classifierModels ? ["image", "classifier"] : ["image"];
       const models: JsonObject[] = [];
       let truncated = false;
       let images = 0;
       for (const type of types) {
-        const registry = type === "image" ? host.imageModels : host.classifierModels;
+        const registry = type === "image" ? host.imageModels : classifierModels!;
         const available = await registry.getAvailableOfType(
           type,
           undefined,
@@ -602,7 +631,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
       const { provider, modelId, context } = parsePiClassifierRequest(args);
-      const model = host.classifierModels.getModelOfType("classifier", provider, modelId);
+      const model = classifierModels!.getModelOfType("classifier", provider, modelId);
       if (
         !model ||
         model.type !== "classifier" ||
@@ -613,7 +642,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
           "Unknown classifier model. Use list_operation_models to find a configured classifier model.",
         );
       const result = await request(model, signal, () =>
-        host.classifierModels.classify(model, context, { signal }),
+        classifierModels!.classify(model, context, { signal }),
       );
       if (result.stopReason !== "stop" || signal?.aborted)
         return errorResult(
@@ -676,7 +705,7 @@ export function createPiModelTools(host: PiModelToolsHost): AgentTool[] {
     : [];
   return [
     Object.assign(list, { codemode: true, replay: "safe" as const }),
-    ...[generate, classify].map((tool) =>
+    ...(classifierModels ? [generate, classify] : [generate]).map((tool) =>
       Object.assign(tool, { codemode: true, replay: "never" as const }),
     ),
     ...referenceTools.map((tool) =>

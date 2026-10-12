@@ -25,6 +25,9 @@ export const createImagesRuntime = new CreateImagesRuntime({
         isImageGenerationProviderId(providerId) ? IMAGE_GENERATION_PROVIDER_NAMES[providerId] : providerId,
       // Offline: loads image settings and registers providers; never contacts a provider.
       ready: () => imageGeneration.ready(),
+      // Cached and offline: the Settings default preselects new Generate Image steps.
+      defaultModel: async () => (await imageGeneration.snapshot()).defaultModel,
+      maker: (providerId, modelId) => imageGeneration.imageModelMaker(providerId, modelId),
       recordUsage: (record) => usageStore.record(record),
     }),
   notify: (snapshot) => ipcMain.broadcast(IMAGE_RUN_CHANGED_CHANNEL, snapshot),
