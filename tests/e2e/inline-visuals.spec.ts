@@ -118,6 +118,8 @@ test("snapshots run guest HTML offline and keep everything down to its last marg
         // A visual that tries to send chat data away by navigating its own frame.
         { name: "render_artifact", arguments: { title: "Leaky", html: `<p>hello</p><script>location.href = "http://127.0.0.1:${port}/leak?d=secret";</script>` } },
         { name: "render_artifact", arguments: { title: "Tall margin", html: `<div style="height:300px;background:#0b7de5"></div><p style="margin:0 0 48px">End of visual</p>` } },
+        // Grows only when the host chart library loaded inside the snapshot.
+        { name: "render_artifact", arguments: { title: "Libraries", html: `<div id="probe" style="height:100px;background:#0b7de5"></div><script>if (typeof Chart === "function") document.getElementById("probe").style.height = "400px";</script>` } },
       ],
       finalText: "Both visuals are drawn.",
     });
@@ -126,15 +128,20 @@ test("snapshots run guest HTML offline and keep everything down to its last marg
     await expect(page.getByText("Both visuals are drawn.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
     expect(scenario.error).toBeUndefined();
 
-    // The queue captures in order, so the second snapshot means the first ran.
-    const tallSnapshot = async () => {
+    // The queue captures in order, so a later snapshot means the first ran.
+    const snapshotOf = async (title: string) => {
       const message = await latestAssistant(userDataDir);
-      const tall = message?.htmlArtifacts?.find((artifact) => artifact.title === "Tall margin");
-      const ref = message?.visualSnapshots?.find((candidate) => candidate.visualId === tall?.mediaId);
+      const artifact = message?.htmlArtifacts?.find((candidate) => candidate.title === title);
+      const ref = message?.visualSnapshots?.find((candidate) => candidate.visualId === artifact?.mediaId);
       return ref ? message?.attachments?.find((attachment) => attachment.id === ref.attachmentId) : undefined;
     };
-    await expect.poll(async () => Boolean(await tallSnapshot()), { timeout: 30_000 }).toBe(true);
+    const tallSnapshot = () => snapshotOf("Tall margin");
+    await expect.poll(async () => Boolean(await snapshotOf("Libraries")), { timeout: 45_000 }).toBe(true);
     expect(hits).toEqual([]);
+
+    // Charts in a snapshot need the host libraries; the probe grows to 400px only if they loaded.
+    const libraries = pngSize((await snapshotOf("Libraries"))!.data!);
+    expect((libraries.height * 752) / libraries.width).toBeGreaterThanOrEqual(420);
 
     // Column width 720 plus 16px padding on each side, at the display's scale.
     const size = pngSize((await tallSnapshot())!.data!);
@@ -144,4 +151,51 @@ test("snapshots run guest HTML offline and keep everything down to its last marg
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+// Guests that never yield: one reports a height and then spins on the renderer's main thread,
+// the other spins before it can report anything. Neither can finish its own capture.
+const SPINS_AFTER_REPORT = `<p>busy</p><script>setTimeout(() => { while (true) {} }, 50);</script>`;
+const SPINS_BEFORE_REPORT = `<script>while (true) {}</script>`;
+
+test("a runaway visual is abandoned at the snapshot timeout and the next visual still gets its snapshot", async ({ aiden }) => {
+  const { page, lmStudio, userDataDir, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  const prompt = "Runaway snapshot scenario: draw three visuals.";
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [
+      { name: "render_artifact", arguments: { title: "Spins after report", html: SPINS_AFTER_REPORT } },
+      { name: "render_artifact", arguments: { title: "Spins before report", html: SPINS_BEFORE_REPORT } },
+      { name: "render_artifact", arguments: { title: "Weekly total", html: HTML } },
+    ],
+    finalText: "All three visuals are drawn.",
+  });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("All three visuals are drawn.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  expect(scenario.error).toBeUndefined();
+  expect(scenario.issuedToolNames).toEqual(["render_artifact", "render_artifact", "render_artifact"]);
+  await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
+
+  // Each runaway capture is cut off by the 6 s queue timeout; the healthy visual after them must still capture.
+  const snapshotOf = async (title: string) => {
+    const message = await latestAssistant(userDataDir);
+    const artifact = message?.htmlArtifacts?.find((candidate) => candidate.title === title);
+    const ref = message?.visualSnapshots?.find((candidate) => candidate.visualId === artifact?.mediaId);
+    return ref ? message?.attachments?.find((attachment) => attachment.id === ref.attachmentId) : undefined;
+  };
+  await expect.poll(async () => Boolean(await snapshotOf("Weekly total")), { timeout: 30_000 }).toBe(true);
+  const attachment = (await snapshotOf("Weekly total"))!;
+  expect(attachment.kind).toBe("image");
+  const size = pngSize(attachment.data!);
+  expect(size.width).toBeGreaterThanOrEqual(720);
+  expect(size.height).toBeGreaterThan(64);
+
+  // The abandoned captures leave no extra visible window, and at most one hidden capture window remains.
+  const windows = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).map((window) => window.isVisible()),
+  );
+  expect(windows.filter(Boolean)).toHaveLength(1);
+  expect(windows.filter((visible) => !visible).length).toBeLessThanOrEqual(1);
 });

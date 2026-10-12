@@ -2,13 +2,12 @@ import { BrowserWindow, logger } from "../platform.js";
 import { getWindowUrl } from "../windows/window-paths.js";
 import { markAuxiliaryWindow } from "../windows/auxiliary-windows.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
-import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import {
   GENERATIVE_UI_RESIZE_MESSAGE,
   MAX_INLINE_VISUAL_HEIGHT,
   MIN_INLINE_VISUAL_HEIGHT,
 } from "../../renderer/shared/generative-ui-bridge.js";
-import { GENERATIVE_UI_IFRAME_SANDBOX } from "../../renderer/shared/generative-ui.js";
+import { GENERATIVE_UI_GUEST_CSP, GENERATIVE_UI_IFRAME_SANDBOX } from "../../renderer/shared/generative-ui.js";
 import {
   createVisualSnapshotQueue,
   snapshotAttachment,
@@ -26,7 +25,9 @@ import type { Attachment } from "./types.js";
  * - Native visuals render `AidenUiBlock` in the `visual-snapshot` entry with
  *   the default light tokens and no preload.
  * The window never shows, opens nothing, navigates nowhere, and closes after
- * the queue goes idle.
+ * the queue goes idle. A capture that is abandoned (timeout or chat deletion)
+ * destroys its own window, because a guest that never yields keeps running
+ * script that `webContents.stop()` cannot interrupt.
  */
 
 const COLUMN_WIDTH = 720;
@@ -50,18 +51,30 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * The host page may frame only the guest's preview URL: a guest can always
- * navigate its own frame, so the host's frame-src is what keeps it offline,
- * exactly as the main window's CSP does.
+ * The guest document is inlined as `srcdoc`, not loaded from its own
+ * `aiden-genui:` URL. Chromium keeps one renderer per site, so a guest on that
+ * URL would share a process with every other aiden-genui guest (including the
+ * chat's own visuals) and a runaway one would block all of them. A srcdoc
+ * frame runs in this capture window's own host process instead, which the
+ * window takes down with it when the capture is abandoned.
+ *
+ * A srcdoc document inherits this page's CSP on top of its own, so the host
+ * uses the guest policy (host libraries, no network) and differs only in
+ * framing that one srcdoc document.
  */
-const HOST_PAGE_CSP = "default-src 'none'; frame-src aiden-genui:; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
+const HOST_PAGE_CSP = GENERATIVE_UI_GUEST_CSP.replace("frame-src 'none'", "frame-src about:srcdoc");
 
-function hostPage(src: string, width: number): string {
+/** Escapes a value for a double-quoted attribute. */
+function escapeAttribute(value: string): string {
+  return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
+function hostPage(guestDocument: string, width: number): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HOST_PAGE_CSP}"><style>
 html,body{margin:0;background:${CANVAS};}
 body{padding:${PADDING}px;}
 iframe{border:0;display:block;width:${width}px;height:${MIN_INLINE_VISUAL_HEIGHT}px;}
-</style></head><body><iframe sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" src="${src}"></iframe><script>
+</style></head><body><iframe sandbox="${GENERATIVE_UI_IFRAME_SANDBOX}" srcdoc="${escapeAttribute(guestDocument)}"></iframe><script>
 window.__snap = { height: 0, changedAt: 0 };
 addEventListener("message", (event) => {
   const data = event.data;
@@ -78,14 +91,25 @@ export function createElectronVisualSnapshotCapture(deps: {
 }) {
   let window: InstanceType<typeof BrowserWindow> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
-  // The one frame URL the current capture may load.
-  let allowedFrameUrl: string | null = null;
 
   const closeWindow = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
     if (window && !window.isDestroyed()) window.destroy();
     window = null;
+  };
+
+  /**
+   * Ends an abandoned capture's window and clears the shared reference, so the
+   * next capture creates a fresh one. Fenced by identity: a late abandoned
+   * capture never acts on the window that replaced its own.
+   */
+  const discardWindow = (target: InstanceType<typeof BrowserWindow>) => {
+    if (window !== target) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+    window = null;
+    if (!target.isDestroyed()) target.destroy();
   };
 
   const ensureWindow = () => {
@@ -110,8 +134,9 @@ export function createElectronVisualSnapshotCapture(deps: {
     markAuxiliaryWindow(window);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event) => event.preventDefault());
+    // The guest is inline, so no frame may navigate anywhere: a guest can always try to navigate its own frame.
     window.webContents.on("will-frame-navigate", (event) => {
-      if (!event.isMainFrame && event.url === allowedFrameUrl) return;
+      if (!event.isMainFrame && event.url === "about:srcdoc") return;
       event.preventDefault();
     });
     return window;
@@ -125,11 +150,13 @@ export function createElectronVisualSnapshotCapture(deps: {
   const captureSized = async (target: InstanceType<typeof BrowserWindow>, width: number, height: number, signal: AbortSignal): Promise<CapturedImage | null> => {
     const fullWidth = width + PADDING * 2;
     const fullHeight = Math.min(height, MAX_INLINE_VISUAL_HEIGHT) + PADDING * 2;
+    if (signal.aborted) return null;
     target.setContentSize(fullWidth, fullHeight);
     await target.webContents.executeJavaScript("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (signal.aborted) return null;
       const image = await target.webContents.capturePage({ x: 0, y: 0, width: fullWidth, height: fullHeight }, { stayHidden: true });
+      if (signal.aborted) return null;
       if (!image.isEmpty()) {
         const png = image.toPNG();
         if (png.length <= MAX_PNG_BYTES) return { bytes: png, mimeType: "image/png" };
@@ -140,23 +167,23 @@ export function createElectronVisualSnapshotCapture(deps: {
     return null;
   };
 
-  const captureHtml = async (visual: SnapshotVisual, job: VisualSnapshotJob, signal: AbortSignal): Promise<CapturedImage | null> => {
-    const html = await deps.htmlFor(job.chatId, visual.visualId);
-    if (!html || signal.aborted) return null;
+  const captureHtml = async (
+    visual: Extract<SnapshotVisual, { kind: "html" }>,
+    html: string,
+    target: InstanceType<typeof BrowserWindow>,
+    signal: AbortSignal,
+  ): Promise<CapturedImage | null> => {
     const width = visual.layout === "wide" ? WIDE_WIDTH : COLUMN_WIDTH;
     // Inline, as the desktop draws it: the same font size and a body that
     // measures its own margins. The host page paints the opaque canvas.
-    const src = registerGenerativeUiPreviewDocument(
-      wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, { inline: true, stillImage: true }),
-    );
-    allowedFrameUrl = src;
-    const target = ensureWindow();
+    const guest = wrapGenerativeUiHtml(html, visual.title, LIGHT_THEME, { inline: true, stillImage: true });
     target.setContentSize(width + PADDING * 2, 400);
-    await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostPage(src, width))}`);
+    await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostPage(guest, width))}`);
     // Wait for the guest to report its height and then stop changing.
     let height = 0;
     while (!signal.aborted) {
       const snap = (await target.webContents.executeJavaScript("window.__snap")) as { height: number; changedAt: number };
+      if (signal.aborted) return null;
       if (snap.height > 0 && Date.now() - snap.changedAt >= SETTLE_MS) {
         height = snap.height;
         break;
@@ -166,14 +193,17 @@ export function createElectronVisualSnapshotCapture(deps: {
     return height > 0 ? captureSized(target, width, height, signal) : null;
   };
 
-  const captureUi = async (visual: Extract<SnapshotVisual, { kind: "ui" }>, signal: AbortSignal): Promise<CapturedImage | null> => {
+  const captureUi = async (
+    visual: Extract<SnapshotVisual, { kind: "ui" }>,
+    target: InstanceType<typeof BrowserWindow>,
+    signal: AbortSignal,
+  ): Promise<CapturedImage | null> => {
     const width = visual.layout === "wide" ? WIDE_WIDTH : COLUMN_WIDTH;
-    allowedFrameUrl = null;
-    const target = ensureWindow();
     target.setContentSize(width + PADDING * 2, 400);
     await target.loadURL(getWindowUrl("visual-snapshot.html"));
     while (!signal.aborted) {
       const ready = await target.webContents.executeJavaScript("typeof window.__aidenSnapshot === 'function'");
+      if (signal.aborted) return null;
       if (ready) break;
       await sleep(50, signal);
     }
@@ -192,16 +222,21 @@ export function createElectronVisualSnapshotCapture(deps: {
 
   return {
     async capture(visual: SnapshotVisual, signal: AbortSignal, job: VisualSnapshotJob): Promise<CapturedImage | null> {
-      // A cancelled capture stops the window's page so a runaway guest cannot keep working.
-      const stop = () => {
-        if (window && !window.isDestroyed()) window.webContents.stop();
-      };
-      signal.addEventListener("abort", stop, { once: true });
+      if (signal.aborted) return null;
+      const html = visual.kind === "html" ? ((await deps.htmlFor(job.chatId, visual.visualId)) ?? "") : "";
+      // Checked again before a window is claimed, so an abandoned capture never takes one.
+      if (signal.aborted || (visual.kind === "html" && !html)) return null;
+      const target = ensureWindow();
+      // Abandoning this capture ends its own window: a guest that never yields
+      // cannot be stopped any other way, and the queue has already moved on.
+      const discard = () => discardWindow(target);
+      signal.addEventListener("abort", discard, { once: true });
       try {
-        return visual.kind === "ui" ? await captureUi(visual, signal) : await captureHtml(visual, job, signal);
+        return visual.kind === "ui" ? await captureUi(visual, target, signal) : await captureHtml(visual, html, target, signal);
       } finally {
-        signal.removeEventListener("abort", stop);
-        scheduleClose();
+        signal.removeEventListener("abort", discard);
+        // An abandoned capture no longer owns the window, so it leaves the idle timer alone.
+        if (window === target) scheduleClose();
       }
     },
     dispose: closeWindow,
