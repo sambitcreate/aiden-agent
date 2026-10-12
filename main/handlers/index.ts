@@ -21,6 +21,7 @@ import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
 import { registerFormFillHandlers } from "./form-fill.js";
 import { registerModelInsightsHandlers } from "./model-insights.js";
+import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -73,6 +74,7 @@ export function registerHandlers(): void {
   registerComputerUseHandlers();
   registerFormFillHandlers();
   registerModelInsightsHandlers();
+  registerImageGenerationHandlers();
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.

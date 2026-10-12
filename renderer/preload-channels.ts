@@ -21,6 +21,7 @@ export const INVOKE_PREFIXES = [
   "exa:",
   "formFill:",
   "git:",
+  "imageGeneration:",
   "imageWorkflows:",
   "localModels:",
   "localVoice:",

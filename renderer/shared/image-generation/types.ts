@@ -1,0 +1,169 @@
+// Shared, renderer-safe contract for Settings → Image Generation and the
+// main-process image registry. No Node or Electron imports.
+
+export const IMAGE_GENERATION_PROVIDER_IDS = ["openrouter", "replicate", "fal"] as const;
+export type ImageGenerationProviderId = (typeof IMAGE_GENERATION_PROVIDER_IDS)[number];
+
+export const IMAGE_GENERATION_PROVIDER_NAMES: Readonly<Record<ImageGenerationProviderId, string>> = {
+  openrouter: "OpenRouter",
+  replicate: "Replicate",
+  fal: "fal",
+};
+
+export function isImageGenerationProviderId(value: unknown): value is ImageGenerationProviderId {
+  return typeof value === "string" && (IMAGE_GENERATION_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+/** Replicate input fields that carry reference images, with how many each holds. */
+export const REPLICATE_REFERENCE_FIELDS = {
+  image_input: "array",
+  images: "array",
+  input_images: "array",
+  image: "single",
+  input_image: "single",
+  subject_reference: "single",
+} as const satisfies Record<string, "array" | "single">;
+export type ReplicateReferenceField = keyof typeof REPLICATE_REFERENCE_FIELDS;
+
+export const FAL_REFERENCE_FIELDS = ["image_urls", "image_url"] as const;
+export type FalReferenceField = (typeof FAL_REFERENCE_FIELDS)[number];
+
+/** Upper bound on reference images any adapter sends in one request. */
+export const MAX_IMAGE_REFERENCES = 14;
+
+/**
+ * Per-provider request metadata. Replicate models are addressed as
+ * `owner/name`; a fal logical model maps to a text endpoint and an optional
+ * edit endpoint that is used when reference images are present.
+ */
+export type ImageModelAdapter =
+  | {
+      kind: "openrouter";
+      /** The model can also return text alongside images. */
+      textOutput?: boolean;
+    }
+  | {
+      kind: "replicate";
+      referenceField?: ReplicateReferenceField;
+      maxReferences?: number;
+      /** Extra fixed inputs sent with every prediction. */
+      input?: Readonly<Record<string, string | number | boolean>>;
+    }
+  | {
+      kind: "fal";
+      textEndpoint: string;
+      editEndpoint?: string;
+      referenceField?: FalReferenceField;
+      maxReferences?: number;
+    };
+
+/** One curated, fetched or custom image model. */
+export interface ImageCatalogEntry {
+  provider: ImageGenerationProviderId;
+  id: string;
+  name: string;
+  /** Logo slug for ImageModelLogo (see `inferImageModelMaker`). */
+  maker?: string;
+  acceptsReferenceImages: boolean;
+  adapter: ImageModelAdapter;
+}
+
+export type ImageModelOrigin = "curated" | "fetched" | "custom";
+
+export interface ImageModelRef {
+  provider: ImageGenerationProviderId;
+  id: string;
+}
+
+export interface ImageGenerationKeyStatus {
+  connected: boolean;
+  source: "stored" | "env" | null;
+}
+
+export interface ImageGenerationProviderView {
+  id: ImageGenerationProviderId;
+  name: string;
+  key: ImageGenerationKeyStatus;
+  /** Epoch ms of the last successful Fetch latest models, or null. */
+  fetchedAt: number | null;
+  fetchedCount: number;
+  /** Replicate's catalog needs a key; OpenRouter and fal do not. */
+  fetchRequiresKey: boolean;
+}
+
+export interface ImageGenerationModelView {
+  provider: ImageGenerationProviderId;
+  id: string;
+  name: string;
+  maker?: string;
+  acceptsReferenceImages: boolean;
+  enabled: boolean;
+  origin: ImageModelOrigin;
+}
+
+export interface ImageGenerationState {
+  providers: ImageGenerationProviderView[];
+  models: ImageGenerationModelView[];
+  /** The stored default, kept even while it is disabled or its key is missing. */
+  defaultModel: ImageModelRef | null;
+}
+
+// ---- IPC requests (renderer → main) ----
+
+export interface ImageGenerationSetKeyRequest {
+  provider: ImageGenerationProviderId;
+  key: string;
+}
+
+export interface ImageGenerationProviderRequest {
+  provider: ImageGenerationProviderId;
+}
+
+export interface ImageGenerationSetModelEnabledRequest {
+  provider: ImageGenerationProviderId;
+  id: string;
+  enabled: boolean;
+}
+
+/** `null` clears the default. */
+export type ImageGenerationSetDefaultModelRequest = ImageModelRef | null;
+
+export interface ImageGenerationAddCustomModelRequest {
+  provider: ImageGenerationProviderId;
+  /** OpenRouter model id, Replicate `owner/name`, or fal text endpoint id. */
+  id: string;
+  name?: string;
+  /** OpenRouter only: the model takes reference images as input. */
+  acceptsReferenceImages?: boolean;
+  /** Replicate or fal: the input field that carries reference images. */
+  referenceField?: string;
+  /** fal only: endpoint used when reference images are present. */
+  editEndpoint?: string;
+}
+
+export type ImageGenerationRemoveCustomModelRequest = ImageModelRef;
+
+// ---- IPC results (main → renderer) ----
+
+export type ImageGenerationErrorCode =
+  | "invalid_request"
+  | "invalid_key"
+  | "key_required"
+  | "unknown_model"
+  | "network_error"
+  | "rejected_key"
+  | "invalid_catalog"
+  | "storage_error";
+
+export type ImageGenerationActionResult =
+  | { ok: true; state: ImageGenerationState }
+  | { ok: false; code: ImageGenerationErrorCode; message: string };
+
+export const IMAGE_GENERATION_LIMITS = {
+  minKeyLength: 8,
+  maxKeyLength: 512,
+  maxModelIdLength: 200,
+  maxModelNameLength: 120,
+  maxCustomModelsPerProvider: 50,
+  maxFetchedModelsPerProvider: 500,
+} as const;

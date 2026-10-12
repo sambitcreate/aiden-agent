@@ -278,7 +278,15 @@
         "main/services/generation-delta-coalescer.test.ts",
         "main/services/bot-connection-dismissals.test.ts",
         "main/services/bot-connection-setup-core.test.ts",
-        "main/services/bot-runtime-tools/suggest-connection.test.ts"
+        "main/services/bot-runtime-tools/suggest-connection.test.ts",
+        "main/services/image-generation/credential-view.test.ts",
+        "main/services/image-generation/replicate-images.test.ts",
+        "main/services/image-generation/fal-images.test.ts",
+        "main/services/image-generation/catalog-fetch.test.ts",
+        "main/services/image-generation/settings-store.test.ts",
+        "main/services/image-generation/runtime.test.ts",
+        "main/handlers/image-generation-parse.test.ts",
+        "renderer/shared/image-generation/catalog.test.ts"
       ],
       "preserved": [
         "browser",

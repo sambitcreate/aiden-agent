@@ -166,6 +166,13 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type {
+  ImageGenerationActionResult,
+  ImageGenerationAddCustomModelRequest,
+  ImageGenerationProviderId,
+  ImageGenerationState,
+  ImageModelRef,
+} from "../shared/image-generation/types";
 import { subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import type {
@@ -420,6 +427,26 @@ export const modelInsightsApi = {
   connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
   refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
+};
+
+/** Settings → Image Generation. Keys go in only; state is redacted. */
+export const imageGenerationApi = {
+  state: () => invoke<ImageGenerationState>("imageGeneration:state"),
+  setKey: (provider: ImageGenerationProviderId, key: string) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setKey", { provider, key }),
+  removeKey: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
+  setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+  setDefaultModel: (model: ImageModelRef | null) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setDefaultModel", model),
+  addCustomModel: (request: ImageGenerationAddCustomModelRequest) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:addCustomModel", request),
+  removeCustomModel: (model: ImageModelRef) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeCustomModel", model),
+  /** User-initiated only: the one network path on this page. */
+  fetchModels: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
 };
 
 export const computerUseApi = {

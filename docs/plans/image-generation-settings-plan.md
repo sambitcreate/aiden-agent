@@ -172,7 +172,7 @@ Shared rules:
 
 1. **Core (main).** Credential view, providers and adapters, catalogs, settings
    store, IPC, preload, `ipc.ts` client, onboarding reset, AGENTS.md network
-   paragraph, tests.
+   paragraph, tests. Done 2026-10-12 (see `.memory/image-generation.md`).
 2. **Consumers (main).** Chat wiring, conversation mode, Create Images port,
    E2E env, tests.
 3. **Renderer.** Settings page, registration, logos component, Create Images
