@@ -212,3 +212,8 @@ export function inferImageModelMaker(providerId: string, modelId: string): strin
   if (providerId === "openrouter" && owner === "openrouter") return "openrouter";
   return undefined;
 }
+
+/** Display name for an OpenRouter model: drops the "Vendor: " prefix, since the maker logo says it. */
+export function openRouterImageModelDisplayName(name: string): string {
+  return name.replace(/^[^:]{1,40}:\s+/u, "").trim() || name;
+}

@@ -4,6 +4,7 @@
 import type { ProviderImages } from "@earendil-works/pi-ai";
 import type { ImageModelAdapter } from "../../../renderer/shared/image-generation/types.js";
 import {
+  base64ByteLength,
   collectImages,
   dataUri,
   downloadImage,
@@ -22,6 +23,7 @@ import {
   requestScope,
   sleep,
   validatedOutput,
+  withPollRetries,
   type AdapterDeps,
   type Fetch,
   type RequestScope,
@@ -32,6 +34,9 @@ export const FAL_QUEUE_ORIGIN = "https://queue.fal.run";
 const PROVIDER = "fal";
 const ENDPOINT = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*){1,5}$/iu;
 const isFalMedia = hostIs("fal.media");
+/** fal takes references inline as data URIs; their decoded total must stay within this. */
+export const FAL_INLINE_REFERENCE_BYTES = 8 * 1024 * 1024;
+export const FAL_REFERENCES_TOO_LARGE = "These reference images are too large for fal; use smaller images.";
 
 type FalAdapter = Extract<ImageModelAdapter, { kind: "fal" }>;
 
@@ -106,6 +111,8 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
           const field = meta.referenceField ?? "image_urls";
           const max = field === "image_url" ? 1 : Math.max(1, meta.maxReferences ?? 4);
           if (references.length > max) throw referenceLimitError(max);
+          const total = references.reduce((sum, image) => sum + base64ByteLength(image.data), 0);
+          if (total > FAL_INLINE_REFERENCE_BYTES) throw new ImageAdapterError(FAL_REFERENCES_TOO_LARGE);
           endpoint = meta.editEndpoint;
           const values = references.map(dataUri);
           body[field] = field === "image_url" ? values[0] : values;
@@ -122,20 +129,23 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
         });
         if (!submitted.ok) throw await httpFailure(submitted, PROVIDER, scope.signal);
         const queued = record(await readJson(submitted, PROVIDER, scope.signal));
+        cancelUrl = queueUrl(queued?.cancel_url);
         const statusUrl = queueUrl(queued?.status_url);
         const responseUrl = queueUrl(queued?.response_url);
-        cancelUrl = queueUrl(queued?.cancel_url);
         if (typeof queued?.request_id === "string") result.responseId = queued.request_id.slice(0, 128);
 
+        const activeScope = scope;
         for (;;) {
-          const polled = await scope.fetch(statusUrl, {
-            method: "GET",
-            headers: auth,
-            redirect: "error",
-            signal: scope.signal,
+          const status = await withPollRetries(activeScope, pollIntervalMs, async () => {
+            const polled = await activeScope.fetch(statusUrl, {
+              method: "GET",
+              headers: auth,
+              redirect: "error",
+              signal: activeScope.signal,
+            });
+            if (!polled.ok) throw await httpFailure(polled, PROVIDER, activeScope.signal);
+            return record(await readJson(polled, PROVIDER, activeScope.signal))?.status;
           });
-          if (!polled.ok) throw await httpFailure(polled, PROVIDER, scope.signal);
-          const status = record(await readJson(polled, PROVIDER, scope.signal))?.status;
           if (status === "COMPLETED") break;
           if (status !== "IN_QUEUE" && status !== "IN_PROGRESS") {
             throw new ImageAdapterError("fal returned an unexpected status.");
@@ -144,17 +154,19 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
         }
         cancelUrl = undefined;
 
-        const finished = await scope.fetch(responseUrl, {
-          method: "GET",
-          headers: auth,
-          redirect: "error",
-          signal: scope.signal,
+        const finished = await withPollRetries(activeScope, pollIntervalMs, async () => {
+          const response = await activeScope.fetch(responseUrl, {
+            method: "GET",
+            headers: auth,
+            redirect: "error",
+            signal: activeScope.signal,
+          });
+          if (!response.ok) throw await httpFailure(response, PROVIDER, activeScope.signal);
+          return response;
         });
-        if (!finished.ok) throw await httpFailure(finished, PROVIDER, scope.signal);
         // sync_mode returns images inline, so allow the 8 MiB output budget plus base64 overhead.
         const payload = await readJson(finished, PROVIDER, scope.signal, 12 * 1024 * 1024);
 
-        const activeScope = scope;
         const images = await collectImages(outputSources(payload), (source) =>
           source.startsWith("data:")
             ? Promise.resolve(imageFromDataUri(source, PROVIDER))
@@ -168,7 +180,8 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
         result.output = validatedOutput(images, PROVIDER);
         return result;
       } catch (error) {
-        if (cancelUrl && key && scope?.signal.aborted) await cancelRequest(scope.fetch, key, cancelUrl);
+        // A submitted, unfinished request keeps billing until cancelled.
+        if (cancelUrl && key && scope) await cancelRequest(scope.fetch, key, cancelUrl);
         return failureResult(result, error, PROVIDER, scope, key);
       }
     },

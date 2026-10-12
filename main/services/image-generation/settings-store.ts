@@ -42,7 +42,8 @@ const OPENROUTER_ID = /^[a-z0-9][a-z0-9._:-]*\/[a-z0-9][a-z0-9._:-]*$/iu;
 const REPLICATE_ID = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/iu;
 const MAKER = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 const INPUT_KEY = /^[a-z_][a-z0-9_]{0,63}$/u;
-const MAX_ENABLED_CHOICES = 2000;
+export const REPLICATE_VERSION_ID = /^[a-z0-9]{1,128}$/iu;
+export const MAX_ENABLED_CHOICES = 2000;
 const MAX_FIXED_INPUTS = 16;
 
 export function isValidImageModelId(provider: ImageGenerationProviderId, id: string): boolean {
@@ -98,10 +99,13 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
         input[key] = entry as string | number | boolean;
       }
     }
+    const version = adapter.version;
+    if (version !== undefined && (typeof version !== "string" || !REPLICATE_VERSION_ID.test(version))) fail();
     return {
       kind: "replicate",
       ...(field ? { referenceField: field as ReplicateReferenceField, ...(max ? { maxReferences: max } : {}) } : {}),
       ...(input ? { input } : {}),
+      ...(typeof version === "string" ? { version } : {}),
     };
   }
   if (adapter.textEndpoint !== id) fail();
@@ -226,7 +230,8 @@ export function createImageGenerationSettingsStore(root?: () => string): ImageGe
       return store.update((draft) => {
         mutate(draft);
         // Re-validate so a buggy mutation can never persist an invalid document.
-        const next = normalizeImageGenerationSettings(structuredClone(draft));
+        // Normalizing only reads the draft and builds a fresh document.
+        const next = normalizeImageGenerationSettings(draft);
         Object.assign(draft, next);
         return structuredClone(next);
       });

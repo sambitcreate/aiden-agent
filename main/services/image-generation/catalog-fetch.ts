@@ -3,7 +3,10 @@
 // here runs on startup, in the background, or during onboarding.
 
 import { readBoundedBody } from "../../shared/bounded-body.js";
-import { inferImageModelMaker } from "../../../renderer/shared/image-generation/catalog.js";
+import {
+  inferImageModelMaker,
+  openRouterImageModelDisplayName,
+} from "../../../renderer/shared/image-generation/catalog.js";
 import {
   IMAGE_GENERATION_LIMITS,
   REPLICATE_REFERENCE_FIELDS,
@@ -13,6 +16,7 @@ import {
   type ReplicateReferenceField,
 } from "../../../renderer/shared/image-generation/types.js";
 import { isFalEndpointId } from "./fal-images.js";
+import { REPLICATE_VERSION_ID } from "./settings-store.js";
 
 type Fetch = typeof fetch;
 
@@ -65,6 +69,18 @@ function humanize(slug: string): string {
     .slice(0, MAX_NAME);
 }
 
+/** The whole user-pressed fetch (every page) must finish within this. */
+export const IMAGE_CATALOG_FETCH_TIMEOUT_MS = 30_000;
+
+function stopped(provider: string, signal: AbortSignal | undefined): CatalogFetchError {
+  const reason: unknown = signal?.reason;
+  const timedOut = reason instanceof Error && reason.name === "TimeoutError";
+  return new CatalogFetchError(
+    "network_error",
+    timedOut ? `${provider} took too long to list its models. Try again.` : "Fetching models was cancelled.",
+  );
+}
+
 function invalid(provider: string): CatalogFetchError {
   return new CatalogFetchError("invalid_catalog", `${provider} returned a model list Aiden can't read.`);
 }
@@ -85,7 +101,7 @@ async function getJson(
       signal,
     });
   } catch {
-    if (signal?.aborted) throw new CatalogFetchError("network_error", "Fetching models was cancelled.");
+    if (signal?.aborted) throw stopped(provider, signal);
     throw new CatalogFetchError("network_error", `Aiden couldn't reach ${provider}.`);
   }
   if (response.status === 401 || response.status === 403) {
@@ -103,10 +119,11 @@ async function getJson(
       tooLarge: () => new CatalogFetchError("invalid_catalog", `${provider} returned an oversized model list.`),
       missingBody: () => invalid(provider),
       invalidChunk: () => invalid(provider),
-      aborted: () => new CatalogFetchError("network_error", "Fetching models was cancelled."),
+      aborted: () => stopped(provider, signal),
     },
   }).catch((error: unknown) => {
     if (error instanceof CatalogFetchError) throw error;
+    if (signal?.aborted) throw stopped(provider, signal);
     throw new CatalogFetchError("network_error", `Aiden couldn't reach ${provider}.`);
   });
   try {
@@ -138,7 +155,7 @@ export function parseOpenRouterImageModels(value: unknown): ImageCatalogEntry[] 
     models.push({
       provider: "openrouter",
       id,
-      name: cleanName(entry?.name, id),
+      name: openRouterImageModelDisplayName(cleanName(entry?.name, id)),
       ...(maker ? { maker } : {}),
       acceptsReferenceImages: input.includes("image"),
       adapter: { kind: "openrouter", textOutput: output.includes("text") },
@@ -320,9 +337,10 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
     const name = typeof model?.name === "string" ? model.name : "";
     if (!REPLICATE_SEGMENT.test(owner) || !REPLICATE_SEGMENT.test(name)) continue;
     const id = `${owner}/${name}`;
-    if (seen.has(id)) continue;
-    const schema = record(model?.latest_version)?.openapi_schema;
-    const reference = replicateReferenceField(schema);
+    if (id.length > MAX_ID || seen.has(id)) continue;
+    const latest = record(model?.latest_version);
+    const version = typeof latest?.id === "string" && REPLICATE_VERSION_ID.test(latest.id) ? latest.id : undefined;
+    const reference = replicateReferenceField(latest?.openapi_schema);
     seen.add(id);
     const maker = inferImageModelMaker("replicate", id);
     entries.push({
@@ -334,6 +352,8 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
       adapter: {
         kind: "replicate",
         ...(reference ? { referenceField: reference.field, maxReferences: reference.max } : {}),
+        // Community models only run by version, so keep the one the schema came from.
+        ...(version ? { version } : {}),
       },
     });
   }

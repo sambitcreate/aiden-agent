@@ -27,6 +27,7 @@ import {
   requestScope,
   sleep,
   validatedOutput,
+  withPollRetries,
   type AdapterDeps,
   type Fetch,
   type RequestScope,
@@ -39,6 +40,8 @@ const PROVIDER = "Replicate";
 export const REPLICATE_INLINE_REFERENCE_BYTES = 256 * 1024;
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/iu;
 const PREDICTION_ID = /^[a-z0-9]{1,64}$/iu;
+const VERSION_ID = /^[a-z0-9]{1,128}$/iu;
+const TERMINAL = new Set(["succeeded", "failed", "canceled", "aborted"]);
 const isReplicateDelivery = hostIs("replicate.delivery");
 
 type ReplicateAdapter = Extract<ImageModelAdapter, { kind: "replicate" }>;
@@ -111,6 +114,21 @@ async function referenceValue(image: ImageContent, key: string, scope: RequestSc
     : uploadReference(image, key, scope);
 }
 
+async function latestVersion(modelPath: string, key: string, scope: RequestScope): Promise<string> {
+  const response = await scope.fetch(modelPath, {
+    method: "GET",
+    headers: { authorization: `Bearer ${key}` },
+    redirect: "error",
+    signal: scope.signal,
+  });
+  if (!response.ok) throw await httpFailure(response, PROVIDER, scope.signal);
+  const version = record(record(await readJson(response, PROVIDER, scope.signal))?.latest_version)?.id;
+  if (typeof version !== "string" || !VERSION_ID.test(version)) {
+    throw new ImageAdapterError("Replicate doesn't have a runnable version of this model.");
+  }
+  return version;
+}
+
 async function cancelPrediction(fetchImpl: Fetch, key: string, id: string): Promise<void> {
   try {
     const response = await fetchImpl(`${REPLICATE_API_BASE}/predictions/${id}/cancel`, {
@@ -156,38 +174,61 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
         }
 
         const [owner, name] = model.id.split("/") as [string, string];
-        const created = await scope.fetch(
-          `${REPLICATE_API_BASE}/models/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/predictions`,
-          {
+        const activeKey = key;
+        const activeScope = scope;
+        const modelPath = `${REPLICATE_API_BASE}/models/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+        const create = (url: string, body: Record<string, unknown>) =>
+          activeScope.fetch(url, {
             method: "POST",
             headers: {
-              authorization: `Bearer ${key}`,
+              authorization: `Bearer ${activeKey}`,
               "content-type": "application/json",
               prefer: "wait=60",
             },
-            body: JSON.stringify({ input }),
+            body: JSON.stringify(body),
             redirect: "error",
-            signal: scope.signal,
-          },
-        );
+            signal: activeScope.signal,
+          });
+        const createByVersion = (version: string) => create(`${REPLICATE_API_BASE}/predictions`, { version, input });
+
+        let created: Response;
+        if (meta.version && VERSION_ID.test(meta.version)) {
+          created = await createByVersion(meta.version);
+        } else {
+          created = await create(`${modelPath}/predictions`, { input });
+          // Only official models run by name; a community model needs its version.
+          if (created.status === 404) {
+            await created.body?.cancel().catch(() => undefined);
+            const version = await latestVersion(modelPath, activeKey, activeScope);
+            created = await createByVersion(version);
+          }
+        }
         if (!created.ok) throw await httpFailure(created, PROVIDER, scope.signal);
         let prediction = parsePrediction(await readJson(created, PROVIDER, scope.signal));
         predictionId = prediction.id;
         result.responseId = prediction.id;
 
-        while (prediction.status === "starting" || prediction.status === "processing") {
+        while (!TERMINAL.has(prediction.status)) {
+          if (prediction.status !== "starting" && prediction.status !== "processing") {
+            throw new ImageAdapterError("Replicate returned an unexpected status.");
+          }
           await sleep(pollIntervalMs, scope.signal);
-          const polled = await scope.fetch(`${REPLICATE_API_BASE}/predictions/${prediction.id}`, {
-            method: "GET",
-            headers: { authorization: `Bearer ${key}` },
-            redirect: "error",
-            signal: scope.signal,
+          const current = prediction;
+          prediction = await withPollRetries(activeScope, pollIntervalMs, async () => {
+            const polled = await activeScope.fetch(`${REPLICATE_API_BASE}/predictions/${current.id}`, {
+              method: "GET",
+              headers: { authorization: `Bearer ${activeKey}` },
+              redirect: "error",
+              signal: activeScope.signal,
+            });
+            if (!polled.ok) throw await httpFailure(polled, PROVIDER, activeScope.signal);
+            const next = parsePrediction(await readJson(polled, PROVIDER, activeScope.signal));
+            if (next.id !== current.id) throw new ImageAdapterError("Replicate returned an unexpected prediction.");
+            return next;
           });
-          if (!polled.ok) throw await httpFailure(polled, PROVIDER, scope.signal);
-          const next = parsePrediction(await readJson(polled, PROVIDER, scope.signal));
-          if (next.id !== prediction.id) throw new ImageAdapterError("Replicate returned an unexpected prediction.");
-          prediction = next;
         }
+        // A finished prediction has nothing left to cancel.
+        predictionId = undefined;
 
         if (prediction.status === "failed") {
           const detail = providerDetail(prediction.error);
@@ -195,11 +236,9 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
             detail ? `Replicate couldn't generate this image: ${detail}` : "Replicate couldn't generate this image.",
           );
         }
-        if (prediction.status === "canceled") throw new ImageAdapterError("Replicate cancelled this prediction.");
-        if (prediction.status !== "succeeded") throw new ImageAdapterError("Replicate returned an unexpected status.");
-        predictionId = undefined;
-
-        const activeScope = scope;
+        if (prediction.status === "canceled" || prediction.status === "aborted") {
+          throw new ImageAdapterError("Replicate cancelled this prediction.");
+        }
         const images = await collectImages(outputSources(prediction.output), (source) =>
           source.startsWith("data:")
             ? Promise.resolve(imageFromDataUri(source, PROVIDER))
@@ -213,7 +252,8 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
         result.output = validatedOutput(images, PROVIDER);
         return result;
       } catch (error) {
-        if (predictionId && key && scope?.signal.aborted) await cancelPrediction(scope.fetch, key, predictionId);
+        // A submitted, unfinished prediction keeps billing until cancelled.
+        if (predictionId && key && scope) await cancelPrediction(scope.fetch, key, predictionId);
         return failureResult(result, error, PROVIDER, scope, key);
       }
     },

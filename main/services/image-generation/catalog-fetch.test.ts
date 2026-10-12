@@ -7,8 +7,10 @@ import {
   fetchReplicateImageModels,
   pairFalModels,
   parseOpenRouterImageModels,
+  parseReplicateCollection,
   replicateReferenceField,
 } from "./catalog-fetch.js";
+import { normalizeImageGenerationSettings } from "./settings-store.js";
 import { fakeFetch, json } from "./test-support.js";
 
 const openRouterFixture = {
@@ -33,10 +35,16 @@ const openRouterFixture = {
 test("OpenRouter's list keeps image-output models with their reference support", () => {
   const models = parseOpenRouterImageModels(openRouterFixture);
   assert.deepEqual(
-    models.map((model) => [model.id, model.acceptsReferenceImages, model.maker, model.adapter]),
+    models.map((model) => [model.id, model.name, model.acceptsReferenceImages, model.maker, model.adapter]),
     [
-      ["google/gemini-nano-banana-2.1", true, "google", { kind: "openrouter", textOutput: true }],
-      ["black-forest-labs/flux.2-pro", false, "black-forest-labs", { kind: "openrouter", textOutput: false }],
+      ["google/gemini-nano-banana-2.1", "Nano Banana 2.1", true, "google", { kind: "openrouter", textOutput: true }],
+      [
+        "black-forest-labs/flux.2-pro",
+        "FLUX.2 Pro",
+        false,
+        "black-forest-labs",
+        { kind: "openrouter", textOutput: false },
+      ],
     ],
   );
   assert.throws(() => parseOpenRouterImageModels({ models: [] }), CatalogFetchError);
@@ -196,4 +204,50 @@ test("the Replicate collection needs a key and parses owner/name models", async 
   await assert.rejects(fetchReplicateImageModels(rejected.fetch, "r8_key_value"), (error: unknown) =>
     error instanceof CatalogFetchError && error.code === "rejected_key",
   );
+});
+
+test("Replicate collection entries keep the latest version and skip ids over the stored limit", () => {
+  const version = "a".repeat(64);
+  const models = parseReplicateCollection({
+    models: [
+      { owner: "someone", name: "community-art", latest_version: { id: version } },
+      { owner: "o".repeat(100), name: "n".repeat(100), latest_version: { id: version } },
+      { owner: "someone", name: "odd-version", latest_version: { id: "not a version!" } },
+    ],
+  });
+  assert.deepEqual(
+    models.map((model) => [model.id, model.adapter]),
+    [
+      ["someone/community-art", { kind: "replicate", version }],
+      ["someone/odd-version", { kind: "replicate" }],
+    ],
+  );
+  // Every parsed entry is storable as a fetched list.
+  assert.doesNotThrow(() =>
+    normalizeImageGenerationSettings({ version: 1, fetched: { replicate: { fetchedAt: 1, models } } }),
+  );
+});
+
+test("a catalog fetch that runs past its deadline fails with a timed-out message", async () => {
+  const { fetch } = fakeFetch(
+    (_request, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }),
+  );
+  // AbortSignal.timeout does not hold the event loop open by itself.
+  const keepAlive = setTimeout(() => undefined, 5_000);
+  try {
+    await assert.rejects(fetchOpenRouterImageModels(fetch, AbortSignal.timeout(20)), (error: unknown) =>
+      error instanceof CatalogFetchError &&
+      error.code === "network_error" &&
+      /took too long/u.test(error.message),
+    );
+    const controller = new AbortController();
+    const cancelled = fetchOpenRouterImageModels(fetch, controller.signal);
+    controller.abort();
+    await assert.rejects(cancelled, /cancelled/u);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });

@@ -48,6 +48,11 @@ export type ImageModelAdapter =
       maxReferences?: number;
       /** Extra fixed inputs sent with every prediction. */
       input?: Readonly<Record<string, string | number | boolean>>;
+      /**
+       * A pinned model version (from a fetched collection). Community models
+       * can only be run through `POST /v1/predictions` with a version.
+       */
+      version?: string;
     }
   | {
       kind: "fal";
@@ -106,6 +111,16 @@ export interface ImageGenerationState {
   models: ImageGenerationModelView[];
   /** The stored default, kept even while it is disabled or its key is missing. */
   defaultModel: ImageModelRef | null;
+}
+
+/**
+ * What chat and Create Images need to know without reading credentials:
+ * whether any image model can run, and the one to preselect. `name` is safe
+ * for a system prompt (the curated name, otherwise the model id).
+ */
+export interface ImageGenerationSnapshot {
+  available: boolean;
+  defaultModel?: { provider: ImageGenerationProviderId; id: string; name: string };
 }
 
 // ---- IPC requests (renderer → main) ----

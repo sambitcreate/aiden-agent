@@ -26,7 +26,11 @@ const MAX_ERROR_DETAIL = 300;
 
 /** An error whose message is safe to show the user (never carries a key). */
 export class ImageAdapterError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** A retry of the same idempotent read may succeed (429, 5xx, garbled body). */
+    readonly transient = false,
+  ) {
     super(message);
     this.name = "ImageAdapterError";
   }
@@ -40,6 +44,8 @@ export interface AdapterDeps {
 
 export interface RequestScope {
   signal: AbortSignal;
+  /** The overall time limit in milliseconds. */
+  limitMs: number;
   /** True when the caller aborted (as opposed to the overall time limit). */
   callerAborted(): boolean;
   fetch: Fetch;
@@ -54,6 +60,7 @@ export function requestScope(options: ImagesOptions | undefined, deps: AdapterDe
   const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   return {
     signal,
+    limitMs: limit,
     callerAborted: () => options?.signal?.aborted === true,
     fetch: options?.fetch ?? deps.fetch ?? globalThis.fetch,
   };
@@ -140,14 +147,14 @@ export async function readJson(
     signal,
     errors: {
       tooLarge: () => new ImageAdapterError(`${provider} returned an oversized response.`),
-      missingBody: () => new ImageAdapterError(`${provider} returned an empty response.`),
-      invalidChunk: () => new ImageAdapterError(`${provider} returned an unreadable response.`),
+      missingBody: () => new ImageAdapterError(`${provider} returned an empty response.`, true),
+      invalidChunk: () => new ImageAdapterError(`${provider} returned an unreadable response.`, true),
     },
   });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {
-    throw new ImageAdapterError(`${provider} returned an unreadable response.`);
+    throw new ImageAdapterError(`${provider} returned an unreadable response.`, true);
   }
 }
 
@@ -191,11 +198,36 @@ export async function httpFailure(response: Response, provider: string, signal: 
   if (status === 402) {
     return new ImageAdapterError(`${provider} needs billing set up or more credit on this account.`);
   }
-  if (status === 429) return new ImageAdapterError(`${provider} is rate limiting requests. Try again shortly.`);
+  if (status === 429) return new ImageAdapterError(`${provider} is rate limiting requests. Try again shortly.`, true);
   if (status === 404) return new ImageAdapterError(`${provider} doesn't have this model.`);
   const suffix = detail ? `: ${detail}` : ".";
   if (status >= 400 && status < 500) return new ImageAdapterError(`${provider} rejected the request${suffix}`);
-  return new ImageAdapterError(`${provider} had a problem (${status})${suffix}`);
+  return new ImageAdapterError(`${provider} had a problem (${status})${suffix}`, status >= 500);
+}
+
+/** Consecutive transient failures tolerated while polling one queued job. */
+export const MAX_POLL_RETRIES = 6;
+const MAX_POLL_BACKOFF_MS = 15_000;
+
+/**
+ * Run one idempotent poll read, retrying transient failures (429, 5xx,
+ * network errors, unreadable bodies) with exponential backoff inside the
+ * request's overall time budget.
+ */
+export async function withPollRetries<T>(
+  scope: RequestScope,
+  baseDelayMs: number,
+  attempt: () => Promise<T>,
+): Promise<T> {
+  for (let failures = 0; ; failures += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      const transient = error instanceof ImageAdapterError ? error.transient : true;
+      if (scope.signal.aborted || !transient || failures >= MAX_POLL_RETRIES) throw error;
+      await sleep(Math.min(Math.max(1, baseDelayMs) * 2 ** failures, MAX_POLL_BACKOFF_MS), scope.signal);
+    }
+  }
 }
 
 /**
@@ -275,6 +307,15 @@ export function validatedOutput(images: ImageContent[], provider: string): Image
   }
 }
 
+export function durationLabel(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) {
+    const minutes = ms / 60_000;
+    return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return seconds === 1 ? "1 second" : `${seconds} seconds`;
+}
+
 /** Turn any failure into the never-reject error shape. */
 export function failureResult(
   result: AssistantImages,
@@ -291,7 +332,7 @@ export function failureResult(
   }
   result.stopReason = "error";
   if (scope?.signal.aborted) {
-    result.errorMessage = `${provider} took longer than 5 minutes.`;
+    result.errorMessage = `${provider} took longer than ${durationLabel(scope.limitMs)}.`;
   } else if (error instanceof ImageAdapterError) {
     // Provider details are echoed only after the key is scrubbed from them.
     result.errorMessage = key && key.length >= 4 ? error.message.split(key).join("[redacted]") : error.message;
