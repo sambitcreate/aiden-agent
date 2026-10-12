@@ -28,6 +28,7 @@ import type {
   ChatPullRequestDetectResult,
   ChatPullRequestLinkResult,
   ChatPullRequestListResult,
+  ChatSidebarPullRequests,
 } from "../../renderer/shared/chat-pull-requests.js";
 import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { GitHubPullRequestService } from "./github-pull-request.js";
@@ -287,6 +288,37 @@ export class ChatPullRequestService {
       ...(message ? { message } : {}),
       ...(rateLimitedUntil !== undefined ? { rateLimitedUntil } : {}),
     };
+  }
+
+  /**
+   * The linked PR each sidebar row shows, plus the refs each chat dismissed,
+   * read from local stores only. Never contacts GitHub, so the sidebar can ask
+   * for every listed chat at once; chats with neither are omitted.
+   */
+  async sidebar(
+    chatIds: readonly string[],
+  ): Promise<Record<string, ChatSidebarPullRequests>> {
+    const entries = await Promise.all(
+      chatIds.map(async (chatId) => {
+        // A chat deleted while the sidebar asked has no store; it simply shows nothing.
+        const [links, dismissed] = await Promise.all([
+          this.deps.store.list(chatId).catch(() => []),
+          this.deps.store.listDismissed(chatId).catch(() => []),
+        ]);
+        return [
+          chatId,
+          resolveCurrentPullRequest(links, {}).pullRequest,
+          dismissed.map(pullRequestRefKey),
+        ] as const;
+      }),
+    );
+    const result: Record<string, ChatSidebarPullRequests> = {};
+    for (const [chatId, pullRequest, dismissed] of entries) {
+      if (pullRequest || dismissed.length > 0) {
+        result[chatId] = { ...(pullRequest ? { pullRequest } : {}), dismissed };
+      }
+    }
+    return result;
   }
 
   /** Link a pull request by pasted URL — canonical identity comes from GitHub. */

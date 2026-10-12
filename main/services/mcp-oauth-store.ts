@@ -8,7 +8,11 @@ import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { secureStorage } from "./secure-storage.js";
-import { parseMcpOAuthSession, type McpOAuthSession } from "./mcp-oauth-session.js";
+import {
+  parseMcpOAuthSession,
+  sameMcpOAuthGrant,
+  type McpOAuthSession,
+} from "./mcp-oauth-session.js";
 import {
   deleteSecretKeyEntry,
   parseSecretKeyMap,
@@ -42,10 +46,34 @@ async function readMap(): Promise<SessionMap> {
   }
 }
 
+/**
+ * Fence Bot runtime authority only for grant changes. A routine token refresh
+ * rewrites this file (often in the middle of a Bot's own catalog snapshot,
+ * which opens fresh MCP clients); invalidating then would abort the very Bot
+ * create or turn admission that caused the refresh.
+ */
+function fenceBotAuthority(grantChanged: boolean): void {
+  if (grantChanged) invalidateBotRuntimeInventoryAuthority("mcp_credential");
+}
+
+/** Decrypt a stored entry for grant comparison; unreadable means "changed". */
+function storedSession(map: SessionMap, serverId: string): McpOAuthSession | undefined {
+  const b64 = secretKeyEntry(map, serverId);
+  if (!b64) return {};
+  try {
+    return parseMcpOAuthSession(
+      JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64"))),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 async function writeMap(
   map: SessionMap,
   previousMap: SessionMap,
   isCurrent: MutationGuard = () => true,
+  grantChanged = true,
 ): Promise<void> {
   const target = await filePath();
   const temporary = `${target}.${randomUUID()}.tmp`;
@@ -69,16 +97,16 @@ async function writeMap(
     await commitOwnedMutation({
       isCurrent,
       publish: async () => {
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.rename(temporary, target);
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },
       rollback: async () => {
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.rename(rollback, target);
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },
@@ -147,8 +175,10 @@ export const mcpOAuthStore = {
       const map = await readMap();
       const previousMap = { ...map };
       assertMutationCurrent(isCurrent);
+      const previous = storedSession(map, serverId);
+      const grantChanged = previous === undefined || !sameMcpOAuthGrant(previous, session);
       setSecretKeyEntry(map, serverId, Buffer.from(encrypted).toString("base64"));
-      await writeMap(map, previousMap, isCurrent);
+      await writeMap(map, previousMap, isCurrent, grantChanged);
     });
   },
 

@@ -16,7 +16,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
 import sbtbiswas.AidenOnTheGo.models.AidenChatMessagesWindow
 import sbtbiswas.AidenOnTheGo.models.AidenServer
 
-/** Revision 27 inline visuals against the shared contract fixture, through the client's wire codec. */
+/** Revision 28 inline visuals against the shared contract fixture, through the client's wire codec. */
 class AidenChatVisualsContractTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 

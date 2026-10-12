@@ -10,7 +10,7 @@
 // Exact joins (MCP tools, skills) are computed on demand from a fresh catalog,
 // so a connection or skill whose fingerprint changed is refused at call time.
 
-import { ASSISTANT_AUTOMATION_TOOL_NAME } from "../../../renderer/shared/assistant.js";
+import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
@@ -24,7 +24,9 @@ import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const SUBAGENT_TOOL = "subagent";
-export const ROUTINE_TOOL = ASSISTANT_AUTOMATION_TOOL_NAME;
+export const ROUTINE_TOOL = BOT_ROUTINES_TOOL_NAME;
+/** Per-routine notepad (`bot-routine-notes.ts`); offered only to routine runs. */
+export const ROUTINE_NOTES_TOOL = "routine_notes";
 
 /** Everything the policy needs about one Bot, read fresh for each decision. */
 export interface BotToolFacts {
@@ -67,6 +69,11 @@ const UNATTENDED_WITHHELD = new Set<string>([ASK_USER_QUESTION_TOOL_NAME, ROUTIN
  * (a steer joined it) may use a tool only when every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  // A routine's notepad belongs to routine runs alone: a person's turn, or a
+  // run a person's message joined, never sees it.
+  if (name === ROUTINE_NOTES_TOOL) {
+    return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine);
+  }
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
     if (turn.intro) return false;
@@ -106,6 +113,8 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
     return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
+  // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
+  if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
   if ((await facts.skillToolNames()).has(name)) return { allowed: true };
   if ((await facts.mcpTools()).has(name)) return { allowed: true };
   return { allowed: false, reason: "This tool is not available to this Bot." };

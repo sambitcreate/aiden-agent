@@ -6,7 +6,7 @@ import {
   AIDEN_REMOTE_MAX_SPEECH_SECONDS,
   AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES,
   AIDEN_REMOTE_SPEECH_SAMPLE_RATE,
-  decodeAidenRemotePcm16,
+  decodeAidenRemotePcm16ToInt16,
 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
 import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
@@ -16,7 +16,9 @@ test("speech service DI preserves selection, wire bounds and serialized model li
   let installed = false, selected = "", calls = 0, released = false;
   const service = new AidenRemoteSpeechServiceCore({
     configStore: { getSettings: async () => ({ localVoiceModel: selected }), setSettings: async (patch) => { selected = patch.localVoiceModel ?? ""; } },
-    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed }],
+    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed,
+      languages: ["en"], capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+      license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" } }],
     localModelDownloadStates: () => [],
     downloadModel: async () => { installed = true; }, cancelDownload: () => false,
     deleteModel: async () => { assert.equal(released, true); installed = false; },
@@ -42,13 +44,11 @@ test("remote speech PCM codec validates base64 and converts signed little-endian
   bytes.writeInt16LE(-32_768, 0);
   bytes.writeInt16LE(0, 2);
   bytes.writeInt16LE(32_767, 4);
-  const samples = decodeAidenRemotePcm16(bytes.toString("base64"));
-  assert.equal(samples.length, 3);
-  assert.equal(samples[0], -1);
-  assert.equal(samples[1], 0);
-  assert.ok(samples[2]! > 0.999);
-  assert.throws(() => decodeAidenRemotePcm16("not base64"), /valid base64/u);
-  assert.throws(() => decodeAidenRemotePcm16(Buffer.from([1]).toString("base64")), /16-bit mono/u);
+  const samples = decodeAidenRemotePcm16ToInt16(bytes.toString("base64"));
+  assert.ok(samples instanceof Int16Array);
+  assert.deepEqual(Array.from(samples), [-32_768, 0, 32_767]);
+  assert.throws(() => decodeAidenRemotePcm16ToInt16("not base64"), /valid base64/u);
+  assert.throws(() => decodeAidenRemotePcm16ToInt16(Buffer.from([1]).toString("base64")), /16-bit mono/u);
 });
 
 test("remote speech accepts the advertised 60-second PCM limit and rejects the next sample", () => {
@@ -59,9 +59,9 @@ test("remote speech accepts the advertised 60-second PCM limit and rejects the n
     AIDEN_REMOTE_SPEECH_SAMPLE_RATE * 2 * AIDEN_REMOTE_MAX_SPEECH_SECONDS,
   );
   assert.equal(maximumBase64.length, AIDEN_REMOTE_MAX_PCM16_BASE64_LENGTH);
-  assert.equal(decodeAidenRemotePcm16(maximumBase64).length, AIDEN_REMOTE_MAX_PCM16_BYTES / 2);
+  assert.equal(decodeAidenRemotePcm16ToInt16(maximumBase64).length, AIDEN_REMOTE_MAX_PCM16_BYTES / 2);
   assert.throws(
-    () => decodeAidenRemotePcm16(Buffer.alloc(AIDEN_REMOTE_MAX_PCM16_BYTES + 2).toString("base64")),
+    () => decodeAidenRemotePcm16ToInt16(Buffer.alloc(AIDEN_REMOTE_MAX_PCM16_BYTES + 2).toString("base64")),
     (error: unknown) =>
       typeof error === "object"
       && error !== null
@@ -144,4 +144,85 @@ test("a failed asynchronous Mac transcript preserves its original error when usa
     (error: unknown) => error === inferenceError,
   );
   assert.equal(usageWrites, 1);
+});
+
+test("remote speech status lists the pinned catalog with capabilities and passes a verify phase through", async (t) => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { createSpeechModelManager } = await import("./local-speech-downloads.js");
+  const root = mkdtempSync(path.join(tmpdir(), "aiden-remote-speech-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // The real catalog manager, so the projection is checked against what the
+  // desktop actually lists; nothing is downloaded.
+  const manager = createSpeechModelManager({ root: () => root, fetchImpl: () => Promise.reject(new Error("no network in tests")) });
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: "" }), setSettings: async () => {} },
+    listModels: manager.listModels,
+    localModelDownloadStates: () => [{ id: "whisper-turbo", percentage: 100, phase: "verify", status: "downloading" }],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => "", recordUsage: async () => {},
+  });
+
+  const status = await service.status();
+  assert.deepEqual(
+    status.models.map((model) => model.id),
+    ["parakeet-v3", "parakeet-v2", "canary-180m-flash", "whisper-turbo", "sense-voice", "moonshine-base-en"],
+  );
+  for (const model of status.models) {
+    assert.ok(model.languages.length > 0, `${model.id} languages`);
+    assert.equal(typeof model.capabilities.translateToEnglish, "boolean", `${model.id} capabilities`);
+    assert.match(model.license.url, /^https:\/\//u, `${model.id} license`);
+    assert.equal(model.installed, false);
+  }
+  assert.equal(status.models[0]!.sizeLabel, "487 MB");
+  assert.deepEqual(status.models.find((model) => model.id === "canary-180m-flash")!.capabilities, {
+    autoDetect: false, languageHint: true, translateToEnglish: true, maxWindowSeconds: null,
+  });
+  assert.deepEqual(status.models.find((model) => model.id === "whisper-turbo")!.download, {
+    id: "whisper-turbo", percentage: 100, phase: "verify", status: "downloading",
+  });
+  assert.equal(status.models.find((model) => model.id === "parakeet-v3")!.download, undefined);
+
+  // The normative contract must accept what the desktop actually serves, and
+  // the shared fixture the native clients decode.
+  const { readFile } = await import("node:fs/promises");
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const protocolDir = new URL("../../protocol/aiden-remote/v1/", import.meta.url);
+  const spec = JSON.parse(await readFile(new URL("openapi.json", protocolDir), "utf8")) as { components: object };
+  const fixture = JSON.parse(await readFile(new URL("fixtures/contract.json", protocolDir), "utf8")) as { speechStatus: unknown };
+  const validate = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/SpeechStatus", components: spec.components });
+  assert.equal(validate(status), true, JSON.stringify(validate.errors));
+  assert.equal(validate(fixture.speechStatus), true, JSON.stringify(validate.errors));
+});
+
+test("remote speech status reports the model Automatic actually uses", async () => {
+  const model = (id: string, installed: boolean) => ({
+    id, name: id, description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: false, installed,
+    languages: ["en"], capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+    license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" },
+  });
+  let selected = "";
+  let models = [model("parakeet-v3", false), model("whisper-turbo", true)];
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: selected }), setSettings: async () => {} },
+    listModels: () => models,
+    localModelDownloadStates: () => [],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => "", recordUsage: async () => {},
+  });
+
+  // No explicit choice: dictation falls back to the installed model.
+  assert.equal((await service.status()).selectedModelId, "whisper-turbo");
+  // A stale choice that is no longer installed is not what dictation uses.
+  selected = "parakeet-v3";
+  assert.equal((await service.status()).selectedModelId, "whisper-turbo");
+  // An installed explicit choice wins.
+  models = [model("parakeet-v3", true), model("whisper-turbo", true)];
+  assert.equal((await service.status()).selectedModelId, "parakeet-v3");
+  // Nothing installed: nothing selected.
+  models = [model("parakeet-v3", false)];
+  assert.equal((await service.status()).selectedModelId, null);
 });

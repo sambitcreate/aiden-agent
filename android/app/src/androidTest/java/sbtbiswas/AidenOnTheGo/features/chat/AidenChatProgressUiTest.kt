@@ -1,14 +1,14 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.activity.ComponentDialog
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.test.espresso.Espresso
-import androidx.test.espresso.action.ViewActions
-import androidx.test.espresso.matcher.RootMatchers
-import androidx.test.espresso.matcher.ViewMatchers
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithText
@@ -39,13 +39,22 @@ class AidenChatProgressUiTest {
     val compose = createComposeRule()
 
     /**
-     * Back goes to the roster sheet's own dialog window. `Espresso.pressBack()`
-     * picks a root by focus, and right after a state restore it can pick the
-     * activity window while the recreated sheet window holds focus, then time
-     * out waiting for the activity to regain it.
+     * Presses Back on the roster sheet the way the system delivers it. The app
+     * opts into OnBackInvokedCallback, so system Back reaches the sheet's
+     * ComponentDialog through its OnBackPressedDispatcher, where both the
+     * detail BackHandler and Material's dismiss callback are registered.
+     *
+     * An Espresso key-event Back would instead have to pick the sheet's window
+     * and wait for it to hold input focus. Right after a state restore on a
+     * slow emulator, Espresso picked a dialog root that never gained focus and
+     * timed out (RootViewWithoutFocusException), whichever root matcher was used.
      */
     private fun pressBackInSheet() {
-        Espresso.onView(ViewMatchers.isRoot()).inRoot(RootMatchers.isDialog()).perform(ViewActions.pressBack())
+        val sheets = compose.onAllNodes(isRoot()).fetchSemanticsNodes().mapNotNull { node ->
+            (node.root as? ViewRootForTest)?.view?.findViewTreeOnBackPressedDispatcherOwner() as? ComponentDialog
+        }.distinct()
+        assertEquals("Expected exactly one roster sheet window", 1, sheets.size)
+        compose.runOnUiThread { sheets.single().onBackPressedDispatcher.onBackPressed() }
     }
 
     @Test

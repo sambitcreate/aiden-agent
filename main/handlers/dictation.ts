@@ -21,10 +21,13 @@ export function registerDictationHandlers(): void {
     if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation error sender.");
     return handleDictationError(message, operationId);
   });
-  ipcMain.handle("dictation:progress", (event, operationId: unknown, progress: unknown) => {
-    if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation progress sender.");
-    return handleDictationProgress(progress, operationId);
-  });
+  ipcMain.handle(
+    "dictation:progress",
+    (event, operationId: unknown, progress: unknown, audioSeconds: unknown) => {
+      if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation progress sender.");
+      return handleDictationProgress(progress, operationId, audioSeconds);
+    },
+  );
   ipcMain.handle("dictation:cancel", (event) => {
     if (!isCurrentPillEvent(event)) throw new Error("Untrusted dictation cancel sender.");
     return cancelDictation();

@@ -1,6 +1,7 @@
 // React Query hooks for providers, chats, and settings.
 
 import {
+  keepPreviousData,
   queryOptions,
   replaceEqualDeep,
   useMutation,
@@ -32,6 +33,7 @@ import {
   telegramApi,
   titleProvidersApi,
   usageApi,
+  voiceApi,
   webSearchApi,
   workspacesApi,
 } from "./ipc";
@@ -85,6 +87,7 @@ export const queryKeys = {
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
+  voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
@@ -101,6 +104,8 @@ export const queryKeys = {
     ["chat-pull-requests", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
+  chatPullRequestsSidebar: (chatIds: readonly string[]) =>
+    ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
     ["chat-pull-request-candidates", chatId ?? "none"] as const,
   chatPullRequestPending: (chatId: string | undefined) =>
@@ -433,15 +438,6 @@ export function useGitPullRequestStatus(workspaceId: string | undefined, enabled
   return useQuery(gitPullRequestStatusQueryOptions(workspaceId, enabled));
 }
 
-/** Sidebar Refresh: bypass the background PR cache and spend interactive budget. */
-export function refreshGitPullRequestStatus(queryClient: QueryClient, workspaceId: string) {
-  return queryClient.fetchQuery({
-    ...gitPullRequestStatusQueryOptions(workspaceId),
-    queryFn: () => gitApi.pullRequestStatus(workspaceId, { interactive: true }),
-    staleTime: 0,
-  });
-}
-
 export function useGitReview(workspaceId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.gitReview(workspaceId),
@@ -512,6 +508,21 @@ export function useChatCurrentPullRequest(chatId: string | undefined, enabled = 
     queryFn: () => pullRequestsApi.current(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Sidebar rows' linked PRs and dismissed refs, read from local stores in one IPC call. It
+ * never reaches GitHub; `chats:pull-requests-changed` invalidates it.
+ */
+export function useSidebarChatPullRequests(chatIds: readonly string[]) {
+  return useQuery({
+    queryKey: queryKeys.chatPullRequestsSidebar(chatIds),
+    // Carry the asked-about ids so rows can tell "no dismissals" from "not read yet".
+    queryFn: async () => ({ chatIds: [...chatIds], rows: await pullRequestsApi.sidebar(chatIds) }),
+    enabled: chatIds.length > 0,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -709,6 +720,17 @@ export function useEngineStatus(enabled = true) {
     queryFn: localVoiceApi.status,
     enabled,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Local-first voice provider resolution. `inputs` should list what the answer
+ * depends on (settings, installed models, keys) so it refetches when they change.
+ */
+export function useVoiceResolution(inputs: readonly unknown[]) {
+  return useQuery({
+    queryKey: [...queryKeys.voiceResolution, ...inputs],
+    queryFn: voiceApi.resolveProvider,
   });
 }
 

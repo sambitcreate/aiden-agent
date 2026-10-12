@@ -13,6 +13,7 @@ import { Menu, nativeImage, nativeTheme } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
+import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { shutdownDevices } from "./handlers/devices.js";
@@ -53,7 +54,7 @@ import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 import { disposeDictation, toggleDictation } from "./services/dictation.js";
-import { disposeParakeet } from "./services/parakeet.js";
+import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
@@ -319,7 +320,7 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
-  disposeParakeet();
+  disposeLocalSpeech();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   scheduleService.stop();
@@ -1839,6 +1840,10 @@ if (!ownsSingleInstanceLock) {
       ) {
         app.dock?.setBadge("DEV");
       }
+      // Local-only housekeeping for on-device speech storage; no network.
+      void prepareLocalSpeechStorage().catch((error: unknown) => {
+        logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);
+      });
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });

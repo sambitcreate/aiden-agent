@@ -23,6 +23,7 @@ import {
 } from "./host.testing.js";
 import { CuaDriverHost, type CuaDriverHostOptions } from "./host.js";
 import { runCuaDriverCommand } from "./process.js";
+import { pngHeaderBase64, toolListResult } from "./fixtures/cua-driver-catalog.mjs";
 import {
   CUA_DRIVER_MAX_CLIENT_MESSAGE_BYTES,
   CUA_DRIVER_MAX_SERVER_MESSAGE_BYTES,
@@ -39,15 +40,6 @@ test("Computer Use helper layout follows physical packaging, not the runtime pro
   assert.match(source, /isPackaged:\s*app\.isPackaged/);
   assert.doesNotMatch(source, /isPackagedRuntime/);
 });
-const SESSION_LESS_TOOLS = new Set([
-  "health_report",
-  "check_permissions",
-  "list_apps",
-  "list_windows",
-  "get_screen_size",
-  "get_accessibility_tree",
-  "bring_to_front",
-]);
 
 function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
   bridge: ChildProcess;
@@ -72,15 +64,7 @@ function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
     stdio: [input, output, diagnostics, null, null],
     stdout: output,
   }) as unknown as ChildProcess;
-  const tools = [...CUA_DRIVER_ALLOWED_TOOLS].map((name) => ({
-    name,
-    inputSchema: {
-      type: "object",
-      additionalProperties: true,
-      properties: SESSION_LESS_TOOLS.has(name) ? {} : { session: { type: "string" } },
-    },
-    capabilities: [],
-  }));
+  const listing = toolListResult([...CUA_DRIVER_ALLOWED_TOOLS]);
   const send = (message: Record<string, unknown>, fragmented = false) => {
     const payload = `${JSON.stringify(message)}\n`;
     if (!fragmented) {
@@ -111,14 +95,14 @@ function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fragmented-image-bridge", version: "0.8.3" },
+            serverInfo: { name: "fragmented-image-bridge", version: "0.34.1" },
           },
         });
       } else if (message.method === "tools/list") {
         send({
           jsonrpc: "2.0",
           id: message.id ?? null,
-          result: { tools, schema_version: "1", capability_version: "1" },
+          result: listing,
         });
       } else if (message.method === "tools/call") {
         const imageResult = message.params?.name === "get_window_state";
@@ -262,6 +246,7 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
   assert.equal(env.CUA_DRIVER_RS_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_TELEMETRY_ENABLED, "0");
   assert.equal(env.CUA_DRIVER_RS_UPDATE_CHECK, "false");
+  assert.equal(env.DO_NOT_TRACK, "1");
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
   assert.equal(env.NODE_OPTIONS, undefined);
@@ -270,44 +255,64 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
 });
 
 test("tool catalog parsing retains pinned versions, exact schemas, and capabilities", () => {
-  const schemaFor = (name: string) => ({
-    type: "object",
-    additionalProperties: name === "start_session" || name === "end_session",
-    properties: SESSION_LESS_TOOLS.has(name) ? {} : { session: { type: "string" } },
-  });
-  const tools = [...CUA_DRIVER_ALLOWED_TOOLS].map((name) => ({
-    name,
-    input_schema: schemaFor(name),
-    read_only: name === "get_window_state",
-    destructive: false,
-    idempotent: false,
-    open_world: false,
-    capabilities: name === "get_window_state" ? ["accessibility.element_tokens"] : [],
-  }));
-  const forbiddenTools = ["launch_app", "kill_app", "move_cursor"].map((name) => ({
-    name,
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
-    capabilities: ["forbidden.test"],
-  }));
-  const catalog = parseCuaDriverTools({
-    tools: [...tools, ...forbiddenTools],
-    schema_version: "1",
-    capability_version: "1",
-  });
+  // The 0.34.1 tools/list wire shape, including fields Aiden ignores
+  // (`enforcement_adapters`, per-tool `risk` and `outputSchema`).
+  const listing = toolListResult([...CUA_DRIVER_ALLOWED_TOOLS]) as {
+    tools: Array<Record<string, unknown>>;
+  };
+  const tools = listing.tools;
+  const forbiddenTools = ["launch_app", "kill_app", "move_cursor", "get_desktop_state"].map(
+    (name) => ({
+      name,
+      inputSchema: { type: "object", additionalProperties: false, properties: {} },
+      capabilities: ["forbidden.test"],
+    }),
+  );
+  const catalog = parseCuaDriverTools({ ...listing, tools: [...tools, ...forbiddenTools] });
   assert.equal(catalog.schemaVersion, "1");
   assert.equal(catalog.capabilityVersion, "1");
-  assert.deepEqual(catalog.tools.get("get_window_state")?.inputSchema, schemaFor("get_window_state"));
+  assert.deepEqual(
+    catalog.tools.get("get_window_state")?.inputSchema,
+    tools.find((tool) => tool.name === "get_window_state")?.inputSchema,
+  );
   assert.equal(catalog.tools.get("get_window_state")?.readOnly, true);
-  assert.equal(cuaDriverToolDeclaresSession(catalog.tools.get("get_window_state")!), true);
-  assert.equal(cuaDriverToolDeclaresSession(catalog.tools.get("list_apps")!), false);
+  assert.equal(catalog.tools.get("click")?.destructive, true);
+  // 0.34 admits `session` on every closed schema, so every tool receives it.
+  for (const name of CUA_DRIVER_ALLOWED_TOOLS) {
+    assert.equal(cuaDriverToolDeclaresSession(catalog.tools.get(name)!), true, name);
+  }
+  assert.equal(
+    cuaDriverToolDeclaresSession({
+      name: "legacy",
+      inputSchema: { type: "object", additionalProperties: false, properties: {} },
+      capabilities: new Set(),
+    }),
+    false,
+  );
   assert.deepEqual(new Set(catalog.tools.keys()), new Set(CUA_DRIVER_ALLOWED_TOOLS));
-  for (const name of ["launch_app", "kill_app", "move_cursor"]) {
+  for (const name of ["launch_app", "kill_app", "move_cursor", "get_desktop_state"]) {
     assert.equal(catalog.tools.has(name), false);
   }
-  assert.deepEqual(
-    [...(catalog.tools.get("get_window_state")?.capabilities ?? [])],
-    ["accessibility.element_tokens"],
-  );
+  for (const name of ["click", "press_key", "scroll", "type_text", "get_window_state", "set_value"]) {
+    assert.equal(
+      catalog.tools.get(name)?.capabilities.has("accessibility.element_tokens"),
+      true,
+      name,
+    );
+  }
+  assert.equal(catalog.tools.get("drag")?.capabilities.has("accessibility.element_tokens"), false);
+  for (const name of ["verify_state", "invoke_menu", "set_window_frame"]) {
+    assert.ok(catalog.tools.has(name), name);
+    assert.throws(
+      () =>
+        parseCuaDriverTools({
+          ...listing,
+          tools: tools.filter((tool) => tool.name !== name),
+        }),
+      (error: unknown) =>
+        error instanceof CuaDriverError && error.code === "incompatible_driver",
+    );
+  }
 
   for (const invalid of [
     { tools, capability_version: "1" },
@@ -321,7 +326,7 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
     },
     {
       tools: tools.map((tool, index) =>
-        index === 0 ? { ...tool, input_schema: { type: "object" } } : tool,
+        index === 0 ? { ...tool, inputSchema: { type: "object" } } : tool,
       ),
       schema_version: "1",
       capability_version: "1",
@@ -331,7 +336,7 @@ test("tool catalog parsing retains pinned versions, exact schemas, and capabilit
         index === 0
           ? {
               ...tool,
-              input_schema: {
+              inputSchema: {
                 type: "object",
                 additionalProperties: false,
                 properties: { session: { type: "number" } },
@@ -455,12 +460,13 @@ test("each session owns an authenticated broker bridge and preserves MCP multimo
       include_screenshot: true,
     })) as {
       content?: Array<{ type?: string; data?: string; mimeType?: string }>;
-      structuredContent?: { width?: number };
+      structuredContent?: { screenshot_width?: number; elements?: unknown[] };
     };
-    assert.equal(image.content?.[1]?.type, "image");
-    assert.equal(image.content?.[1]?.data, "aGVsbG8=");
-    assert.equal(image.content?.[1]?.mimeType, "image/png");
-    assert.equal(image.structuredContent?.width, 10);
+    const imagePart = image.content?.find((part) => part.type === "image");
+    assert.equal(imagePart?.data, pngHeaderBase64(400, 200));
+    assert.equal(imagePart?.mimeType, "image/png");
+    assert.equal(image.structuredContent?.screenshot_width, 400);
+    assert.equal(image.structuredContent?.elements?.length, 2);
     await first.close();
     await second.close();
   } finally {
@@ -733,51 +739,67 @@ test("session rejects non-allowlisted tools and private broker arguments", async
   await rm(root, { recursive: true, force: true });
 });
 
-test("schema-driven session injection leaves every session-less tool strict", async () => {
+test("schema-driven session injection binds every 0.34.1 tool call to Aiden's session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "acu-session-schema-"));
   const logPath = path.join(root, "events.jsonl");
   const host = fakeHost(root, logPath);
   let sessionId = "";
+  const results: unknown[] = [];
   try {
     const session = await host.createSession();
     sessionId = session.id;
-    await session.callTool("click", { x: 10, y: 20 });
-    const sessionLessCalls: Array<[string, Record<string, unknown>]> = [
+    // 0.34.1 admits `session` on every closed schema, so each call carries it.
+    const calls: Array<[string, Record<string, unknown>]> = [
       ["health_report", { include: ["binary_version"] }],
       ["check_permissions", { prompt: false }],
       ["list_apps", {}],
       ["list_windows", { on_screen_only: true }],
-      ["get_screen_size", {}],
-      ["get_accessibility_tree", {}],
-      ["bring_to_front", { pid: 42 }],
+      ["bring_to_front", { pid: 42, window_id: 7 }],
+      ["get_window_state", { pid: 42, window_id: 7, include_screenshot: false }],
+      // A caller-supplied label never replaces Aiden's own session.
+      ["list_apps", { session: "caller-controlled" }],
     ];
-    for (const [name, args] of sessionLessCalls) await session.callTool(name, args);
-    await assert.rejects(
-      session.callTool("list_apps", { session: "caller-controlled" }),
-      (error: unknown) =>
-        error instanceof CuaDriverError && error.code === "unsupported_argument",
-    );
+    for (const [name, args] of calls) results.push(await session.callTool(name, args));
   } finally {
     await host.shutdown();
   }
+  for (const result of results) assert.equal((result as { isError?: boolean }).isError, undefined);
   const events = await readEvents(logPath);
-  const toolCalls = events.filter((event) => event.event === "tool-call");
-  const click = toolCalls.find((event) => event.name === "click");
-  assert.equal((click?.args as { session?: string }).session, sessionId);
-  for (const name of SESSION_LESS_TOOLS) {
-    const matching = toolCalls.filter((event) => event.name === name);
-    assert.equal(matching.length, 1, `${name} should reach the bridge exactly once`);
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(matching[0].args as object, "session"),
-      false,
-      `${name} must not receive a generated session argument`,
-    );
+  const toolCalls = events.filter(
+    (event) => event.event === "tool-call" && event.name !== "start_session" && event.name !== "end_session",
+  );
+  assert.equal(toolCalls.length, 7);
+  for (const call of toolCalls) {
+    assert.equal((call.args as { session?: string }).session, sessionId, String(call.name));
   }
   assert.equal(
-    events.some((event) => event.event === "bridge-rejected-arguments"),
+    events.some((event) => event.event === "driver-refused-arguments"),
     false,
-    "all calls must satisfy the strict fake schemas",
+    "all calls must satisfy the strict 0.34.1 schemas",
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("the 0.34.1 fake refuses the removed element_index and unknown arguments as invalid_arguments", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "acu-closed-schema-"));
+  const logPath = path.join(root, "events.jsonl");
+  const host = fakeHost(root, logPath);
+  try {
+    const session = await host.createSession();
+    for (const args of [
+      { pid: 42, window_id: 7, element_index: 0 },
+      { pid: 42, window_id: 7, snapshot_id: "s00000001", element_token: "s00000001:0" },
+    ]) {
+      const result = (await session.callTool("click", args)) as {
+        isError?: boolean;
+        structuredContent?: { refusal?: { code?: string } };
+      };
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent?.refusal?.code, "invalid_arguments");
+    }
+  } finally {
+    await host.shutdown();
+  }
   await rm(root, { recursive: true, force: true });
 });
 

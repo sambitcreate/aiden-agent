@@ -7,6 +7,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,9 +117,21 @@ data class AidenBotRoutineDraft(
     }
 
     companion object {
-        fun from(routine: AidenBotRoutine): AidenBotRoutineDraft {
-            val base = AidenBotRoutineDraft(name = routine.name, message = routine.message)
-            val schedule = routine.schedule ?: return base
+        fun from(routine: AidenBotRoutine): AidenBotRoutineDraft =
+            scheduled(AidenBotRoutineDraft(name = routine.name, message = routine.message), routine.schedule)
+
+        /** The editor prefilled from a suggestion (the daily check-in); nothing exists until Save. */
+        fun from(suggestion: AidenBotRoutineSuggestion): AidenBotRoutineDraft =
+            scheduled(
+                AidenBotRoutineDraft(
+                    name = suggestion.name.take(AidenBotRoutineWire.MAX_NAME_LENGTH),
+                    message = suggestion.prompt.take(AidenBotRoutineWire.MAX_MESSAGE_LENGTH)
+                ),
+                suggestion.schedule
+            )
+
+        private fun scheduled(base: AidenBotRoutineDraft, schedule: AidenBotRoutineSchedule?): AidenBotRoutineDraft {
+            if (schedule == null) return base
             val (hour, minute) = schedule.time.split(":").map { it.toInt() }
             val timed = base.copy(hour = hour, minute = minute)
             return when (schedule) {
@@ -155,7 +168,7 @@ fun aidenBotRoutineWriteFailure(error: Exception, fallback: String): AidenBotRou
  * enabled toggle, plus "+ Add routine".
  */
 @Composable
-fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
+fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSuggestions: Boolean = false) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -163,7 +176,27 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
     var error by remember(botId) { mutableStateOf<String?>(null) }
     var editing by remember(botId) { mutableStateOf<AidenBotRoutine?>(null) }
     var adding by remember(botId) { mutableStateOf(false) }
+    // Revision 27: with no routines, "Try a daily check-in" opens the editor prefilled.
+    var suggestions by remember(botId) { mutableStateOf<List<AidenBotRoutineSuggestion>>(emptyList()) }
+    var addingDraft by remember(botId) { mutableStateOf<AidenBotRoutineDraft?>(null) }
     val togglingIds = remember(botId) { mutableStateListOf<String>() }
+    val hasNoRoutines = routines?.isEmpty() == true
+
+    LaunchedEffect(botId, client, offersSuggestions, hasNoRoutines) {
+        val cl = client
+        if (cl == null || !offersSuggestions || !hasNoRoutines) {
+            suggestions = emptyList()
+            return@LaunchedEffect
+        }
+        suggestions = try {
+            cl.botRoutineSuggestions(botId).suggestions
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // A missing suggestion only hides the row.
+            emptyList()
+        }
+    }
 
     /** Reloads the list; an open editor follows its routine's new revision. */
     suspend fun reload(cl: AidenRemoteClient, keepError: Boolean = false) {
@@ -230,9 +263,33 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
                         )
                     }
                 }
+                if (hasNoRoutines) {
+                    suggestions.forEach { suggestion ->
+                        TextButton(
+                            onClick = {
+                                addingDraft = AidenBotRoutineDraft.from(suggestion)
+                                adding = true
+                            },
+                            enabled = client != null,
+                            shape = AidenShape.Button,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp)
+                        ) {
+                            Icon(Icons.Outlined.WbSunny, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(R.string.bot_routine_suggestion_title), style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
+                                Text(suggestion.label, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                            }
+                        }
+                        HorizontalDivider(color = palette.canvas, modifier = Modifier.padding(start = 16.dp))
+                    }
+                }
                 if (routines.orEmpty().isNotEmpty()) HorizontalDivider(color = palette.canvas, modifier = Modifier.padding(start = 16.dp))
                 TextButton(
-                    onClick = { adding = true },
+                    onClick = {
+                        addingDraft = null
+                        adding = true
+                    },
                     enabled = client != null && routines != null,
                     shape = AidenShape.Button,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp)
@@ -252,13 +309,16 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?) {
             botId = botId,
             client = cl,
             routine = editing,
+            initial = addingDraft.takeIf { editing == null },
             onDismiss = {
                 adding = false
+                addingDraft = null
                 editing = null
             },
             onSaved = { saved ->
                 replace(saved)
                 adding = false
+                addingDraft = null
                 editing = null
             },
             onDeleted = { deletedId ->
@@ -275,6 +335,8 @@ private fun AidenBotRoutineEditorDialog(
     botId: String,
     client: AidenRemoteClient,
     routine: AidenBotRoutine?,
+    /** A new routine's starting point, such as the daily check-in suggestion. */
+    initial: AidenBotRoutineDraft? = null,
     onDismiss: () -> Unit,
     onSaved: (AidenBotRoutine) -> Unit,
     onDeleted: (String) -> Unit,
@@ -283,7 +345,9 @@ private fun AidenBotRoutineEditorDialog(
     val palette = AidenTheme.palette
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    var draft by remember(routine?.id) { mutableStateOf(routine?.let(AidenBotRoutineDraft::from) ?: AidenBotRoutineDraft()) }
+    var draft by remember(routine?.id) {
+        mutableStateOf(routine?.let { AidenBotRoutineDraft.from(it) } ?: initial ?: AidenBotRoutineDraft())
+    }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // A retried Add of the same routine reuses its key, so it never makes two; a changed

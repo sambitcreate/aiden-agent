@@ -133,7 +133,7 @@ export interface AidenRemoteMessageProjection {
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
   htmlArtifacts?: AidenRemoteHtmlArtifactProjection[];
-  /** Additive (contract revision 27): inline visuals, in reply order. */
+  /** Additive (contract revision 28): inline visuals, in reply order. */
   visuals?: AidenRemoteVisualProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
   timeline?: GenerationTimeline;

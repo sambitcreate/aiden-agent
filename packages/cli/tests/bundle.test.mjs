@@ -74,6 +74,12 @@ test("all theme presets and pi originals ship beside the bundle", () => {
 	}
 });
 
+test("the speech worker ships beside the Silero VAD model it trims silence with", () => {
+	assert.ok(existsSync(join(appDir, "speech-worker.js")));
+	const vad = readFileSync(join(appDir, "speech", "silero_vad.onnx"));
+	assert.deepEqual(vad, readFileSync(join(pkgDir, "..", "..", "resources", "speech", "silero_vad.onnx")));
+});
+
 test("pi's docs directory is vendored for auth/model guidance pointers", () => {
 	assert.ok(existsSync(join(appDir, "docs", "providers.md")));
 	assert.ok(existsSync(join(appDir, "docs", "models.md")));

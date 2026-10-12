@@ -1,4 +1,4 @@
-export const CUA_DRIVER_VERSION = "0.8.3";
+export const CUA_DRIVER_VERSION = "0.34.1";
 export const CUA_DRIVER_TOOL_SCHEMA = "1";
 export const CUA_DRIVER_CAPABILITY_VERSION = "1";
 export const CUA_DRIVER_HOST_BUNDLE_ID = "com.sambitcreate.aiden-agent";
@@ -27,10 +27,8 @@ export const CUA_DRIVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "check_permissions",
   "list_apps",
   "list_windows",
-  "get_screen_size",
-  "get_accessibility_tree",
-  "get_desktop_state",
   "get_window_state",
+  "verify_state",
   "bring_to_front",
   "click",
   "double_click",
@@ -41,10 +39,35 @@ export const CUA_DRIVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "press_key",
   "hotkey",
   "set_value",
+  "invoke_menu",
+  "set_window_frame",
 ]);
 
-/** Every allowed tool is required so native and TypeScript fail closed on contract drift. */
+/**
+ * Every allowed tool is required so native and TypeScript fail closed on
+ * contract drift. 0.34.1 registers each of them on macOS
+ * (`platform-macos/src/tools/mod.rs::register_all`).
+ */
 export const CUA_DRIVER_REQUIRED_TOOLS = CUA_DRIVER_ALLOWED_TOOLS;
+
+/**
+ * Tools whose 0.34.1 schema accepts the preferred per-call tagged
+ * `target: {kind:"window", pid, window_id}` (upstream
+ * `cua-driver-core/src/action_target.rs::TARGETED_TOOLS`). The driver refuses
+ * `target` combined with flat pid/window_id, so these tools receive only
+ * `target`; every other tool keeps its own flat pid/window_id fields.
+ */
+export const CUA_DRIVER_TYPED_TARGET_TOOLS: ReadonlySet<string> = new Set([
+  "click",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "hotkey",
+]);
+
+/** Snapshot-bound element token minted by get_window_state (`element_token.rs`). */
+export const CUA_DRIVER_ELEMENT_TOKEN_PATTERN = /^s[0-9a-f]{8}:[0-9]+$/u;
 
 export interface CuaDriverInvocation {
   /** Aiden's broker/bridge executable, resolved inside the signed helper app. */
@@ -102,6 +125,8 @@ export function buildCuaDriverEnvironment(
     CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
     CUA_TELEMETRY_ENABLED: "0",
     CUA_DRIVER_RS_UPDATE_CHECK: "false",
+    // Upstream's cross-tool opt-out; it overrides every other telemetry switch.
+    DO_NOT_TRACK: "1",
     NO_COLOR: "1",
   };
   for (const key of [
@@ -154,6 +179,11 @@ export function cuaDriverToolDeclaresSession(tool: CuaDriverToolInfo): boolean {
   return true;
 }
 
+/**
+ * Parse the pinned tools/list envelope. 0.34.1 adds `enforcement_adapters` at
+ * the top level and `risk`/`outputSchema` per tool; Aiden enforces its own
+ * approval policy and parses each result itself, so those are ignored.
+ */
 export function parseCuaDriverTools(value: unknown): CuaDriverToolCatalog {
   const response = asRecord(value);
   const rawTools = response?.tools;

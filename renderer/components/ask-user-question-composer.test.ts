@@ -1,31 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ASK_USER_QUESTION_VERSION, type AskUserQuestionPromptV1 } from "../shared/ask-user-question.js";
 import { AskUserQuestionComposer } from "./ask-user-question-composer.js";
-
-function source(relativePath: string): string {
-  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
-}
-
-test("structured questions fully replace the composer with the reference card", () => {
-  const pane = source("../main/chat-pane.tsx");
-  const component = source("./ask-user-question-composer.tsx");
-  const styles = source("../styles.css");
-  assert.match(
-    pane,
-    /questionnaire \? \([\s\S]*<AskUserQuestionComposer[\s\S]*\) : \([\s\S]*<Composer/u,
-  );
-  assert.match(component, /rounded-sheet bg-popover/u);
-  assert.match(styles, /--radius-sheet: 24px;/u);
-  assert.match(component, /\{activeIndex \+ 1\} of \{prompt\.questions\.length\}/u);
-  assert.match(component, /Type your own answer/u);
-  assert.match(component, /"Sending…" : "Skip"/u);
-  assert.match(styles, /\.ask-user-question-option:focus-visible/u);
-  assert.match(styles, /@keyframes ask-user-question-in/u);
-});
 
 function prompt(multiSelect: boolean): AskUserQuestionPromptV1 {
   return {
@@ -59,8 +37,7 @@ test("single-select options are action buttons, multi-select options are checkbo
   );
   const singleOptions = optionButtons(single);
   assert.equal(singleOptions.length, 2);
-  // Activating an option answers and advances, so it must not claim radio
-  // semantics whose arrow-key selection it cannot honour.
+  // Single answers use toggle buttons; the question tabs own arrow navigation.
   assert.doesNotMatch(single, /role="radio(group)?"/u);
   for (const option of singleOptions) assert.doesNotMatch(option, /aria-checked/u);
 
@@ -73,4 +50,15 @@ test("single-select options are action buttons, multi-select options are checkbo
     assert.match(option, /role="checkbox"/u);
     assert.match(option, /aria-checked="false"/u);
   }
+});
+
+test("questions expose one active panel and a tab for every question", () => {
+  const value = prompt(false);
+  value.questions.push({ ...value.questions[0]!, header: "Timing", question: "When should it run?" });
+  const markup = renderToStaticMarkup(createElement(AskUserQuestionComposer, { prompt: value, onRespond: () => undefined }));
+  assert.equal((markup.match(/role="tab"/g) ?? []).length, 2);
+  assert.equal((markup.match(/role="tabpanel"/g) ?? []).length, 1);
+  assert.match(markup, /1. Database/);
+  assert.match(markup, /2. Timing/);
+  assert.doesNotMatch(markup, /When should it run\?/);
 });

@@ -45,7 +45,7 @@ const COMPOSIO_COVERED_PLUGIN_IDS: ReadonlySet<string> = new Set([
 ]);
 
 const CHIP_LABELS: Readonly<Record<string, string>> = {
-  composio: "500+ apps",
+  composio: "More apps (Composio)",
   "google-calendar": "Calendar",
   "outlook-email": "Outlook",
   "outlook-calendar": "Outlook Calendar",

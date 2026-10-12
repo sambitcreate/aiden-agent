@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { getCurrentTools } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
+import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { createBotMemoryService } from "../bot-memory/service.js";
+import { createBotMemoryStore } from "../bot-memory/store.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
 import { botQuestionCandidate } from "./bot-question-tool.js";
@@ -526,6 +529,66 @@ test("a routine queued before a quit keeps its own tool policy after Resume", as
     });
     assert.ok(offered[0]!.includes(QUESTION_TOOL_NAME), "the resumed desktop turn offers questions");
     assert.equal(offered[1]!.includes(QUESTION_TOOL_NAME), false, "the queued routine still offers none");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("delete erases the Bot's memory even when its session never opened", async () => {
+  const profile = tempProfile();
+  const memoryDir = path.join(profile, "bots", botDirectoryName("bot:a"), "memory");
+  mkdirSync(memoryDir, { recursive: true });
+  writeFileSync(path.join(memoryDir, "USER.md"), "Prefers short answers.");
+  const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir: profile }) });
+  const service = await serviceFor(profile, createFauxModels([]), {
+    deleteEffects: [async (botId) => memory.forgetBot(botId)],
+  });
+  try {
+    await service.deleteBot("bot:a");
+    assert.equal(existsSync(memoryDir), false);
+    const view = await memory.view("bot:a");
+    assert.deepEqual([view.user.entries, view.updatedAt], [[], null]);
+    await assert.rejects(memory.apply("bot:a", "user", [{ action: "add", content: "Has a dog." }]));
+    assert.equal(existsSync(memoryDir), false, "nothing writes it back");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("an open session keeps its memory snapshot; reopening after the idle close re-reads it", async () => {
+  const profile = tempProfile();
+  const memoryDir = path.join(profile, "bots", botDirectoryName("bot:a"), "memory");
+  const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir: profile }) });
+  const sections: string[] = [];
+  const record = (context: { messages: Message[] }) => {
+    sections.push(getCurrentSystemPrompt(context.messages) ?? "");
+    return fauxAssistantMessage("ok");
+  };
+  const fauxModels = createFauxModels([record, record, record]);
+  const service = await serviceFor(profile, fauxModels, {
+    idleCloseMs: 50,
+    onSessionOpen: (botId) => memory.beginSession(botId),
+    extension: {
+      ...recordingDeps(),
+      memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
+    },
+  });
+  const turn = async (requestId: string) => {
+    const sent = await service.send("bot:a", { text: "hi", requestId });
+    await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+  };
+  try {
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(path.join(memoryDir, "USER.md"), "Prefers short answers.");
+    await turn("desk-1");
+    // Written outside the Bot's tool (by the shell, say) while the session is open.
+    writeFileSync(path.join(memoryDir, "USER.md"), "Prefers short answers.\n§\nHas a dog.");
+    await turn("desk-2");
+    assert.ok(sections[0]!.includes("Prefers short answers."));
+    assert.ok(!sections[1]!.includes("Has a dog."), "the open session's snapshot is frozen");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await turn("desk-3");
+    assert.ok(sections[2]!.includes("Has a dog."), "the reopened session reads current memory");
   } finally {
     await service.shutdown();
   }

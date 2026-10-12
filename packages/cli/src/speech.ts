@@ -1,49 +1,101 @@
 import { Worker } from "node:worker_threads";
 import { dirname, join } from "node:path";
-import { createLocalModelManager } from "../../../main/services/local-models-core.js";
+import { rmSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { createSpeechModelManager } from "../../../main/services/local-speech-downloads.js";
 import { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
-import { ParakeetProcessClient } from "../../../main/services/parakeet-process-core.js";
+import {
+  LocalSpeechProcessClient,
+  runWithCrashRetry,
+  WorkerCrashError,
+} from "../../../main/services/local-speech-process-core.js";
+import { needsFreshWorker, speechLanguageKey, type LoadedSpeechModel } from "../../../main/services/local-speech-worker-host.js";
+import { effectiveLanguage } from "../../../renderer/shared/voice-language.js";
+import { voiceTrimSilenceEnabled } from "../../../renderer/shared/voice-preferences.js";
 import type { AppSettings } from "../../../main/services/types.js";
 import { JsonStore, acquireLease } from "./state.ts";
 import { recordUsageRecord } from "./usage-ledger.ts";
 import { readRegularFile } from "../../../main/services/regular-file-read.js";
-import { AIDEN_REMOTE_MAX_PCM16_BYTES } from "../../../main/services/aiden-remote-speech-codec.js";
+import { AIDEN_REMOTE_MAX_PCM16_BYTES, decodeAidenRemotePcm16ToInt16 } from "../../../main/services/aiden-remote-speech-codec.js";
 
 export function createCliSpeech(agentDir: string) {
-  const models = createLocalModelManager({ root: () => join(agentDir, "parakeet-models") });
+  // Pre-1.0: the unverified Parakeet folder is removed, not migrated.
+  // createCliSpeech is synchronous for its callers, so this uses rmSync.
+  try { rmSync(join(agentDir, "parakeet-models"), { recursive: true, force: true }); } catch { /* best effort */ }
+  const models = createSpeechModelManager({ root: () => join(agentDir, "voice-models") });
   const settings = new JsonStore<AppSettings>(join(agentDir, "speech.json"), {});
-  let worker: Worker | undefined, client: ParakeetProcessClient | undefined;
+  let worker: Worker | undefined, client: LocalSpeechProcessClient | undefined;
+  let loaded: LoadedSpeechModel | null = null;
+  const cliDir = () => dirname(process.env.AIDEN_CLI_ENTRY!);
+  const dropClient = (current: LocalSpeechProcessClient) => {
+    if (client !== current) return;
+    current.dispose(); client = undefined; worker = undefined; loaded = null;
+  };
+  // A worker holds its native recognizer until its thread exits, so retiring one
+  // awaits termination before a replacement is created.
+  const retireWorker = async () => {
+    const stopping = worker;
+    client?.dispose(); client = undefined; worker = undefined; loaded = null;
+    if (stopping) await stopping.terminate();
+  };
   const getClient = () => {
     if (client) return client;
-    const launched = new Worker(join(dirname(process.env.AIDEN_CLI_ENTRY!), "speech-worker.js"));
+    const launched = new Worker(join(cliDir(), "speech-worker.js"), { stderr: true, stdout: true });
     worker = launched;
     launched.on("error", () => {}); // The exit listener rejects pending protocol requests.
-    launched.once("exit", () => { if (worker === launched) { worker = undefined; client = undefined; } });
-    client = new ParakeetProcessClient({
+    launched.stdout.resume();
+    const created: LocalSpeechProcessClient = new LocalSpeechProcessClient({
       postMessage: (value) => launched.postMessage(value),
       onMessage: (callback) => { launched.on("message", callback); return () => { launched.off("message", callback); }; },
       onExit: (callback) => { launched.on("exit", callback); return () => { launched.off("exit", callback); }; },
       kill: () => { void launched.terminate(); },
-    });
-    return client;
+    }, { onHang: () => dropClient(created) });
+    createInterface({ input: launched.stderr }).on("line", (line) => created.pushStderr(line));
+    launched.once("exit", () => { if (worker === launched) { worker = undefined; client = undefined; loaded = null; } });
+    client = created;
+    return created;
   };
   const service = new AidenRemoteSpeechServiceCore({ ...models,
     configStore: { getSettings: () => settings.load(), setSettings: (patch) => settings.update((value) => { Object.assign(value, patch); return value; }) },
     engineStatus: () => getClient().status(),
-    releaseRecognizer: async (id) => { if (client) await client.release(id); },
+    releaseRecognizer: retireWorker,
     transcribePcm16Base64: async (pcmBase64, modelId) => {
       const modelDirectory = models.modelDir(modelId);
-      if (!modelDirectory || !models.isModelInstalled(modelId)) throw new Error("The local speech model is not installed.");
-      const current = getClient();
-      try { return await current.transcribe({ pcmBase64, modelId, modelDirectory, encoding: "pcm_s16le" }); }
-      catch (error) { current.dispose(); if (client === current) { client = undefined; worker = undefined; } throw error; }
+      const spec = models.specFor(modelId);
+      if (!spec || !modelDirectory || !models.isModelInstalled(modelId)) throw new Error("The local speech model is not installed.");
+      const prefs = await settings.load();
+      const request = {
+        modelId, modelDirectory, spec,
+        audio: { kind: "pcm16" as const, pcm: decodeAidenRemotePcm16ToInt16(pcmBase64) },
+        language: effectiveLanguage(spec, prefs.voiceLanguage).language,
+        translate: prefs.voiceTranslateToEnglish === true,
+        trimSilence: voiceTrimSilenceEnabled(prefs.voiceTrimSilence),
+        vadModelPath: join(cliDir(), "speech", "silero_vad.onnx"),
+      };
+      let current: LocalSpeechProcessClient | undefined;
+      const target = { modelId, family: spec.family, language: request.language };
+      const result = await runWithCrashRetry(async () => {
+        if (needsFreshWorker(loaded, target)) await retireWorker();
+        current = getClient();
+        // Recorded before the request is sent: a failed transcribe can still leave the model held.
+        loaded = { modelId, languageKey: speechLanguageKey(spec.family, request.language) };
+        return current.transcribe(request);
+      }, {
+        isCancelled: () => false,
+        isCrash: (error) => error instanceof WorkerCrashError,
+        onCrash: (_error, attempt) => {
+          if (!current) return;
+          process.stderr.write(`[local-speech] worker crashed (attempt ${attempt})\n${current.stderrTail().join("\n")}\n`);
+          dropClient(current);
+        },
+      });
+      return result.text;
     },
     recordUsage: (record) => recordUsageRecord(agentDir, record),
   });
   return { service, models, async stop() {
     await models.stopDownloads();
-    const stopping = worker; client?.dispose(); client = undefined; worker = undefined;
-    if (stopping) await stopping.terminate();
+    await retireWorker();
   } };
 }
 

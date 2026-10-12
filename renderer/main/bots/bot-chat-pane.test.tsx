@@ -61,7 +61,7 @@ test("a reply still being written is folded under Working and opens to its text"
   assert.ok(await screen.findByText("Checking your calendar now"));
 });
 
-test("a Bot's A–E question shows its card, and choosing an option answers it by wait id", async () => {
+test("a Bot's A–E question shows its card, and submitting a chosen option answers it by wait id", async () => {
   const calls = await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
@@ -72,6 +72,12 @@ test("a Bot's A–E question shows its card, and choosing an option answers it b
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
   assert.equal(screen.queryByPlaceholderText("Ask Planner"), null, "the card takes the composer's place");
   fireEvent.click(screen.getByRole("button", { name: /Blue/u }));
+  assert.equal(
+    calls.filter((call) => call.channel === "bots:answerQuestion").length,
+    0,
+    "choosing an option selects it without answering yet",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerQuestion").length, 1));
   const input = calls.find((call) => call.channel === "bots:answerQuestion")!.args[0] as {
     botId: string;
@@ -581,4 +587,181 @@ test("Stop stays available while a question card replaces the composer", async (
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
+test("a model the Bot can't reach says why, and Choose a model opens Advanced for that Bot", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ state: { kind: "model_error", message: "Sign in to Text Service again." } }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const card = await screen.findByRole("alert", { name: "Planner can’t reach its AI model" });
+  assert.ok(within(card).getByText("Sign in to Text Service again."));
+  fireEvent.click(within(card).getByRole("button", { name: "Choose a model" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+  assert.equal((router.state.location.search as { page?: string }).page, "advanced");
+});
+
+test("an interrupted Bot whose access changed opens Advanced, not just the Profile", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s1", blocked: "access_changed" } }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const card = await screen.findByRole("group", { name: "Planner was interrupted" });
+  fireEvent.click(within(card).getByRole("button", { name: "Open Advanced" }));
+  await waitFor(() => assert.equal((router.state.location.search as { page?: string }).page, "advanced"));
+});
+
+/** Gives the chat's scrollport a real height so follow-the-reply can be observed. */
+function measurableScrollport(scrollHeight: number, clientHeight: number) {
+  const viewport = document.querySelector<HTMLElement>("[data-scroll-top]");
+  assert.ok(viewport, "the chat scrolls in its own scrollport");
+  let top = 0;
+  Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => scrollHeight });
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(viewport, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      top = value;
+    },
+  });
+  viewport.scrollTo = ((options: ScrollToOptions) => {
+    top = Math.min(options.top ?? top, scrollHeight - clientHeight);
+  }) as typeof viewport.scrollTo;
+  return {
+    viewport,
+    scrollTop: () => top,
+    scrollUserTo: (value: number) => {
+      top = value;
+      fireEvent.scroll(viewport);
+    },
+  };
+}
+
+test("a streaming reply doesn't pull the chat down while the person reads earlier messages", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [userEntry("u1", "Tell me a story")], state: { kind: "running", submissionId: "s1" } }),
+  });
+  await screen.findByText("Tell me a story");
+  const port = measurableScrollport(2_000, 400);
+  port.scrollUserTo(300);
+
+  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" });
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "partial",
+    text: "Once upon a time there was a fox.",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(port.scrollTop(), 300, "the reader keeps their place");
+
+  // The way back down is one click away.
+  fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
+  assert.equal(port.scrollTop(), 1_600);
+});
+
+const CHECK_IN_PROPOSAL = {
+  proposalId: "proposal-1",
+  name: "Daily check-in",
+  prompt: "Check in briefly with one or two things worth knowing today.",
+  schedule: { kind: "daily" as const, time: "09:00" },
+  timezone: "UTC",
+  label: "Every day at 9:00 AM",
+};
+
+function proposalEntry(status: "pending" | "accepted" | "dismissed", routineId?: string): BotTranscriptEntry {
+  return { id: "p1", type: "routine_proposal", proposal: CHECK_IN_PROPOSAL, status, ...(routineId ? { routineId } : {}) };
+}
+
+test("Memory updated is a quiet caption, outside Updates, that opens this Bot's Memory page", async () => {
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "I'm vegetarian"),
+          { id: "m1", type: "memory_update", targets: ["user"], source: "turn" },
+          { id: "m2", type: "memory_update", targets: ["memory"], source: "review" },
+          assistantEntry("a1", "Noted."),
+        ],
+      }),
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByText("Noted.");
+  const captions = screen.getAllByRole("button", { name: "Memory updated. Open Memory" });
+  assert.equal(captions.length, 1, "back-to-back saves read as one line");
+  assert.equal(screen.queryByRole("button", { name: /Updates/u }) === null, true, "never folded into Updates");
+  fireEvent.click(captions[0]!);
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+  assert.equal((router.state.location.search as { page?: string }).page, "memory");
+});
+
+test("a routine proposal shows its name, schedule and prompt, and Add routine accepts it once", async () => {
+  let respond: (value: unknown) => void = () => undefined;
+  const calls = await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () =>
+      snapshot({ entries: [assistantEntry("a1", "Want me to check in daily?"), proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => new Promise((resolve) => (respond = resolve)),
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  assert.ok(within(card).getByText("Add a routine?"));
+  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM"));
+  assert.ok(within(card).getByText(CHECK_IN_PROPOSAL.prompt));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
+  fireEvent.click(within(card).getByRole("button", { name: /Add/u }));
+  const responds = () => calls.filter((call) => call.channel === "bots:routineProposals:respond");
+  await waitFor(() => assert.equal(responds().length, 1));
+  assert.deepEqual(responds()[0]!.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "accept" });
+  respond({ status: "accepted", routineId: "task-9" });
+  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.equal(within(card).queryByRole("button") === null, true, "a settled card has no actions");
+  assert.equal(responds().length, 1, "a second click while it was answering sent nothing");
+});
+
+test("Not now dismisses a routine proposal, and the card reads Not added", async () => {
+  const calls = await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => ({ status: "dismissed" }),
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  fireEvent.click(within(card).getByRole("button", { name: "Not now" }));
+  assert.ok(await within(card).findByText("Not added"));
+  const respond = calls.find((call) => call.channel === "bots:routineProposals:respond")!;
+  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss" });
+});
+
+test("a failed answer keeps the proposal answerable, and one answered elsewhere arrives settled", async () => {
+  await mountChat({
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
+    "bots:routineProposals:respond": () => {
+      throw new Error("The Mac is busy.");
+    },
+  });
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
+  fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
+  await waitFor(() =>
+    assert.equal((within(card).getByRole("button", { name: "Add routine" }) as HTMLButtonElement).disabled, false),
+  );
+  assert.ok(within(card).getByText("Add a routine?"));
+
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "entry",
+    entry: proposalEntry("accepted", "task-9"),
+  });
+  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
 });

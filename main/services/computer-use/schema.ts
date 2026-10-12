@@ -15,6 +15,9 @@ const Action = Type.Union([
   Type.Literal("list_apps"),
   Type.Literal("list_windows"),
   Type.Literal("focus_app"),
+  Type.Literal("verify"),
+  Type.Literal("menu"),
+  Type.Literal("set_window_frame"),
 ]);
 // Some OpenAI-compatible providers reject draft-07 tuple schemas because their
 // `items` value is an array. Keep tuple typing for Aiden while publishing the
@@ -37,6 +40,49 @@ const Modifier = Type.Union(
     "super",
     "meta",
   ].map((modifier) => Type.Literal(modifier)),
+);
+
+/** One verify_state predicate: exactly one of element or window (cua-driver 0.34.1). */
+const VerifyPredicate = Type.Object(
+  {
+    element: Type.Optional(
+      Type.Object(
+        {
+          role: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+          label_contains: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+          value_equals: Type.Optional(Type.String({ maxLength: 1_000 })),
+          enabled: Type.Optional(Type.Boolean()),
+          selected: Type.Optional(Type.Boolean()),
+        },
+        {
+          additionalProperties: false,
+          description:
+            "A trusted accessibility element matching role and/or label_contains exists, optionally with this value/enabled/selected state. Absence cannot be proven.",
+        },
+      ),
+    ),
+    window: Type.Optional(
+      Type.Object(
+        {
+          exists: Type.Optional(Type.Boolean()),
+          bounds: Type.Optional(
+            Type.Object(
+              {
+                x: Type.Number(),
+                y: Type.Number(),
+                width: Type.Number({ exclusiveMinimum: 0 }),
+                height: Type.Number({ exclusiveMinimum: 0 }),
+                tolerance_px: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
 );
 
 /**
@@ -63,6 +109,13 @@ export const ComputerUseParameters = Type.Object(
     pid: Type.Optional(Type.Integer({ minimum: 1 })),
     window_id: Type.Optional(Type.Integer({ minimum: 1 })),
     max_elements: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000, default: 100 })),
+    max_image_dimension: Type.Optional(
+      Type.Integer({
+        minimum: 256,
+        maximum: 4096,
+        description: "Capture only: cap the screenshot's long edge in pixels for a cheaper image.",
+      }),
+    ),
     element: Type.Optional(
       Type.Integer({
         minimum: 0,
@@ -99,7 +152,7 @@ export const ComputerUseParameters = Type.Object(
     delivery_mode: Type.Optional(
       Type.Union([Type.Literal("background"), Type.Literal("foreground")], {
         description:
-          "Background is non-intrusive. Foreground may visibly change focus and receives a distinct approval.",
+          "Background is non-intrusive. Foreground may visibly change focus and receives a distinct approval. drag and clicks with modifiers are foreground-only on macOS and default to it.",
       }),
     ),
     bring_to_front: Type.Optional(
@@ -109,8 +162,42 @@ export const ComputerUseParameters = Type.Object(
       }),
     ),
     capture_after: Type.Optional(
-      Type.Boolean({ description: "Capture the exact target again after a successful action." }),
+      Type.Boolean({
+        description: "Capture the exact target again after a successful action.",
+      }),
     ),
+    expect: Type.Optional(
+      Type.Array(VerifyPredicate, {
+        minItems: 1,
+        maxItems: 8,
+        description:
+          "verify only: one to eight predicates, all of which must hold on the active window.",
+      }),
+    ),
+    stable_samples: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
+    timeout_ms: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 10_000,
+        description: "verify only: bounded wait.",
+      }),
+    ),
+    include_screenshot: Type.Optional(
+      Type.Boolean({
+        description: "verify only: also return the final screenshot.",
+      }),
+    ),
+    menu_path: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+        minItems: 1,
+        maxItems: 16,
+        description: 'menu only: menu-bar path for the active app, e.g. ["File", "Save As…"].',
+      }),
+    ),
+    x: Type.Optional(Type.Integer({ minimum: -100_000, maximum: 100_000 })),
+    y: Type.Optional(Type.Integer({ minimum: -100_000, maximum: 100_000 })),
+    width: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000 })),
+    height: Type.Optional(Type.Integer({ minimum: 1, maximum: 100_000 })),
   },
   { additionalProperties: false },
 );

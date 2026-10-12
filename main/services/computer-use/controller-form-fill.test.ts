@@ -94,7 +94,7 @@ function stalePlan(): FormFillBatchPlan {
       {
         order: 0,
         elementIndex: 0,
-        elementToken: "tok-0",
+        elementToken: "s00000001:0",
         role: "AXTextField",
         label: "First name",
         action: "fill",
@@ -105,7 +105,7 @@ function stalePlan(): FormFillBatchPlan {
       {
         order: 1,
         elementIndex: 1,
-        elementToken: "tok-1",
+        elementToken: "s00000001:1",
         role: "AXTextField",
         label: "Last name",
         action: "fill",
@@ -121,8 +121,8 @@ function stalePlan(): FormFillBatchPlan {
 }
 
 const FILL_ELEMENTS_PRE = () => [
-  element(0, "First name", "", "tok-0"),
-  element(1, "Last name", "", "tok-1"),
+  element(0, "First name", "", "s00000001:0"),
+  element(1, "Last name", "", "s00000001:1"),
 ];
 
 
@@ -130,7 +130,14 @@ for (const nextDocument of ["same-url-reload", "same-title-new-origin", "native-
   test(`fails closed before capture or writes for ${nextDocument} with identical window and form`, async () => {
     const { controller, session } = makeController({ list_windows: [WINDOWS],
       get_window_state: [windowState(FILL_ELEMENTS_PRE()), windowState(FILL_ELEMENTS_PRE())],
-      set_value: [{ effect: "confirmed" }],
+      set_value: [
+        {
+          effect: "confirmed",
+          route: "accessibility",
+          delivery: { mode: "background" },
+          evidence: [{ kind: "value_readback" }],
+        },
+      ],
     });
     const unavailable = (error: unknown) => error instanceof ComputerUseSafetyError && error.code === "form_fill_unavailable";
     await assert.rejects(controller.formFillCapture({ pid: 42, windowId: 7 }), unavailable);

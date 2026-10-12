@@ -649,11 +649,7 @@ export function Composer({
       );
       if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
     },
-    {
-      provider: settings.data?.voiceProvider ?? "openai",
-      localModel: settings.data?.localVoiceModel,
-      model: settings.data?.voiceModel,
-    },
+    { model: settings.data?.voiceModel },
   );
 
   React.useLayoutEffect(() => {
@@ -2409,6 +2405,14 @@ export function Composer({
                   >
                     <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
                     <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
+                  </span>
+                ) : voice.transcribing && voice.loadingModel ? (
+                  <span
+                    className="max-w-56 truncate text-small text-secondary"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    Loading model…
                   </span>
                 ) : null}
                 {contextMeter}

@@ -100,7 +100,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Contract revision 25: phones may view and control the Mac's shared
     /// iOS Simulators after negotiating `simulators:mobile`.
     static let mobileSimulatorsFeature = "mobile-simulators-v1"
-    /// Contract revision 27: assistant messages may carry `visuals`, each
+    /// Contract revision 28: assistant messages may carry `visuals`, each
     /// shown as the Mac's snapshot at its tool step. The field is additive, so
     /// the transcript renders visuals whenever a message carries them.
     static let chatVisualsFeature = "chat-visuals-v1"
@@ -289,6 +289,13 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// The Mac offers the phone simulator viewer (`simulators:mobile`).
     var supportsMobileSimulators: Bool {
         features.contains(Self.mobileSimulatorsFeature)
+    }
+
+    /// The Mac offers `bot:cards` (it lists the opt-in in its support
+    /// inventory wherever it serves Bot sessions), so this device may ask for
+    /// memory and routine proposal cards.
+    var supportsBotCards: Bool {
+        serverCapabilities?.contains(.botCards) == true
     }
 
     /// This device both may and did negotiate foreign-run observation.
@@ -981,7 +988,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1722,6 +1729,82 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
         guard receipt.pluginId == request.pluginId else { throw AidenRemoteClientError.invalidResponse }
         return receipt
+    }
+
+    // MARK: Memory (`bot-memory-v1`) and proactivity (`bot-proactive-v1`)
+
+    func botMemory(botId: String) async throws -> AidenBotMemory {
+        try validateBotIdentifier(botId)
+        let view: AidenBotMemory = try await send(method: "GET", path: ["bots", botId, "memory"])
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return view
+    }
+
+    /// One person edit. The error bodies carry no view, so a failed edit is
+    /// followed by a fresh `botMemory` read.
+    func editBotMemory(
+        botId: String,
+        request: AidenBotMemoryEditRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotMemory {
+        try validateBotIdentifier(botId)
+        let response: AidenBotMemoryEditResponse = try await send(
+            method: "POST",
+            path: ["bots", botId, "memory", "edits"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard response.view.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return response.view
+    }
+
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult {
+        try validateBotIdentifier(botId)
+        try AidenBotProactiveWire.validateProposalID(proposalId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "routine-proposals", proposalId, "respond"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+    }
+
+    func botRoutineSuggestions(botId: String) async throws -> [AidenBotRoutineSuggestion] {
+        try validateBotIdentifier(botId)
+        let list: AidenBotRoutineSuggestionList = try await send(
+            method: "GET",
+            path: ["bots", botId, "routine-suggestions"]
+        )
+        return list.suggestions
+    }
+
+    /// Finished Bot routine runs since `since` (the previous feed's `now`).
+    func botRoutineNotifications(since: String?) async throws -> AidenBotRoutineNotificationFeed {
+        if let since {
+            // The cursor is a timestamp the Mac sent earlier; never forward
+            // anything else in the query.
+            guard (1...64).contains(since.unicodeScalars.count),
+                  since.unicodeScalars.allSatisfy({ scalar in
+                      switch scalar.value {
+                      case 48...58, 65...90, 97...122, 43, 45, 46: true
+                      default: false
+                      }
+                  }) else {
+                throw AidenRemoteClientError.invalidResponse
+            }
+        }
+        return try await send(
+            method: "GET",
+            path: ["bots", "routine-notifications"],
+            query: since.map { [URLQueryItem(name: "since", value: $0)] } ?? []
+        )
     }
 
     func botPresets() async throws -> [AidenBotPreset] {

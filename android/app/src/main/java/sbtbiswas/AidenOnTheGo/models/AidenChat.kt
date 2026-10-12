@@ -661,7 +661,7 @@ data class AidenChatMessage(
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
     /**
-     * Inline visuals in reply order (contract revision 27). Entries this
+     * Inline visuals in reply order (contract revision 28). Entries this
      * version cannot use are dropped; the message itself survives.
      */
     @Serializable(with = AidenChatVisualListSerializer::class)
@@ -701,7 +701,7 @@ data class AidenHtmlArtifact(
 }
 
 /**
- * One inline visual of an assistant reply (contract revision 27): a native
+ * One inline visual of an assistant reply (contract revision 28): a native
  * `render_ui` visual or a sandboxed `render_artifact` HTML visual. Phones never
  * draw it; they show the Mac's snapshot image, else [fallbackText], else [title].
  */

@@ -160,15 +160,15 @@ function readinessStatus(
     typeof permissions.accessibility === "boolean" ? permissions.accessibility : null;
   const screenRecordingPreflight =
     typeof permissions.screen_recording === "boolean" ? permissions.screen_recording : null;
-  const screenRecordingCapturable =
-    typeof permissions.screen_recording_capturable === "boolean"
-      ? permissions.screen_recording_capturable
-      : null;
+  // 0.34 runs the live ScreenCaptureKit probe only on a prompting call, which
+  // an embedded driver never makes, so this is null ("not_checked") here. A
+  // probe that did run and failed still vetoes the TCC preflight.
+  const capturable = permissions.screen_recording_capturable;
   const source = asRecord(permissions.source);
   if (
     accessibility === null ||
     screenRecordingPreflight === null ||
-    screenRecordingCapturable === null ||
+    (capturable !== null && typeof capturable !== "boolean") ||
     source?.attribution !== "host" ||
     source.embedded !== true ||
     source.host_bundle_id !== CUA_DRIVER_TCC_HOST_BUNDLE_ID ||
@@ -179,9 +179,9 @@ function readinessStatus(
       "cua-driver returned an invalid permission report.",
     );
   }
-  // ScreenCaptureKit is the live capability probe. The cheaper TCC preflight
-  // can be stale or answer for the wrong responsible process.
-  const screenRecording = screenRecordingCapturable;
+  // A stale preflight cannot grant pixels on its own: a screenshot capture
+  // without the grant fails and the controller then refuses pixel actions.
+  const screenRecording = screenRecordingPreflight && capturable !== false;
 
   if (accessibility && screenRecording) {
     return {
