@@ -176,7 +176,7 @@ Shared rules:
 2. **Consumers (main).** Chat wiring, conversation mode, Create Images port,
    E2E env, tests. Done 2026-10-12 (see `.memory/image-generation.md`).
 3. **Renderer.** Settings page, registration, logos component, Create Images
-   picker logos and copy, onboarding note, tests.
+   picker logos and copy, onboarding note, tests. Done 2026-10-12.
 4. **Review.** Two independent Opus reviews (correctness/edge cases/blast
    radius; efficiency), then fixes.
 5. **Verify.** Narrow suites, typecheck, lint, then launch the app.

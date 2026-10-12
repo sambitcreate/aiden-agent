@@ -101,8 +101,26 @@ test("the Output mini-gallery shows at most four granted images and a hint when 
   assert.match(render(<OutputNodeBody images={[]} urls={{}} />).text, /Run the workflow to see images here/u);
 });
 
-test("the model picker explains how to add a provider when no image model is configured", () => {
-  assert.match(render(<ModelPicker models={[]} onChange={noop} />).text, /Add an OpenRouter key in Settings → Providers/u);
+test("the model picker points to Image Generation settings when no image model is configured", () => {
+  const bare = render(<ModelPicker models={[]} onChange={noop} />);
+  assert.match(bare.text, /Add an image key in Settings → Image Generation\./u);
+  assert.equal(bare.buttons.length, 0);
+  const linked = render(<ModelPicker models={[]} onChange={noop} onOpenSettings={noop} />);
+  assert.deepEqual(linked.buttons.map((button) => button.textContent), ["Open Image Generation"]);
+});
+
+test("the model picker shows the selected model's maker mark", () => {
+  const option = {
+    provider: "openrouter", providerLabel: "OpenRouter", model: "google/gemini-3.1-flash-image",
+    label: "Nano Banana 2", acceptsReferences: true, textOutput: false,
+  };
+  const picker = render(
+    <ModelPicker value={{ provider: "openrouter", id: "google/gemini-3.1-flash-image" }} models={[option]} onChange={noop} />,
+  );
+  const [trigger] = picker.buttons;
+  assert.match(trigger?.textContent ?? "", /Nano Banana 2/u);
+  const marks = Array.from(trigger?.getElementsByTagName("span") ?? []).map((node) => node.getAttribute("data-image-logo"));
+  assert.ok(marks.includes("google"));
 });
 
 test("a Generate node shows its run status and disables Run from Here during a run", () => {

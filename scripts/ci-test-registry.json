@@ -678,6 +678,8 @@
         "renderer/components/settings/skills-settings.test.tsx",
         "renderer/components/settings/tool-approval-settings.test.tsx",
         "renderer/components/settings/tts-settings.test.tsx",
+        "renderer/components/settings/image-generation-settings.test.tsx",
+        "renderer/components/image-model-logo.test.tsx",
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
         "renderer/components/sidebar-organize-menu.test.tsx",

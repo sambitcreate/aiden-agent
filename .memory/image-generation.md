@@ -21,3 +21,12 @@ Plan: `docs/plans/image-generation-settings-plan.md`.
 - Create Images: `createWiredImagePort({ models: imageGeneration.models, ready: () => imageGeneration.ready(), ... })`; the port's `prepare` hook runs before listing and before every request (sync lookups). Run-coordinator's missing-model message points to Settings → Image Generation.
 - E2E: `fakeOpenRouter` sets `AIDEN_IMAGE_OPENROUTER_API_KEY` (allowed credential key) instead of `OPENROUTER_API_KEY`.
 - CLI: does not wire `pi-model-tools`; only `packages/cli/src/extensions/display-image.ts` consumes the display-image runtime (always with a workspace root).
+
+## Renderer (Task 3, 2026-10-12)
+
+- Settings section `imageGeneration` ("Image Generation", Agent group, `Image` lucide icon) in `renderer/shared/settings-section.ts` and `renderer/main/settings-view.tsx`; deep link `/settings?section=imageGeneration`. Not capability-gated.
+- Page: `renderer/components/settings/image-generation-settings.tsx`. One action at a time (a ref lock); every result's `state` replaces local state; a thrown IPC error reloads state. Groups: privacy Callout, Providers (status badge, Add/Replace key inline password form, Remove with AlertDialog, Fetch latest models with per-provider inline notice, "Last fetched" line), Default model (Select, Automatic = null, unavailable default shown disabled), Models (search, provider filter buttons, Field rows with Switch; fetched models that are off stay hidden until searched or "Show all"; 200-row pages), Add model by ID (provider-specific extras: OpenRouter reference switch, Replicate reference field, fal edit endpoint + field).
+- Logos: `renderer/components/image-model-logo.tsx` (`ImageModelLogo`, `ImageProviderLogo`); shared mask/initial pieces in `renderer/components/themed-mark.tsx`, also used by `ProviderIcon` (markup unchanged).
+- Create Images picker shows maker marks; empty state "Add an image key in Settings → Image Generation." with an "Open Image Generation" button wired in `GenerateImageNode` via `useNavigate`.
+- Onboarding provider step has a one-line note; no gallery tile.
+- Tests: `renderer/components/image-model-logo.test.tsx`, `renderer/components/settings/image-generation-settings.test.tsx` (happy-dom + `installBotTestIpc`), both in `npm run test:image-generation` and the renderer-other CI lane.
