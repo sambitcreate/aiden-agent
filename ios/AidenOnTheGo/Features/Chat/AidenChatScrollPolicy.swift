@@ -102,10 +102,14 @@ enum AidenChatScrollPolicy {
     /// back to zero distance, so only an actual scroll (status-bar tap,
     /// VoiceOver, hardware keyboard) can carry the reader out that far.
     /// Keyboard insets change the viewport and are excluded.
+    /// Offset movement is required: content growth at an unchanged reader offset
+    /// (e.g., streaming tokens) must not opt out of following.
     static func isScrollingAwayFromBottom(previous: ScrollGeometry?, current: ScrollGeometry) -> Bool {
         guard let previous, previous.visibleHeight == current.visibleHeight else { return false }
+        let offsetMoved = current.offsetY > previous.offsetY + 0.5
         let distance = current.distanceFromBottom
-        return distance > previous.distanceFromBottom + 0.5
+        return offsetMoved
+            && distance > previous.distanceFromBottom + 0.5
             && distance > streamingBottomDetectionThreshold
     }
 
@@ -247,7 +251,10 @@ final class AidenTranscriptFollowController {
     var isFollowing: Bool { latch.isFollowing }
 
     func handle(_ event: AidenChatScrollPolicy.FollowEvent) {
-        if case .userScrollBegin = event { bottomArrivalGeneration &+= 1 }
+        if case .userScrollBegin = event {
+            bottomArrivalGeneration &+= 1
+            followGeneration &+= 1
+        }
         let resolved = AidenChatScrollPolicy.resolveFollow(current: latch, event: event)
         if resolved != latch { latch = resolved }
         updateJumpButton()
@@ -298,6 +305,13 @@ final class AidenTranscriptFollowController {
     func setStreaming(_ streaming: Bool) {
         guard streaming != isStreaming else { return }
         isStreaming = streaming
+        // Recompute proximity when the threshold changes, since the cached
+        // isNearBottom was computed with the old streaming state.
+        let nearBottom = AidenChatScrollPolicy.isNearBottom(
+            distanceFromBottom: distanceFromBottom,
+            isStreaming: streaming
+        )
+        if nearBottom != isNearBottom { isNearBottom = nearBottom }
         updateJumpButton()
     }
 

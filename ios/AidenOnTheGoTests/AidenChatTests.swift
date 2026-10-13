@@ -11285,6 +11285,16 @@ final class AidenChatScrollFollowTests: XCTestCase {
         XCTAssertFalse(Policy.isScrollingAwayFromBottom(
             previous: atBottom, current: Geometry(offsetY: 4700, contentHeight: 5400, visibleHeight: 700)))
     }
+
+    func testContentGrowthAtUnchangedOffsetDoesNotTriggerMovedAway() {
+        // Streaming or reply growth that doesn't move the reader's offset
+        // should not opt out of following. Only actual offset movement upward
+        // counts as a scroll away.
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        let grewLargeReplyWithoutScroll = Geometry(offsetY: 4300, contentHeight: 5200, visibleHeight: 700)
+        // Distance grew from 700 to 900, past streaming threshold, but offset unchanged.
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: atBottom, current: grewLargeReplyWithoutScroll))
+    }
 }
 
 /// Releases `AidenTranscriptFollowController` pauses one at a time.
@@ -11339,6 +11349,54 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertEqual(performed, 0)
     }
 
+    func testANewDragInvalidatesPendingFollowAndCorrectionTasks() async {
+        // A user-initiated scroll that is waiting in followPause, or a
+        // corrective snap scheduled after an animated jump, must be cancelled
+        // if the user starts a new drag before the pause releases.
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed: [String] = []
+
+        // Schedule a user-initiated jump (like "Jump to latest").
+        let jumpTask = controller.scheduleFollowScroll(isUserInitiated: true, animated: false) { _ in
+            performed.append("jump")
+        }
+        await pauses.waitForPending(1)
+        // User starts dragging before the jump pause releases.
+        controller.handle(.userScrollBegin)
+        pauses.releaseAll()
+        await jumpTask?.value
+        // The jump must not execute because the new drag invalidated it.
+        XCTAssertEqual(performed, [])
+    }
+
+    func testDragAfterResetInvalidatesTheOlderDragCorrection() async {
+        // After an explicit reset (jump), a later corrective snap must be
+        // invalidated by a newer drag, not resurrected by the old momentum.
+        let settles = AidenManualPauses()
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: { await pauses.pause() },
+            jumpButtonDelay: {},
+            animationSettle: { await settles.pause() }
+        )
+        var performed: [String] = []
+
+        // Jump (animate), land short (schedule corrective snap).
+        let jumpTask = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            performed.append(animated ? "jump-animated" : "jump-correct")
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await settles.waitForPending(1)
+        // User drags while the corrective snap is settling.
+        controller.handle(.userScrollBegin)
+        settles.releaseAll()
+        await jumpTask?.value
+
+        // The corrective snap must not execute (only the animated jump did).
+        XCTAssertEqual(performed, ["jump-animated"])
+    }
+
     func testAutomaticFollowDoesNothingWhileTheReaderIsAway() {
         let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
         controller.handle(.userScrollBegin)
@@ -11360,6 +11418,39 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         controller.setStreaming(false)
         await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
         XCTAssertEqual(animatedValues, [false, true])
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingEnds() {
+        // When streaming ends, the bottom proximity threshold changes from 160pt
+        // to 80pt. A distance that was "near" while streaming (e.g., 120pt) may
+        // become "away" once streaming stops, and isNearBottom must recompute
+        // immediately so the Jump button appears without waiting for the next
+        // geometry report.
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Streaming: 120pt is near (within 160pt threshold).
+        controller.setStreaming(true)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertTrue(controller.isNearBottom)
+
+        // Streaming ends: 120pt becomes away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        XCTAssertFalse(controller.isNearBottom)
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingStarts() {
+        // Conversely, when streaming starts, the threshold loosens and a
+        // distance that was "away" (e.g., 120pt) becomes "near".
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Not streaming: 120pt is away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertFalse(controller.isNearBottom)
+
+        // Streaming starts: 120pt becomes near (within 160pt threshold).
+        controller.setStreaming(true)
+        XCTAssertTrue(controller.isNearBottom)
     }
 
     func testJumpButtonAppearsAfterTheDelayAndHidesImmediately() async {
@@ -11525,6 +11616,43 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         scrollView.contentOffset.y -= 200
         drainMainQueue()
         XCTAssertFalse(controller.isFollowing)
+    }
+
+    func testScrollObserverFinishesSessionWhenFingerLiftsWhileTracking() {
+        // Fling toward the bottom + tap to stop within re-arm distance: the
+        // settle check must eventually run even if UIKit never sends a pan
+        // .failed event for the tracking-without-dragging state.
+        let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        scrollView.contentSize = CGSize(width: 320, height: 2_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_480)
+
+        var followEvents: [AidenChatScrollPolicy.FollowEvent] = []
+        let coordinator = AidenChatScrollObserver.Coordinator(
+            onFollowEvent: { followEvents.append($0) },
+            onMetrics: { _ in }
+        )
+        let content = UIView()
+        scrollView.addSubview(content)
+        coordinator.attachIfNeeded(from: content)
+        defer { coordinator.detach() }
+        drainMainQueue()
+
+        // Start a fling (pan began, then momentum).
+        scrollView.touchIsTracking = true
+        followEvents.removeAll()
+        // (observer reports pan .began as userScrollBegin via handlePanGesture)
+
+        // User taps to stop within re-arm distance (12pt).
+        scrollView.touchIsTracking = true
+        scrollView.touchIsDragging = false
+        let stopPosition = scrollView.contentOffset.y + 8 // 8pt from bottom
+        scrollView.contentOffset.y = stopPosition
+        drainMainQueue()
+
+        // Settle eventually fires userScrollEnd (it reschedules while tracking).
+        XCTAssertTrue(runMainLoop(until: {
+            followEvents.contains { if case .userScrollEnd = $0 { return true }; return false }
+        }, timeout: 1))
     }
 
     func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
