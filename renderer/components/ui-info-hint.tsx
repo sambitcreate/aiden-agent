@@ -73,7 +73,7 @@ export function InfoHint({
           aria-describedby={open ? contentId : undefined}
           data-slot="info-hint"
           className={cn(
-            "info-hint inline-grid size-[1.125rem] shrink-0 cursor-default place-items-center rounded-full text-tertiary outline-none transition-colors duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary aria-expanded:bg-control aria-expanded:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
+            "inline-grid size-[1.125rem] shrink-0 cursor-default place-items-center rounded-full text-tertiary outline-none transition-colors duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary aria-expanded:bg-control aria-expanded:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
             className,
           )}
           onPointerEnter={(event) => {

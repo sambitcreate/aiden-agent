@@ -80,7 +80,7 @@ export function ModelPadTray({
                 data-value={entry.value}
                 data-hot={hotValue === entry.value ? "true" : undefined}
                 data-selected={selectedValue === entry.value ? "true" : undefined}
-                className="model-pad-tray-row group flex min-h-9 items-center gap-1 rounded-control pr-1 transition-colors duration-(--motion-duration) ease-standard hover:bg-list-hover data-[hot=true]:bg-list-hover data-[selected=true]:bg-list-selection"
+                className="group flex min-h-9 items-center gap-1 rounded-control pr-1 transition-colors duration-(--motion-duration) ease-standard hover:bg-list-hover data-[hot=true]:bg-list-hover data-[selected=true]:bg-list-selection"
                 onPointerEnter={() => onHotChange(entry.value, true)}
                 onPointerLeave={() => onHotChange(entry.value, false)}
               >

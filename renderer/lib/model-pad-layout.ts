@@ -15,11 +15,6 @@ export type {
 /** How a marker reads on every Pad surface: placed by the user, or positioned with data. */
 export type ModelPadPlacementKind = "personal" | "benchmark";
 
-export const MODEL_PAD_PLACEMENT_KIND_LABELS: Record<ModelPadPlacementKind, string> = {
-  personal: "Placed by you",
-  benchmark: "Data-assisted",
-};
-
 /** A placement is personal only when the user owns both axes; any data-derived axis makes it data-assisted. */
 export function modelPadPlacementKind(
   placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
@@ -34,7 +29,7 @@ export function modelPadPlacementKind(
 export function modelPadPlacementSourceLabel(
   placement: Pick<ModelPadPlacement, "xSource" | "ySource">,
 ): string {
-  if (modelPadPlacementKind(placement) === "personal") return MODEL_PAD_PLACEMENT_KIND_LABELS.personal;
+  if (modelPadPlacementKind(placement) === "personal") return "Placed by you";
   if (placement.xSource === "measured") {
     return placement.ySource === "benchmark" ? "Benchmark height, measured pace" : "Measured pace";
   }

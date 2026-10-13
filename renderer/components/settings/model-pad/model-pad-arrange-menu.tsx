@@ -17,9 +17,8 @@ import {
   modelPadHeightCaption,
   type ModelPadMetric,
 } from "../../../lib/model-pad-layout";
+import { MODEL_PAD_METRICS } from "../../../shared/model-pad-preferences";
 import { cn } from "../../../lib/ui-utils";
-
-export const MODEL_PAD_METRICS: readonly ModelPadMetric[] = ["intelligence", "coding", "agentic"];
 
 type CloseAutoFocus = (event: Event) => void;
 
@@ -132,7 +131,7 @@ export function ModelPadArrangeMenu({
           aria-label="Benchmark score for height"
           value={metric}
           onValueChange={(value) => onMetricChange(value as ModelPadMetric)}
-          className="model-pad-segments mx-1 mb-1 grid grid-cols-3 gap-0.5 rounded-control bg-control p-0.5"
+          className="mx-1 mb-1 grid grid-cols-3 gap-0.5 rounded-control bg-control p-0.5"
         >
           {MODEL_PAD_METRICS.map((option) => (
             <DropdownMenuPrimitive.RadioItem
@@ -140,7 +139,7 @@ export function ModelPadArrangeMenu({
               value={option}
               // Switching the score keeps the menu open, like a segmented control.
               onSelect={(event) => event.preventDefault()}
-              className="model-pad-segment flex h-6 cursor-default select-none items-center justify-center rounded-[10px] text-small text-secondary outline-none transition-colors duration-(--motion-duration) ease-standard hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring data-[state=checked]:bg-popover data-[state=checked]:text-primary data-[state=checked]:shadow-control"
+              className="flex h-6 cursor-default select-none items-center justify-center rounded-menu text-small text-secondary outline-none transition-colors duration-(--motion-duration) ease-standard hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring data-[state=checked]:bg-popover data-[state=checked]:text-primary data-[state=checked]:shadow-control"
             >
               {MODEL_PAD_METRIC_LABELS[option]}
             </DropdownMenuPrimitive.RadioItem>

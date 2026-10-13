@@ -506,6 +506,15 @@ body {
   font-size: var(--code-font-size);
 }
 
+/* Keys named in an InfoHint (ui-info-hint.tsx) read as keycaps in the hint's text. */
+.info-hint-content kbd {
+  padding-inline: 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .code-font-sized,
 .code-font-sized :where(textarea, code, pre) {
   font-family: var(--font-code-family);
@@ -840,10 +849,9 @@ textarea {
 }
 
 /*
- * The model map borrows the tactile grammar of Apple's Photographic Styles
- * pad while keeping Aiden's restrained surfaces and accent palette. The
- * lattice is structural: its highlighted row and column expose both axes at
- * the current model instead of turning the map into an unlabeled mood field.
+ * Settings → Model Pad: the card is a size container so the tray can sit
+ * beside the square or stack under it; the header holds the count, the
+ * metric chip and the Add, Arrange and ⋯ actions.
  */
 .model-pad-fieldset {
   width: 100%;
@@ -943,18 +951,10 @@ textarea {
   gap: 0.375rem;
   margin-top: 0.625rem;
   padding: 0.25rem 0.25rem 0.25rem 0.75rem;
-  border-radius: 1.125rem;
+  border-radius: var(--radius-pill);
   background: var(--surface-popover);
   box-shadow: var(--elevation-popover);
   font-size: var(--text-small);
-}
-
-.info-hint-content kbd {
-  padding-inline: 0.25rem;
-  border-radius: 0.25rem;
-  background: var(--surface-control);
-  color: var(--text-primary);
-  font: inherit;
 }
 
 .model-pad {
@@ -1213,8 +1213,9 @@ textarea {
   box-shadow: 0 0 0 2px var(--surface-popover);
 }
 
-/* Composer Pad axis captions, in the 8% inset margin outside the lattice. They are
-   dropped on a Pad too small for the margin to clear the edge markers. */
+/* Pad axis captions (composer and settings), in the 8% inset margin outside the
+   lattice. They are dropped on a Pad too small for the margin to clear the edge
+   markers. */
 .model-pad-axis-captions {
   position: absolute;
   inset: 0;
@@ -1516,7 +1517,6 @@ textarea {
 }
 
 /* The tray moves under the Pad when the card itself is narrow. */
-
 @container model-pad-fieldset (max-width: 640px) {
   .model-pad-body {
     grid-template-columns: minmax(0, 1fr);
@@ -1526,7 +1526,6 @@ textarea {
     max-height: none;
   }
 }
-
 
 @container settings-content (max-width: 540px) {
   .settings-field-horizontal {

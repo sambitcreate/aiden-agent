@@ -25,7 +25,8 @@ export type ModelPadPlacements = Record<string, ModelPadPlacement>;
  * main and renderer types is this type; here it also sets the height of
  * benchmark-assisted Pad placements.
  */
-export type ModelPadMetric = "intelligence" | "coding" | "agentic";
+export const MODEL_PAD_METRICS = ["intelligence", "coding", "agentic"] as const;
+export type ModelPadMetric = (typeof MODEL_PAD_METRICS)[number];
 
 export const DEFAULT_MODEL_PAD_METRIC: ModelPadMetric = "coding";
 
@@ -108,7 +109,7 @@ export function recordRecentModel(recent: readonly string[], value: string): str
 
 /** A known metric, or undefined (the caller then uses {@link DEFAULT_MODEL_PAD_METRIC}). */
 export function normalizeModelPadMetric(value: unknown): ModelPadMetric | undefined {
-  return value === "intelligence" || value === "coding" || value === "agentic" ? value : undefined;
+  return MODEL_PAD_METRICS.find((metric) => metric === value);
 }
 
 export interface ModelPadPreferencesPatch {
