@@ -577,6 +577,9 @@ export function MessageList({
     [],
   );
   const transcriptRef = React.useRef<HTMLDivElement | null>(null);
+  const settledReplyKeysRef = React.useRef<ReadonlySet<string>>(new Set());
+  const liveKeyRef = React.useRef<{ base: string; key: string } | null>(null);
+  const handedOffKeysRef = React.useRef(new Map<string, string>());
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -761,10 +764,69 @@ export function MessageList({
   // The persisted copy of the reply still on screen waits until the live row
   // hands over, then takes the live row's key: one reply, settled in place.
   const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
+  const settlingIndex = settlingMessageId
+    ? messages.findIndex((message) => message.id === settlingMessageId)
+    : -1;
+  // The live row stands where its saved message will be, keyed by the message
+  // it answers, even if a queued prompt is saved after it before the handoff.
+  const liveBaseKey = replyRowKey(
+    settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1],
+  );
+  let liveKey = liveBaseKey;
+  if (streamingRowVisible) {
+    const held = liveKeyRef.current;
+    if (held?.base === liveBaseKey) {
+      liveKey = held.key;
+    } else {
+      // A new reply to a prompt that already has a saved reply (a regenerated
+      // answer) starts fresh instead of inheriting that reply's open sections.
+      for (let n = 1; settledReplyKeysRef.current.has(liveKey); n += 1) {
+        liveKey = `${liveBaseKey}~${n}`;
+      }
+    }
+    liveKeyRef.current = { base: liveBaseKey, key: liveKey };
+    if (settlingMessageId) handedOffKeysRef.current.set(settlingMessageId, liveKey);
+  } else {
+    liveKeyRef.current = null;
+  }
+  const liveRow = streamingRowVisible ? (
+    <SettledMessageRow
+      key={liveKey}
+      live={{
+        content: streamingText ?? "",
+        timeline,
+        reasoning: streamingReasoning,
+        attachments: liveAttachments,
+        subagentChips:
+          subagentsEnabled && liveSubagents.length > 0 ? (
+            <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+          ) : undefined,
+        streamComplete,
+        onStreamHandoffComplete,
+        visuals: htmlArtifactsByAnchor.get("streaming"),
+        visualPlacements: streamingArtifactPlacements,
+        wideVisuals: streamingWideVisuals,
+        visualDrafts: streamingVisualDrafts,
+        renderVisual,
+        uiVisuals: streamingUiVisuals,
+        uiDrafts: streamingUiDrafts,
+        renderUiVisual: renderLiveUiVisual,
+      }}
+      subagentsEnabled={subagentsEnabled}
+      onOpenSubagent={onOpenSubagent}
+    />
+  ) : null;
+
+  const settledReplyKeys = new Set<string>();
   let previous: ChatMessage | undefined;
   for (const message of messages) {
-    if (message.id === settlingMessageId) continue;
-    const key = transcriptRowKey(message, previous);
+    if (message.id === settlingMessageId) {
+      transcriptRows.push(liveRow);
+      previous = message;
+      continue;
+    }
+    const key = handedOffKeysRef.current.get(message.id) ?? transcriptRowKey(message, previous);
+    if (message.role === "assistant") settledReplyKeys.add(key);
     previous = message;
     transcriptRows.push(
       <SettledMessageRow
@@ -787,35 +849,10 @@ export function MessageList({
     }
   }
 
-  if (streamingRowVisible) {
-    transcriptRows.push(
-      <SettledMessageRow
-        key={replyRowKey(previous)}
-        live={{
-          content: streamingText ?? "",
-          timeline,
-          reasoning: streamingReasoning,
-          attachments: liveAttachments,
-          subagentChips:
-            subagentsEnabled && liveSubagents.length > 0 ? (
-              <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-            ) : undefined,
-          streamComplete,
-          onStreamHandoffComplete,
-          visuals: htmlArtifactsByAnchor.get("streaming"),
-          visualPlacements: streamingArtifactPlacements,
-          wideVisuals: streamingWideVisuals,
-          visualDrafts: streamingVisualDrafts,
-          renderVisual,
-          uiVisuals: streamingUiVisuals,
-          uiDrafts: streamingUiDrafts,
-          renderUiVisual: renderLiveUiVisual,
-        }}
-        subagentsEnabled={subagentsEnabled}
-        onOpenSubagent={onOpenSubagent}
-      />,
-    );
-  }
+  if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
+  React.useLayoutEffect(() => {
+    settledReplyKeysRef.current = settledReplyKeys;
+  });
 
   return (
     <MessageAttachmentPreviewProvider>

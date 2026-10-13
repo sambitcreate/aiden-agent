@@ -9,6 +9,8 @@ export type StreamingRevealBlockKind = "prose" | "markdown";
 export interface StreamingRevealUnit {
   id: string;
   text: string;
+  /** Where this unit's source ends in the response. */
+  end: number;
   /**
    * Set only while a fenced code block is still open. Its source grows every
    * line, so it renders as plain monospaced text and is highlighted once the
@@ -186,6 +188,7 @@ function proseUnits(
     units.push({
       id: `prose-${start + currentStart}-${start + end}`,
       text: value,
+      end: start + end,
     });
     currentStart = end;
     pendingSentenceEnd = false;
@@ -217,14 +220,16 @@ function proseUnits(
 }
 
 function atomicMarkdownBlock(
-  start: number,
+  lines: SourceLine[],
   text: string,
   code?: Pick<StreamingRevealUnit, "openCode" | "fence">,
 ): StreamingRevealBlock {
+  const start = lines[0]!.start;
+  const last = lines[lines.length - 1]!;
   return {
     id: `markdown-${start}`,
     kind: "markdown",
-    units: [{ id: `markdown-${start}`, text, ...code }],
+    units: [{ id: `markdown-${start}`, text, end: last.start + last.text.length, ...code }],
   };
 }
 
@@ -313,10 +318,11 @@ function parseStreamingRevealRange(
       const closedFence = end < lines.length;
       const closingFenceStable = closedFence && (lines[end]!.closed || isComplete);
       const sourceEnd = closingFenceStable ? end + 1 : lines.length;
-      let source = lines
-        .slice(index, closingFenceStable ? sourceEnd : closedFence ? end : sourceEnd)
-        .map((entry) => entry.text)
-        .join("");
+      const sourceLinesShown = lines.slice(
+        index,
+        closingFenceStable ? sourceEnd : closedFence ? end : sourceEnd,
+      );
+      let source = sourceLinesShown.map((entry) => entry.text).join("");
       let code: Pick<StreamingRevealUnit, "openCode" | "fence"> | undefined;
       if (!closingFenceStable) {
         if (!source.endsWith("\n")) source += "\n";
@@ -333,7 +339,7 @@ function parseStreamingRevealRange(
         const fence = lang ? { code: body, lang } : { code: body };
         code = closingFenceStable ? { fence } : { openCode: fence };
       }
-      blocks.push(atomicMarkdownBlock(line.start, source, code));
+      blocks.push(atomicMarkdownBlock(sourceLinesShown, source, code));
       index = sourceEnd - 1;
       continue;
     }
@@ -372,11 +378,8 @@ function parseStreamingRevealRange(
       while (end < lines.length && lines[end]!.body.includes("|") && lines[end]!.body.trim()) {
         end += 1;
       }
-      const source = lines
-        .slice(index, end)
-        .map((entry) => entry.text)
-        .join("");
-      blocks.push(atomicMarkdownBlock(line.start, source));
+      const tableLines = lines.slice(index, end);
+      blocks.push(atomicMarkdownBlock(tableLines, tableLines.map((entry) => entry.text).join("")));
       index = end - 1;
       continue;
     }
@@ -385,11 +388,8 @@ function parseStreamingRevealRange(
       flushParagraph(true);
       let end = index + 1;
       while (end < lines.length && lines[end]!.body.trim()) end += 1;
-      const source = lines
-        .slice(index, end)
-        .map((entry) => entry.text)
-        .join("");
-      blocks.push(atomicMarkdownBlock(line.start, source));
+      const listLines = lines.slice(index, end);
+      blocks.push(atomicMarkdownBlock(listLines, listLines.map((entry) => entry.text).join("")));
       index = end - 1;
       continue;
     }
@@ -397,7 +397,7 @@ function parseStreamingRevealRange(
     if (HEADING_OR_QUOTE.test(line.body)) {
       if (!line.closed) break;
       flushParagraph(true);
-      blocks.push(atomicMarkdownBlock(line.start, line.text));
+      blocks.push(atomicMarkdownBlock([line], line.text));
       continue;
     }
 
@@ -438,6 +438,24 @@ export class StreamingRevealParser {
     }
     return blocks;
   }
+}
+
+/**
+ * Where the first `count` reveal units end in the response. Units follow the
+ * source in order, so the text before this offset is exactly what has been
+ * revealed, and it renders as one Markdown document.
+ */
+export function streamingRevealVisibleEnd(blocks: StreamingRevealBlock[], count: number): number {
+  let remaining = count;
+  let end = 0;
+  for (const block of blocks) {
+    for (const unit of block.units) {
+      if (remaining <= 0) return end;
+      end = unit.end;
+      remaining -= 1;
+    }
+  }
+  return end;
 }
 
 export function revealDelayMs(pendingUnits: number, isComplete: boolean): number {

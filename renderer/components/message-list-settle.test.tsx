@@ -34,6 +34,7 @@ interface Frame {
   live?: boolean;
   liveSubagents?: SubagentRunSnapshotV1[];
   subagentsEnabled?: boolean;
+  reasoning?: string | null;
 }
 
 function transcript({
@@ -45,13 +46,14 @@ function transcript({
   live,
   liveSubagents,
   subagentsEnabled,
+  reasoning,
 }: Frame) {
   return (
     <MessageList
       chatId="chat-settle"
       messages={messages}
       streamingText={streamingText}
-      streamingReasoning={null}
+      streamingReasoning={reasoning ?? null}
       streamingArtifacts={live ? [visual] : []}
       streamComplete={streamComplete}
       persistedHandoffMessageId={persistedHandoffMessageId ?? null}
@@ -125,6 +127,105 @@ test("a finished reply settles in place: one copy during the handoff, the same e
   assert.equal(replyCopyButton(), copy, "the reserved actions appear in place");
   assert.equal(copy.closest('[aria-hidden="true"]'), null);
   assert.ok(screen.getByRole("button", { name: "Fork from here" }), "and the settled reply gains its fork action");
+});
+
+/** The rendered Markdown of the reply that shows `text`: its whole document root. */
+function replyMarkdown(container: HTMLElement, text: string): string {
+  const paragraph = [...container.querySelectorAll("p")].find((p) => p.textContent?.includes(text));
+  assert.ok(paragraph?.parentElement, `a paragraph with ${JSON.stringify(text)}`);
+  return paragraph.parentElement.innerHTML;
+}
+
+test("a streamed reply settles into exactly what the same reply renders from history", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const reply = [
+    "Read the [design notes][notes] first.[^review]",
+    "",
+    "- The first point",
+    "",
+    "  It has a second paragraph.",
+    "",
+    "- The second point",
+    "",
+    "[notes]: https://example.com/notes",
+    "[^review]: Written during the review.",
+    "",
+  ].join("\n");
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: reply, createdAt: 2 };
+
+  const history = render(transcript({ messages: [prompt, saved], streamingText: null }));
+  const expected = replyMarkdown(history.container, "Read the");
+  history.unmount();
+  // The oracle itself resolves what a block-by-block render cannot.
+  const parsed = document.createElement("div");
+  parsed.innerHTML = expected;
+  assert.equal(parsed.querySelector("a")?.getAttribute("href"), "https://example.com/notes");
+  assert.equal(parsed.querySelectorAll("ul").length, 1, "one loose list");
+  assert.ok(parsed.querySelector("section")?.textContent?.includes("Written during the review."));
+
+  const view = render(transcript({ messages: [prompt], streamingText: reply.slice(0, 40) }));
+  for (const end of [80, 120, reply.length]) {
+    view.rerender(transcript({ messages: [prompt], streamingText: reply.slice(0, end) }));
+  }
+  view.rerender(
+    transcript({
+      messages: [prompt, saved],
+      streamingText: reply,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    }),
+  );
+  assert.equal(replyMarkdown(view.container, "Read the"), expected, "the finished reveal");
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  assert.equal(replyMarkdown(view.container, "Read the"), expected, "the settled reply");
+});
+
+test("a reply settling behind a queued prompt keeps its place and its elements", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const text = "The first answer.";
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: text, createdAt: 2 };
+  const queued: ChatMessage = { id: "user-2", role: "user", content: "And then?", createdAt: 3 };
+  const view = render(transcript({ messages: [prompt], streamingText: `${text}\n\n` }));
+  const paragraph = screen.getByText(text).closest("p");
+  assert.ok(paragraph);
+
+  // The queued prompt is saved after the reply while the reply still hands over.
+  view.rerender(
+    transcript({
+      messages: [prompt, saved, queued],
+      streamingText: text,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    }),
+  );
+  const follows = (first: Node, second: Node) =>
+    Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(screen.getByText(text).closest("p"), paragraph, "the reply is not remounted");
+  assert.ok(follows(paragraph, screen.getByText("And then?")), "and it stays above the queued prompt");
+
+  view.rerender(transcript({ messages: [prompt, saved, queued], streamingText: null }));
+  assert.equal(screen.getByText(text).closest("p"), paragraph, "the saved reply is the same element");
+});
+
+test("a new answer to a prompt that already has one starts with its own sections closed", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const answered: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: "The first answer.",
+    reasoning: "Earlier thinking.",
+    createdAt: 2,
+  };
+  const view = render(transcript({ messages: [prompt, answered], streamingText: null }));
+  const header = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
+  assert.ok(header, "the saved reasoning has a disclosure");
+  act(() => header.click());
+  assert.equal(header.closest("section")?.dataset.disclosureLayout, "full", "the reader opened it");
+
+  // The saved answer is replaced by a fresh one streaming in its place.
+  view.rerender(transcript({ messages: [prompt], streamingText: "", reasoning: "Fresh thinking." }));
+  const live = screen.getByText("Fresh thinking.").closest("section");
+  assert.equal(live?.dataset.disclosureLayout, "preview", "the new reasoning opens as a live preview");
 });
 
 function previews(container: HTMLElement): number {

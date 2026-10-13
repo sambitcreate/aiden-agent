@@ -1,14 +1,12 @@
 import * as React from "react";
-import { CodeBlock } from "./code-block";
-import { MARKDOWN_CLASSNAME, MarkdownContent, MarkdownInline } from "./markdown";
+import { MARKDOWN_CLASSNAME, MarkdownContent } from "./markdown";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import {
   advanceStreamingRevealSchedule,
   clampStreamingRevealSchedule,
-  splitStreamingRevealUnit,
   StreamingRevealParser,
   streamingRevealHandoffDelay,
-  type StreamingRevealBlock,
+  streamingRevealVisibleEnd,
   type StreamingRevealScheduleInput,
   type StreamingRevealScheduleState,
 } from "../lib/streaming-reveal";
@@ -34,21 +32,6 @@ function useReducedMotion(): boolean {
     return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
   }, []);
   return reduced;
-}
-
-function visibleBlocks(
-  blocks: StreamingRevealBlock[],
-  revealedCount: number,
-): StreamingRevealBlock[] {
-  let remaining = revealedCount;
-  const visible: StreamingRevealBlock[] = [];
-  for (const block of blocks) {
-    if (remaining <= 0) break;
-    const units = block.units.slice(0, remaining);
-    if (units.length) visible.push({ ...block, units });
-    remaining -= units.length;
-  }
-  return visible;
 }
 
 export function StreamingMarkdownReveal({
@@ -104,8 +87,14 @@ export function StreamingMarkdownReveal({
   }, [unitCount, complete, reducedMotion]);
 
   const visibleCount = reducedMotion ? unitCount : revealedCount;
-  const visible = visibleBlocks(blocks, visibleCount);
   const handoffReady = complete && visibleCount >= unitCount;
+  // The revealed text renders as one document, exactly like a reply loaded
+  // from history: reference links, footnotes, and loose lists resolve across
+  // blocks. Blocks keep their elements as the text grows, so the finished
+  // reply settles in place.
+  const source = handoffReady
+    ? content
+    : content.slice(0, streamingRevealVisibleEnd(blocks, visibleCount));
 
   const notifyHandoffComplete = React.useCallback(() => {
     if (handoffNotified.current) return;
@@ -121,41 +110,8 @@ export function StreamingMarkdownReveal({
   }, [handoffReady, notifyHandoffComplete, reducedMotion]);
 
   return (
-    <div className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}>
-      {visible.map((block) => {
-        if (block.kind === "prose") {
-          return (
-            <p key={block.id} className="my-3 max-w-[72ch] first:mt-0 last:mb-0">
-              {block.units.map((unit) => {
-                const parts = splitStreamingRevealUnit(unit.text);
-                return (
-                  <span key={unit.id} className="streaming-reveal-unit">
-                    {parts.leadingWhitespace}
-                    {parts.markdown ? (
-                      <MarkdownInline content={parts.markdown} richLinks={richLinks} />
-                    ) : null}
-                    {parts.trailingWhitespace}
-                  </span>
-                );
-              })}
-            </p>
-          );
-        }
-        return block.units.map((unit) => {
-          const code = unit.openCode ?? unit.fence;
-          return (
-            <div key={unit.id} className="streaming-reveal-block">
-              {code ? (
-                // One code element from the first line to the settled reply:
-                // it stays plain while the fence grows and highlights once it closes.
-                <CodeBlock code={code.code} lang={code.lang} plain={Boolean(unit.openCode)} />
-              ) : (
-                <MarkdownContent content={unit.text} richLinks={richLinks} />
-              )}
-            </div>
-          );
-        });
-      })}
+    <div className={`streaming-reveal ${MARKDOWN_CLASSNAME}`} data-streaming={handoffReady ? undefined : ""}>
+      <MarkdownContent content={source} richLinks={richLinks} streaming={!handoffReady} />
     </div>
   );
 }
