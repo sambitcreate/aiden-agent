@@ -2730,9 +2730,34 @@ class AidenChatTest {
         } finally { Dispatchers.resetMain(); dispatcher.close() }
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun aTitleRefreshHoldingTheEndedRunsReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("done", "{\"messageId\":\"final-reply\"}", outcome = null, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshHoldingACancelledRunsPartialReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("cancelled", "{\"source\":\"device\"}",
+            AidenMessageOutcomeStatus.CANCELLED, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshHoldingAFailedRunsPartialReplyRetiresTheLiveCard() {
+        assertTitleRefreshAfterTerminal("error", "{\"code\":\"internal_error\",\"message\":\"Provider failed\"}",
+            AidenMessageOutcomeStatus.FAILED, refreshHoldsReply = true)
+    }
+
+    @Test
+    fun aTitleRefreshWithoutTheCancelledRunsReplyKeepsTheLiveCard() {
+        // The chat already ends with an earlier cancelled reply; that one is not this run's.
+        assertTitleRefreshAfterTerminal("cancelled", "{\"source\":\"server\"}",
+            AidenMessageOutcomeStatus.CANCELLED, refreshHoldsReply = false)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertTitleRefreshAfterTerminal(
+        terminalType: String, terminalPayload: String, outcome: AidenMessageOutcomeStatus?, refreshHoldsReply: Boolean
+    ) {
         val directory = kotlin.io.path.createTempDirectory("ended-reply-").toFile()
         val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val server = MockWebServer()
@@ -2740,11 +2765,17 @@ class AidenChatTest {
         val releaseEvents = CountDownLatch(1)
         val releaseRetries = CountDownLatch(1)
         val reads = java.util.concurrent.atomic.AtomicInteger()
-        val initial = AidenChat(id = "chat-ended", workspaceId = "workspace-ended", title = "Ended", messages = emptyList(),
+        val earlier = listOf(
+            AidenChatMessage("earlier-prompt", AidenChatRole.USER, "Earlier", createdAt = Instant.EPOCH),
+            AidenChatMessage("earlier-reply", AidenChatRole.ASSISTANT, "Stopped early", createdAt = Instant.EPOCH,
+                outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED)))
+        val initial = AidenChat(id = "chat-ended", workspaceId = "workspace-ended", title = "Ended", messages = earlier,
             createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1", titlePending = true)
         val reply = "The final reply"
-        val final = initial.copy(revision = "r2", titlePending = null, messages = listOf(
-            AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH)))
+        val runReply = AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH,
+            outcome = outcome?.let { AidenMessageOutcome(it) })
+        val final = initial.copy(revision = "r2", titlePending = null,
+            messages = if (refreshHoldsReply) earlier + runReply else earlier)
         val wire = Json { explicitNulls = false; encodeDefaults = true }
         fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
             "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-ended\",\"sequence\":$sequence," +
@@ -2757,7 +2788,7 @@ class AidenChatTest {
                         event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
                             event(2, "tool_finished", "{\"toolId\":\"tool-1\",\"status\":\"succeeded\"}") +
                             event(3, "text_delta", "{\"text\":\"$reply\"}") +
-                            event(4, "done", "{\"messageId\":\"final-reply\"}", terminal = true))
+                            event(4, terminalType, terminalPayload, terminal = true))
                 }
                 request.requestUrl!!.encodedPath.endsWith("/chats/chat-ended") -> when (reads.incrementAndGet()) {
                     1 -> MockResponse().setBody(wire.encodeToString(initial))
@@ -2801,12 +2832,19 @@ class AidenChatTest {
                 assertEquals(listOf("tool-1"), vm.tools.value.map { it.id })
 
                 withTimeout(5_000) { vm.chat.first { it?.revision == "r2" } }
-                assertEquals(listOf("final-reply"), vm.chat.value?.messages?.map { it.id })
+                assertEquals(final.messages.map { it.id }, vm.chat.value?.messages?.map { it.id })
                 // The screen keeps the card while any live output remains, tool rows included.
                 val hasLiveOutput = vm.liveText.value.isNotEmpty() || vm.reasoning.value.isNotEmpty() || vm.tools.value.isNotEmpty()
-                assertFalse("the reply must not show twice", AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput))
-                assertFalse(vm.hasActiveStream.value)
-                assertNull("the settled run clears its recovery warning", vm.presentedError.value)
+                val showsLiveCard = AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput)
+                if (refreshHoldsReply) {
+                    assertFalse("the reply must not show twice", showsLiveCard)
+                    assertFalse(vm.hasActiveStream.value)
+                    assertNull("the settled run clears its recovery warning", vm.presentedError.value)
+                } else {
+                    assertTrue("the run's output stays visible until its reply is read", showsLiveCard)
+                    assertEquals(reply, vm.liveText.value)
+                    assertTrue(vm.hasActiveStream.value)
+                }
             }
         } finally {
             releaseEvents.countDown()
