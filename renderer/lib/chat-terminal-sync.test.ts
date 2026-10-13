@@ -703,6 +703,40 @@ test("a settled detached stream stops draining while the phone's newer turn keep
   );
 });
 
+test("a settled stream's release survives a competing read cancelling its refresh", async () => {
+  const finished = detached("mac-cancelled-read", "chat-cancelled-read", "workspace-1");
+  rememberDetachedLifecycleStream(finished);
+  assert.equal(fallbackDetachedLifecycleStream(finished.streamId), true);
+
+  let reads = 0;
+  const released = await releaseSettledDetachedLifecycleStreams(finished, {
+    settled: async (streamIds) => streamIds,
+    refreshChat: async () => {
+      reads += 1;
+      // The observer's own read of the chat cancels the first one.
+      if (reads === 1) throw new Error("CancelledError");
+    },
+  });
+  assert.equal(released, true);
+  assert.equal(reads, 2);
+  assert.equal(isDetachedLifecycleChatDraining(finished.chatId, finished.workspaceId), false);
+
+  // A chat whose reads keep failing is not released on faith.
+  const unreadable = detached("mac-unreadable", "chat-unreadable", "workspace-1");
+  rememberDetachedLifecycleStream(unreadable);
+  assert.equal(fallbackDetachedLifecycleStream(unreadable.streamId), true);
+  await assert.rejects(
+    releaseSettledDetachedLifecycleStreams(unreadable, {
+      settled: async (streamIds) => streamIds,
+      refreshChat: async () => {
+        throw new Error("offline");
+      },
+    }),
+  );
+  assert.equal(isDetachedLifecycleChatDraining(unreadable.chatId, unreadable.workspaceId), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(unreadable)!, new Set()), true);
+});
+
 test("an observed run shows as the chat's live projection until it is cleared", () => {
   const owner = detached("phone-run", "chat-observed", "workspace-1");
   let notifications = 0;

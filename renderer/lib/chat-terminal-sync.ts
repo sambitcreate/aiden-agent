@@ -592,6 +592,8 @@ export interface SettledStreamRelease {
 
 /** Bound on one settled query, matching main's. */
 const MAX_SETTLED_QUERY = 64;
+/** Re-reads tried before a release gives way to the chat-level idle path. */
+const SETTLED_REFRESH_ATTEMPTS = 3;
 
 /**
  * A per-stream settlement for a chat that is still busy (a phone's turn began
@@ -608,7 +610,17 @@ export async function releaseSettledDetachedLifecycleStreams(
   if (!captured || captured.streamIds.length === 0) return false;
   const settled = await io.settled(captured.streamIds.slice(-MAX_SETTLED_QUERY));
   if (settled.length === 0) return false;
-  await io.refreshChat(captured.chatId);
+  // A competing read of the same chat (the observer's) cancels this one, so a
+  // rejected read is tried again rather than leaving the marker until idle.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await io.refreshChat(captured.chatId);
+      break;
+    } catch (error) {
+      if (attempt >= SETTLED_REFRESH_ATTEMPTS) throw error;
+      await new Promise((resolve) => globalThis.setTimeout(resolve, FALLBACK_RETRY_DELAY_MS));
+    }
+  }
   return clearSettledDetachedLifecycleStreams(captured, settled);
 }
 
