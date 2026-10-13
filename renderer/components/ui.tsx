@@ -877,6 +877,9 @@ function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLE
  * Whether a reading key is consumed by a nested scroller in the direction the key specifies.
  * If a nested element can scroll in that direction, the transcript follow latch is not affected.
  */
+const SPACE_ACTIVATED_CONTROLS =
+  'button, summary, [role="button"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"]';
+
 function nestedScrollerConsumesKey(
   target: EventTarget | null,
   viewport: HTMLElement,
@@ -1037,8 +1040,13 @@ export function ScrollArea({
     if (!element) return;
     const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
     // Streaming ticks cut animated scrolls short, and a smooth scroll that
-    // has nowhere to go never fires scrollend, so both snap instead.
-    const smooth = behavior === "smooth" && !streamingRef.current && distance > 1;
+    // has nowhere to go never fires scrollend, so both snap instead, as does
+    // Reduce Motion (CSS scroll-behavior does not reach a scripted scroll).
+    const smooth =
+      behavior === "smooth" &&
+      !streamingRef.current &&
+      distance > 1 &&
+      document.documentElement.dataset.reduceMotion !== "true";
     dispatchFollow({ type: "jump", smooth });
     window.clearTimeout(jumpSettleTimerRef.current);
     if (smooth) {
@@ -1131,6 +1139,8 @@ export function ScrollArea({
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
       if (!isUserScrollKey(event.key)) return;
+      // Space on a focused control presses it rather than scrolling.
+      if (event.key === " " && target.closest(SPACE_ACTIVATED_CONTROLS)) return;
       // A nested scrollable element in the direction this key moves leaves follow alone.
       if (nestedScrollerConsumesKey(event.target, element, event.key, event.shiftKey)) return;
       dispatchFollow({
