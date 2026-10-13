@@ -52,7 +52,7 @@ test("keyboard focus shows the hint without moving focus, and blur hides it", as
   const button = renderHint();
   act(() => button.focus());
   await screen.findByRole("tooltip");
-  assert.equal(document.activeElement, button);
+  assert.ok(document.activeElement === button, "focus stays on the button");
 
   act(() => screen.getByRole("button", { name: "Elsewhere" }).focus());
   await waitFor(() => assert.ok(!hintText()));
