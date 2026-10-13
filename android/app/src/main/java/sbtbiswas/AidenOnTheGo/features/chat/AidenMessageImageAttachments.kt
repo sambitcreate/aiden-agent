@@ -188,6 +188,10 @@ internal fun aidenEligibleImageAttachments(
 internal fun AidenMessageImageAttachments(
     attachments: List<AidenMessageAttachment>,
     edge: AidenMessageMediaEdge,
+    /** Only this attachment plays the arrival reveal; the others draw as usual. */
+    revealAttachmentId: String? = null,
+    onArrivalRevealed: () -> Unit = {},
+    // Last, so callers can still pass the loader as a trailing lambda.
     loadData: suspend (AidenMessageAttachment) -> ByteArray?
 ) {
     if (attachments.isEmpty()) return
@@ -210,7 +214,9 @@ internal fun AidenMessageImageAttachments(
                     .aspectRatio(1f)
                     .clickable { galleryStart = 0 },
                 alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
-                imageCornerRadius = 16.dp
+                imageCornerRadius = 16.dp,
+                revealsArrival = attachments.first().id == revealAttachmentId,
+                onArrivalRevealed = onArrivalRevealed
             )
         } else {
             AidenInlineImageCardDeck(
@@ -219,7 +225,9 @@ internal fun AidenMessageImageAttachments(
                 selection = selection,
                 onSelectionChange = { selection = it },
                 onOpen = { galleryStart = selection },
-                loadData = loadData
+                loadData = loadData,
+                revealAttachmentId = revealAttachmentId,
+                onArrivalRevealed = onArrivalRevealed
             )
         }
     }
@@ -302,7 +310,9 @@ private fun AidenInlineImageCardDeck(
     selection: Int,
     onSelectionChange: (Int) -> Unit,
     onOpen: () -> Unit,
-    loadData: suspend (AidenMessageAttachment) -> ByteArray?
+    loadData: suspend (AidenMessageAttachment) -> ByteArray?,
+    revealAttachmentId: String? = null,
+    onArrivalRevealed: () -> Unit = {}
 ) {
     var rawDrag by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -380,6 +390,8 @@ private fun AidenInlineImageCardDeck(
                     attachment = attachment,
                     maximumPixelSize = 960,
                     loadData = loadData,
+                    revealsArrival = attachment.id == revealAttachmentId,
+                    onArrivalRevealed = onArrivalRevealed,
                     alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
                     modifier = Modifier
                         .fillMaxSize()
@@ -478,6 +490,8 @@ private fun AidenAttachmentImage(
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.Center,
     imageCornerRadius: Dp = 0.dp,
+    revealsArrival: Boolean = false,
+    onArrivalRevealed: () -> Unit = {},
     description: String = attachment.name,
     onImageSize: ((width: Int, height: Int) -> Unit)? = null
 ) {
@@ -525,7 +539,9 @@ private fun AidenAttachmentImage(
                     bitmap = bitmap!!.asImageBitmap(),
                     contentDescription = description,
                     contentScale = ContentScale.Fit,
-                    modifier = fitted.clip(RoundedCornerShape(imageCornerRadius))
+                    modifier = fitted
+                        .clip(RoundedCornerShape(imageCornerRadius))
+                        .aidenImageArrivalReveal(revealsArrival, AidenTheme.palette, onArrivalRevealed)
                 )
             }
             failed -> Column(

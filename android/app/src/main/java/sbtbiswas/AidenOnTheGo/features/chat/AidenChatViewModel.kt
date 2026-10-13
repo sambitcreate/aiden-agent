@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -118,6 +119,9 @@ class AidenChatViewModel(
 
     private val _activityTimeline = MutableStateFlow<AidenGenerationTimeline?>(null)
     val activityTimeline: StateFlow<AidenGenerationTimeline?> = _activityTimeline.asStateFlow()
+    private val _imageArrivalRevealGenerationIds = MutableStateFlow<Set<String>>(emptySet())
+    /** Generations whose image this phone watched being generated; their settled image reveals once. */
+    val imageArrivalRevealGenerationIds: StateFlow<Set<String>> = _imageArrivalRevealGenerationIds.asStateFlow()
 
     private val _pendingApproval = MutableStateFlow<AidenPendingApproval?>(null)
     val pendingApproval: StateFlow<AidenPendingApproval?> = _pendingApproval.asStateFlow()
@@ -481,6 +485,10 @@ class AidenChatViewModel(
         coordinator.installationStore.installations.value.any {
             it.instanceId == instanceId && it.deviceId == deviceId && it.createdAt == createdAt
         }
+
+    fun finishImageArrivalReveal(generationId: String) {
+        _imageArrivalRevealGenerationIds.update { it - generationId }
+    }
 
     fun consumeForkNavigation(forkChatId: String) {
         if (_forkNavigation.value == forkChatId) _forkNavigation.value = null
@@ -1679,6 +1687,9 @@ class AidenChatViewModel(
             AidenRemoteEventType.TIMELINE -> {
                 event.payload?.timeline?.let { timeline ->
                     _activityTimeline.value = timeline
+                    _imageArrivalRevealGenerationIds.update {
+                        AidenImageGenerationPlaceholderState.armedArrivalReveals(it, timeline)
+                    }
                 }
             }
             AidenRemoteEventType.APPROVAL_REQUIRED -> {

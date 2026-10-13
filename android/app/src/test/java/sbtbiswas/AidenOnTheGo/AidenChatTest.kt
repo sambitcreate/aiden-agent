@@ -801,6 +801,37 @@ class AidenChatTest {
     }
 
     @Test
+    fun liveFallbackListsTheTimelineCallsAndRecapsInsteadOfTheStreamToolRows() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        // The stream's text has not reached the steps' offset yet, so the reply has no
+        // chronological rows and falls back to listing activity.
+        assertNull(AidenChronologicalProjection.rows("Bef", "", timeline))
+        // Live rows carry stream ids that match no step's toolCallId.
+        val liveTools = listOf(
+            AidenLiveTool("tool_1", "read_file", "completed"),
+            AidenLiveTool("tool_2", "ask_user_question", "completed"),
+            AidenLiveTool("tool_3", "run_command")
+        )
+
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.liveToolSteps(timeline).map { it.id })
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            AidenAgentActivityPresentation.questionnaireSteps(timeline).single().questionnaireRecap!!.items.map { it.question })
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline))
+
+        // A recap alone still covers its call: the plain question row stays hidden.
+        val recapOnly = timeline.copy(steps = listOf(timeline.steps[1]))
+        assertTrue(AidenAgentActivityPresentation.liveToolSteps(recapOnly).isEmpty())
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, recapOnly))
+
+        // Before the timeline knows any call, the stream's rows are all there is.
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, null))
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline.copy(steps = emptyList())))
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(emptyList(), null))
+        assertTrue(AidenAgentActivityPresentation.questionnaireSteps(null).isEmpty())
+    }
+
+    @Test
     fun questionnaireAnswersReadAsChoicesQuotesOrTheReasonTheyWereUnanswered() {
         val recap = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(answeredQuestionnaireJson))!!
         assertEquals(

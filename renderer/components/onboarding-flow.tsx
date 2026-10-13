@@ -696,6 +696,10 @@ export function OnboardingFlow({
                   Settings → Memory also offers optional prompt cache warming. It is off by default;
                   enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
                 </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Image generation uses its own keys, added later in Settings → Image Generation. The connection you
+                  choose here is never used for images.
+                </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices
                     .filter((item) =>

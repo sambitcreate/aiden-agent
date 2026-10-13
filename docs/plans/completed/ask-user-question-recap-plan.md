@@ -51,6 +51,6 @@ Not run locally:
 
 ## Follow-ups
 
-- Android's live fallback (no chronological rows) lists the stream's live tools, so a question shows its plain row mid-turn and its recap only once the turn settles. Render that fallback from timeline steps.
+- Android's live fallback (no chronological rows) listed the stream's live tools, so a question showed its plain row mid-turn. Done in the Android follow-up: that fallback now renders from timeline steps and shows the recap mid-turn, and the recap cards became a Material 3 Expressive connected group.
 - Bot chats answer through A–E quick replies and still show a plain bubble; give them the same recap if it reads well there.
 - The CLI's terminal questionnaire is unaffected.
