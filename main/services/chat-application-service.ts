@@ -76,6 +76,8 @@ export interface ChatApplicationDependencies {
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
+  /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
+  visualSnapshots?: { cancelChat(chatId: string): void };
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
@@ -268,6 +270,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         assertRenameAllowedFromChat(current, options);
         await options.assertCurrent?.(current);
         await deps.llmClient.cancelChat(chatId);
+        deps.visualSnapshots?.cancelChat(chatId);
         try {
           await deps.subagentRunStore.deleteChat(chatId);
         } catch (error) {

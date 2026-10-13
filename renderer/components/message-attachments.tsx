@@ -166,6 +166,7 @@ export function MessageAttachments({
   imageActions?: MessageImageActions;
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
+  if (attachments.length === 0) return null;
   const content = <MessageAttachmentsContent attachments={attachments} role={role} imageActions={imageActions} />;
   if (!controller) return <MessageAttachmentPreviewProvider>{content}</MessageAttachmentPreviewProvider>;
   return content;

@@ -69,6 +69,9 @@ object AidenRemoteProtocol {
     const val BOT_MEMORY_FEATURE = "bot-memory-v1"
     /** Contract revision 27: routine proposal answers, routine suggestions and the routine notification feed. */
     const val BOT_PROACTIVE_FEATURE = "bot-proactive-v1"
+    /** Contract revision 28: assistant messages may carry inline `visuals`,
+     * each shown through a snapshot image attachment the Mac stores. */
+    const val CHAT_VISUALS_FEATURE = "chat-visuals-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5

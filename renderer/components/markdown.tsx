@@ -18,9 +18,20 @@ import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE } from "../lib/rich-link";
 import { CodeBlock } from "./code-block";
 import { RichLink } from "./rich-link";
 
+/**
+ * Model-written Markdown inside a native visual. Remote images never load (they
+ * show as alt text), and an https link goes to the owner, which asks first.
+ */
+export interface RestrictedMarkdown {
+  openLink: (href: string) => void;
+  /** Links stay visible but cannot act (a draft is still streaming). */
+  inert: boolean;
+}
+
 interface MarkdownProps {
   content: string;
   richLinks?: boolean;
+  restricted?: RestrictedMarkdown;
 }
 
 export const MARKDOWN_CLASSNAME = cn(
@@ -131,22 +142,63 @@ const components: Components = {
   },
 };
 
+const RestrictedMarkdownContext = React.createContext<RestrictedMarkdown | null>(null);
+
+function isHttpsHref(href: string): boolean {
+  try {
+    return new URL(href).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** A restricted link is text unless it is https; an https one is a button that asks its owner. */
+function RestrictedLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const policy = React.useContext(RestrictedMarkdownContext);
+  if (!policy || !href || !isHttpsHref(href)) return <span>{children}</span>;
+  return (
+    <button
+      type="button"
+      disabled={policy.inert}
+      onClick={() => policy.openLink(href)}
+      className="m-0 cursor-pointer appearance-none border-0 bg-transparent p-0 [font:inherit] text-accent underline underline-offset-2 disabled:cursor-default disabled:text-secondary disabled:no-underline"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Same as `components`, except that nothing remote loads and no link navigates directly. */
+const restrictedComponents: Components = {
+  ...components,
+  img: ({ alt }) => (alt ? <span className="text-secondary">{alt}</span> : null),
+  a: ({ href, children }) => <RestrictedLink href={href}>{children}</RestrictedLink>,
+};
+
+const restrictedInlineComponents: Components = {
+  ...restrictedComponents,
+  p: ({ children }) => <>{children}</>,
+};
+
 export const MarkdownContent = React.memo(function MarkdownContent({
   content,
   richLinks = false,
+  restricted,
 }: MarkdownProps) {
   const plugins = useMarkdownPlugins(content, richLinks);
   return (
-    <ReactMarkdown {...plugins} components={components}>
-      {content}
-    </ReactMarkdown>
+    <RestrictedMarkdownContext.Provider value={restricted ?? null}>
+      <ReactMarkdown {...plugins} components={restricted ? restrictedComponents : components}>
+        {content}
+      </ReactMarkdown>
+    </RestrictedMarkdownContext.Provider>
   );
 });
 
-export const Markdown = React.memo(function Markdown({ content, richLinks = false }: MarkdownProps) {
+export const Markdown = React.memo(function Markdown({ content, richLinks = false, restricted }: MarkdownProps) {
   return (
     <div className={MARKDOWN_CLASSNAME}>
-      <MarkdownContent content={content} richLinks={richLinks} />
+      <MarkdownContent content={content} richLinks={richLinks} restricted={restricted} />
     </div>
   );
 });
@@ -159,11 +211,14 @@ const inlineComponents: Components = {
 export const MarkdownInline = React.memo(function MarkdownInline({
   content,
   richLinks = false,
+  restricted,
 }: MarkdownProps) {
   const plugins = useMarkdownPlugins(content, richLinks);
   return (
-    <ReactMarkdown {...plugins} components={inlineComponents}>
-      {content}
-    </ReactMarkdown>
+    <RestrictedMarkdownContext.Provider value={restricted ?? null}>
+      <ReactMarkdown {...plugins} components={restricted ? restrictedInlineComponents : inlineComponents}>
+        {content}
+      </ReactMarkdown>
+    </RestrictedMarkdownContext.Provider>
   );
 });
