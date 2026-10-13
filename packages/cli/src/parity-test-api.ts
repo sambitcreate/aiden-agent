@@ -12,7 +12,6 @@ export * from "./daemon-chats.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
-export * from "./child-runner.ts";
 export * from "./usage-ledger.ts";
 export * from "./extensions/session-parity.ts";
 export * from "./extensions/subagents.ts";
@@ -20,7 +19,7 @@ export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
-export { mcpCommand, validateMcpServer, createMcpExtension } from "./mcp.ts";
+export { mcpCommand, validateMcpServer, createMcpExtension, mcpCredentialId } from "./mcp.ts";
 
 export { importSession } from "./session-import.ts";
 export { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";

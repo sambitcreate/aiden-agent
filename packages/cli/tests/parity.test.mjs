@@ -144,16 +144,6 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
 });
 
-test("child process parses actual event records, passes prompt via stdin, and enforces time budgets", async (t) => {
-  const dir = temporary(t), child = join(dir, "child.mjs"), original = process.env.AIDEN_CLI_ENTRY;
-  process.env.AIDEN_CLI_ENTRY = child; t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  writeFileSync(child, `let input=""; for await (const chunk of process.stdin) input += chunk; console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:input}],stopReason:"stop"}}));`);
-  const result = await api.runChild({ cwd: dir, prompt: "secret prompt", permission: "read-only" });
-  assert.equal(result.output, "secret prompt");
-  writeFileSync(child, `setInterval(() => {}, 1000);`);
-  await assert.rejects(api.runChild({ cwd: dir, prompt: "x", permission: "read-only", timeoutMs: 30 }), /time budget/);
-});
-
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
   const dir = temporary(t), controller = new AbortController();
   const promise = api.serve(dir, controller.signal);
@@ -243,32 +233,15 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-test("a real child completes through a local compatible provider with no recursive tools", async (t) => {
-  const dir = temporary(t), requests = [];
-  const server = createServer(async (request, response) => {
-    let body = ""; for await (const chunk of request) body += chunk;
-    const parsed = JSON.parse(body); requests.push(parsed);
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Local child succeeded" }, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const original = { AIDEN_CLI_ENTRY: process.env.AIDEN_CLI_ENTRY, AIDEN_CODING_AGENT_DIR: process.env.AIDEN_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE };
-  Object.assign(process.env, { AIDEN_CLI_ENTRY: join(pkg, "dist/app/cli.js"), AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" });
-  t.after(() => { for (const [key, value] of Object.entries(original)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
-  const result = await api.runChild({ cwd: dir, prompt: "Say hello", permission: "read-only", provider: "cli-test", model: "test", timeoutMs: 15000 });
-  assert.equal(result.output, "Local child succeeded"); assert.equal(requests.length, 1);
-  const names = requests[0].tools?.map((tool) => tool.function.name) ?? [];
-  assert.ok(names.includes("read")); assert.ok(!names.includes("bash")); assert.ok(!names.includes("subagent"));
-});
-
 test("MCP validates transports and redacts configured secrets from listing", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "http://example.com", enabled: true }), /HTTPS/);
-  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /id, name/);
+  assert.throws(() => api.validateMcpServer({ id: "../remote", name: "Remote", transport: "stdio", command: "node", enabled: true }), /server id must/);
+  for (const id of [undefined, 123, null]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /string id/);
+  for (const id of ["+remote", "-remote"]) assert.throws(() => api.validateMcpServer({ id, name: "Remote", transport: "stdio", command: "node", enabled: true }), /cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "-Remote", transport: "stdio", command: "node", enabled: true }), /name cannot begin with/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", enabled: true }), /needs a url/);
+  assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "sse", url: "not a url", enabled: true }), /not a valid URL/);
   writeFileSync(file, JSON.stringify({ id: "local", name: "Local", transport: "stdio", command: "node", enabled: false, env: { SECRET: "do-not-list" } }));
   await api.mcpCommand(dir, ["add", file]);
   const listed = await api.mcpCommand(dir, ["list"]);
@@ -691,11 +664,123 @@ test("MCP paginates tools, fences schema drift, and terminates its stdio transpo
   assert.deepEqual(tools[1].parameters.properties.count, { type: ["integer", "null"], minimum: 0, maximum: 4_294_967_295 });
   const result = await tools[1].execute("call", { value: "works" });
   assert.match(JSON.stringify(result), /Echo works/);
+  // A tool error's diagnostic JSON need not match the success output schema.
+  await assert.rejects(tools[1].execute("failure", { value: "fail" }), /Diagnostic failure/);
   writeFileSync(revision, "changed");
   await assert.rejects(tools[1].execute("stale", { value: "must not run" }), /changed/);
-  const pid = Number(readFileSync(pidFile, "utf8"));
+  const [pid, ...others] = readFileSync(pidFile, "utf8").trim().split("\n").map(Number);
+  assert.deepEqual(others, [], "one transport per server");
   await pool.close();
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+function fixtureServer(dir, id, mode = "") {
+  return { id, name: id, transport: "stdio", command: process.execPath, args: [join(pkg, "tests/fixtures/mcp-stdio.mjs"), join(dir, `${id}.changed`), join(dir, `${id}.pid`), mode], enabled: true };
+}
+const listRequests = (dir, id) => existsSync(join(dir, `${id}.pid.lists`)) ? readFileSync(join(dir, `${id}.pid.lists`), "utf8").trim().split("\n").length : 0;
+async function captureStderr(run) {
+  const write = process.stderr.write, lines = [];
+  process.stderr.write = function(chunk, ...args) { if (String(chunk).startsWith("aiden: ")) { lines.push(String(chunk)); return true; } return write.call(this, chunk, ...args); };
+  try { return { value: await run(), stderr: lines.join("") }; } finally { process.stderr.write = write; }
+}
+
+test("MCP reuses a live inventory until tools/list_changed, fails closed on drift or config change, and admits large servers", async (t) => {
+  const dir = temporary(t), watched = fixtureServer(dir, "watched", "listChanged"), large = fixtureServer(dir, "large", "many");
+  api.atomicJson(join(dir, "aiden-mcp.json"), [watched, large]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const tools = await pool.agentTools(watched);
+  assert.equal(listRequests(dir, "watched"), 2);
+  assert.match(JSON.stringify(await tools[0].execute("a", { value: "one" })), /Echo one/);
+  assert.match(JSON.stringify(await tools[0].execute("b", { value: "two" })), /Echo two/);
+  assert.equal(listRequests(dir, "watched"), 2, "calls reuse the complete inventory of the live connection");
+  // The server changes its tools and announces it: the next call re-reads and fails closed.
+  await tools[0].execute("c", { value: "notify" });
+  await assert.rejects(tools[0].execute("d", { value: "stale" }), /changed/);
+  assert.ok(listRequests(dir, "watched") > 2);
+  // Over the former 128-tool cap, within the shared 512-tool inventory limit.
+  assert.equal((await pool.inspectTools(large)).length, 300);
+  // A configuration edit fences existing tools without a notification.
+  const fresh = await pool.agentTools(watched);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...watched, description: "Edited" }, large]);
+  await assert.rejects(fresh[0].execute("e", { value: "edited" }), /changed or was disabled/);
+});
+
+test("MCP connections survive token refreshes, rebuild on sign-out, and connect once under concurrency", async (t) => {
+  const dir = temporary(t); let initializes = 0;
+  const http = createServer(async (request, response) => {
+    if (request.method !== "POST") return response.writeHead(405).end();
+    let body = ""; for await (const chunk of request) body += chunk;
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    let result = {};
+    if (message.method === "initialize") { initializes++; result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "http", version: "1" } }; }
+    else if (message.method === "tools/list") result = { tools: [{ name: "ping", inputSchema: { type: "object" } }] };
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise((resolve) => http.listen(0, "127.0.0.1", resolve));
+  t.after(() => { http.closeAllConnections(); http.close(); });
+  const server = { id: "remote", name: "Remote", transport: "http", url: `http://127.0.0.1:${http.address().port}/mcp`, enabled: true, oauth: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, tokens: { access_token: token, token_type: "Bearer" } }));
+  await store("first");
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const client = await pool.connection(server);
+  await store("refreshed");
+  assert.equal(await pool.connection(server), client, "a token refresh keeps the live transport");
+  assert.equal(initializes, 1);
+  await api.mcpCommand(dir, ["logout", "remote"]);
+  const [first, second] = await Promise.all([pool.connection(server), pool.connection(server)]);
+  assert.equal(first, second);
+  assert.notEqual(first, client);
+  assert.equal(initializes, 2, "concurrent callers share one reconnect");
+});
+
+test("MCP startup connects servers concurrently within one budget and reports each failure's cause", async (t) => {
+  const dir = temporary(t), good = fixtureServer(dir, "good"), hung = fixtureServer(dir, "hung", "hang");
+  const missing = { id: "missing", name: "Missing", transport: "stdio", command: join(dir, "no-such-mcp-server"), enabled: true };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [hung, missing, good]);
+  const events = new Map(), tools = new Map();
+  const started = Date.now();
+  const { stderr } = await captureStderr(() => api.createMcpExtension(dir, { startupBudgetMs: 1_500 }).factory({
+    on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.label, tool) }));
+  assert.ok(Date.now() - started < 8_000, "a hung server cannot hold startup for its 10 s connect timeout");
+  assert.deepEqual([...tools.keys()].sort(), ["good: first", "good: second"]);
+  assert.match(stderr, /MCP hung unavailable \(timed out\)/);
+  assert.match(stderr, /MCP missing unavailable \([^)]*ENOENT/);
+  await events.get("session_shutdown")();
+  for (const id of ["good", "hung"]) for (const pid of readFileSync(join(dir, `${id}.pid`), "utf8").trim().split("\n").map(Number)) {
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  }
+});
+
+test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
+  const dir = temporary(t), file = join(dir, "server.json");
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir);
+  writeFileSync(file, JSON.stringify(server));
+  await api.mcpCommand(dir, ["add", file]);
+  await credentials.write(api.mcpCredentialId(server), "{}");
+  // Renaming keeps the endpoint identity and its sign-in.
+  writeFileSync(file, JSON.stringify({ ...server, name: "Renamed" }));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), "{}");
+  const moved = { ...server, url: "https://two.example/mcp" };
+  writeFileSync(file, JSON.stringify(moved));
+  await api.mcpCommand(dir, ["add", file]);
+  assert.equal(await credentials.read(api.mcpCredentialId(server)), undefined);
+  await credentials.write(api.mcpCredentialId(moved), "{}");
+  await api.mcpCommand(dir, ["remove", "remote"]);
+  assert.equal(await credentials.read(api.mcpCredentialId(moved)), undefined);
+});
+
+test("MCP migration skips a malformed native mcp.json with a warning and leaves it untouched", async (t) => {
+  const dir = temporary(t), legacy = join(dir, "mcp.json");
+  writeFileSync(legacy, "{ not json");
+  const { value, stderr } = await captureStderr(() => api.mcpCommand(dir, ["list"]));
+  assert.deepEqual(value, []);
+  assert.match(stderr, /skipped MCP migration; .* is not valid JSON/);
+  assert.equal(readFileSync(legacy, "utf8"), "{ not json");
 });
 
 test("daemon idle waits include cancelled append work before releasing workspace authority", async (t) => {
@@ -749,7 +834,7 @@ test("MCP migration recovers a completed copy and refuses conflicting or invalid
   api.migrateAidenMcpConfig(dir, api.validateMcpServer);
   assert.equal(existsSync(legacy), false);
   api.atomicJson(legacy, [{ id: "invalid" }]);
-  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs/);
+  assert.throws(() => api.migrateAidenMcpConfig(dir, api.validateMcpServer), /MCP server needs a non-empty name/);
   assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), [{ id: "invalid" }]);
 });
 
