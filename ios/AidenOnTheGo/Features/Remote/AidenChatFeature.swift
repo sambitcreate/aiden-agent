@@ -1228,6 +1228,7 @@ final class AidenChatViewModel {
     /// lookup may have been answered before the turn's run registered, so the
     /// turn is looked up once it ends.
     @ObservationIgnored private var turnAwaitingLookup: ForeignRunAttachReason?
+    @ObservationIgnored private var localStreamTurnId: String?
     @ObservationIgnored private var foreignRunProbeTask: Task<Void, Never>?
     @ObservationIgnored private var foreignRunProbeGeneration: UInt64 = 0
     /// Waits between foreground probes for a foreign run; tests shorten it.
@@ -2583,7 +2584,7 @@ final class AidenChatViewModel {
             // to it now rather than when the chat is reopened. The first turn
             // this chat sees is looked up too, because its run may have
             // registered after the opening lookup was answered.
-            if turnId != previousTurnId {
+            if turnId != previousTurnId, turnId != localStreamTurnId {
                 attachToAnnouncedTurn(reason: previousTurnId == nil ? .firstRosterTurn : .announcedTurn)
             }
         }
@@ -3842,6 +3843,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask = nil
         streamTask?.cancel()
         activeStreamID = stream.streamId
+        localStreamTurnId = stream.turnId
         if streamState == nil { streamState = .reconciling }
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context, feedbackPolicy: feedbackPolicy)
@@ -4773,6 +4775,7 @@ final class AidenChatViewModel {
         pendingApproval = nil
         pendingQuestion = nil
         activeStreamID = nil
+        localStreamTurnId = nil
     }
 }
 
@@ -9147,7 +9150,7 @@ extension AidenChatViewModel {
     }
 
     private func attachToTurnAnnouncedDuringObservation() {
-        guard let reason = turnAwaitingLookup, foreignRunTask == nil else { return }
+        guard let reason = turnAwaitingLookup, foreignRunTask == nil, !Task.isCancelled else { return }
         turnAwaitingLookup = nil
         attachToAnnouncedTurn(reason: reason)
     }
@@ -9208,6 +9211,7 @@ extension AidenChatViewModel {
         foreignRunTask = nil
         foreignRunSettleTask?.cancel()
         foreignRunSettleTask = nil
+        turnAwaitingLookup = nil
         // An ended run still awaiting its transcript is presented too.
         var wasLive = foreignRunIsLive
         if !preservingRecovery, let recovery = foreignRunReconcileTask {
@@ -9277,9 +9281,10 @@ extension AidenChatViewModel {
                         foreignRunAccountedRunId = runId
                         // The run finished before it could be shown live, so
                         // its reply is only in the transcript. A load has just
-                        // read it, and a run already accounted for was read or
-                        // shown before; a newly found run reads it once.
-                        if reason != .load, isNewRun,
+                        // read it, a first roster arrived during load, and a run
+                        // already accounted for was read or shown before; a newly
+                        // found run reads it once.
+                        if reason != .load && reason != .firstRosterTurn, isNewRun,
                            isCurrentForeignRun(generation, context: context) {
                             await reconcileChat(context: context)
                         }
