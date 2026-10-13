@@ -3104,11 +3104,15 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     private func waitForChatWrite(_ gate: AidenChatWriteTestGate) async {
-        for _ in 0..<200 {
-            if await gate.isHolding { return }
-            try? await Task.sleep(for: .milliseconds(10))
+        // Wakes as soon as the caller parks on the gate; the timer only bounds
+        // a caller that never arrives, so a slow simulator does not fail it.
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(10))
+            await gate.stopWaitingForHold()
         }
-        XCTFail("Expected caller to reach held chat write")
+        let reached = await gate.untilHolding()
+        deadline.cancel()
+        if !reached { XCTFail("Expected caller to reach held chat write") }
     }
 
     @MainActor
@@ -8076,8 +8080,12 @@ final class AidenChatTests: XCTestCase {
 @MainActor
 private final class AidenHeldAttachmentPreparation {
     private var continuation: CheckedContinuation<Void, Never>?
+    /// A release before the preparation parks lets it pass straight through
+    /// instead of suspending forever.
+    private var released = false
 
     func wait(onStart: () -> Void) async {
+        guard !released else { return onStart() }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             onStart()
@@ -8085,6 +8093,7 @@ private final class AidenHeldAttachmentPreparation {
     }
 
     func release() {
+        released = true
         continuation?.resume()
         continuation = nil
     }
@@ -10856,16 +10865,33 @@ private final class AidenHeldChatCacheFileManager: FileManager, @unchecked Senda
 private actor AidenChatWriteTestGate {
     private var armed = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var holdWaiters: [CheckedContinuation<Bool, Never>] = []
     var isHolding: Bool { continuation != nil }
     func arm() { armed = true }
     func waitIfArmed() async {
         guard armed else { return }
         armed = false
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { continuation = $0; resumeHoldWaiters(true) }
     }
+    /// Resolves true once a caller parks on the gate, or false if
+    /// `stopWaitingForHold` runs first.
+    func untilHolding() async -> Bool {
+        if continuation != nil { return true }
+        return await withCheckedContinuation { holdWaiters.append($0) }
+    }
+    func stopWaitingForHold() { resumeHoldWaiters(false) }
+    /// Releases a parked caller. A release that arrives before the caller
+    /// parks disarms the gate instead, so the late caller passes straight
+    /// through rather than suspending forever.
     func release() {
+        armed = false
         continuation?.resume()
         continuation = nil
+    }
+    private func resumeHoldWaiters(_ holding: Bool) {
+        let waiters = holdWaiters
+        holdWaiters = []
+        for waiter in waiters { waiter.resume(returning: holding) }
     }
 }
 
@@ -12082,5 +12108,272 @@ private final class AidenRevealStreamFixture: @unchecked Sendable {
 
     static func frame(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-reveal\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-12T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+final class AidenImageGenerationPlaceholderTests: XCTestCase {
+    private func imageStep(
+        _ status: AidenAgentStepStatus,
+        detail: String? = nil,
+        index: Int = 1,
+        startedAt: Double = 1_000,
+        updatedAt: Double = 2_000,
+        toolName: String = "generate_image",
+        target: String? = nil
+    ) -> AidenAgentStep {
+        AidenAgentStep(
+            id: "tool-\(index)",
+            order: index - 1,
+            kind: .tool,
+            toolCallId: "call-\(index)",
+            toolName: toolName,
+            label: "Generate image",
+            status: status,
+            startedAt: startedAt,
+            updatedAt: updatedAt,
+            finishedAt: status == .completed ? updatedAt : nil,
+            contentOffset: 0,
+            durationMs: nil,
+            target: target,
+            detail: detail,
+            lineChanges: nil
+        )
+    }
+
+    private func timeline(
+        _ steps: [AidenAgentStep],
+        status: AidenGenerationTimelineStatus = .running
+    ) -> AidenGenerationTimeline {
+        AidenGenerationTimeline(
+            version: 3,
+            generationId: "generation-1",
+            status: status,
+            startedAt: 1_000,
+            finishedAt: status == .running ? nil : 9_000,
+            steps: steps
+        )
+    }
+
+    func testRunningCallShowsPlaceholderInItsRequestedShape() {
+        let items = AidenImageGenerationPlaceholderState.items(
+            timeline([imageStep(.running, detail: "16:9", updatedAt: 4_000)])
+        )
+        XCTAssertEqual(items, [
+            AidenImageGenerationPlaceholderItem(
+                id: "call-1",
+                aspectRatio: .landscape16x9,
+                elapsedAtObservation: 3
+            ),
+        ])
+        XCTAssertEqual(items.first.map { Double($0.aspectRatio.value) } ?? 0, 16.0 / 9.0, accuracy: 1e-9)
+    }
+
+    func testMissingOrUnknownShapeFallsBackToSquare() {
+        let items = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, detail: nil, index: 1),
+            imageStep(.running, detail: "21:9", index: 2),
+        ]))
+        XCTAssertEqual(items.map(\.aspectRatio), [.square, .square])
+    }
+
+    func testCallsBeforeApprovalOrThatEndedWithoutAnImageShowNoPlaceholder() {
+        for status in [AidenAgentStepStatus.pending, .awaitingApproval, .failed, .blocked, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(status, detail: "1:1")])),
+                [],
+                "\(status)"
+            )
+        }
+    }
+
+    func testCompletedCallHoldsUntilTheTurnSettlesThenClears() {
+        // The image reaches the phone with the settled message, so a finished
+        // call keeps its placeholder while the turn still streams.
+        XCTAssertEqual(
+            AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed, detail: "3:4")])).map(\.aspectRatio),
+            [.portrait3x4]
+        )
+        for status in [AidenGenerationTimelineStatus.completed, .failed, .cancelled] {
+            XCTAssertEqual(
+                AidenImageGenerationPlaceholderState.items(timeline([imageStep(.completed)], status: status)),
+                []
+            )
+        }
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(nil), [])
+    }
+
+    func testOtherToolsNeverShowAPlaceholder() {
+        let step = AidenAgentStep(
+            id: "tool-1", order: 0, kind: .tool, toolCallId: "call-1", toolName: "display_image",
+            label: "Display image", status: .running, startedAt: 1_000, updatedAt: 1_000, finishedAt: nil,
+            contentOffset: 0, durationMs: nil, target: nil, detail: "16:9", lineChanges: nil
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.items(timeline([step])), [])
+    }
+
+    private func armed(after timelines: [AidenGenerationTimeline]) -> Set<String> {
+        timelines.reduce(into: Set<String>()) { armed, timeline in
+            armed = AidenImageGenerationPlaceholderState.armedArrivalReveals(armed, after: timeline)
+        }
+    }
+
+    func testArrivalRevealIsArmedOnlyWhenAGenerateImageCallCompletes() {
+        XCTAssertEqual(armed(after: [timeline([imageStep(.running)])]), [])
+        XCTAssertEqual(
+            armed(after: [timeline([imageStep(.running)]), timeline([imageStep(.completed)])]),
+            ["generation-1"]
+        )
+        // A phone that joins after the call finished still reveals the image.
+        XCTAssertEqual(armed(after: [timeline([imageStep(.completed)], status: .completed)]), ["generation-1"])
+    }
+
+    func testFailedOrCancelledCallsNeverArmTheReveal() {
+        for status in [AidenAgentStepStatus.failed, .blocked, .cancelled, .awaitingApproval] {
+            XCTAssertEqual(
+                armed(after: [timeline([imageStep(.running)]), timeline([imageStep(status)], status: .failed)]),
+                [],
+                "\(status)"
+            )
+        }
+        // Another generation's armed reveal survives an unrelated failed turn.
+        let other = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+            ["generation-0"],
+            after: timeline([imageStep(.failed)], status: .failed)
+        )
+        XCTAssertEqual(other, ["generation-0"])
+    }
+
+    private func image(_ id: String) -> AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10)
+    }
+
+    private func settledMessage(
+        steps: [AidenAgentStep],
+        attachments: [AidenMessageAttachment],
+        visuals: [AidenChatVisual]? = nil
+    ) -> AidenChatMessage {
+        AidenChatMessage(
+            id: "assistant-1",
+            role: .assistant,
+            text: "Here it is.",
+            attachments: attachments,
+            visuals: visuals,
+            timeline: timeline(steps, status: .completed),
+            createdAt: Date(timeIntervalSince1970: 9)
+        )
+    }
+
+    func testOnlyTheGeneratedImageRevealsNotVisualSnapshots() {
+        let snapshot = image("visual-snapshot_chart")
+        let namedSnapshot = image("chart-png")
+        let message = settledMessage(
+            steps: [imageStep(.completed)],
+            attachments: [snapshot, namedSnapshot, image("generated")],
+            visuals: [AidenChatVisual(id: "ui-1", kind: .ui, title: "Chart", snapshotAttachmentId: "chart-png")]
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: message), "generated")
+    }
+
+    func testDisplayImageResultsAndFailedCallsDoNotReveal() {
+        // Attachments carry no tool association, so a turn that also displayed
+        // an image cannot single out the generated one: nothing reveals.
+        let mixed = settledMessage(
+            steps: [imageStep(.completed, index: 1), imageStep(.completed, index: 2, toolName: "display_image")],
+            attachments: [image("shown"), image("generated")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: mixed))
+        let displayOnly = settledMessage(
+            steps: [imageStep(.completed, toolName: "display_image")],
+            attachments: [image("shown")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: displayOnly))
+        let failed = settledMessage(steps: [imageStep(.failed)], attachments: [image("other")])
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: failed))
+    }
+
+    func testElapsedTimeUsesHostTimestampsNotThePhoneClock() {
+        // Started at 1s host time; the newest host time in the timeline is 13s,
+        // so the call has run 12s whatever the phone's clock says.
+        let items = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, index: 1, startedAt: 1_000, updatedAt: 3_000),
+            AidenAgentStep(
+                id: "tool-2", order: 1, kind: .tool, toolCallId: "call-2", toolName: "read_file",
+                label: "Read", status: .running, startedAt: 13_000, updatedAt: 13_000, finishedAt: nil,
+                contentOffset: 0, durationMs: nil, target: nil, detail: nil, lineChanges: nil
+            ),
+        ]))
+        XCTAssertEqual(items.map(\.elapsedAtObservation), [12])
+        // A step stamped after the newest host time never goes negative.
+        let skewed = AidenImageGenerationPlaceholderState.items(
+            timeline([imageStep(.running, startedAt: 5_000, updatedAt: 5_000)])
+        )
+        XCTAssertEqual(skewed.map(\.elapsedAtObservation), [0])
+    }
+
+    func testCaptionNamesTheModelWhenTheHostSendsAValidTarget() {
+        let item = AidenImageGenerationPlaceholderState.items(timeline([
+            imageStep(.running, target: "openrouter/google/gemini-2.5-flash-image"),
+        ])).first
+        XCTAssertEqual(
+            AidenImagePlaceholderSpec.caption(elapsed: 12, model: item?.model),
+            "Generating · 12s · OpenRouter · google/gemini-2.5-flash-image"
+        )
+        XCTAssertEqual(
+            AidenImagePlaceholderSpec.caption(elapsed: 65, model: AidenImageGenerationModelLabel(target: "fal/fal-ai/flux")),
+            "Still generating · 1m 05s · fal · fal-ai/flux"
+        )
+        for target in [nil, "", "no-slash", "/model", "replicate/", String(repeating: "a", count: 200) + "/m", "fal/x\ny"] {
+            XCTAssertNil(AidenImageGenerationModelLabel(target: target), String(describing: target))
+        }
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 12, model: nil), "Generating · 12s")
+    }
+
+    func testLensPhaseStaysContinuousWhenThePassSlowsAtOneMinute() {
+        let before = AidenImagePlaceholderSpec.phase(elapsed: 60 - 1e-6)
+        let after = AidenImagePlaceholderSpec.phase(elapsed: 60 + 1e-6)
+        XCTAssertEqual(before, after, accuracy: 1e-4)
+        // Each regime still completes one pass per its own period.
+        XCTAssertEqual(AidenImagePlaceholderSpec.phase(elapsed: 1.4), 0.5, accuracy: 1e-9)
+        let advance = AidenImagePlaceholderSpec.phase(elapsed: 72.6) - AidenImagePlaceholderSpec.phase(elapsed: 70)
+        XCTAssertEqual(advance - advance.rounded(.down), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(AidenImagePlaceholderSpec.phase(elapsed: -5), 0)
+    }
+
+    func testReduceMotionAndLowPowerHoldTheStillPose() {
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: false), .animated)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: true, lowPowerMode: false), .still)
+        XCTAssertEqual(AidenImagePlaceholderMotion.resolve(reduceMotion: false, lowPowerMode: true), .still)
+        // The still lens rests around 40% of the placeholder.
+        let height: CGFloat = 100
+        let lensCenter = AidenImagePlaceholderSpec.stillLensTop(height: height)
+            + height * AidenImagePlaceholderSpec.lensHeightFraction / 2
+        XCTAssertEqual(Double(lensCenter / height), 0.4, accuracy: 0.05)
+    }
+
+    func testLensTravelsTopToBottomThenRests() {
+        let height: CGFloat = 200
+        let lens = height * AidenImagePlaceholderSpec.lensHeightFraction
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0), height: height), -lens)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensTop(progress: AidenImagePlaceholderSpec.lensProgress(phase: 0.78), height: height), height)
+        XCTAssertEqual(AidenImagePlaceholderSpec.lensProgress(phase: 0.9), 1)
+        let early = AidenImagePlaceholderSpec.lensProgress(phase: 0.2)
+        let late = AidenImagePlaceholderSpec.lensProgress(phase: 0.6)
+        XCTAssertLessThan(early, late)
+        // Eases in: the first fifth of the travel covers less than a fifth of the distance.
+        XCTAssertLessThan(AidenImagePlaceholderSpec.lensProgress(phase: 0.78 * 0.2), 0.2)
+    }
+
+    func testLongRunsSlowDownAndSayStillGenerating() {
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 12.7), "Generating · 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: -3), "Generating · 0s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 72), "Still generating · 1m 12s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.caption(elapsed: 65), "Still generating · 1m 05s")
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 59), 2.8)
+        XCTAssertEqual(AidenImagePlaceholderSpec.period(elapsed: 60), 5.2)
+    }
+
+    func testGenerateImageActivityLineNamesTheShape() {
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.running, detail: "16:9")), "Generating image 16:9")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: imageStep(.completed)), "Generated image")
     }
 }

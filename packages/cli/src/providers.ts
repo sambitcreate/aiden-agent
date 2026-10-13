@@ -10,9 +10,9 @@ import { fetchModelsDevCatalog, parseModelsDevCacheDocument } from "../../../mai
 import { fetchArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-runtime-core.js";
 import { fetchOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-runtime-core.js";
 import { parseArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-catalog-core.js";
-import { parseOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
+import { parseOpenRouterBenchmarkCache, type OpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
 import { insightCredentials } from "./credentials.ts";
-import { lookupCatalogModelInfo, parseModelCatalog } from "../../../main/services/models-catalog-core.js";
+import { resolveModelInfo, parseModelCatalog } from "../../../main/services/models-catalog-core.js";
 import { atomicJson, readJson, splitArgs, JsonStore } from "./state.ts";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -80,6 +80,14 @@ export async function insightsCommand(agentDir: string, args: string[]) {
   return value;
 }
 
+/** A missing, unreadable or no-longer-valid insights cache means no benchmark, never an error. */
+function cachedOpenRouterBenchmarks(agentDir: string): OpenRouterBenchmarkCache | null {
+  try {
+    const value = readJson(join(agentDir, "openrouter-insights.json"), null);
+    return value ? parseOpenRouterBenchmarkCache(value) : null;
+  } catch { return null; }
+}
+
 export function createProviderParityExtension(agentDir: string): InlineExtension {
   return { name: "aiden-providers", factory(pi) {
     pi.registerProvider(concentrateProvider());
@@ -104,7 +112,9 @@ export function createProviderParityExtension(agentDir: string): InlineExtension
           const cached = readJson(join(agentDir, "models-dev.json"), null);
           const document = cached ? parseModelsDevCacheDocument(cached) : null;
           const catalog = document?.appVersion === VERSION && document.catalog ? document.catalog : parseModelCatalog(readJson(join(dirname(process.env.AIDEN_CLI_ENTRY!), "model-capabilities.json"), {}));
-          ctx.ui.notify(JSON.stringify({ ...model, metadata: catalog ? lookupCatalogModelInfo(catalog, model.provider, model.id) : null }, null, 2), "info");
+          // Display-only: the shared desktop matcher reads the offline insights cache; no network here.
+          const metadata = catalog ? resolveModelInfo(catalog, { id: model.provider, baseUrl: model.baseUrl }, model.id, cachedOpenRouterBenchmarks(agentDir)) : null;
+          ctx.ui.notify(JSON.stringify({ ...model, metadata }, null, 2), "info");
         } else ctx.ui.notify(models.map((model) => `${model.provider}/${model.id}\t${model.name}\tcontext ${model.contextWindow}\tthinking ${model.reasoning}`).join("\n"), "info");
       },
     });

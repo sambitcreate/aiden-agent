@@ -1,4 +1,4 @@
-import { ModelPadSettings } from "./model-pad-settings";
+import { ModelPadSettings } from "./model-pad/model-pad-settings";
 
 /**
  * The retired direct Artificial Analysis credential flow remains absent;
