@@ -65,7 +65,7 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
   await expect(viewport).toHaveAttribute("data-follow", "true");
   // Released blocks fade in place: opacity only, nothing slides.
   const motion = await page
-    .locator(".streaming-reveal[data-streaming] .streaming-reveal-block")
+    .locator(".streaming-reveal[data-streaming] > *")
     .last()
     .evaluate((element) => {
       const style = getComputedStyle(element);
