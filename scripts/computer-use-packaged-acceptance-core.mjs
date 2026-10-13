@@ -242,13 +242,13 @@ export function evaluateAcceptanceRequests(requests, { expectedTitles = [], save
       !targetMatches(typed.capture.target, target)
     ) {
       failures.push(
-        "The approved type action did not return an exact-target capture_after result.",
+        "The type action did not return an exact-target capture_after result.",
       );
     } else if (!JSON.stringify(typed.capture).includes(ACCEPTANCE_TEXT)) {
       failures.push("The capture_after result did not contain the typed acceptance marker.");
     }
     if (!hasImageAfterToolResult(requests[6], 5)) {
-      failures.push("The approved type action's capture_after result returned no image.");
+      failures.push("The type action's capture_after result returned no image.");
     }
 
     expectSuccessfulAction({
@@ -267,7 +267,7 @@ export function evaluateAcceptanceRequests(requests, { expectedTitles = [], save
   try {
     const stale = correlatedToolMessage(requests[8], 7).content;
     if (!/not present in the latest capture|stale element|Capture again/iu.test(stale)) {
-      failures.push("The stale element action did not return the expected pre-approval rejection.");
+      failures.push("The stale element action was not rejected before it ran.");
     }
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
@@ -294,6 +294,20 @@ export function acceptanceCapabilityBaseUrl(port, capability) {
 export function acceptanceChatCompletionPath(capability) {
   acceptanceCapabilityBaseUrl(1, capability);
   return `/${capability}/v1/chat/completions`;
+}
+
+/**
+ * Computer Use runs in a chat when the beta is on and the chat was allowed on
+ * its access card (or Always allow is on). There is no per-chat toggle.
+ */
+export function acceptanceGateEvidence(config, chat) {
+  const settings = config?.settings;
+  return {
+    globalEnabled: settings?.computerUseEnabled === true,
+    accessGranted:
+      settings?.computerUseEnabled === true &&
+      (chat?.computerUseAllowed === true || settings?.computerUseAlwaysAllow === true),
+  };
 }
 
 export function acceptanceFixture(port, capability, now = Date.now()) {
@@ -326,7 +340,6 @@ export function acceptanceFixture(port, capability, now = Date.now()) {
     workspaceId,
     providerId,
     model,
-    computerUseEnabled: false,
     createdAt: now,
     updatedAt: now,
     messages: [],

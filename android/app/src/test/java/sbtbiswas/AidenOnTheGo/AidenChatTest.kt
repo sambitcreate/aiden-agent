@@ -32,6 +32,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -46,6 +47,12 @@ import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
+import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
+import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualsWithRows
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -62,6 +69,27 @@ class AidenChatTest {
         assertEquals(listOf("call-1", "call-2"), timeline.steps.map { it.toolCallId })
         assertEquals(listOf("codemode", "read_file"), timeline.steps.map { it.toolName })
         assertEquals(2, timeline.steps.map { it.id }.toSet().size)
+    }
+
+    @Test
+    fun canonicalFixtureQuestionnaireRecapDecodesFromTheTimelineEvent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val timelineEvent = root.getValue("events").jsonArray.map { it.jsonObject }
+            .single { it.getValue("type").jsonPrimitive.content == "timeline" }
+        val timeline = json.decodeFromJsonElement(
+            AidenGenerationTimeline.serializer(),
+            timelineEvent.getValue("payload").jsonObject.getValue("timeline"),
+        )
+        assertTrue(timeline.isRendererSafe())
+        val recap = timeline.steps.firstNotNullOf { it.questionnaireRecap }
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap.outcome)
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Plain text"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED),
+            ),
+            recap.items.map { recap.answer(it) },
+        )
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -126,6 +154,194 @@ class AidenChatTest {
                 assertEquals("reply-two", json.parseToJsonElement(second!!).jsonObject["throughMessageId"]!!.jsonPrimitive.content)
                 model.setChatForegrounded(true)
                 assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun snapshotStoredAfterTheReplySettlesAppearsWithoutUserAction() = assertLateSnapshotRefresh(snapshotArrives = true)
+
+    @Test
+    fun snapshotThatNeverArrivesStopsRefetchingAfterThreeTries() = assertLateSnapshotRefresh(snapshotArrives = false)
+
+    @Test
+    fun snapshotStoredAfterAStreamedTurnSettlesAppearsWithoutUserAction() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-stream-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val wireJson = Json(json) { explicitNulls = false }
+        val initial = AidenChat(
+            id = "chat-stream", workspaceId = "workspace-stream", title = "Plans",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r0"
+        )
+        val question = AidenChatMessage("question-1", AidenChatRole.USER, "Compare plans", createdAt = Instant.now())
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"5".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-1", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The terminal read lands before capture; the snapshot is stored only once the phone has settled.
+        val settled = initial.copy(revision = "r1", messages = listOf(question, reply))
+        val captured = initial.copy(revision = "r2", messages = listOf(question, reply.copy(attachments = listOf(snapshot))))
+        val remote = java.util.concurrent.atomic.AtomicReference(initial)
+        val turnStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                return when {
+                    path == "/api/aiden/v1/chats/chat-stream/turns" -> {
+                        turnStarted.set(true)
+                        remote.set(settled)
+                        MockResponse().setResponseCode(202).setBody(
+                            """{"turnId":"turn-1","streamId":"stream-1","status":"queued","message":${wireJson.encodeToString(question)}}"""
+                        )
+                    }
+                    path == "/api/aiden/v1/chats/chat-stream" -> MockResponse().setBody(wireJson.encodeToString(remote.get()))
+                    path == "/api/aiden/v1/streams/stream-1/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-1\",\"sequence\":1," +
+                            "\"timestamp\":\"2026-09-22T12:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                    )
+                    path == "/api/aiden/v1/streams/stream-1" -> MockResponse().setBody(
+                        """{"streamId":"stream-1","chatId":"chat-stream","turnId":"turn-1","state":"done","lastSequence":1,"updatedAt":"2026-09-22T12:00:00Z"}"""
+                    )
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val grants = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-stream", deviceId = "device-stream", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                // The production client binding without unrelated /server refresh work.
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(
+                    initial.id, coordinator, cache, drafts, initial,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(300L, 300L, 300L))
+                )
+                viewModels.put("stream", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Compare plans")
+                assertTrue(model.canSend)
+                model.send()
+                // The streamed turn reaches its terminal event and settles on the snapshot-less transcript.
+                withTimeout(5_000) { while (!turnStarted.get()) kotlinx.coroutines.delay(10) }
+                withTimeout(5_000) {
+                    while (model.chat.value?.revision != "r1" || model.hasActiveStream.value || model.isStarting.value) {
+                        kotlinx.coroutines.delay(10)
+                    }
+                }
+                assertNull(aidenVisualDisplay(reply.visuals!!.single(), model.chat.value!!.messages.last().attachments.orEmpty()).snapshot)
+                // Capture finishes on the Mac; nothing on the phone asks for it.
+                remote.set(captured)
+                val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                val message = shown.messages.last()
+                assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun assertLateSnapshotRefresh(snapshotArrives: Boolean) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-late-snapshot-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val snapshot = AidenMessageAttachment(
+            "visual-snapshot_${"4".repeat(64)}", "Plan options.png", "image/png", AidenAttachmentKind.IMAGE, 2_048
+        )
+        val reply = AidenChatMessage(
+            "reply-visual", AidenChatRole.ASSISTANT, "Here are the plans.",
+            visuals = listOf(AidenChatVisual(
+                id = "ui_plans", kind = "ui", title = "Plan options",
+                fallbackText = "Solo or team", snapshotAttachmentId = snapshot.id
+            )),
+            createdAt = Instant.now()
+        )
+        // The Mac settles the reply before its snapshot capture finishes.
+        val settled = AidenChat(
+            id = "chat-visual", workspaceId = "workspace-visual", title = "Plans", messages = listOf(reply),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val captured = settled.copy(revision = "r2", messages = listOf(reply.copy(attachments = listOf(snapshot))))
+        val fetches = java.util.concurrent.atomic.AtomicInteger(0)
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-visual","name":"Visual Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-visuals-v1"],"connectionMode":"lan","serverTime":"2026-09-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-visual" -> {
+                    // The first read lands before the snapshot is stored; later reads see it when it exists.
+                    val served = if (fetches.incrementAndGet() > 1 && snapshotArrives) captured else settled
+                    MockResponse().setBody(wireJson.encodeToString(served))
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-visual", deviceId = "device-visual", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(
+                    settled.id, coordinator, cache, drafts, settled,
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(50L, 50L, 50L))
+                )
+                viewModels.put("visual", model)
+                if (snapshotArrives) {
+                    val shown = withTimeout(5_000) { model.chat.first { it?.revision == "r2" } }!!
+                    val message = shown.messages.single()
+                    assertEquals(snapshot, aidenVisualDisplay(message.visuals!!.single(), message.attachments.orEmpty()).snapshot)
+                    val afterSnapshot = fetches.get()
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("refetching stops once every visual has its snapshot", afterSnapshot, fetches.get())
+                } else {
+                    withTimeout(5_000) { while (fetches.get() < 4) kotlinx.coroutines.delay(20) }
+                    kotlinx.coroutines.delay(400)
+                    assertEquals("the initial read plus three bounded retries", 4, fetches.get())
+                    assertEquals("r1", model.chat.value?.revision)
+                }
                 viewModels.clearAndJoin()
             }
         } finally {
@@ -475,6 +691,385 @@ class AidenChatTest {
                 AidenChronologicalRow.Kind.TEXT),
             AidenChronologicalProjection.rows(message.text, "", hiddenTimeline)?.map { it.kind }
         )
+    }
+
+    private val answeredQuestionnaireJson = """{"version":1,"outcome":"answered","items":[""" +
+        """{"question":"Which database?","header":"Database","kind":"option","answers":["Postgres"]},""" +
+        """{"question":"Which extras?","header":"Extras","kind":"multi","answers":["Auth","Billing"]},""" +
+        """{"question":"Anything else?","header":"Notes","kind":"custom","answers":["Keep it small"]},""" +
+        """{"question":"Deploy target?","header":"Deploy","kind":"skipped","answers":[]}]}"""
+
+    private fun questionnaireTimelineJson(
+        questionnaire: String = answeredQuestionnaireJson,
+        toolName: String = "ask_user_question",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-questions","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Ask","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"questionnaire":$questionnaire},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"run_command","label":"Run command","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun answeredQuestionnaireBecomesItsOwnRowAtItsPositionAndLeavesTheActivityTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        val message = AidenChatMessage("message-q", AidenChatRole.ASSISTANT, "Before.After.",
+            timeline = timeline, createdAt = Instant.EPOCH)
+        assertTrue(message.isWireSafe)
+
+        val recap = timeline.steps[1].questionnaireRecap
+        assertNotNull(recap)
+        assertEquals(AidenQuestionnaireRecap.Outcome.ANSWERED, recap!!.outcome)
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            recap.items.map { it.question })
+
+        // The recap splits the activity at its offset: the read before it and the
+        // command after it stay activity lines on either side of the answers.
+        val rows = AidenChronologicalProjection.rows(message.text, "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1", "QUESTIONNAIRE:tool-2", "TOOL:tool-3", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].questionnaire)
+
+        // Two tool calls are activity; the questionnaire is not counted.
+        assertEquals("Explored 1 file, ran 1 command", AidenAgentActivityPresentation.summary(timeline))
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.activityTimeline(timeline).steps.map { it.id })
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].questionnaireRecap)
+        // An absent recap stays absent on the wire rather than turning into null.
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("questionnaire"))
+    }
+
+    @Test
+    fun liveFallbackListsTheTimelineCallsAndRecapsInsteadOfTheStreamToolRows() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson())
+        // The stream's text has not reached the steps' offset yet, so the reply has no
+        // chronological rows and falls back to listing activity.
+        assertNull(AidenChronologicalProjection.rows("Bef", "", timeline))
+        // Live rows carry stream ids that match no step's toolCallId.
+        val liveTools = listOf(
+            AidenLiveTool("tool_1", "read_file", "completed"),
+            AidenLiveTool("tool_2", "ask_user_question", "completed"),
+            AidenLiveTool("tool_3", "run_command")
+        )
+
+        assertEquals(listOf("tool-1", "tool-3"),
+            AidenAgentActivityPresentation.liveToolSteps(timeline).map { it.id })
+        assertEquals(listOf("Which database?", "Which extras?", "Anything else?", "Deploy target?"),
+            AidenAgentActivityPresentation.questionnaireSteps(timeline).single().questionnaireRecap!!.items.map { it.question })
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline))
+
+        // A recap alone still covers its call: the plain question row stays hidden.
+        val recapOnly = timeline.copy(steps = listOf(timeline.steps[1]))
+        assertTrue(AidenAgentActivityPresentation.liveToolSteps(recapOnly).isEmpty())
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, recapOnly))
+
+        // Before the timeline knows any call, the stream's rows are all there is.
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, null))
+        assertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline.copy(steps = emptyList())))
+        assertFalse(AidenAgentActivityPresentation.showsLiveToolRows(emptyList(), null))
+        assertTrue(AidenAgentActivityPresentation.questionnaireSteps(null).isEmpty())
+    }
+
+    @Test
+    fun questionnaireAnswersReadAsChoicesQuotesOrTheReasonTheyWereUnanswered() {
+        val recap = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(answeredQuestionnaireJson))!!
+        assertEquals(
+            listOf(
+                AidenQuestionnaireRecap.Answer.Choice("Postgres"),
+                AidenQuestionnaireRecap.Answer.Choice("Auth, Billing"),
+                AidenQuestionnaireRecap.Answer.Custom("Keep it small"),
+                AidenQuestionnaireRecap.Answer.Unanswered(AidenQuestionnaireRecap.Outcome.ANSWERED)
+            ),
+            recap.items.map(recap::answer)
+        )
+        for (outcome in listOf("dismissed", "expired")) {
+            val closed = AidenQuestionnaireRecap.fromJson(Json.parseToJsonElement(
+                """{"version":1,"outcome":"$outcome","items":[{"question":"Which database?","header":"Database","kind":"skipped","answers":[]}]}"""
+            ))!!
+            assertEquals(outcome, closed.outcome.wire)
+            assertTrue(closed.answer(closed.items.single()) is AidenQuestionnaireRecap.Answer.Unanswered)
+        }
+    }
+
+    @Test
+    fun malformedQuestionnaireIsDroppedWhileTheStepAndChatStillRender() {
+        fun item(kind: String, answers: String, question: String = "Which database?", header: String = "Database") =
+            """{"question":"$question","header":"$header","kind":"$kind","answers":$answers}"""
+        fun recap(outcome: String = "answered", version: String = "1", vararg items: String) =
+            """{"version":$version,"outcome":"$outcome","items":[${items.joinToString(",")}]}"""
+        val oneItem = item("option", """["Postgres"]""")
+        val malformed = mapOf(
+            "option with two answers" to recap(items = arrayOf(item("option", """["Postgres","MySQL"]"""))),
+            "option with no answer" to recap(items = arrayOf(item("option", "[]"))),
+            "multi with a repeated label" to recap(items = arrayOf(item("multi", """["Auth","Auth"]"""))),
+            "multi with six labels" to recap(items = arrayOf(item("multi", """["a","b","c","d","e","f"]"""))),
+            "custom with two answers" to recap(items = arrayOf(item("custom", """["a","b"]"""))),
+            "skipped with an answer" to recap(items = arrayOf(item("skipped", """["Postgres"]"""))),
+            "answer on a dismissed card" to recap(outcome = "dismissed", items = arrayOf(oneItem)),
+            "answer on an expired card" to recap(outcome = "expired", items = arrayOf(oneItem)),
+            "no items" to recap(),
+            "five items" to recap(items = Array(5) { oneItem }),
+            "unknown kind" to recap(items = arrayOf(item("ranking", """["Postgres"]"""))),
+            "unknown outcome" to recap(outcome = "ignored", items = arrayOf(oneItem)),
+            "future version" to recap(version = "2", items = arrayOf(oneItem)),
+            "string version" to recap(version = "\"1\"", items = arrayOf(oneItem)),
+            "non-string answer" to recap(items = arrayOf(item("option", "[7]"))),
+            "answers not a list" to recap(items = arrayOf(item("option", "\"Postgres\""))),
+            "blank question" to recap(items = arrayOf(item("option", """["Postgres"]""", question = "  "))),
+            "header over 16 characters" to recap(items = arrayOf(item("option", """["Postgres"]""", header = "A".repeat(17)))),
+            "control character" to recap(items = arrayOf(item("option", """["Post\u0007gres"]"""))),
+            "label over 60 characters" to recap(items = arrayOf(item("option", """["${"x".repeat(61)}"]"""))),
+            "not an object" to "\"answered\"",
+            "null" to "null"
+        )
+        for ((case, questionnaire) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(questionnaire))
+            val step = timeline.steps[1]
+            assertNull(case, step.questionnaire)
+            assertEquals(case, "ask_user_question", step.toolName)
+            assertTrue(case, timeline.isRendererSafe(contentLength = 13))
+            // Without a recap the questionnaire is an ordinary activity line again.
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertEquals(case, listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+        }
+
+        // A literal tab or newline is allowed inside a custom answer.
+        val multiline = wireJson.decodeFromString<AidenGenerationTimeline>(questionnaireTimelineJson(
+            recap(items = arrayOf(item("custom", """["Line one\nLine two"]"""))))
+        )
+        assertEquals("Line one\nLine two", multiline.steps[1].questionnaireRecap?.items?.single()?.answers?.single())
+    }
+
+    @Test
+    fun recapOutsideACompletedAskUserQuestionStepKeepsTheActivityLine() {
+        for ((toolName, status) in listOf("ask_user_question" to "cancelled", "read_file" to "completed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                questionnaireTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].questionnaireRecap)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(rows.none { it.kind == AidenChronologicalRow.Kind.QUESTIONNAIRE })
+            assertEquals(listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+            assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        }
+    }
+
+    private fun fixtureVisualMessage(): AidenChatMessage {
+        val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
+        val chat = wireJson.decodeFromJsonElement(AidenChat.serializer(), Json.parseToJsonElement(data).jsonObject.getValue("chat"))
+        return chat.messages.single { it.id == "message_fixture_assistant_01" }
+    }
+
+    private fun visualWireMessage(visuals: String): AidenChatMessage = wireJson.decodeFromString(
+        """
+            {"id":"message-visuals","role":"assistant","text":"Here it is.","createdAt":"2026-08-25T18:00:00.000Z",
+             "attachments":[{"id":"visual-snapshot_aa","name":"Chart.png","mimeType":"image/png","kind":"image","size":10}],
+             "visuals":$visuals}
+        """.trimIndent()
+    )
+
+    @Test
+    fun fixtureChatDecodesItsInlineVisualsInReplyOrder() {
+        val message = fixtureVisualMessage()
+        val visuals = message.visuals.orEmpty()
+        assertEquals(listOf("artifact_fixture_01", "ui_fixture_01"), visuals.map { it.id })
+        assertEquals(listOf("html", "ui"), visuals.map { it.kind })
+        assertEquals(listOf("call-1", "call-2"), visuals.map { it.toolCallId })
+        assertEquals("wide", visuals[0].layout)
+        assertNull(visuals[1].layout)
+        assertEquals("Plan options\nSolo: \$12.00\nTeam: \$60.00", visuals[1].fallbackText)
+        assertTrue(message.isWireSafe)
+    }
+
+    @Test
+    fun eachVisualFollowsTheToolStepThatDrewItAndUnmatchedVisualsTrail() {
+        val message = fixtureVisualMessage()
+        val rows = AidenChronologicalProjection.rows(
+            message.text, message.reasoning.orEmpty(), message.timeline, message.visuals.orEmpty()
+        )!!
+        // Both tool steps share content offset 0, yet each visual sits right after its own step.
+        assertEquals(
+            listOf("TOOL:call-1", "VISUAL:artifact_fixture_01", "TOOL:call-2", "VISUAL:ui_fixture_01", "TEXT:"),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.VISUAL -> "VISUAL:" + row.visual?.id
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        val orphan = AidenChatVisual(id = "ui_orphan", kind = "ui", title = "Orphan", toolCallId = "call-9")
+        val trailing = AidenChronologicalProjection.rows(
+            message.text, "", message.timeline, message.visuals.orEmpty() + orphan
+        )!!
+        assertEquals(AidenChronologicalRow.Kind.VISUAL, trailing.last().kind)
+        assertEquals("ui_orphan", trailing.last().visual?.id)
+        // Without visuals, the steps group as before.
+        assertEquals(
+            listOf(AidenChronologicalRow.Kind.TOOL, AidenChronologicalRow.Kind.TEXT),
+            AidenChronologicalProjection.rows(message.text, "", message.timeline)?.map { it.kind }
+        )
+    }
+
+    @Test
+    fun malformedVisualIsDroppedWithoutLosingItsMessage() {
+        val message = visualWireMessage(
+            """
+            [
+              {"id":"ui_untitled","kind":"ui"},
+              {"id":"ui_kind","kind":"chart","title":"Bad kind"},
+              {"id":"ui_call","kind":"ui","title":"Bad call","toolCallId":"tool-1"},
+              {"id":"ui_layout","kind":"ui","title":"Bad layout","layout":"narrow"},
+              {"id":"ui_long","kind":"ui","title":"Long","fallbackText":"${"x".repeat(4_001)}"},
+              "not an object",
+              {"id":"html_ok","kind":"html","title":"Chart","snapshotAttachmentId":"visual-snapshot_aa","futureKey":1},
+              {"id":"html_ok","kind":"html","title":"Duplicate"}
+            ]
+            """.trimIndent()
+        )
+        assertEquals("Here it is.", message.text)
+        assertEquals(listOf("html_ok"), message.visuals?.map { it.id })
+        assertEquals("Chart", message.visuals?.single()?.title)
+        assertTrue(message.isWireSafe)
+
+        val chat = AidenChat(
+            id = "chat-visuals", workspaceId = "workspace-1", title = "Visuals", messages = listOf(message),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "rev_1"
+        )
+        assertEquals(1, chat.messages.size)
+    }
+
+    @Test
+    fun moreThanFortyVisualsFailTheMessage() {
+        val forty = (1..40).map { AidenChatVisual(id = "ui_$it", kind = "ui", title = "Visual $it") }
+        val base = AidenChatMessage("message-1", AidenChatRole.ASSISTANT, "Text", createdAt = Instant.EPOCH)
+        assertTrue(base.copy(visuals = forty).isWireSafe)
+        assertFalse(base.copy(visuals = forty + AidenChatVisual(id = "ui_41", kind = "ui", title = "Visual 41")).isWireSafe)
+    }
+
+    @Test
+    fun snapshotAttachmentsNeverReachTheOrdinaryAttachmentList() {
+        val message = fixtureVisualMessage()
+        val photo = AidenMessageAttachment("photo-1", "Photo.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val namedSnapshot = AidenMessageAttachment("named-snapshot", "Named.png", "image/png", AidenAttachmentKind.IMAGE, 1_024)
+        val strayPrefixed = AidenMessageAttachment(
+            "visual-snapshot_${"3".repeat(64)}", "Stray.png", "image/png", AidenAttachmentKind.IMAGE, 1_024
+        )
+        val notes = AidenMessageAttachment("notes", "notes.txt", "text/plain", AidenAttachmentKind.TEXT, 12)
+        val visuals = message.visuals.orEmpty() +
+            AidenChatVisual(id = "ui_named", kind = "ui", title = "Named", snapshotAttachmentId = "named-snapshot")
+        val attachments = message.attachments.orEmpty() + photo + namedSnapshot + strayPrefixed + notes
+
+        assertEquals(listOf(photo), aidenEligibleImageAttachments(attachments, visuals))
+        assertEquals(listOf(photo, notes), aidenVisibleMessageAttachments(attachments, visuals))
+        // A message without visuals keeps every ordinary image.
+        assertEquals(listOf(photo, namedSnapshot), aidenEligibleImageAttachments(listOf(photo, namedSnapshot)))
+    }
+
+    @Test
+    fun visualRowShowsSnapshotThenFallbackTextThenTitle() {
+        val message = fixtureVisualMessage()
+        val attachments = message.attachments.orEmpty()
+        val (html, ui) = message.visuals.orEmpty()
+
+        val htmlDisplay = aidenVisualDisplay(html, attachments)
+        assertEquals(html.snapshotAttachmentId, htmlDisplay.snapshot?.id)
+        assertNull(htmlDisplay.text)
+
+        val uiDisplay = aidenVisualDisplay(ui, attachments)
+        assertEquals(ui.snapshotAttachmentId, uiDisplay.snapshot?.id)
+        assertEquals(ui.fallbackText, uiDisplay.text)
+
+        // A snapshot the message does not carry is no snapshot at all.
+        val fallbackOnly = aidenVisualDisplay(ui, emptyList())
+        assertNull(fallbackOnly.snapshot)
+        assertEquals(ui.fallbackText, fallbackOnly.text)
+
+        val titleOnly = aidenVisualDisplay(html, emptyList())
+        assertNull(titleOnly.snapshot)
+        assertEquals("Weekly total", titleOnly.text)
+    }
+
+    @Test
+    fun htmlVisualWithoutASnapshotIsLeftToItsUnsupportedNotice() {
+        val message = fixtureVisualMessage()
+        val (html, ui) = message.visuals.orEmpty()
+        // With snapshots, both visuals get rows.
+        assertEquals(listOf(html.id, ui.id), aidenVisualsWithRows(message).map { it.id })
+
+        // Without one, the html visual is represented only by its notice; the ui visual keeps its fallback row.
+        val noSnapshots = message.copy(attachments = emptyList())
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(noSnapshots).map { it.id })
+        assertEquals(listOf(html.id), aidenUnsupportedHtmlArtifacts(noSnapshots).map { it.id })
+
+        // A ui visual with neither snapshot nor fallback text still shows its title.
+        val bareUi = noSnapshots.copy(visuals = listOf(ui.copy(fallbackText = null)))
+        assertEquals(listOf(ui.id), aidenVisualsWithRows(bareUi).map { it.id })
+
+        // The chronological transcript built from those visuals carries no html row either.
+        val rows = AidenChronologicalProjection.rows(
+            noSnapshots.text, "", noSnapshots.timeline, aidenVisualsWithRows(noSnapshots)
+        )!!
+        assertEquals(listOf(ui.id), rows.mapNotNull { it.visual?.id })
+    }
+
+    @Test
+    fun lateSnapshotRefreshRetriesBrieflyForTheNewestReplyStillMissingOne() {
+        val policy = AidenVisualSnapshotRefreshPolicy()
+        val settled = fixtureVisualMessage()
+        val pending = settled.copy(attachments = emptyList())
+        val soon = pending.createdAt.plusSeconds(5)
+
+        // Every visual already has its snapshot: nothing to wait for.
+        assertNull(policy.nextDelayMillis(settled, attempt = 0, now = soon))
+        // Missing snapshots: three bounded re-reads, then stop. Measured from settlement the
+        // re-reads land at 4 s, 10 s and 20 s, the same schedule iOS uses.
+        val waits = (0..3).map { policy.nextDelayMillis(pending, it, soon) }
+        assertNull(waits.last())
+        assertEquals(listOf(4_000L, 10_000L, 20_000L), waits.filterNotNull().runningReduce { elapsed, wait -> elapsed + wait })
+        // One visual still missing its snapshot is enough to retry.
+        val partial = settled.copy(attachments = settled.attachments.orEmpty().take(1))
+        assertEquals(4_000L, policy.nextDelayMillis(partial, 0, soon))
+        // An old reply is not polled for.
+        assertNull(policy.nextDelayMillis(pending, 0, pending.createdAt.plusSeconds(180)))
+        // A long turn counts from when it finished, not from when it started.
+        val finishedRecently = pending.copy(
+            createdAt = pending.createdAt.minusSeconds(600),
+            timeline = pending.timeline!!.copy(finishedAt = soon.minusSeconds(10).toEpochMilli().toDouble())
+        )
+        assertEquals(4_000L, policy.nextDelayMillis(finishedRecently, 0, soon))
+        // No visuals, a user message, or no message: nothing to do.
+        assertNull(policy.nextDelayMillis(pending.copy(visuals = null), 0, soon))
+        assertNull(policy.nextDelayMillis(pending.copy(role = AidenChatRole.USER), 0, soon))
+        assertNull(policy.nextDelayMillis(null, 0, soon))
+
+        // Only the newest assistant reply is watched.
+        val later = AidenChatMessage("reply-later", AidenChatRole.ASSISTANT, "No visuals", createdAt = soon)
+        val question = AidenChatMessage("question", AidenChatRole.USER, "Thanks", createdAt = soon)
+        assertEquals(pending.id, policy.watchedMessage(listOf(pending, question))?.id)
+        assertEquals(later.id, policy.watchedMessage(listOf(pending, question, later))?.id)
+    }
+
+    @Test
+    fun htmlArtifactNoticeIsSuppressedOnlyWhenItsVisualHasASnapshot() {
+        val message = fixtureVisualMessage()
+        assertEquals(emptyList<AidenHtmlArtifact>(), aidenUnsupportedHtmlArtifacts(message))
+
+        val withoutSnapshot = message.copy(visuals = message.visuals?.map { it.copy(snapshotAttachmentId = null) })
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(withoutSnapshot).map { it.id })
+
+        val snapshotMissing = message.copy(attachments = emptyList())
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(snapshotMissing).map { it.id })
+
+        val noVisuals = message.copy(visuals = null)
+        assertEquals(listOf("artifact_fixture_01"), aidenUnsupportedHtmlArtifacts(noVisuals).map { it.id })
     }
 
     @Test

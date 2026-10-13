@@ -629,6 +629,9 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
+  htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
+  uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
+  visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
@@ -654,7 +657,10 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
-  computerUseEnabled?: boolean;
+  /** The user granted Computer Use for this chat. */
+  computerUseAllowed?: boolean;
+  /** A Computer Use access request is waiting for macOS setup; offer Continue. */
+  computerUsePendingContinue?: boolean;
   /** Main-owned crash stage exists and must be recovered before another chat mutation. */
   imageArtifactRecoveryPending?: boolean;
   /** Main-owned image staging could not be opened or quarantined automatically. */
@@ -943,6 +949,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Skip the per-chat Computer Use access card in every chat. */
+  computerUseAlwaysAllow?: boolean;
   /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button. Omitted means shown; active sessions always show it. */
@@ -1142,6 +1150,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals for this turn. */
+  inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
 }
 
 export interface ApprovalRequest {

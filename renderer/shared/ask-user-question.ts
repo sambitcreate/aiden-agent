@@ -318,3 +318,152 @@ export function parseAskUserQuestionResponse(
     answers,
   };
 }
+
+/** Longest custom answer a transcript recap keeps; the model still receives the full text. */
+export const ASK_USER_RECAP_MAX_CUSTOM_LENGTH = 1_000;
+
+/**
+ * One question and what became of it, as shown in the transcript after the
+ * card closes. `answers` holds one option label, one or more labels for a
+ * multi-select, one custom text, or nothing for a skipped question.
+ */
+export interface AskUserQuestionRecapItemV1 {
+  question: string;
+  header: string;
+  kind: "option" | "multi" | "custom" | "skipped";
+  answers: string[];
+}
+
+/**
+ * Renderer-safe record of a settled questionnaire, carried on its timeline
+ * step. `dismissed` means the owner closed the card; `expired` means the
+ * agent stopped waiting. Both leave every item skipped.
+ */
+export interface AskUserQuestionRecapV1 {
+  version: typeof ASK_USER_QUESTION_VERSION;
+  outcome: "answered" | "dismissed" | "expired";
+  items: AskUserQuestionRecapItemV1[];
+}
+
+const RECAP_OUTCOMES = new Set<AskUserQuestionRecapV1["outcome"]>([
+  "answered",
+  "dismissed",
+  "expired",
+]);
+
+function clipRecapText(value: string, maximum: number): string {
+  const characters = Array.from(value);
+  return characters.length <= maximum ? value : `${characters.slice(0, maximum - 1).join("")}…`;
+}
+
+/** C0 controls other than tab and newline, plus DEL, never reach the transcript. */
+function isUnsafeControl(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return (code < 32 && code !== 9 && code !== 10) || code === 127;
+}
+
+function stripUnsafeControls(value: string): string {
+  return Array.from(value)
+    .map((character) => (isUnsafeControl(character) ? " " : character))
+    .join("");
+}
+
+/**
+ * Build the transcript recap from the main-owned response, including its
+ * timeout flag. Returns undefined when the result would not pass
+ * `parseAskUserQuestionRecap`, so a stored timeline never carries one that
+ * replay would reject.
+ */
+export function buildAskUserQuestionRecap(
+  questions: readonly AskUserQuestionV1[],
+  response: Pick<AskUserQuestionResponseV1, "cancelled" | "answers" | "timedOut">,
+): AskUserQuestionRecapV1 | undefined {
+  const outcome = response.timedOut ? "expired" : response.cancelled ? "dismissed" : "answered";
+  const byIndex = new Map(
+    outcome === "answered" ? response.answers.map((answer) => [answer.questionIndex, answer]) : [],
+  );
+  return parseAskUserQuestionRecap({
+    version: ASK_USER_QUESTION_VERSION,
+    outcome,
+    items: questions.map((question, index): AskUserQuestionRecapItemV1 => {
+      const base = {
+        question: stripUnsafeControls(question.question),
+        header: stripUnsafeControls(question.header),
+      };
+      const answer = byIndex.get(index);
+      if (!answer) return { ...base, kind: "skipped", answers: [] };
+      if (answer.kind === "multi") return { ...base, kind: "multi", answers: [...answer.selected] };
+      if (answer.kind === "custom") {
+        const text = stripUnsafeControls(answer.answer);
+        return {
+          ...base,
+          kind: "custom",
+          answers: [clipRecapText(text, ASK_USER_RECAP_MAX_CUSTOM_LENGTH)],
+        };
+      }
+      return { ...base, kind: "option", answers: [answer.answer] };
+    }),
+  });
+}
+
+function recapString(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    Array.from(value).length <= maximum &&
+    !Array.from(value).some(isUnsafeControl)
+  );
+}
+
+/** Validate a stored or received recap before it reaches the transcript. */
+export function parseAskUserQuestionRecap(value: unknown): AskUserQuestionRecapV1 | undefined {
+  const input = record(value);
+  if (
+    !input ||
+    input.version !== ASK_USER_QUESTION_VERSION ||
+    typeof input.outcome !== "string" ||
+    !RECAP_OUTCOMES.has(input.outcome as AskUserQuestionRecapV1["outcome"]) ||
+    !Array.isArray(input.items) ||
+    input.items.length < 1 ||
+    input.items.length > ASK_USER_MAX_QUESTIONS
+  ) {
+    return undefined;
+  }
+  const outcome = input.outcome as AskUserQuestionRecapV1["outcome"];
+  const items: AskUserQuestionRecapItemV1[] = [];
+  for (const candidate of input.items) {
+    const item = record(candidate);
+    if (
+      !item ||
+      !recapString(item.question, ASK_USER_MAX_QUESTION_LENGTH) ||
+      !recapString(item.header, ASK_USER_MAX_HEADER_LENGTH) ||
+      !Array.isArray(item.answers)
+    ) {
+      return undefined;
+    }
+    const answers: unknown[] = item.answers;
+    const kind = item.kind;
+    const valid =
+      kind === "skipped"
+        ? answers.length === 0
+        : outcome === "answered" &&
+          (kind === "option"
+            ? answers.length === 1 && recapString(answers[0], ASK_USER_MAX_LABEL_LENGTH)
+            : kind === "multi"
+              ? answers.length >= 1 &&
+                answers.length <= ASK_USER_MAX_OPTIONS &&
+                new Set(answers).size === answers.length &&
+                answers.every((label) => recapString(label, ASK_USER_MAX_LABEL_LENGTH))
+              : kind === "custom" &&
+                answers.length === 1 &&
+                recapString(answers[0], ASK_USER_RECAP_MAX_CUSTOM_LENGTH));
+    if (!valid) return undefined;
+    items.push({
+      question: item.question,
+      header: item.header,
+      kind: kind as AskUserQuestionRecapItemV1["kind"],
+      answers: [...(answers as string[])],
+    });
+  }
+  return { version: ASK_USER_QUESTION_VERSION, outcome, items };
+}

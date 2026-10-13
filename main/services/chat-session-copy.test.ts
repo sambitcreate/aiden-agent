@@ -151,6 +151,37 @@ test("clone and fork copy visible linear history with fresh identities", async (
   }
 });
 
+test("copies remap placement mediaIds together with their artifacts", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-placement-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Placed", workspaceId: "w", providerId: "p", model: "m" });
+  const sourceMediaId = `html_${"1".repeat(43)}`;
+  await store.appendMessage(chat.id, { role: "user", content: "Chart it" });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Here it is",
+    htmlArtifacts: [{
+      version: 1, kind: "html", id: "artifact-1", title: "Chart",
+      mimeType: "text/html", size: 1, mediaId: sourceMediaId,
+    }],
+    htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" }],
+  });
+  const restarted = createChatStore(async () => directory);
+  const source = await restarted.get(chat.id);
+  assert.deepEqual(source?.messages[1]?.htmlArtifactPlacements, [
+    { mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" },
+  ]);
+  const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
+  const copied = clone.messages[1];
+  const copiedMediaId = copied?.htmlArtifacts?.[0]?.mediaId;
+  assert.ok(copiedMediaId);
+  assert.notEqual(copiedMediaId, sourceMediaId);
+  assert.deepEqual(copied?.htmlArtifactPlacements, [
+    { mediaId: copiedMediaId, toolCallId: "call_1", layout: "wide" },
+  ]);
+});
+
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -406,4 +437,38 @@ test("copy rejects malformed visible fields and unbounded retained metadata", as
     store.copyVisibleHistory({ sourceChatId: chat.id }),
     /provider identifier/iu,
   );
+});
+
+const NATIVE_VISUAL = {
+  version: 1 as const,
+  kind: "ui" as const,
+  id: "ui-abc",
+  toolCallId: "call-1",
+  title: "Board",
+  catalogVersion: 1,
+  tree: { t: "Visual", k: "0", c: [{ t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Hi" }] }] },
+  fallbackText: "Hi",
+};
+
+test("native visuals persist across restart, drop malformed entries, and survive a copy", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-ui-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({ title: "Native", workspaceId: "w", providerId: "p", model: "m" });
+  await store.appendMessage(chat.id, { role: "user", content: "Show it" });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Here",
+    uiVisuals: [
+      NATIVE_VISUAL,
+      { ...NATIVE_VISUAL, id: "ui-bad", tree: undefined } as never,
+      { ...NATIVE_VISUAL, id: "ui-wide", layout: "wide" },
+    ],
+  });
+  const restarted = createChatStore(async () => directory);
+  const stored = (await restarted.get(chat.id))?.messages[1];
+  assert.deepEqual(stored?.uiVisuals?.map((visual) => visual.id), ["ui-abc", "ui-wide"]);
+  assert.equal(stored?.uiVisuals?.[1]?.layout, "wide");
+  const clone = await store.copyVisibleHistory({ sourceChatId: chat.id });
+  assert.deepEqual(clone.messages[1]?.uiVisuals, stored?.uiVisuals);
 });

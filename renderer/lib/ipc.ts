@@ -433,6 +433,8 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  /** Clear every chat's Computer Use grant and turn off Always allow. */
+  resetChatGrants: () => invoke<{ cleared: number }>("computerUse:resetChatGrants"),
 };
 
 export const formFillApi = {
@@ -1175,7 +1177,6 @@ export const chatsApi = {
     workspaceId?: string;
     providerId?: string;
     model?: string;
-    computerUseEnabled?: boolean;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1205,8 +1206,9 @@ export const chatsApi = {
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
-  setComputerUse: (id: string, enabled: boolean) =>
-    invoke<Chat>("chats:setComputerUse", id, enabled),
+  /** Clear the post-restart "continue Computer Use" callout without resuming. */
+  dismissComputerUseContinue: (chatId: string) =>
+    invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
@@ -1218,6 +1220,8 @@ export const chatsApi = {
       foreground?: string;
       secondary?: string;
       accent?: string;
+      /** Allowlisted semantic tokens; main sanitizes them again. */
+      vars?: Record<string, string>;
     },
   ) =>
     invoke<{ title: string; src: string } | undefined>("chats:htmlArtifactSrcdoc", {
@@ -1225,6 +1229,9 @@ export const chatsApi = {
       mediaId,
       theme,
     }),
+  /** Remember a native visual's local state (tabs, filters, sliders) on its message. */
+  updateUiVisualState: (chatId: string, messageId: string, visualId: string, state: Record<string, unknown>) =>
+    invoke<boolean>("chats:updateUiVisualState", { chatId, messageId, visualId, state }),
   exportHtmlArtifact: (chatId: string, mediaId: string) =>
     invoke<{ saved: boolean; canceled: boolean }>("chats:exportHtmlArtifact", {
       chatId,

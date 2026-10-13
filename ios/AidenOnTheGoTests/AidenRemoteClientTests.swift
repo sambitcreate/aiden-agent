@@ -459,6 +459,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(server.supportsChatSummaries)
         XCTAssertEqual(server.features, [
             AidenServer.chatSummariesFeature,
+            AidenServer.chatVisualsFeature,
             AidenServer.chatTasksFeature,
             AidenServer.chatAgentsFeature,
             AidenServer.chatRunInputFeature,

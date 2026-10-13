@@ -643,6 +643,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "memoryEnabled",
     "skillsEnabled",
     "computerUseEnabled",
+    "computerUseAlwaysAllow",
     "aidenLiveEnabled",
     "aidenLiveButtonVisible",
     "scheduledTasksEnabled",

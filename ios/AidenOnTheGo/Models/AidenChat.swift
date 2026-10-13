@@ -26,6 +26,9 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let reasoning: String?
     let attachments: [AidenMessageAttachment]?
     let htmlArtifacts: [AidenHtmlArtifact]?
+    /// Additive in contract revision 28: the inline visuals this reply drew, in
+    /// reply order. Entries this client cannot parse are dropped individually.
+    let visuals: [AidenChatVisual]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
     let createdAt: Date
@@ -37,6 +40,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         reasoning: String? = nil,
         attachments: [AidenMessageAttachment]? = nil,
         htmlArtifacts: [AidenHtmlArtifact]? = nil,
+        visuals: [AidenChatVisual]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
         createdAt: Date
@@ -47,6 +51,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.reasoning = reasoning
         self.attachments = attachments
         self.htmlArtifacts = htmlArtifacts
+        self.visuals = visuals
         self.outcome = outcome
         self.timeline = timeline
         self.createdAt = createdAt
@@ -68,6 +73,10 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .htmlArtifacts
         )
+        // Additive and lenient: a malformed list or entry never rejects the
+        // message, so an older or newer Mac's visuals cannot hide the reply.
+        visuals = (try? values.decodeIfPresent([AidenLossyChatVisual].self, forKey: .visuals))
+            .map(AidenChatVisual.deduplicated)
         outcome = try aidenDecodeOptionalNonNull(
             AidenMessageOutcome.self,
             from: values,
@@ -90,6 +99,8 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             && (attachments?.allSatisfy(\.isWireSafe) ?? true)
             && (htmlArtifacts?.count ?? 0) <= 40
             && (htmlArtifacts?.allSatisfy(\.isWireSafe) ?? true)
+            && (visuals?.count ?? 0) <= AidenChatVisual.maximumPerMessage
+            && (visuals?.allSatisfy(\.isWireSafe) ?? true)
             && (outcome?.isWireSafe ?? true)
             // Generation timelines originate in JavaScript, where String.length
             // measures UTF-16 code units. Keep that wire offset convention while
@@ -98,7 +109,185 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, reasoning, attachments, htmlArtifacts, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, visuals, outcome, timeline, createdAt
+    }
+}
+
+/// One inline visual (contract revision 28): a native `render_ui` component or
+/// a sandboxed `render_artifact` page drawn on the Mac. Phones never receive
+/// its markup; they show the Mac's snapshot image, its text description, or
+/// its title, at the timeline tool step that drew it.
+struct AidenChatVisual: Codable, Identifiable, Equatable, Sendable {
+    static let maximumPerMessage = 40
+    static let maximumTitleLength = 120
+    static let maximumFallbackTextLength = 4_000
+    static let snapshotAttachmentPrefix = "visual-snapshot_"
+
+    enum Kind: String, Codable, Sendable {
+        case ui
+        case html
+        /// A kind a newer Mac introduced; it still shows its snapshot or text.
+        case other
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Kind(rawValue: raw) ?? .other
+        }
+    }
+
+    enum Layout: String, Codable, Sendable {
+        case wide
+    }
+
+    let id: String
+    let kind: Kind
+    let title: String
+    let toolCallId: String?
+    let fallbackText: String?
+    let snapshotAttachmentId: String?
+    let layout: Layout?
+
+    init(
+        id: String,
+        kind: Kind,
+        title: String,
+        toolCallId: String? = nil,
+        fallbackText: String? = nil,
+        snapshotAttachmentId: String? = nil,
+        layout: Layout? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.toolCallId = toolCallId
+        self.fallbackText = fallbackText
+        self.snapshotAttachmentId = snapshotAttachmentId
+        self.layout = layout
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        title = try values.decode(String.self, forKey: .title)
+        toolCallId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .toolCallId)
+        fallbackText = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .fallbackText)
+        snapshotAttachmentId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .snapshotAttachmentId)
+        // Layout is a presentation hint; an unknown value is ignored rather
+        // than costing the visual.
+        layout = try? values.decodeIfPresent(Layout.self, forKey: .layout)
+        guard isWireSafe else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "Chat visual contains an unsafe identity, title, tool call, or description."
+            )
+        }
+    }
+
+    var isWireSafe: Bool {
+        Self.isSafeIdentifier(id)
+            && !title.isEmpty
+            && title.unicodeScalars.count <= Self.maximumTitleLength
+            && (toolCallId.map(Self.isToolCallIdentifier) ?? true)
+            && (fallbackText.map { !$0.isEmpty && $0.unicodeScalars.count <= Self.maximumFallbackTextLength } ?? true)
+            && (snapshotAttachmentId.map(Self.isSafeIdentifier) ?? true)
+    }
+
+    /// Keeps the first entry per id, in reply order, so row identities stay unique.
+    static func deduplicated(_ entries: [AidenLossyChatVisual]) -> [AidenChatVisual] {
+        var seen = Set<String>()
+        return entries.compactMap(\.value).filter { seen.insert($0.id).inserted }
+    }
+
+    private static func isSafeIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.unicodeScalars.count <= 256 && value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 46, 58, 95: return true
+            default: return false
+            }
+        }
+    }
+
+    /// `call-<n>` with a positive decimal `n`, as the Mac's timeline names tool calls.
+    private static func isToolCallIdentifier(_ value: String) -> Bool {
+        guard value.hasPrefix("call-") else { return false }
+        let digits = value.dropFirst(5)
+        return !digits.isEmpty && digits.count <= 16 && digits.first != "0"
+            && digits.unicodeScalars.allSatisfy { (48...57).contains($0.value) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, toolCallId, fallbackText, snapshotAttachmentId, layout
+    }
+}
+
+/// Decodes one `visuals` entry without letting a malformed entry fail the list.
+struct AidenLossyChatVisual: Decodable {
+    let value: AidenChatVisual?
+
+    init(from decoder: Decoder) throws {
+        value = try? AidenChatVisual(from: decoder)
+    }
+}
+
+/// Presentation decisions for inline visuals, kept pure so they can be tested
+/// without rendering the transcript.
+enum AidenChatVisualPresentation {
+    /// Whether an attachment is a visual's snapshot rather than a user-facing
+    /// image: either a visual names it, or it carries the reserved id prefix.
+    static func isSnapshotAttachment(_ attachment: AidenMessageAttachment, in message: AidenChatMessage) -> Bool {
+        attachment.id.hasPrefix(AidenChatVisual.snapshotAttachmentPrefix)
+            || (message.visuals?.contains { $0.snapshotAttachmentId == attachment.id } ?? false)
+    }
+
+    /// The attachments the ordinary attachment strip shows: everything except
+    /// snapshots, which appear once, inline at their visual.
+    static func stripAttachments(for message: AidenChatMessage) -> [AidenMessageAttachment] {
+        (message.attachments ?? []).filter { !isSnapshotAttachment($0, in: message) }
+    }
+
+    /// The image attachment holding a visual's snapshot, when the message
+    /// carries one that the image views can display.
+    static func snapshotAttachment(
+        for visual: AidenChatVisual,
+        in message: AidenChatMessage
+    ) -> AidenMessageAttachment? {
+        guard let id = visual.snapshotAttachmentId, let attachments = message.attachments else { return nil }
+        let matches = attachments.filter { $0.id == id }
+        guard matches.count == 1, let attachment = matches.first,
+              AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
+        else { return nil }
+        return attachment
+    }
+
+    /// The visuals that get an inline row, in reply order. An html visual
+    /// without a usable snapshot gets none: its "Can't view on this device"
+    /// card already represents it. Other kinds always get a row, falling back
+    /// from snapshot to description to title.
+    static func rowVisuals(in message: AidenChatMessage) -> [AidenChatVisual] {
+        (message.visuals ?? []).filter { visual in
+            visual.kind != .html || snapshotAttachment(for: visual, in: message) != nil
+        }
+    }
+
+    /// HTML artifacts that still need the "Can't view on this device" card:
+    /// those without a visual whose snapshot this message can show.
+    static func unviewableHtmlArtifacts(in message: AidenChatMessage) -> [AidenHtmlArtifact] {
+        let replaced = Set((message.visuals ?? []).compactMap { visual in
+            snapshotAttachment(for: visual, in: message) == nil ? nil : visual.id
+        })
+        return (message.htmlArtifacts ?? []).filter { !replaced.contains($0.id) }
+    }
+}
+
+enum AidenMessageAttachmentPresentation {
+    /// An attachment the inline image views decode: a bounded, non-empty PNG or JPEG image.
+    static func isDisplayableImage(_ attachment: AidenMessageAttachment) -> Bool {
+        attachment.kind == .image
+            && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
+            && attachment.size > 0
+            && attachment.size <= AidenAttachmentImageValidation.maximumBytes
     }
 }
 
@@ -179,6 +368,125 @@ struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let deletions: Int
 }
 
+/// What the owner chose in a settled `ask_user_question` card, carried on its
+/// completed timeline step so the transcript can show the questions and
+/// answers in place of the generic activity line. Decoding throws for any
+/// recap the desktop would reject; `AidenAgentStep` then drops only the recap.
+struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
+    static let toolName = "ask_user_question"
+    static let maxItems = 4
+    static let maxOptions = 5
+    static let maxQuestionLength = 1_000
+    static let maxHeaderLength = 16
+    static let maxLabelLength = 60
+    static let maxCustomLength = 1_000
+
+    enum Outcome: String, Codable, Sendable {
+        case answered
+        case dismissed
+        case expired
+    }
+
+    struct Item: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case option
+            case multi
+            case custom
+            case skipped
+        }
+
+        /// How the answer line under a question reads.
+        enum Answer: Equatable, Sendable {
+            /// One option label, or a multi-select's labels joined with ", ".
+            case chosen(String)
+            /// The owner's own words, quoted.
+            case custom(String)
+            /// A question left without an answer.
+            case unanswered(String)
+        }
+
+        let question: String
+        let header: String
+        let kind: Kind
+        let answers: [String]
+
+        func answer(for outcome: Outcome) -> Answer {
+            switch kind {
+            case .skipped:
+                switch outcome {
+                case .answered: return .unanswered("Skipped")
+                case .dismissed: return .unanswered("Dismissed")
+                case .expired: return .unanswered("No answer")
+                }
+            case .custom:
+                return .custom("\u{201C}\(answers.first ?? "")\u{201D}")
+            case .option, .multi:
+                return .chosen(answers.joined(separator: ", "))
+            }
+        }
+    }
+
+    let version: Int
+    let outcome: Outcome
+    let items: [Item]
+
+    init(version: Int = 1, outcome: Outcome, items: [Item]) {
+        self.version = version
+        self.outcome = outcome
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        outcome = try values.decode(Outcome.self, forKey: .outcome)
+        items = try values.decode([Item].self, forKey: .items)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid ask_user_question recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, outcome, items
+    }
+
+    var isValid: Bool {
+        guard version == 1, (1...Self.maxItems).contains(items.count) else { return false }
+        return items.allSatisfy { item in
+            guard Self.isSafeText(item.question, maximum: Self.maxQuestionLength),
+                  Self.isSafeText(item.header, maximum: Self.maxHeaderLength) else { return false }
+            switch item.kind {
+            case .skipped:
+                return item.answers.isEmpty
+            case .option:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxLabelLength)
+            case .multi:
+                return outcome == .answered
+                    && (1...Self.maxOptions).contains(item.answers.count)
+                    && Set(item.answers).count == item.answers.count
+                    && item.answers.allSatisfy { Self.isSafeText($0, maximum: Self.maxLabelLength) }
+            case .custom:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxCustomLength)
+            }
+        }
+    }
+
+    /// Non-blank, within `maximum` code points, and free of C0 controls other
+    /// than tab and newline, and of DEL.
+    private static func isSafeText(_ value: String, maximum: Int) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && value.unicodeScalars.count <= maximum
+            && !value.unicodeScalars.contains { scalar in
+                (scalar.value < 32 && scalar.value != 9 && scalar.value != 10) || scalar.value == 127
+            }
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -203,6 +511,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let detail: String?
     let lineChanges: AidenAgentLineChanges?
     let producedFile: AidenProducedFile?
+    /// Present only on a completed `ask_user_question` step.
+    let questionnaire: AidenQuestionnaireRecap?
 
     init(
         id: String,
@@ -222,7 +532,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         target: String?,
         detail: String?,
         lineChanges: AidenAgentLineChanges?,
-        producedFile: AidenProducedFile? = nil
+        producedFile: AidenProducedFile? = nil,
+        questionnaire: AidenQuestionnaireRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -242,6 +553,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.detail = detail
         self.lineChanges = lineChanges
         self.producedFile = producedFile
+        self.questionnaire = questionnaire
     }
 
     init(from decoder: Decoder) throws {
@@ -276,21 +588,38 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .lineChanges
         )
+        // A malformed or misplaced recap is dropped; the step itself still
+        // renders as an ordinary activity line.
+        if kind == .tool, toolName == AidenQuestionnaireRecap.toolName, status == .completed {
+            questionnaire = try? aidenDecodeOptionalNonNull(
+                AidenQuestionnaireRecap.self,
+                from: values,
+                forKey: .questionnaire
+            )
+        } else {
+            questionnaire = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire
     }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
     }
+
+    /// A settled questionnaire reads as its recap, not as an activity line, so
+    /// it leaves activity groups and their tool-call tally.
+    var isQuestionnaire: Bool {
+        questionnaire != nil
+    }
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -298,7 +627,15 @@ struct AidenChronologicalRow: Identifiable, Equatable {
 }
 
 enum AidenChronologicalProjection {
-    static func rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?) -> [AidenChronologicalRow]? {
+    /// `visuals` come only from a committed message: each follows the tool row
+    /// whose step drew it, and any whose step is missing trail the reply. The
+    /// live stream passes none, since snapshots exist only after commit.
+    static func rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: [AidenChatVisual] = []
+    ) -> [AidenChronologicalRow]? {
         guard let timeline, timeline.version == 3,
               timeline.steps.allSatisfy({ $0.contentOffset != nil }),
               timeline.isRendererSafe(contentLength: text.utf16.count, reasoningLength: reasoning.utf16.count)
@@ -320,6 +657,8 @@ enum AidenChronologicalProjection {
               reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         let steps = timeline.steps
+        let visualToolCalls = Set(visuals.compactMap(\.toolCallId))
+        var placedVisuals = Set<Int>()
         var result: [AidenChronologicalRow] = []
         var cursor = 0
         var index = 0
@@ -338,13 +677,27 @@ enum AidenChronologicalProjection {
                 let slice = start.map { reasoningValue.substring(with: NSRange(location: $0, length: end - $0)) } ?? ""
                 result.append(.init(id: "reasoning-\(step.id)", kind: .reasoning, text: slice, steps: [step]))
                 index += 1
+            } else if step.isQuestionnaire {
+                result.append(.init(id: "questionnaire-\(step.id)", kind: .questionnaire, text: "", steps: [step]))
+                index += 1
             } else {
                 var group: [AidenAgentStep] = []
-                while index < steps.count && steps[index].kind == .tool && steps[index].contentOffset == offset {
-                    group.append(steps[index])
+                while index < steps.count && steps[index].kind == .tool && !steps[index].isQuestionnaire
+                        && steps[index].contentOffset == offset {
+                    let groupedStep = steps[index]
+                    group.append(groupedStep)
                     index += 1
+                    // A step that drew a visual closes its group so the visual
+                    // sits directly beneath it.
+                    if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+                let groupCalls = Set(group.compactMap(\.toolCallId))
+                for (visualIndex, visual) in visuals.enumerated()
+                where !placedVisuals.contains(visualIndex) && visual.toolCallId.map(groupCalls.contains) == true {
+                    placedVisuals.insert(visualIndex)
+                    result.append(visualRow(visual, at: visualIndex))
+                }
             }
             cursor = offset
         }
@@ -354,7 +707,14 @@ enum AidenChronologicalProjection {
                 result.append(.init(id: "text-\(cursor)", kind: .text, text: slice, steps: []))
             }
         }
+        for (visualIndex, visual) in visuals.enumerated() where !placedVisuals.contains(visualIndex) {
+            result.append(visualRow(visual, at: visualIndex))
+        }
         return result
+    }
+
+    private static func visualRow(_ visual: AidenChatVisual, at index: Int) -> AidenChronologicalRow {
+        .init(id: "visual-\(index)-\(visual.id)", kind: .visual(visual), text: "", steps: [])
     }
 }
 
@@ -650,7 +1010,29 @@ enum AidenAgentActivityPresentation {
         _ timeline: AidenGenerationTimeline,
         reasoningVisible: Bool
     ) -> [AidenAgentStep] {
-        reasoningVisible ? timeline.steps.filter { $0.kind == .tool } : timeline.steps
+        timeline.steps.filter { step in
+            !step.isQuestionnaire && (!reasoningVisible || step.kind == .tool)
+        }
+    }
+
+    /// Settled questionnaires, in timeline order, for transcripts that show
+    /// their recap after the activity feed instead of in chronological rows.
+    static func questionnaireSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter(\.isQuestionnaire) ?? []
+    }
+
+    /// Whether a fallback transcript lists the stream's live tool rows. Once
+    /// the timeline has a tool step, the activity feed or a recap card already
+    /// shows each call, so the live rows would only repeat them.
+    static func showsLiveToolRows(
+        _ tools: [AidenLiveTool],
+        timeline: AidenGenerationTimeline?,
+        reasoningVisible: Bool
+    ) -> Bool {
+        guard !tools.isEmpty else { return false }
+        guard let timeline else { return true }
+        return activitySteps(timeline, reasoningVisible: reasoningVisible).isEmpty
+            && questionnaireSteps(timeline).isEmpty
     }
 
     static func line(for step: AidenAgentStep) -> String {
@@ -689,7 +1071,7 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool }
+        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
         guard !tools.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }

@@ -9,6 +9,7 @@ import {
   runWithCrashRetry,
   WorkerCrashError,
 } from "../../../main/services/local-speech-process-core.js";
+import { needsFreshWorker, speechLanguageKey, type LoadedSpeechModel } from "../../../main/services/local-speech-worker-host.js";
 import { effectiveLanguage } from "../../../renderer/shared/voice-language.js";
 import { voiceTrimSilenceEnabled } from "../../../renderer/shared/voice-preferences.js";
 import type { AppSettings } from "../../../main/services/types.js";
@@ -24,10 +25,18 @@ export function createCliSpeech(agentDir: string) {
   const models = createSpeechModelManager({ root: () => join(agentDir, "voice-models") });
   const settings = new JsonStore<AppSettings>(join(agentDir, "speech.json"), {});
   let worker: Worker | undefined, client: LocalSpeechProcessClient | undefined;
+  let loaded: LoadedSpeechModel | null = null;
   const cliDir = () => dirname(process.env.AIDEN_CLI_ENTRY!);
   const dropClient = (current: LocalSpeechProcessClient) => {
     if (client !== current) return;
-    current.dispose(); client = undefined; worker = undefined;
+    current.dispose(); client = undefined; worker = undefined; loaded = null;
+  };
+  // A worker holds its native recognizer until its thread exits, so retiring one
+  // awaits termination before a replacement is created.
+  const retireWorker = async () => {
+    const stopping = worker;
+    client?.dispose(); client = undefined; worker = undefined; loaded = null;
+    if (stopping) await stopping.terminate();
   };
   const getClient = () => {
     if (client) return client;
@@ -42,14 +51,14 @@ export function createCliSpeech(agentDir: string) {
       kill: () => { void launched.terminate(); },
     }, { onHang: () => dropClient(created) });
     createInterface({ input: launched.stderr }).on("line", (line) => created.pushStderr(line));
-    launched.once("exit", () => { if (worker === launched) { worker = undefined; client = undefined; } });
+    launched.once("exit", () => { if (worker === launched) { worker = undefined; client = undefined; loaded = null; } });
     client = created;
     return created;
   };
   const service = new AidenRemoteSpeechServiceCore({ ...models,
     configStore: { getSettings: () => settings.load(), setSettings: (patch) => settings.update((value) => { Object.assign(value, patch); return value; }) },
     engineStatus: () => getClient().status(),
-    releaseRecognizer: async () => { if (client) await client.release(); },
+    releaseRecognizer: retireWorker,
     transcribePcm16Base64: async (pcmBase64, modelId) => {
       const modelDirectory = models.modelDir(modelId);
       const spec = models.specFor(modelId);
@@ -64,7 +73,14 @@ export function createCliSpeech(agentDir: string) {
         vadModelPath: join(cliDir(), "speech", "silero_vad.onnx"),
       };
       let current: LocalSpeechProcessClient | undefined;
-      const result = await runWithCrashRetry(async () => { current = getClient(); return current.transcribe(request); }, {
+      const target = { modelId, family: spec.family, language: request.language };
+      const result = await runWithCrashRetry(async () => {
+        if (needsFreshWorker(loaded, target)) await retireWorker();
+        current = getClient();
+        // Recorded before the request is sent: a failed transcribe can still leave the model held.
+        loaded = { modelId, languageKey: speechLanguageKey(spec.family, request.language) };
+        return current.transcribe(request);
+      }, {
         isCancelled: () => false,
         isCrash: (error) => error instanceof WorkerCrashError,
         onCrash: (_error, attempt) => {
@@ -79,8 +95,7 @@ export function createCliSpeech(agentDir: string) {
   });
   return { service, models, async stop() {
     await models.stopDownloads();
-    const stopping = worker; client?.dispose(); client = undefined; worker = undefined;
-    if (stopping) await stopping.terminate();
+    await retireWorker();
   } };
 }
 

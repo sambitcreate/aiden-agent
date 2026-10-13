@@ -14,6 +14,8 @@ import {
 import { SubagentShellApproval } from "./subagent-shell-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
+import { ComputerUseAccessApproval } from "./computer-use-access-approval";
+import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
 import type { ApprovalPrompt } from "../lib/ipc";
 import {
   isAssistantAutomationApprovalDetails,
@@ -78,6 +80,7 @@ export function ChatApprovalCard({
   denyRef,
   disabledReason,
   pendingCount = 1,
+  computerUseHost = "local",
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -88,6 +91,11 @@ export function ChatApprovalCard({
   disabledReason?: string;
   /** Approvals waiting in this chat when they are shown one at a time, this one first. */
   pendingCount?: number;
+  /**
+   * Where a Computer Use access request would run: "local" checks this Mac's
+   * permissions live; "remote" leaves setup to the host Mac.
+   */
+  computerUseHost?: "local" | "remote";
 }) {
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
@@ -117,6 +125,20 @@ export function ChatApprovalCard({
     !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
+  if (isComputerUseAccessApprovalDetails(details)) {
+    return (
+      <ComputerUseAccessApproval
+        pending={pending}
+        deciding={deciding}
+        onDecide={onDecide}
+        cardRef={cardRef}
+        denyRef={denyRef}
+        disabledReason={disabledReason}
+        pendingCount={pendingCount}
+        host={computerUseHost}
+      />
+    );
+  }
   const disabled = deciding || disabledReason !== undefined;
   const summaryId = `approval-summary-${pending.approvalId}`;
 

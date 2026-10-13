@@ -659,14 +659,35 @@ export async function clearModelPaceSummaries(
   await queryClient.invalidateQueries({ queryKey: queryKeys.modelPaceSummaries });
 }
 
-export function useComputerUseStatus(enabled = true) {
+/** How often a surface waiting on macOS permissions forces a fresh Computer Use probe. */
+export const COMPUTER_USE_LIVE_CHECK_MS = 5_000;
+
+export function useComputerUseStatus(
+  enabled = true,
+  options: {
+    /**
+     * For a surface waiting on macOS permissions: every check bypasses the main
+     * process's status cache, repeats every few seconds and on window focus
+     * until Computer Use is ready, and stops after a failed check so the
+     * surface can offer a manual retry instead of probing in a loop.
+     */
+    liveUntilReady?: boolean;
+  } = {},
+) {
+  const live = options.liveUntilReady === true;
   return useQuery({
     queryKey: queryKeys.computerUseStatus,
-    queryFn: () => computerUseApi.status(),
+    queryFn: () => computerUseApi.status(live),
     enabled,
     retry: false,
     staleTime: 5_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: live
+      ? (query) => (query.state.status === "error" ? false : query.state.data?.ready ? true : "always")
+      : true,
+    refetchInterval: live
+      ? (query) =>
+          query.state.status === "error" || query.state.data?.ready ? false : COMPUTER_USE_LIVE_CHECK_MS
+      : false,
   });
 }
 

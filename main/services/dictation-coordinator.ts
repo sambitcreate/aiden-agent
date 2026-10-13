@@ -66,8 +66,8 @@ export function errorHideDelayMs(message: string): number {
 export const WARNING_HIDE_DELAY_MS = 4_000;
 const MAX_TRANSCRIPT_LENGTH = 100_000;
 export const HOLD_RELEASE_GRACE_MS = 50;
-// Cloud renderers fail within 45 seconds. The local speech worker allows at least
-// 120 seconds per request, so the coordinator's last-resort fence must not preempt local work.
+// Armed when recording stops, before the audio length is known. The audio-scaled
+// fence replaces it at finalize, so a long on-device recording is not preempted.
 export const TRANSCRIPTION_WATCHDOG_MS = 135_000;
 const WATCHDOG_HEADROOM_MS = 10_000;
 
@@ -77,10 +77,7 @@ const WATCHDOG_HEADROOM_MS = 10_000;
  * never shorter than the cloud's, so the fence never preempts either.
  */
 export function transcriptionWatchdogMs(audioSeconds?: number): number {
-  return Math.min(
-    MAX_TIMER_DELAY_MS,
-    Math.max(TRANSCRIPTION_WATCHDOG_MS, transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS),
-  );
+  return Math.min(MAX_TIMER_DELAY_MS, transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS);
 }
 
 /**

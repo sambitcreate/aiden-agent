@@ -207,6 +207,10 @@ test("projects display_image as a safe relative GUI artifact action", () => {
     label: "Render artifact",
     detail: "Dependencies",
   });
+  assert.deepEqual(safeToolDescriptor("render_ui", { title: "Q3 revenue", markup: "<Visual />" }), {
+    label: "Draw visual",
+    detail: "Q3 revenue",
+  });
   assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
     label: "Display image",
     target: undefined,
@@ -804,6 +808,38 @@ test("produced files require completed host mutation provenance and survive time
     (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
     assert.equal(parseGenerationTimeline(invalid), undefined);
   }
+});
+
+test("an answered questionnaire keeps its recap through timeline replay, and only there", () => {
+  const recap = {
+    version: 1,
+    outcome: "answered",
+    items: [{ question: "Which database?", header: "Database", kind: "option", answers: ["Postgres"] }],
+  };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status, details] of [
+    ["asked", "ask_user_question", "completed", recap],
+    ["other", "read_file", "completed", recap],
+    ["failed", "ask_user_question", "failed", recap],
+    ["forged", "ask_user_question", "completed", { ...recap, outcome: "dismissed" }],
+  ] as const) {
+    projector.toolStarted(id, tool, {});
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.finish("completed");
+  assert.deepEqual(
+    toolSteps(snapshot).map((step) => step.questionnaire),
+    [recap, undefined, undefined, undefined],
+  );
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+
+  // One malformed recap rejects the stored timeline rather than rendering it.
+  const tampered = structuredClone(snapshot);
+  toolSteps(tampered)[0]!.questionnaire!.items[0]!.answers = [];
+  assert.equal(parseGenerationTimeline(tampered), undefined);
+  const misplaced = structuredClone(snapshot);
+  toolSteps(misplaced)[1]!.questionnaire = toolSteps(snapshot)[0]!.questionnaire;
+  assert.equal(parseGenerationTimeline(misplaced), undefined);
 });
 
 test("form fill activity persists counts without source or field values", () => {

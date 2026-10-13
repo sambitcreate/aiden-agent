@@ -176,6 +176,9 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
   }
 
   function build(spec: SpeechModelSpec, dir: string, options: ConfigOptions): Slot {
+    // Dropping the old slot does not free its native recognizer. In production the
+    // worker process holding it is replaced first (local-speech-worker-host.ts);
+    // this in-process path (tests, non-Electron hosts) relies on garbage collection.
     slot = null;
     for (const relative of Object.values(spec.files)) {
       if (!exists(path.join(dir, relative))) throw new ModelMissingError();
@@ -244,9 +247,10 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
       }
     },
 
-    load(spec: SpeechModelSpec, dir: string): { loadMs: number } {
+    load(spec: SpeechModelSpec, dir: string, language: string | null = null): { loadMs: number } {
       const started = performance.now();
-      if (!holds(spec, dir)) build(spec, dir, configOptions(spec, null, "transcribe"));
+      // Same path as a transcription: builds when nothing is held, reuses a matching recognizer, and rebuilds for a new language.
+      ensure(spec, dir, configOptions(spec, language, "transcribe"));
       return { loadMs: performance.now() - started };
     },
 
@@ -273,6 +277,7 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
     },
 
     release(): void {
+      // Same as build(): production reclaims native memory by replacing the worker process.
       slot = null;
     },
 

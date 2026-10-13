@@ -529,6 +529,46 @@ test.describe("with a workspace", () => {
     await expect(accessOptions).toBeHidden();
     await expect(page.locator(".composer-shell textarea")).toBeFocused();
   });
+
+  test("composer footer controls share one row and collapse instead of wrapping", async ({ aiden }) => {
+    const { page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const composer = page.locator(".composer-responsive");
+    const permission = page.getByRole("button", { name: /^Workspace access: Full access/u });
+    const controls = [
+      page.getByRole("button", { name: "Attach files or images" }),
+      permission,
+      page.getByRole("button", { name: /^Selected model: /u }),
+      page.getByRole("button", { name: "Start voice input" }),
+      page.getByRole("button", { name: /^(Send|Queue) message$/u }),
+    ];
+    for (const width of [900, 600, 520, 420]) {
+      await composer.evaluate((element, px) => {
+        (element as HTMLElement).style.width = `${px}px`;
+      }, width);
+      await expect.poll(() => composer.evaluate((element) => element.getBoundingClientRect().width)).toBe(width);
+      const boxes = [];
+      for (const control of controls) {
+        await expect(control).toBeVisible();
+        const box = await control.boundingBox();
+        expect(box).not.toBeNull();
+        boxes.push(box!);
+      }
+      const centers = boxes.map((box) => box.y + box.height / 2);
+      expect(Math.max(...centers) - Math.min(...centers), `one footer row at ${width}px`).toBeLessThanOrEqual(4);
+      for (let index = 1; index < boxes.length; index += 1) {
+        expect(boxes[index]!.x, `footer controls do not overlap at ${width}px`).toBeGreaterThanOrEqual(
+          boxes[index - 1]!.x + boxes[index - 1]!.width - 0.5,
+        );
+      }
+      // The access control drops its label before anything wraps.
+      const labelVisible = await permission.evaluate((element) => {
+        const label = element.querySelector("span");
+        return label ? label.getBoundingClientRect().width > 0 : false;
+      });
+      expect(labelVisible, `Full access label at ${width}px`).toBe(width > 560);
+    }
+  });
 });
 
 test("compaction commands keep cancellation available for every engine", async ({ aiden }) => {

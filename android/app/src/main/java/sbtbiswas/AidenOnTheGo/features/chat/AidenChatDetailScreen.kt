@@ -1259,7 +1259,7 @@ private fun UserMessageRow(
         MessageClusterPosition.LAST -> RoundedCornerShape(20.dp, 6.dp, 20.dp, 20.dp)
     }
 
-    val attachments = message.attachments.orEmpty()
+    val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), message.visuals.orEmpty())
     val imageAttachments = aidenEligibleImageAttachments(attachments)
     val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
@@ -1353,13 +1353,25 @@ private fun AssistantMessageRow(
     } else null
 
     val displayText = projection?.finalText ?: message.text
+    val visuals = message.visuals.orEmpty()
+    // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
+    val rowVisuals = aidenVisualsWithRows(message)
     val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline)
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals)
     val progressText = projection?.progressText ?: ""
-    val attachments = message.attachments.orEmpty()
-    val imageAttachments = aidenEligibleImageAttachments(attachments)
+    // Visual snapshots render inside their visual rows, never as ordinary attachments.
+    val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
+    val imageAttachments = aidenEligibleImageAttachments(attachments, visuals)
     val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+    val renderVisual: @Composable (AidenChatVisual) -> Unit = { visual ->
+        AidenVisualRow(
+            visual = visual,
+            attachments = message.attachments.orEmpty(),
+            loadAttachmentImage = loadAttachmentImage,
+            palette = palette
+        )
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         if (chronologicalRows != null) {
@@ -1375,7 +1387,8 @@ private fun AssistantMessageRow(
                     active = false,
                     palette = palette,
                     onCopy = onCopy,
-                    onOpenUrl = onOpenUrl
+                    onOpenUrl = onOpenUrl,
+                    renderVisual = renderVisual
                 )
             }
         } else {
@@ -1390,9 +1403,18 @@ private fun AssistantMessageRow(
         }
         // Step Timeline items if present
         message.timeline?.let { timeline ->
-            if (timeline.steps.isNotEmpty()) {
-                AidenTimelineCollapsibleCard(timeline = timeline, palette = palette)
+            val activity = AidenAgentActivityPresentation.activityTimeline(timeline)
+            if (activity.steps.isNotEmpty()) {
+                AidenTimelineCollapsibleCard(timeline = activity, palette = palette)
                 Spacer(modifier = Modifier.height(4.dp))
+            }
+            timeline.steps.forEach { step ->
+                step.questionnaireRecap?.let { recap ->
+                    key(step.id) {
+                        AidenQuestionnaireRecapStack(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
             }
         }
 
@@ -1448,6 +1470,13 @@ private fun AssistantMessageRow(
                 }
             }
         }
+        // Without a chronological timeline, visuals trail the reply in order.
+        rowVisuals.forEach { visual ->
+            key(visual.id) {
+                Spacer(modifier = Modifier.height(8.dp))
+                renderVisual(visual)
+            }
+        }
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
@@ -1483,7 +1512,8 @@ private fun AssistantMessageRow(
                 }
             }
         }
-        message.htmlArtifacts.orEmpty().forEach { artifact ->
+        // An html artifact whose visual has a snapshot is already shown; the rest stay "view on Mac".
+        aidenUnsupportedHtmlArtifacts(message).forEach { artifact ->
             Spacer(modifier = Modifier.height(8.dp))
             Surface(
                 color = palette.raised,
@@ -1517,6 +1547,122 @@ private fun AssistantMessageRow(
     }
 }
 
+/** What a visual row shows: the Mac's snapshot when the message carries it, and [text] beneath or alone. */
+@Immutable
+internal data class AidenVisualDisplay(val snapshot: AidenMessageAttachment?, val text: String?)
+
+/**
+ * The snapshot when the visual names a usable image on its message; then the
+ * fallback text (beneath the snapshot, or alone); the title alone when neither.
+ */
+internal fun aidenVisualDisplay(visual: AidenChatVisual, attachments: List<AidenMessageAttachment>): AidenVisualDisplay {
+    val snapshot = visual.snapshotAttachmentId?.let { id ->
+        attachments.singleOrNull { it.id == id }?.takeIf(::aidenIsEligibleImage)
+    }
+    val fallback = visual.fallbackText?.takeIf { it.isNotBlank() }
+    return AidenVisualDisplay(snapshot, fallback ?: if (snapshot == null) visual.title else null)
+}
+
+/**
+ * The html artifacts that still need the "view in Aiden Agent" notice: those
+ * without an html visual whose snapshot the message carries.
+ */
+internal fun aidenUnsupportedHtmlArtifacts(message: AidenChatMessage): List<AidenHtmlArtifact> {
+    val attachments = message.attachments.orEmpty()
+    val shown = message.visuals.orEmpty()
+        .filter { it.kind == AidenChatVisual.KIND_HTML && aidenVisualDisplay(it, attachments).snapshot != null }
+        .mapTo(HashSet()) { it.id }
+    return message.htmlArtifacts.orEmpty().filterNot { it.id in shown }
+}
+
+/**
+ * Whether [visual] gets its own row. An html visual without a usable snapshot
+ * has nothing to show beyond its title, which the "view in Aiden Agent" notice
+ * already carries, so only that notice represents it. ui visuals always get a
+ * row (snapshot, else fallback text, else title).
+ */
+internal fun aidenVisualHasRow(visual: AidenChatVisual, attachments: List<AidenMessageAttachment>): Boolean =
+    visual.kind != AidenChatVisual.KIND_HTML || aidenVisualDisplay(visual, attachments).snapshot != null
+
+/** The message's visuals that render as rows, in reply order. */
+internal fun aidenVisualsWithRows(message: AidenChatMessage): List<AidenChatVisual> {
+    val attachments = message.attachments.orEmpty()
+    return message.visuals.orEmpty().filter { aidenVisualHasRow(it, attachments) }
+}
+
+private const val VISUAL_FALLBACK_COLLAPSED_LINES = 6
+
+/**
+ * One inline visual of a committed reply. Phones show the Mac's snapshot,
+ * described by the visual's title, with any fallback text beneath; without a
+ * snapshot, the fallback text alone; with neither, the title.
+ */
+@Composable
+internal fun AidenVisualRow(
+    visual: AidenChatVisual,
+    attachments: List<AidenMessageAttachment>,
+    loadAttachmentImage: suspend (AidenMessageAttachment) -> ByteArray?,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    modifier: Modifier = Modifier
+) {
+    val display = remember(visual, attachments) { aidenVisualDisplay(visual, attachments) }
+    val snapshot = display.snapshot
+    if (snapshot != null) {
+        Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            AidenVisualSnapshotImage(
+                attachment = snapshot,
+                title = visual.title,
+                wide = visual.layout == AidenChatVisual.LAYOUT_WIDE,
+                loadData = loadAttachmentImage
+            )
+            display.text?.let { AidenVisualFallbackText(text = it, visualId = visual.id, palette = palette) }
+        }
+        return
+    }
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium, modifier = modifier) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            val fallback = display.text.takeUnless { visual.fallbackText.isNullOrBlank() }
+            if (fallback != null) {
+                AidenVisualFallbackText(text = fallback, visualId = visual.id, palette = palette)
+            } else {
+                Text(text = visual.title, style = MaterialTheme.typography.labelLarge, color = palette.foreground)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AidenVisualFallbackText(
+    text: String,
+    visualId: String,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+) {
+    var expanded by rememberSaveable(visualId) { mutableStateOf(false) }
+    var overflows by remember(text) { mutableStateOf(false) }
+    val reduceMotion = aidenReduceMotion()
+    Column(modifier = Modifier.animateContentSize(AidenMotion.spatial(reduceMotion))) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.secondary,
+            maxLines = if (expanded) Int.MAX_VALUE else VISUAL_FALLBACK_COLLAPSED_LINES,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { layout -> if (!expanded) overflows = layout.hasVisualOverflow }
+        )
+        if (overflows || expanded) {
+            Text(
+                text = stringResource(if (expanded) R.string.chat_visual_show_less else R.string.chat_visual_show_more),
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.accent,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clickable(role = Role.Button) { expanded = !expanded }
+                    .padding(vertical = 4.dp)
+            )
+        }
+    }
+}
+
 @Composable
 internal fun ActiveStreamingCard(
     liveText: String,
@@ -1537,6 +1683,14 @@ internal fun ActiveStreamingCard(
     val chronologicalRows = remember(isBotChat, liveText, reasoning, activityTimeline) {
         if (isBotChat) null else AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
     }
+    // Without chronological rows, the timeline still lists the calls and their recaps.
+    val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
+    val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
+    val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
+    val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
+    // Recaps that already sprang in during this reply. The card moves between the
+    // fallback and the chronological rows as the text catches up, and must not replay.
+    val enteredRecaps = remember { mutableSetOf<String>() }
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1555,7 +1709,8 @@ internal fun ActiveStreamingCard(
                     active = true,
                     palette = palette,
                     onCopy = {},
-                    onOpenUrl = {}
+                    onOpenUrl = {},
+                    enteredRecaps = enteredRecaps
                 )
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
@@ -1598,8 +1753,11 @@ internal fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // Live Tools
-            if (tools.isNotEmpty()) {
+            // Tool activity: the timeline's calls once it has any, else the stream's live rows.
+            if (fallbackToolSteps.isNotEmpty()) {
+                AidenToolStepsCard(steps = fallbackToolSteps, active = true, palette = palette)
+                Spacer(modifier = Modifier.height(8.dp))
+            } else if (showsLiveToolRows) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (tool in tools) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1626,7 +1784,19 @@ internal fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            if (visualizingLabel != null) {
+            fallbackQuestionnaires.forEach { step ->
+                step.questionnaireRecap?.let { recap ->
+                    key(step.id) {
+                        val firstAppearance = remember { enteredRecaps.add(step.id) }
+                        AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+
+            if (visualizingLabel != null && fallbackToolSteps.none {
+                it.toolName == AidenAgentActivityPresentation.RENDER_ARTIFACT_TOOL_NAME && it.isActive
+            }) {
                 Surface(
                     color = palette.raised,
                     shape = MaterialTheme.shapes.medium,
@@ -1661,7 +1831,7 @@ internal fun ActiveStreamingCard(
                     AidenStreamingCursor(palette = palette)
                 }
             }
-            if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
+            if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && !fallbackShowsActivity && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AidenActivityMark(
                         mark = AidenActivityMarkKind.TRI_STEP,
@@ -1681,7 +1851,7 @@ internal fun ActiveStreamingCard(
             // Chronological and fallback transcripts both show the pause,
             // after whatever content the run already produced.
             if (isWaitingForNetwork) {
-                if (!chronologicalRows.isNullOrEmpty() || liveText.isNotEmpty() || reasoning.isNotEmpty() || tools.isNotEmpty()) {
+                if (!chronologicalRows.isNullOrEmpty() || liveText.isNotEmpty() || reasoning.isNotEmpty() || fallbackShowsActivity) {
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 // A paused run, not an error: neutral copy and icon, no banner.
@@ -1717,7 +1887,10 @@ private fun AidenChronologicalTranscript(
     active: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     onCopy: (String) -> Unit,
-    onOpenUrl: (String) -> Unit
+    onOpenUrl: (String) -> Unit,
+    renderVisual: @Composable (AidenChatVisual) -> Unit = {},
+    // Step ids of recaps already shown in this live reply; null for a settled message.
+    enteredRecaps: MutableSet<String>? = null
 ) {
     val lastTextId = rows.lastOrNull { it.kind == AidenChronologicalRow.Kind.TEXT }?.id
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1748,19 +1921,40 @@ private fun AidenChronologicalTranscript(
                         )
                     }
                     AidenChronologicalRow.Kind.TOOL -> {
-                        Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
-                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                row.steps.forEach { step ->
-                                    AidenActivityShimmerLabel(
-                                        label = AidenAgentActivityPresentation.line(step),
-                                        active = active && step.isActive,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                }
+                        AidenToolStepsCard(steps = row.steps, active = active, palette = palette)
+                    }
+                    AidenChronologicalRow.Kind.QUESTIONNAIRE -> {
+                        row.questionnaire?.let { recap ->
+                            val firstAppearance = remember {
+                                row.steps.firstOrNull()?.id?.let { enteredRecaps?.add(it) } == true
                             }
+                            AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         }
                     }
+                    AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
+                }
+            }
+        }
+    }
+}
+
+/** A run of tool calls, one activity line per step; running steps shimmer while [active]. */
+@Composable
+private fun AidenToolStepsCard(
+    steps: List<AidenAgentStep>,
+    active: Boolean,
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+) {
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            steps.forEach { step ->
+                key(step.id) {
+                    AidenActivityShimmerLabel(
+                        label = AidenAgentActivityPresentation.line(step),
+                        active = active && step.isActive,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary
+                    )
                 }
             }
         }

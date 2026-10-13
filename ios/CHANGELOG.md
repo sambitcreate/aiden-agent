@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The three onboarding pages now draw their art natively: tinted, cropped slices of the workspace chat, the model menu, and Scheduled Tasks that follow light, dark, and every theme preset, with motion that holds still under Reduce Motion and Low Power Mode. The old clay images are gone.
+
 - Agent details now follow the delegated-agent ancestry: Back returns through parents to the roster, and Started by / Sub-agents links stay inside the current chat inspector.
 
 - An attachment upload whose cleanup finds the device revoked now finishes only after the installation data has been purged, even when chat removal started the revocation.

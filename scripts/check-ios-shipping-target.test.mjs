@@ -72,6 +72,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
+  "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
+  "AidenOnTheGo/Features/Remote/AidenOnboardingVignettes.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
@@ -127,6 +129,7 @@ const testSources = [
   "AidenChatTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
+  "AidenOnboardingArtTests.swift",
   "AidenProductShellTests.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemoteContractFixture.swift",
@@ -627,7 +630,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(pairing, /\.tabViewStyle\(\.page\(indexDisplayMode: \.never\)\)/u);
   assert.match(pairing, /Paste Pairing Payload[\s\S]*?More pairing options/u);
-  assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
   assert.match(pairing, /BOTS AND WORKSPACES/u);
   assert.match(
     pairing,

@@ -300,13 +300,15 @@ export function PillApp() {
                 await dictationApi.reportResult(operationId, "");
                 return;
               }
+              // Only the on-device budget scales with the recording; a cloud fence keeps its floor.
+              const progressAudioSeconds = voice.provider === "local" ? audioSeconds : undefined;
               if (!text) {
                 if (active.liveStart) {
                   setPhase("fallback");
-                  await dictationApi.reportProgress(operationId, "fallback", audioSeconds);
+                  await dictationApi.reportProgress(operationId, "fallback", progressAudioSeconds);
                 } else {
                   // Batch transcription is the first attempt, not a retry.
-                  await dictationApi.reportProgress(operationId, "finalizing", audioSeconds);
+                  await dictationApi.reportProgress(operationId, "finalizing", progressAudioSeconds);
                 }
                 active.batchOperationId = `${operationId}-batch`;
                 active.batchProvider = voice.provider;

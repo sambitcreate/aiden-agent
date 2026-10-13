@@ -8,6 +8,7 @@ import type {
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { ChatMessage, ChatStartParams } from "./types.js";
 import { visionAttachmentAlias } from "./vision-attachment-reference.js";
+import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 
 const ZERO_USAGE = {
   input: 0,
@@ -167,9 +168,9 @@ export function chatMessageToPiMessage(
   }
   const displayedImageCount =
     message.role === "assistant" && !message.content.trim()
-      ? (message.attachments?.filter(
+      ? withoutVisualSnapshots(message.attachments ?? []).filter(
           (attachment) => attachment.kind === "image",
-        ).length ?? 0)
+        ).length
       : 0;
   const content =
     displayedImageCount > 0

@@ -148,6 +148,13 @@ data class AidenServer(
     val offersBotCards: Boolean
         get() = supportsBotMemory || supportsBotProactive
 
+    /**
+     * Chat messages may carry inline `visuals` (revision 28). Informational:
+     * the transcript renders whatever visuals a message carries.
+     */
+    val supportsChatVisuals: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_VISUALS_FEATURE)
+
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
     }
