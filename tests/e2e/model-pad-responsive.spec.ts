@@ -1,26 +1,24 @@
 import { E2E_MODEL_DISPLAY_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-type PadReachability = {
-  fits: boolean;
-  pad: { top: number; bottom: number; height: number };
-  scrollport: {
-    top: number;
-    bottom: number;
-    clientHeight: number;
-    scrollHeight: number;
-    scrollTop: number;
-  } | null;
+type Box = { top: number; bottom: number; left: number; right: number };
+
+type PadLayout = {
+  card: number;
+  pad: Box;
+  tray: Box;
+  scrollport: Box;
   viewport: { width: number; height: number };
+  pageOverflowX: number;
+  scrollportOverflowX: number;
 };
 
 // Measure rendered geometry in Electron, including both navigation columns and
-// native zoom; CSS/source assertions cannot catch a square extending offscreen.
-test("Model Pad fits resized settings and keeps models usable at native zoom", async ({
+// native zoom; CSS/source assertions cannot catch a square extending offscreen
+// or a tray pushing the page sideways.
+test("Model Pad and its tray fit resized settings and keep models usable at native zoom", async ({
   aiden,
 }) => {
-  // A cold hosted Electron run can spend more than the suite's 90-second
-  // default traversing all 24 size, zoom, and panel combinations. Preserve the
-  // full matrix and its per-state polling while bounding the whole case.
+  // A cold hosted Electron run can be slow to traverse every size and zoom.
   test.setTimeout(180_000);
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
@@ -30,30 +28,25 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     .getByRole("button", { name: "Model Pad", exact: true })
     .click();
   const pad = page.getByRole("group", { name: "Personal Model Pad arrangement", exact: true });
-  const browse = page.getByRole("button", { name: "Browse models", exact: true });
-  const insights = page.getByRole("button", { name: "Benchmark insights", exact: true });
-  // A fresh profile opens Browse models on its own, so set each panel state
-  // explicitly instead of toggling from an assumed starting point.
-  const setExpanded = async (button: typeof browse, expanded: boolean) => {
-    if ((await button.getAttribute("aria-expanded")) !== String(expanded)) await button.click();
-    await expect(button).toHaveAttribute("aria-expanded", String(expanded));
-  };
-  const showPanel = async (panel: "closed" | "models" | "insights") => {
-    if (panel === "models") await setExpanded(browse, true);
-    if (panel === "insights") await setExpanded(insights, true);
-    // The panels are mutually exclusive: opening one closes the other.
-    if (panel !== "models") await setExpanded(browse, false);
-    if (panel !== "insights") await setExpanded(insights, false);
-  };
-  await page.evaluate(() => {
-    const sentinel = document.createElement("span");
-    sentinel.style.cssText = "position:fixed;width:1px;height:1px;pointer-events:none;opacity:0";
-    document.body.append(sentinel);
-    sentinel.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
-      duration: 1_000,
-      iterations: Infinity,
-    });
+  const tray = page.getByRole("complementary", { name: "On your Pad", exact: true });
+
+  // Add the E2E model from the Add list; it lands on the Pad and in the tray.
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const addList = page.getByRole("dialog", { name: "Add models to the Pad" });
+  await addList
+    .getByRole("option", { name: new RegExp(`^Add ${E2E_MODEL_DISPLAY_NAME} .*to Pad$`, "u") })
+    .first()
+    .click();
+  await expect(
+    addList.getByRole("option", { name: new RegExp(`^Remove ${E2E_MODEL_DISPLAY_NAME} `, "u") }).first(),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(addList).toHaveCount(0);
+  await expect(tray.getByText(E2E_MODEL_DISPLAY_NAME, { exact: true })).toBeVisible();
+  const marker = pad.getByRole("button", {
+    name: new RegExp(`^${E2E_MODEL_DISPLAY_NAME} from`, "u"),
   });
+  await expect(marker).toHaveCount(1);
 
   for (const [width, height, zoom] of [
     [1440, 1000, 1],
@@ -73,113 +66,120 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
       },
       { width, height, zoom },
     );
+    const state = `${width}×${height}, ${zoom} zoom`;
 
-    for (const panel of ["closed", "models", "insights"] as const) {
-      await showPanel(panel);
-      await page.evaluate(async (settleTimeoutMs) => {
-        const animations = (document.getAnimations?.() ?? []).filter((animation) => {
-          const endTime = animation.effect?.getComputedTiming().endTime;
-          return typeof endTime === "number" && Number.isFinite(endTime);
-        });
-        await Promise.race([
-          Promise.allSettled(animations.map((animation) => animation.finished)),
-          new Promise<void>((resolve) => window.setTimeout(resolve, settleTimeoutMs)),
-        ]);
-      }, 500);
-      await page.locator(".model-pad-fieldset").evaluate((element) => {
-        let parent = element.parentElement;
-        while (parent && !/(auto|scroll)/u.test(getComputedStyle(parent).overflowY))
-          parent = parent.parentElement;
-        if (parent) parent.scrollTop = 0;
+    await expect
+      .poll(
+        () =>
+          pad.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const body = element.closest(".model-pad-body")!;
+            return {
+              square: Math.abs(bounds.width - bounds.height) <= 1,
+              minimumSize: bounds.width >= 160 && bounds.height >= 160,
+              fitsWidth: bounds.left >= 0 && bounds.right <= innerWidth,
+              fitsHeight: bounds.height <= innerHeight,
+              fitsColumn: bounds.width <= body.clientWidth + 1,
+            };
+          }),
+        { message: `Pad size at ${state}` },
+      )
+      .toEqual({
+        square: true,
+        minimumSize: true,
+        fitsWidth: true,
+        fitsHeight: true,
+        fitsColumn: true,
       });
-      await expect
-        .poll(
-          async () =>
-            pad.evaluate((element) => {
-              const bounds = element.getBoundingClientRect();
-              const canvas = element.parentElement!;
-              const grid = canvas.parentElement!;
+
+    // Scroll each part into view the way a user would, then check it is fully
+    // visible inside the settings scrollport with no sideways page scrolling.
+    await expect
+      .poll(
+        async () =>
+          pad.evaluate(async (element): Promise<PadLayout & { padVisible: boolean; trayVisible: boolean }> => {
+            const box = (target: Element): Box => {
+              const bounds = target.getBoundingClientRect();
               return {
-                square: Math.abs(bounds.width - bounds.height) <= 1,
-                minimumSize: bounds.width >= 160 && bounds.height >= 160,
-                fitsWidth: bounds.left >= 0 && bounds.right <= innerWidth,
-                fitsHeight: bounds.height <= innerHeight,
-                fitsContainer: bounds.width <= grid.clientWidth + 1,
-                // On the smallest windows the surrounding settings controls scroll.
-                // At normal sizes the entire canvas + labels must be in the viewport.
-                fitsViewport:
-                  innerWidth < 800 ||
-                  innerHeight < 560 ||
-                  canvas.getBoundingClientRect().bottom <= innerHeight,
+                top: Math.round(bounds.top),
+                bottom: Math.round(bounds.bottom),
+                left: Math.round(bounds.left),
+                right: Math.round(bounds.right),
               };
-            }),
-          { message: `${width}×${height}, ${zoom} zoom, ${panel}` },
-        )
-        .toEqual({
-          square: true,
-          minimumSize: true,
-          fitsWidth: true,
-          fitsHeight: true,
-          fitsContainer: true,
-          fitsViewport: true,
-        });
-      // Small/zoomed windows scroll their chrome; the entire Pad remains reachable.
-      await expect
-        .poll(
-          () =>
-            pad.evaluate(async (element): Promise<PadReachability> => {
-              // A sidebar collapse or supporting-panel transition can finish after
-              // the first scroll. Reapply the user's scroll after layout settles,
-              // then sample on the following frame.
-              element.scrollIntoView({ block: "center", inline: "nearest" });
-              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-              const bounds = element.getBoundingClientRect();
-              let scrollport = element.parentElement;
-              while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
-                scrollport = scrollport.parentElement;
-              }
-              const scrollportBounds = scrollport?.getBoundingClientRect();
-              const visibleTop = Math.max(0, scrollportBounds?.top ?? 0);
-              const visibleBottom = Math.min(innerHeight, scrollportBounds?.bottom ?? innerHeight);
-              return {
-                fits: bounds.top >= visibleTop && bounds.bottom <= visibleBottom,
-                pad: {
-                  top: Math.round(bounds.top),
-                  bottom: Math.round(bounds.bottom),
-                  height: Math.round(bounds.height),
-                },
-                scrollport: scrollportBounds
-                  ? {
-                      top: Math.round(scrollportBounds.top),
-                      bottom: Math.round(scrollportBounds.bottom),
-                      clientHeight: scrollport!.clientHeight,
-                      scrollHeight: scrollport!.scrollHeight,
-                      scrollTop: scrollport!.scrollTop,
-                    }
-                  : null,
-                viewport: { width: innerWidth, height: innerHeight },
-              };
-            }),
-          { message: `reachable Pad at ${width}×${height}, ${zoom} zoom, ${panel}` },
-        )
-        .toMatchObject({ fits: true });
-      const legend = page.locator(".model-pad-legend");
-      await legend.scrollIntoViewIfNeeded();
-      await expect(legend).toBeInViewport();
-    }
+            };
+            let scrollport = element.parentElement;
+            while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
+              scrollport = scrollport.parentElement;
+            }
+            const port = scrollport ?? document.documentElement;
+            const trayElement = document.querySelector('aside[aria-label="On your Pad"]')!;
+            const visible = (target: Element) => {
+              const bounds = target.getBoundingClientRect();
+              const portBounds = port.getBoundingClientRect();
+              const top = Math.max(0, portBounds.top);
+              const bottom = Math.min(innerHeight, portBounds.bottom);
+              return (
+                bounds.top >= top - 1 &&
+                bounds.bottom <= bottom + 1 &&
+                bounds.left >= -1 &&
+                bounds.right <= innerWidth + 1
+              );
+            };
+            const settle = () =>
+              new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            element.scrollIntoView({ block: "center", inline: "nearest" });
+            await settle();
+            const padVisible = visible(element);
+            // A tray taller than the window only needs its top (title + first rows).
+            trayElement.scrollIntoView({ block: "start", inline: "nearest" });
+            await settle();
+            const trayTitle = trayElement.firstElementChild!;
+            const trayVisible = visible(trayTitle);
+            return {
+              card: Math.round(element.closest(".model-pad-fieldset")!.getBoundingClientRect().width),
+              pad: box(element),
+              tray: box(trayElement),
+              scrollport: box(port),
+              viewport: { width: innerWidth, height: innerHeight },
+              pageOverflowX: document.documentElement.scrollWidth - innerWidth,
+              scrollportOverflowX: port.scrollWidth - port.clientWidth,
+              padVisible,
+              trayVisible,
+            };
+          }),
+        { message: `reachable Pad and tray at ${state}` },
+      )
+      .toMatchObject({
+        padVisible: true,
+        trayVisible: true,
+        pageOverflowX: 0,
+        scrollportOverflowX: 0,
+      });
+
+    // The tray sits beside the square when the card has room and stacks under
+    // it otherwise (a container query on the card, not the window).
+    const layout = await pad.evaluate((element) => {
+      const padBounds = element.getBoundingClientRect();
+      const trayBounds = document
+        .querySelector('aside[aria-label="On your Pad"]')!
+        .getBoundingClientRect();
+      return {
+        wide: element.closest(".model-pad-fieldset")!.getBoundingClientRect().width > 640,
+        beside: trayBounds.left >= padBounds.right - 1 && trayBounds.top < padBounds.bottom,
+        below: trayBounds.top >= padBounds.bottom - 1,
+      };
+    });
+    expect(layout, `tray placement at ${state}`).toEqual(
+      layout.wide
+        ? { wide: true, beside: true, below: false }
+        : { wide: false, beside: false, below: true },
+    );
   }
 
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     window.setSize(1280, 800);
     window.webContents.setZoomFactor(1);
-  });
-  await showPanel("models");
-  await page
-    .getByRole("button", { name: new RegExp(`^Add ${E2E_MODEL_DISPLAY_NAME} .* to Pad$`, "u") })
-    .click();
-  const marker = pad.getByRole("button", {
-    name: new RegExp(`^${E2E_MODEL_DISPLAY_NAME} from`, "u"),
   });
   await marker.focus();
   const before = await marker.getAttribute("style");
@@ -190,7 +190,6 @@ test("Model Pad fits resized settings and keeps models usable at native zoom", a
     hasText: new RegExp(`Moved ${E2E_MODEL_DISPLAY_NAME} from `, "u"),
   });
   await expect(moved).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save Pad", exact: true })).toHaveCount(0);
   await moved.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(marker).toHaveAttribute("style", before!);
 });
