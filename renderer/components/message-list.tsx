@@ -584,6 +584,7 @@ export function MessageList({
   const settledReplyKeysRef = React.useRef<ReadonlySet<string>>(new Set());
   const liveKeyRef = React.useRef<{ base: string; key: string } | null>(null);
   const handedOffKeysRef = React.useRef(new Map<string, string>());
+  const liveRunRef = React.useRef<{ promptId: string; handoffId: string | null } | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -594,14 +595,34 @@ export function MessageList({
   }, [messages]);
   const liveAttachments = React.useMemo(() => {
     const attachments: Attachment[] = [];
+    const seenIds = new Set<string>();
+
+    // Add attachments from streaming artifacts that aren't persisted elsewhere
     for (const artifact of streamingArtifacts) {
       if (!isChatImageArtifact(artifact)) continue;
       if (!persistedAttachmentIds.has(artifact.attachment.id)) {
         attachments.push(artifact.attachment);
+        seenIds.add(artifact.attachment.id);
       }
     }
+
+    // During handoff, include attachments from the persisted message that's being suppressed
+    // so they're shown exactly once in the live row instead of disappearing
+    if (persistedHandoffMessageId) {
+      const persistedMessage = messages.find((m) => m.id === persistedHandoffMessageId);
+      if (persistedMessage?.attachments) {
+        for (const attachment of persistedMessage.attachments) {
+          // Only add if not already included from streaming artifacts
+          if (!seenIds.has(attachment.id)) {
+            attachments.push(attachment);
+            seenIds.add(attachment.id);
+          }
+        }
+      }
+    }
+
     return attachments;
-  }, [persistedAttachmentIds, streamingArtifacts]);
+  }, [persistedAttachmentIds, streamingArtifacts, persistedHandoffMessageId, messages]);
   // While the streaming row is still mounted its live HTML cards stay exactly
   // where they appeared; the persisted copies wait hidden so the handoff is a
   // single atomic swap instead of an unmount/remount flash in two frames.
@@ -772,12 +793,24 @@ export function MessageList({
     ? messages.findIndex((message) => message.id === settlingMessageId)
     : -1;
   // The live row stands where its saved message will be, keyed by the message
-  // it answers, even if a queued prompt is saved after it before the handoff.
-  const liveBaseKey = replyRowKey(
-    settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1],
-  );
+  // it answers: the prompt it started from stays its key while steering
+  // guidance or a queued prompt is saved before the handoff. A run whose
+  // handoff has finished gives way to the next one.
+  if (!streamingRowVisible || (liveRunRef.current?.handoffId && liveRunRef.current.handoffId !== settlingMessageId)) {
+    liveRunRef.current = null;
+  }
+  const startedFrom = liveRunRef.current
+    ? messages.find((message) => message.id === liveRunRef.current?.promptId)
+    : undefined;
+  const promptMessageForLiveRow =
+    startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+  const liveBaseKey = replyRowKey(promptMessageForLiveRow);
   let liveKey = liveBaseKey;
   if (streamingRowVisible) {
+    if (!liveRunRef.current && promptMessageForLiveRow) {
+      liveRunRef.current = { promptId: promptMessageForLiveRow.id, handoffId: null };
+    }
+    if (liveRunRef.current && settlingMessageId) liveRunRef.current.handoffId = settlingMessageId;
     const held = liveKeyRef.current;
     if (held?.base === liveBaseKey) {
       liveKey = held.key;

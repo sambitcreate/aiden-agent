@@ -305,3 +305,76 @@ test("the transcript reserves room for the overlaid toolbar, composer, and float
     HTMLElement.prototype.getBoundingClientRect = original;
   }
 });
+
+test("growth deferred during a scrollbar hold snaps to the new bottom on release without movement", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  // Start with the scrollbar held at the bottom.
+  fireEvent.pointerDown(port.viewport);
+  const initialBottom = port.bottom();
+
+  // Content grows while the thumb is still pressed, deferring the snap.
+  port.grow(200);
+  view.rerender(<Transcript chunks={2} />);
+  // The viewport should still be at the old bottom, not snapped (held blocks snap).
+  assert.equal(port.top(), initialBottom, "held thumb deferred the growth snap");
+
+  // Release without moving the thumb.
+  fireEvent.pointerUp(window);
+  // Now the viewport should snap to the new bottom.
+  assert.equal(port.top(), port.bottom(), "release snaps to the new bottom after deferred growth");
+  assert.equal(port.following(), true, "follow is still active after the snap");
+});
+
+test("content growth between scrollbar press and first drag does not pin the viewport", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  // Start with the scrollbar held at the bottom.
+  fireEvent.pointerDown(port.viewport);
+  const initialBottom = port.bottom();
+
+  // Content grows while the thumb is still pressed (before any movement).
+  port.grow(200);
+  view.rerender(<Transcript chunks={2} />);
+  // The viewport should not have snapped to the new bottom while held.
+  assert.equal(port.top(), initialBottom, "held thumb blocks growth snap");
+
+  // Now drag the thumb upward while still held.
+  port.moveTo(port.bottom() - 300);
+  assert.equal(port.following(), false, "dragging away from the end disables follow");
+
+  // Release and verify the drag was effective.
+  fireEvent.pointerUp(window);
+  assert.equal(port.top(), port.bottom() - 300, "the drag moved the viewport away from the bottom");
+});
+
+test("reading keys in a focused nested scrollable element leave transcript follow alone", () => {
+  const view = render(
+    <ScrollArea autoScrollToBottom autoScrollDeps={[1]}>
+      <div data-testid="nested" style={{ overflowY: "auto" }} tabIndex={0}>
+        nested content
+      </div>
+    </ScrollArea>,
+  );
+  const port = scrollport();
+  const nested = screen.getByTestId("nested");
+  Object.defineProperty(nested, "scrollHeight", { configurable: true, get: () => 600 });
+  Object.defineProperty(nested, "clientHeight", { configurable: true, get: () => 200 });
+  Object.defineProperty(nested, "scrollTop", { configurable: true, get: () => 300, set: () => {} });
+
+  // Focus the nested element and press PageUp; it can scroll up.
+  nested.focus();
+  fireEvent.keyDown(nested, { key: "PageUp" });
+  assert.equal(port.following(), true, "the nested element consumed the PageUp; transcript follow unchanged");
+
+  // Grow content and verify transcript follows.
+  port.grow(80);
+  view.rerender(
+    <ScrollArea autoScrollToBottom autoScrollDeps={[2]}>
+      <div data-testid="nested" style={{ overflowY: "auto" }} tabIndex={0}>
+        nested content
+      </div>
+    </ScrollArea>,
+  );
+  assert.equal(port.top(), port.bottom(), "transcript stays pinned even after nested scroll");
+});

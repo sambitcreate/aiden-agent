@@ -1,15 +1,18 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
+import { withCommittedRunInput } from "../lib/chat-message-queue";
 import type { ChatMessage } from "../lib/types";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL_MAX_WAIT_MS } from "../lib/streaming-reveal";
 
 afterEach(() => {
+  mock.restoreAll();
   cleanup();
   delete document.documentElement.dataset.reduceMotion;
 });
@@ -36,6 +39,7 @@ interface Frame {
   liveSubagents?: SubagentRunSnapshotV1[];
   subagentsEnabled?: boolean;
   reasoning?: string | null;
+  streamingArtifacts?: readonly ChatArtifactV1[];
 }
 
 function transcript({
@@ -48,6 +52,7 @@ function transcript({
   liveSubagents,
   subagentsEnabled,
   reasoning,
+  streamingArtifacts,
 }: Frame) {
   return (
     <MessageList
@@ -55,7 +60,7 @@ function transcript({
       messages={messages}
       streamingText={streamingText}
       streamingReasoning={reasoning ?? null}
-      streamingArtifacts={live ? [visual] : []}
+      streamingArtifacts={streamingArtifacts ?? (live ? [visual] : [])}
       streamComplete={streamComplete}
       persistedHandoffMessageId={persistedHandoffMessageId ?? null}
       timeline={timeline ?? null}
@@ -468,4 +473,162 @@ test("subagent chips show on live and saved replies only while subagents are ena
 
   view.rerender(transcript(frame(false)));
   assert.deepEqual(chipRunIds(view.container), [], "a disabled capability hides every chip");
+});
+
+test("a reply steered mid-run stays the same reply through guidance, handoff and settlement", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const text = "The reply with reasoning.";
+  const reasoning = "Let me think about this.";
+  const view = render(transcript({ messages: [prompt], streamingText: `${text}\n\n`, reasoning }));
+  const paragraph = screen.getByText(text).closest("p");
+  const header = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
+  assert.ok(paragraph && header, "the live reply shows its prose and reasoning");
+  act(() => header.click());
+  const collapsed = header.getAttribute("aria-expanded");
+
+  const steered = withCommittedRunInput(
+    { messages: [prompt] },
+    { messageId: "user-steer-1", text: "Use examples", createdAt: 2 },
+  ).messages;
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: text, reasoning, createdAt: 3 };
+  const frames: Frame[] = [
+    { messages: steered, streamingText: `${text}\n\n`, reasoning },
+    {
+      messages: [...steered, saved],
+      streamingText: text,
+      reasoning,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    },
+    { messages: [...steered, saved], streamingText: null },
+  ];
+  for (const frame of frames) {
+    view.rerender(transcript(frame));
+    assert.ok(screen.getByText(text).closest("p") === paragraph, "the reply is not remounted");
+    assert.equal(
+      view.container.querySelector("section > button[aria-expanded]")?.getAttribute("aria-expanded"),
+      collapsed,
+      "the reader's choice on its reasoning holds",
+    );
+  }
+});
+
+test("a reply that settles gives way to the next run's reply", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const first: ChatMessage = { id: "assistant-1", role: "assistant", content: "The first answer.", createdAt: 2 };
+  const next: ChatMessage = { id: "user-2", role: "user", content: "And then?", createdAt: 3 };
+  const second: ChatMessage = { id: "assistant-2", role: "assistant", content: "The second answer.", createdAt: 4 };
+  // Two rows under one key leave React free to drop or swap either reply.
+  const errors = mock.method(console, "error", () => undefined);
+  const view = render(transcript({ messages: [prompt], streamingText: "The first answer.\n\n" }));
+  view.rerender(
+    transcript({
+      messages: [prompt, first],
+      streamingText: first.content,
+      streamComplete: true,
+      persistedHandoffMessageId: first.id,
+    }),
+  );
+  const settled = screen.getByText(first.content).closest("p");
+  // The queued prompt starts its run as the first one settles, with no idle frame between.
+  view.rerender(transcript({ messages: [prompt, first, next], streamingText: "The second answer.\n\n" }));
+  const streamed = screen.getByText(second.content).closest("p");
+  view.rerender(
+    transcript({
+      messages: [prompt, first, next, second],
+      streamingText: second.content,
+      streamComplete: true,
+      persistedHandoffMessageId: second.id,
+    }),
+  );
+  view.rerender(transcript({ messages: [prompt, first, next, second], streamingText: null }));
+  assert.deepEqual(
+    [first.content, next.content, second.content].map((text) => screen.getAllByText(text).length),
+    [1, 1, 1],
+    "each message shows once",
+  );
+  assert.deepEqual(
+    errors.mock.calls.map((call) => String(call.arguments[0])).filter((message) => message.includes("same key")),
+    [],
+    "every row keeps its own key",
+  );
+  assert.ok(screen.getByText(first.content).closest("p") === settled, "the first reply stays put");
+  assert.ok(screen.getByText(second.content).closest("p") === streamed, "the second settles in place");
+  const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(follows(screen.getByText(next.content), streamed!), "below the prompt it answers");
+});
+
+test("a generated image shows exactly once through handoff and settlement", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const image = {
+    version: 1 as const,
+    kind: "image" as const,
+    id: "image-live",
+    attachment: {
+      id: "attachment-image-1",
+      name: "generated.png",
+      kind: "image" as const,
+      mimeType: "image/png",
+      size: 1024,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    },
+  };
+  const prose = "Here is the generated image.";
+  const saved: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: prose,
+    createdAt: 2,
+    attachments: [image.attachment],
+  };
+  const shown = () => [...view.container.querySelectorAll(`[data-attachment-preview-id="${image.attachment.id}"]`)];
+  const onlyPreview = () => shown().length === 1 && shown()[0] === preview;
+  const view = render(transcript({ messages: [prompt], streamingText: `${prose}\n\n`, streamingArtifacts: [image] }));
+  const [preview] = shown();
+  assert.ok(preview, "the live reply shows its image");
+  view.rerender(
+    transcript({
+      messages: [prompt, saved],
+      streamingText: prose,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+      streamingArtifacts: [image],
+    }),
+  );
+  assert.ok(onlyPreview(), "one image, the same one, while the reply hands over");
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  assert.ok(onlyPreview(), "and once the saved reply settles");
+});
+
+test("links a reparsed reply replaces keep their previews, as the saved reply shows them", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const tight = Array.from(
+    { length: 50 },
+    (_, i) => `- [Link ${i + 1}](https://github.com/org/repo/pull/${1000 + i})`,
+  ).join("\n");
+  // An indented paragraph after a blank line turns the tight list loose: every
+  // link moves from the list item into a new paragraph.
+  const loose = `${tight}\n\n  More details.\n`;
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: loose, createdAt: 2 };
+  const history = render(transcript({ messages: [prompt, saved], streamingText: null }));
+  const fromHistory = previews(history.container);
+  assert.equal(fromHistory, 50, "the saved reply previews all its links");
+  history.unmount();
+
+  const view = render(transcript({ messages: [prompt], streamingText: `${tight}\n` }));
+  assert.equal(previews(view.container), 50, "the tight list previews its links while streaming");
+  view.rerender(transcript({ messages: [prompt], streamingText: loose }));
+  assert.ok(view.container.querySelector("li > p"), "the list is loose now");
+  assert.equal(previews(view.container), 50, "the replaced links keep their previews");
+  view.rerender(
+    transcript({
+      messages: [prompt, saved],
+      streamingText: loose,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    }),
+  );
+  assert.equal(previews(view.container), 50);
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  assert.equal(previews(view.container), fromHistory, "the settled reply shows what history shows");
 });
