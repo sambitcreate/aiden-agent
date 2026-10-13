@@ -1,6 +1,6 @@
 # Ask User Question recap and composer spacing
 
-Status: Implemented, awaiting PR (2026-10-12) on `feature/question-answer-recap`.
+Status: Merged in [PR #441](https://github.com/sambitcreate/aiden-agent/pull/441) on 2026-10-13 after exact-head CI and reviews passed. Aiden Remote contract revision 29.
 
 ## Problem
 
@@ -21,7 +21,7 @@ Once an `ask_user_question` card closes, the transcript shows only an "Ask a que
   - A tertiary footnote lists the live shortcuts: `1–5` choose/toggle, `↵` next on the chosen row (`⌘↵` for multi-select, accepted for both), and `esc` skip.
   - The footnote hides while a custom answer is being written.
   - Next and Skip expose `aria-keyshortcuts`.
-- **Aiden Remote.** The contract revision is bumped to 28 for the additive `questionnaire` field on `GenerationToolStep`. Claim the next free revision at merge. iOS and Android render the same cards.
+- **Aiden Remote.** Contract revision 29 adds the optional `questionnaire` field on `GenerationToolStep` (revision 28 went to inline visuals first). iOS and Android render the same cards. `tool_started` is unchanged: installed clients reject unknown keys on that event.
 
 ## Contract and clients
 
@@ -40,7 +40,8 @@ Once an `ask_user_question` card closes, the transcript shows only an "Ask a que
 | Desktop | Playwright `assistant-scheduled-profile.spec.ts` questionnaire specs | pass |
 | Android | `AidenChatTest`, `AidenBotContractTest` | pass |
 | Android | full unit suite, `compileDebugAndroidTestKotlin`, `lintDebug` | pass |
-| iOS | `AidenChatTests`, `AidenRemotePhase0Tests`, `AidenBotContractTests` on the simulator | 350 pass, 0 fail |
+| iOS | `AidenChatTests`, `AidenRemotePhase0Tests`, `AidenRemoteClientTests`, `AidenBotContractTests` on the simulator | 461 pass, 0 fail |
+| Hosted CI | all 27 checks on the merged head `18d4a9f2` | pass |
 
 The Playwright specs now check that the recap list appears after submit, and that the open card keeps at least 16px of clearance above the window's bottom edge.
 
@@ -50,5 +51,6 @@ Not run locally:
 
 ## Follow-ups
 
+- Android's live fallback (no chronological rows) lists the stream's live tools, so a question shows its plain row mid-turn and its recap only once the turn settles. Render that fallback from timeline steps.
 - Bot chats answer through A–E quick replies and still show a plain bubble; give them the same recap if it reads well there.
 - The CLI's terminal questionnaire is unaffected.

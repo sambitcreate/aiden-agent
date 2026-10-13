@@ -1,6 +1,6 @@
 # Ask User Question recap — 2026-10-12
 
-Branch: `feature/question-answer-recap`. Plan: `docs/plans/ask-user-question-recap-plan.md`.
+Merged in PR #441 (2026-10-13). Plan: `docs/plans/completed/ask-user-question-recap-plan.md`.
 
 The `ask_user_question` tool result `details` is now an `AskUserQuestionRecapV1`, or null for a stopped run. `GenerationTimelineProjector.updateTool` copies a valid recap onto the completed step as `questionnaire`. Persisted chats and Aiden Remote get it through `parseGenerationTimeline`, which rejects the whole timeline when a recap is malformed or sits on any other tool or status. That strictness is why `buildAskUserQuestionRecap` returns its result through `parseAskUserQuestionRecap`. Never store an unparsed recap.
 
@@ -15,7 +15,7 @@ Composer: the dock wrapper uses Composer's `pb-4 pt-3 sm:pb-5`. Key handling:
 - When the active question changes and focus has left the card (the focused row was replaced), focus moves to the open custom field or the first option. Tab-strip arrow navigation keeps focus on its tab.
 - In happy-dom tests, compare focused elements by identity inside `assert.ok`. A failing `assert.equal` on two nodes hangs while Node inspects the DOM graph.
 
-Aiden Remote contract revision 29 (provisional; reclaim at merge; main took 28 for inline visuals) adds `questionnaire` to `GenerationToolStep` in `openapi.json`. An Ajv test checks that the schema and the runtime parser agree. The shared fixture's timeline event carries a recap, and desktop, iOS (`AidenRemotePhase0Tests`) and Android (`AidenChatTest`) each decode it.
+Aiden Remote contract revision 29 (main took 28 for inline visuals) adds `questionnaire` to `GenerationToolStep` in `openapi.json`. An Ajv test checks that the schema and the runtime parser agree. The shared fixture's timeline event carries a recap, and desktop, iOS (`AidenRemotePhase0Tests`) and Android (`AidenChatTest`) each decode it.
 
 Native clients:
 - iOS: `AidenQuestionnaireRecap` in `Models/AidenChat.swift` and `AidenQuestionnaireRecapView` in `AidenChatFeature.swift`.
