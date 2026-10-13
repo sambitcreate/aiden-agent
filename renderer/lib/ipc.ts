@@ -1227,6 +1227,13 @@ export const chatsApi = {
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
+  /** Save a stored chat image to Downloads under a new name; returns the saved path. */
+  saveImageToDownloads: (chatId: string, attachmentId: string) =>
+    invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
+  copyImage: (chatId: string, attachmentId: string) =>
+    invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** Reveal a file saved by saveImageToDownloads in Finder. */
+  showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>

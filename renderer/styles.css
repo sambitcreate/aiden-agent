@@ -526,8 +526,9 @@ body {
 }
 
 /* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
-   and collapsing their tracks to 0.001ms would end them on a last frame instead. */
-:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *),
+   and collapsing their tracks to 0.001ms would end them on a last frame instead.
+   A generated image's arrival keeps its short opacity fade (see .image-scan). */
+:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *, .image-scan-result),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.001ms !important;
@@ -2961,3 +2962,161 @@ textarea {
   transform: none;
   transition: none;
 }
+
+/* ---- Generated-image "Lens" placeholder ------------------------------------
+   Shown where a chat's generated image will appear while generate_image runs.
+   Numbers mirror IMAGE_SCAN_SPEC in renderer/shared/image-generation/placeholder-spec.ts
+   (iOS and Android use the same spec). Only transform and opacity animate; the
+   dot fields are tiled gradients drawn once. Without motion (Reduce Motion, or
+   before the animation class applies) the lens rests in its still pose. */
+/* The slot is exactly the requested shape: as wide as the column allows, at
+   most 42rem wide and 32rem tall. A generated image renders at the same size. */
+.image-scan-slot {
+  width: min(100%, 42rem, calc(32rem * var(--image-scan-aspect, 1)));
+}
+.image-scan {
+  --image-scan-period: 2.8s;
+  --image-scan-dot: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --image-scan-dot-lit: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--image-scan-ratio, 1 / 1);
+  overflow: hidden;
+  contain: paint;
+  isolation: isolate;
+}
+.image-scan-result {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-scan[data-scan-period="long"] { --image-scan-period: 5.2s; }
+.image-scan-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-popover);
+}
+.image-scan-cover > * { position: absolute; inset: 0; }
+.image-scan-fill { background: var(--surface-control); }
+.image-scan-dots {
+  background-image: radial-gradient(var(--image-scan-dot) 1px, transparent 1.3px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+/* Edges sink toward the window background, which is darker than the popover in every theme. */
+.image-scan-vignette {
+  background: radial-gradient(120% 90% at 50% 40%, transparent 55%, color-mix(in srgb, var(--surface-background) 70%, transparent));
+}
+/* The lens: 34% of the height. Its still pose centres it at 40% of the height. */
+.image-scan .image-scan-lens,
+.image-scan .image-scan-edge {
+  inset: 0 0 auto 0;
+  height: 34%;
+  transform: translateY(67.65%);
+  will-change: transform;
+}
+.image-scan-lens {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+}
+.image-scan-lens-glow {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--accent) 7%, transparent) 100%);
+}
+/* Counter-moving bright dots, the placeholder's full height, so lit dots stay put. */
+.image-scan-lens-dots {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 294.12%;
+  transform: translateY(-23%);
+  will-change: transform;
+  background-image: radial-gradient(var(--image-scan-dot-lit) 1.1px, transparent 1.5px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+.image-scan-edge { pointer-events: none; }
+.image-scan-edge::after,
+.image-scan-cover::before {
+  content: "";
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent) 22%, var(--accent) 78%, transparent);
+}
+.image-scan-edge::after {
+  bottom: 0;
+  opacity: 0.85;
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens,
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-edge {
+  animation: image-scan-window var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens-dots {
+  animation: image-scan-counter var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+/* Travel during the first 78% of each pass, then rest. */
+@keyframes image-scan-window {
+  0% { transform: translateY(-100%); }
+  78%, 100% { transform: translateY(294.12%); }
+}
+@keyframes image-scan-counter {
+  0% { transform: translateY(34%); }
+  78%, 100% { transform: translateY(-100%); }
+}
+.image-scan[data-offscreen] *,
+.image-scan[data-document-hidden] *,
+.image-scan[data-arrival="reveal"] * { animation-play-state: paused !important; }
+/* Arrival: the cover slides away under a bright edge, revealing the image. */
+.image-scan-cover::before {
+  top: -1px;
+  z-index: 1;
+  opacity: 0;
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover {
+  transform: translateY(100%);
+  transition: transform 720ms cubic-bezier(0.65, 0.05, 0.25, 1);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover::before {
+  opacity: 0.9;
+  transition: opacity 120ms;
+}
+.image-scan[data-arrival="reveal"] .image-scan-chip {
+  opacity: 0;
+  transition: opacity 200ms;
+}
+:root[data-reduce-motion="true"] .image-scan[data-arrival="reveal"] .image-scan-cover { transition: none; }
+:root[data-reduce-motion="true"] .image-scan-result { animation: image-scan-fade 260ms ease-out both; }
+@keyframes image-scan-fade { from { opacity: 0; } }
+.image-scan-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  font-variant-numeric: tabular-nums;
+}
+.image-scan-live {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.9;
+}
+:root[data-reduce-motion="false"] .image-scan-caption[data-motion="animate"] .image-scan-live {
+  animation: image-scan-live 1.4s ease-in-out infinite;
+}
+@keyframes image-scan-live { 50% { opacity: 0.25; } }

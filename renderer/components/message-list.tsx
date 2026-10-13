@@ -11,7 +11,11 @@ import { MessageForkContextMenu, type MessageForkAction } from "./fork-message-b
 import { MessageActions } from "./message-actions";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import { forkSummaryRows } from "../lib/chat-copy-view";
-import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
+import {
+  MessageAttachmentPreviewProvider,
+  MessageAttachments,
+  type MessageImageActions,
+} from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
 import { TurnFooter } from "./turn-footer";
@@ -25,6 +29,7 @@ import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { HtmlArtifactFrame } from "./html-artifact-frame";
+import { ImageScanPlaceholder, useImageGenerationSlots } from "./image-generation-placeholder";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -98,6 +103,8 @@ interface AssistantResponseProps {
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
   fork?: MessageForkAction;
+  /** Save and copy actions for images stored in this (settled) response. */
+  imageActions?: MessageImageActions;
 }
 
 function AssistantResponse({
@@ -113,7 +120,27 @@ function AssistantResponse({
   richLinks = true,
   footer,
   fork,
+  imageActions,
 }: AssistantResponseProps) {
+  const imageGeneration = useImageGenerationSlots(timeline, attachments, streaming);
+  const shownAttachments = React.useMemo(
+    () =>
+      imageGeneration.hiddenAttachmentIds.size && attachments
+        ? attachments.filter((attachment) => !imageGeneration.hiddenAttachmentIds.has(attachment.id))
+        : attachments,
+    [attachments, imageGeneration.hiddenAttachmentIds],
+  );
+  // In-flight generate_image calls hold the image's place where it will appear.
+  const media = (
+    <>
+      {imageGeneration.slots.map((slot) => (
+        <ImageScanPlaceholder key={slot.stepId} slot={slot} onRevealed={imageGeneration.onRevealed} />
+      ))}
+      {shownAttachments?.length ? (
+        <MessageAttachments attachments={shownAttachments} role="assistant" imageActions={imageActions} />
+      ) : null}
+    </>
+  );
   const rows = assistantPresentationRows(content, timeline, reasoning ?? "");
   const reasoningActive = hasActiveThinkingStep(timeline ?? null);
   const active =
@@ -149,9 +176,7 @@ function AssistantResponse({
             fork={fork}
           />
         ) : null}
-        {attachments?.length ? (
-          <MessageAttachments attachments={attachments} role="assistant" />
-        ) : null}
+        {media}
         {!content ? proselessActions(footer, fork) : null}
       </>
     );
@@ -212,9 +237,7 @@ function AssistantResponse({
           />
         );
       })}
-      {attachments?.length ? (
-        <MessageAttachments attachments={attachments} role="assistant" />
-      ) : null}
+      {media}
       {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
     </>
   );
@@ -237,6 +260,7 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
+  chatId: string;
   message: ChatMessage;
   readAloud?: ReadAloudActionProps;
   richLinks: boolean;
@@ -255,6 +279,7 @@ interface SettledMessageRowProps {
  * only the live row, do not re-render or re-derive settled history.
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
+  chatId,
   message,
   readAloud,
   richLinks,
@@ -275,6 +300,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       disabledReason: forkDisabledReason,
     };
   }, [forkDisabledReason, message.id, message.role, onFork, onForkWithSummary]);
+  const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
   const row = (
     <div className="flex min-w-0 flex-col gap-3">
       {message.role === "assistant" ? (
@@ -288,6 +314,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             richLinks={richLinks}
             footer={settledTurnFooter(message)}
             fork={fork}
+            imageActions={imageActions}
             subagentChips={
               subagentsEnabled && message.subagents ? (
                 <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
@@ -511,6 +538,7 @@ export function MessageList({
     transcriptRows.push(
       <SettledMessageRow
         key={`message:${message.id}`}
+        chatId={chatId}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
         richLinks={message.id !== richLinkHandoffDuplicateId}

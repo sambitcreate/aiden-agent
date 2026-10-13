@@ -286,7 +286,9 @@
         "main/services/image-generation/settings-store.test.ts",
         "main/services/image-generation/runtime.test.ts",
         "main/handlers/image-generation-parse.test.ts",
-        "renderer/shared/image-generation/catalog.test.ts"
+        "renderer/shared/image-generation/catalog.test.ts",
+        "renderer/shared/image-generation/placeholder-spec.test.ts",
+        "main/services/chat-image-actions.test.ts"
       ],
       "preserved": [
         "browser",
@@ -681,6 +683,8 @@
         "renderer/components/settings/image-generation-settings.test.tsx",
         "renderer/lib/relative-time.test.ts",
         "renderer/components/image-model-logo.test.tsx",
+        "renderer/components/image-generation-placeholder.test.tsx",
+        "renderer/components/assistant-image-actions.test.tsx",
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
         "renderer/components/sidebar-organize-menu.test.tsx",

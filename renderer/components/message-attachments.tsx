@@ -1,13 +1,14 @@
 import * as React from "react";
-import { FileImage, FileText, Maximize2 } from "lucide-react";
+import { Download, Expand, FileImage, FileText, Maximize2 } from "lucide-react";
 import type { Attachment } from "../lib/types";
 import { cn } from "../lib/ui-utils";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
-import { Dialog } from "./ui";
+import { chatsApi } from "../lib/ipc";
+import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Dialog, toast } from "./ui";
 
 const EMPTY_FAILED_IMAGE_IDS: ReadonlySet<string> = new Set();
 
-function inlineImageSource(attachment: Attachment): string | undefined {
+export function inlineImageSource(attachment: Attachment): string | undefined {
   if (
     attachment.kind !== "image" ||
     !attachment.data ||
@@ -114,7 +115,7 @@ export function MessageAttachmentPreviewProvider({ children }: React.PropsWithCh
         title={preview?.name ?? "Image preview"}
         description={preview ? fileSize(preview.size) : undefined}
         confirmHidden
-        size="large"
+        size="full"
         returnFocus={returnFocus}
       >
         {previewSource ? (
@@ -124,7 +125,7 @@ export function MessageAttachmentPreviewProvider({ children }: React.PropsWithCh
             onError={() => {
               if (preview) markDecodeFailed(preview);
             }}
-            className="mx-auto max-h-[65vh] max-w-full rounded-xl bg-control object-contain"
+            className="mx-auto block h-full w-full rounded-card object-contain"
           />
         ) : null}
       </Dialog>
@@ -149,30 +150,132 @@ export function partitionMessageAttachments(
   return { images, files };
 }
 
+/** Chat-scoped actions for stored images (Save to Downloads, Copy image). */
+export interface MessageImageActions {
+  chatId: string;
+}
+
 export function MessageAttachments({
   attachments,
   role,
+  imageActions,
 }: {
   attachments: readonly Attachment[];
   role: "user" | "assistant";
+  /** Present for a settled assistant response whose images are stored in the chat. */
+  imageActions?: MessageImageActions;
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
-  if (!controller) {
-    return (
-      <MessageAttachmentPreviewProvider>
-        <MessageAttachmentsContent attachments={attachments} role={role} />
-      </MessageAttachmentPreviewProvider>
-    );
+  const content = <MessageAttachmentsContent attachments={attachments} role={role} imageActions={imageActions} />;
+  if (!controller) return <MessageAttachmentPreviewProvider>{content}</MessageAttachmentPreviewProvider>;
+  return content;
+}
+
+async function saveImageToDownloads(chatId: string, attachment: Attachment): Promise<void> {
+  try {
+    const saved = await chatsApi.saveImageToDownloads(chatId, attachment.id);
+    toast("Saved to Downloads", {
+      action: { label: "Show in Finder", onClick: () => void chatsApi.showSavedImage(saved.path).catch(() => undefined) },
+    });
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : "Aiden couldn't save the image.");
   }
-  return <MessageAttachmentsContent attachments={attachments} role={role} />;
+}
+
+async function copyImage(chatId: string, attachment: Attachment): Promise<void> {
+  try {
+    await chatsApi.copyImage(chatId, attachment.id);
+    toast("Image copied");
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : "Aiden couldn't copy the image.");
+  }
+}
+
+/**
+ * An assistant image stands alone at its natural shape (within 42rem by
+ * 32rem), with its name and actions in a caption row below. Nothing overlays
+ * the image; right-click offers the same actions.
+ */
+function AssistantImage({
+  attachment,
+  source,
+  imageActions,
+}: {
+  attachment: Attachment;
+  source: string;
+  imageActions?: MessageImageActions;
+}) {
+  const controller = React.useContext(MessageAttachmentPreviewContext)!;
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const open = () => {
+    if (triggerRef.current) controller.openPreview(attachment, triggerRef.current);
+  };
+  const chatId = imageActions?.chatId;
+  return (
+    <figure className="m-0 flex w-fit min-w-0 max-w-[min(100%,42rem)] flex-col" data-assistant-image={attachment.id}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            ref={triggerRef}
+            type="button"
+            data-attachment-preview-id={attachment.id}
+            aria-label={`Open ${attachment.name} preview`}
+            className="block w-fit max-w-full overflow-hidden rounded-card text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            onClick={open}
+          >
+            <img
+              src={source}
+              alt={attachment.name}
+              decoding="async"
+              onError={() => controller.markDecodeFailed(attachment)}
+              className="block h-auto max-h-[32rem] w-auto max-w-full"
+            />
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {chatId ? (
+            <>
+              <ContextMenuItem onSelect={() => void saveImageToDownloads(chatId, attachment)}>
+                Save to Downloads
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void copyImage(chatId, attachment)}>Copy image</ContextMenuItem>
+            </>
+          ) : null}
+          <ContextMenuItem onSelect={open}>Open full view</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <figcaption className="mt-1.5 flex min-w-0 items-center gap-1 pl-1">
+        <span className="min-w-0 flex-1 truncate text-mini text-tertiary">
+          {attachment.name} · {fileSize(attachment.size)}
+        </span>
+        <Button size="small" variant="transparent" className="px-2" onClick={open}>
+          <Expand aria-hidden="true" className="size-3.5" />
+          Expand
+        </Button>
+        {chatId ? (
+          <Button
+            size="small"
+            variant="transparent"
+            className="px-2"
+            onClick={() => void saveImageToDownloads(chatId, attachment)}
+          >
+            <Download aria-hidden="true" className="size-3.5" />
+            Save
+          </Button>
+        ) : null}
+      </figcaption>
+    </figure>
+  );
 }
 
 function MessageAttachmentsContent({
   attachments,
   role,
+  imageActions,
 }: {
   attachments: readonly Attachment[];
   role: "user" | "assistant";
+  imageActions?: MessageImageActions;
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
   if (!controller) throw new Error("Message attachment preview context is unavailable.");
@@ -190,14 +293,15 @@ function MessageAttachmentsContent({
       )}
       data-message-attachments={role}
     >
-      {images.length ? (
-        <div
-          className={cn(
-            "grid max-w-full gap-2",
-            role === "assistant" && "w-full max-w-[42rem]",
-            images.length > 1 && role === "assistant" ? "grid-cols-2" : "grid-cols-1",
-          )}
-        >
+      {images.length && role === "assistant" ? (
+        <div className="flex max-w-full flex-col gap-3">
+          {images.map(({ attachment, source }) => (
+            <AssistantImage key={attachment.id} attachment={attachment} source={source} imageActions={imageActions} />
+          ))}
+        </div>
+      ) : null}
+      {images.length && role === "user" ? (
+        <div className="grid max-w-full grid-cols-1 gap-2">
           {images.map(({ attachment, source }) => {
             return (
               <figure key={attachment.id} className="min-w-0">
@@ -205,10 +309,7 @@ function MessageAttachmentsContent({
                   type="button"
                   data-attachment-preview-id={attachment.id}
                   aria-label={`Open ${attachment.name} preview`}
-                  className={cn(
-                    "group/image relative block max-w-full overflow-hidden rounded-xl bg-control text-left outline-none transition-colors hover:bg-control-hover motion-reduce:transition-none",
-                    role === "assistant" && "w-full",
-                  )}
+                  className="group/image relative block max-w-full overflow-hidden rounded-xl bg-control text-left outline-none transition-colors hover:bg-control-hover motion-reduce:transition-none"
                   onClick={(event) => {
                     openPreview(attachment, event.currentTarget);
                   }}
@@ -219,20 +320,12 @@ function MessageAttachmentsContent({
                     loading="lazy"
                     decoding="async"
                     onError={() => markDecodeFailed(attachment)}
-                    className={cn(
-                      "block max-w-full object-contain",
-                      role === "user" ? "max-h-40" : "max-h-[32rem] min-h-28 w-full bg-popover",
-                    )}
+                    className="block max-h-40 max-w-full object-contain"
                   />
                   <span className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-popover/90 text-secondary opacity-0 shadow-popover transition-opacity group-hover/image:opacity-100 group-focus-visible/image:opacity-100 motion-reduce:transition-none">
                     <Maximize2 aria-hidden="true" className="size-3.5" />
                   </span>
                 </button>
-                {role === "assistant" ? (
-                  <figcaption className="mt-1 truncate px-1 text-mini text-tertiary">
-                    {attachment.name} · {fileSize(attachment.size)}
-                  </figcaption>
-                ) : null}
               </figure>
             );
           })}

@@ -417,3 +417,20 @@ test("agent-run activity changes tense like Aiden's own tools, with the same lin
     assert.equal(activityLineText(row), line);
   }
 });
+
+test("an image generation row reads naturally and names its ratio once settled", () => {
+  const base = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool" as const,
+    toolCallId: "call-1",
+    toolName: "generate_image",
+    label: "Generate image",
+    startedAt: 1,
+    updatedAt: 1,
+    detail: "16:9",
+  };
+  assert.equal(activityLineText({ ...base, status: "running" }), "Generating image");
+  assert.equal(activityLineText({ ...base, status: "completed" }), "Generated image 16:9");
+  assert.equal(activityLineText({ ...base, status: "failed" }), "Generate image failed 16:9");
+});
