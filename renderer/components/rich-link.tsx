@@ -115,6 +115,21 @@ function BudgetedRichLink({
       withinBudget = existingDecision;
     }
   }
+
+  // Clean up budget decision when this link is unmounted (e.g., due to markdown restructuring)
+  React.useEffect(() => {
+    return () => {
+      if (budget && budget.decisions.has(budgetId)) {
+        const wasApproved = budget.decisions.get(budgetId);
+        budget.decisions.delete(budgetId);
+        // Release the budget slot if this link had been approved for preview
+        if (wasApproved) {
+          budget.used -= 1;
+        }
+      }
+    };
+  }, [budgetId, budget]);
+
   if (!withinBudget) return <a href={href} {...props} />;
   return <RichLinkPreview href={href} descriptor={descriptor} {...props} />;
 }
