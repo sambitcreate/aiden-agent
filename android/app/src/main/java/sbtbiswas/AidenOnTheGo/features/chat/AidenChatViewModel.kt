@@ -220,8 +220,9 @@ class AidenChatViewModel(
         }
     }
     private fun endedWith(streamId: String, outcome: AidenMessageOutcomeStatus) = EndedReply(
-        streamId, outcome = outcome, earlierIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id })
+        streamId, outcome = outcome, earlierIds = streamStartMessageIds)
     private var endedReply: EndedReply? = null
+    private var streamStartMessageIds: Set<String> = emptySet()
     private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
     private var streamJob: Job? = null
@@ -1528,6 +1529,7 @@ class AidenChatViewModel(
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
+        streamStartMessageIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id }
         endedReply = null
         if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
         terminalReconciliationJob?.cancel()
@@ -3037,6 +3039,7 @@ class AidenChatViewModel(
             transcriptGeneration++
             activeStreamId = null
             endedReply = null
+            streamStartMessageIds = emptySet()
             networkWaitStreamId = null
             _isWaitingForNetwork.value = false
             liveTranscript.reset()
