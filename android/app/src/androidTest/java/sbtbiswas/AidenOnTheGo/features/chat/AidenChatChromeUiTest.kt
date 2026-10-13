@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -385,9 +386,53 @@ class AidenChatChromeUiTest {
         assertEquals(0 to 0, viewport())
     }
 
+    @Test
+    fun accessibilityScrollsLeaveAndRejoinTheLiveEdgeWithoutAFling() {
+        setStreamingTranscript()
+        val transcriptNode = compose.onNodeWithTag("transcript")
+        // The list is reversed: a positive scroll moves up into history.
+        transcriptNode.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
+        settleSemanticScroll()
+        val readerPlace = viewport()
+        assertNotEquals(0 to 0, readerPlace)
+        stream(6)
+        assertEquals(readerPlace, viewport())
+        compose.runOnIdle { assertFalse(follow.isFollowing) }
+
+        transcriptNode.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -5_000f) }
+        settleSemanticScroll()
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        stream(6)
+        assertEquals(0 to 0, viewport())
+    }
+
+    @Test
+    fun anAccessibilityScrollBackAfterLoadingEarlierMessagesFollowsAgain() {
+        setStreamingTranscript()
+        compose.onNodeWithTag("transcript").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
+        settleSemanticScroll()
+        // Loading older history detaches without a gesture.
+        compose.runOnIdle { follow.detach() }
+        compose.onNodeWithTag("transcript").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -5_000f) }
+        settleSemanticScroll()
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        stream(6)
+        assertEquals(0 to 0, viewport())
+    }
+
     /** Lets the follow latch's post-gesture settle run on the test clock instead of real time. */
     private fun settleGesture() {
         compose.mainClock.advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + AidenChatScroll.MOMENTUM_SETTLE_MILLIS)
+        compose.waitForIdle()
+    }
+
+    /**
+     * A semantic scroll animates its deltas and each one restarts the input
+     * settle, so let the animation finish before running that last settle.
+     */
+    private fun settleSemanticScroll() {
+        compose.waitUntil(2_000) { !transcript.isScrollInProgress }
+        compose.mainClock.advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS)
         compose.waitForIdle()
     }
 
