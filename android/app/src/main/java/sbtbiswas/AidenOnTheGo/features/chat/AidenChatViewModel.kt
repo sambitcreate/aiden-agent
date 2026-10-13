@@ -219,6 +219,8 @@ class AidenChatViewModel(
     private var agentEpoch: String? = null
     private var agentRevision = 0L
     private var currentRosterTurnId: String? = null
+    /** The turn this phone started most recently; the roster announcing it is not a foreign run. */
+    private var lastLocalTurnId: String? = null
     private var selectedRosterTurnId: String? = null
     private var agentRosterSelectionTicket = 0L
     private var taskCapabilityDeniedObservationToken: Long? = null
@@ -922,8 +924,11 @@ class AidenChatViewModel(
             val previousTurnId = currentRosterTurnId
             currentRosterTurnId = snapshot.turnId
             _agentRoster.value = snapshot
-            if (hadRoster && snapshot.turnId != null && snapshot.turnId != previousTurnId) {
-                // A turn started, perhaps on the Mac: follow it if nothing is attached.
+            if (hadRoster && snapshot.turnId != null && snapshot.turnId != previousTurnId &&
+                snapshot.turnId != lastLocalTurnId
+            ) {
+                // A turn started on the Mac: follow it if nothing is attached. This
+                // phone's own turn can be announced after its stream has ended.
                 if (progressForeground) startForeignRunObservation(retryNotFound = true)
             }
             if (selectedRosterTurnId == null || selectedRosterTurnId == previousTurnId || selectedRosterTurnId == snapshot.turnId) {
@@ -1302,6 +1307,7 @@ class AidenChatViewModel(
                 // Clear the stored draft before the turn can reach the server.
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
                     streamId = response.streamId,
@@ -2251,7 +2257,11 @@ class AidenChatViewModel(
         foreignRunProbeJob = viewModelScope.launch {
             var attempt = 0
             while (progressForeground && !canReadAgentRoster) {
-                delay(foreignRunAttach.probeDelayMillis(attempt))
+                // Count from the end of any lookup in flight, such as the one made on opening.
+                val presentedBeforeWait = foreignRunsPresented
+                foreignRunJob?.join()
+                if (foreignRunsPresented != presentedBeforeWait) attempt = 0
+                foreignRunAttach.pause(foreignRunAttach.probeDelayMillis(attempt))
                 if (!progressForeground || canReadAgentRoster) break
                 if (activeStreamId != null || _isStarting.value || foreignRunId != null ||
                     foreignRunJob?.isActive == true
@@ -2310,7 +2320,7 @@ class AidenChatViewModel(
                     if (server?.statusCode == 404 && projection == null && notFoundRetries > 0) {
                         // The turn was announced before its run was registered.
                         notFoundRetries -= 1
-                        delay(foreignRunAttach.notFoundRetryMillis)
+                        foreignRunAttach.pause(foreignRunAttach.notFoundRetryMillis)
                         continue
                     }
                     if (server != null && server.statusCode in setOf(403, 404, 410)) {
