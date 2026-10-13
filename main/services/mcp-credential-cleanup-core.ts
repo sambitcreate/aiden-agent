@@ -78,7 +78,10 @@ function parseSnapshot(value: unknown): McpCredentialConnectionSnapshot | null {
   ) {
     throw new Error("Invalid pending MCP credential cleanup.");
   }
-  return structuredClone(record) as unknown as McpCredentialConnectionSnapshot;
+  // Journals written before credentials stopped being bound to env/header
+  // values still carry their hashes; compare them as the canonical identity.
+  const { envHash: _env, headersHash: _headers, ...identity } = structuredClone(record);
+  return identity as unknown as McpCredentialConnectionSnapshot;
 }
 
 export function mcpCredentialConnectionSnapshot(
