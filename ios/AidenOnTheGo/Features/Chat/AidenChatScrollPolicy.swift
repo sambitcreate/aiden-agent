@@ -217,11 +217,13 @@ final class AidenTranscriptFollowController {
     /// `Task.yield()` and 16ms.
     @ObservationIgnored private let followPause: @MainActor () async -> Void
     @ObservationIgnored private let jumpButtonDelay: @MainActor () async -> Void
-    /// Runs after an animated follow scroll before checking where it landed.
+    /// Runs after an animated follow scroll before checking where it landed,
+    /// and after a gesture-free scroll lands at the bottom before re-arming.
     @ObservationIgnored private let animationSettle: @MainActor () async -> Void
     /// The newest reported distance from the bottom.
     @ObservationIgnored private var distanceFromBottom: CGFloat = 0
     @ObservationIgnored private var followGeneration: UInt64 = 0
+    @ObservationIgnored private var bottomArrivalGeneration: UInt64 = 0
     @ObservationIgnored private var jumpButtonGeneration: UInt64 = 0
     @ObservationIgnored private var isJumpButtonRevealPending = false
 
@@ -245,6 +247,7 @@ final class AidenTranscriptFollowController {
     var isFollowing: Bool { latch.isFollowing }
 
     func handle(_ event: AidenChatScrollPolicy.FollowEvent) {
+        if case .userScrollBegin = event { bottomArrivalGeneration &+= 1 }
         let resolved = AidenChatScrollPolicy.resolveFollow(current: latch, event: event)
         if resolved != latch { latch = resolved }
         updateJumpButton()
@@ -258,12 +261,38 @@ final class AidenTranscriptFollowController {
         let wasNearBottom = isNearBottom
         distanceFromBottom = metrics.distanceFromBottom
         if nearBottom != isNearBottom { isNearBottom = nearBottom }
+        let isAtBottom = AidenChatScrollPolicy.isAtBottom(distanceFromBottom: metrics.distanceFromBottom)
         handle(.contentScrolled(
-            isAtBottom: AidenChatScrollPolicy.isAtBottom(distanceFromBottom: metrics.distanceFromBottom),
+            isAtBottom: isAtBottom,
             isUserScrolling: metrics.isUserInteracting,
             movedAwayFromBottom: metrics.movedAwayFromBottom,
             wasNearBottom: wasNearBottom
         ))
+        if metrics.isUserInteracting || metrics.movedAwayFromBottom {
+            bottomArrivalGeneration &+= 1
+        } else if isAtBottom, !wasNearBottom, !latch.isFollowing {
+            confirmBottomArrival()
+        }
+    }
+
+    /// A scroll with no drag (a hardware keyboard, VoiceOver, a pointer
+    /// scroll that skips the pan callbacks) can land at the bottom from far
+    /// above in one report, and nothing reports again while the reader stays
+    /// there. One report from far above may also be a transient layout
+    /// correction, so follow re-arms only if the reader is still at the bottom
+    /// once the scroll has settled and nothing has scrolled it away or dragged
+    /// since. Reply growth in the meantime is allowed: the check uses the
+    /// same near-bottom tolerance as streaming.
+    private func confirmBottomArrival() {
+        bottomArrivalGeneration &+= 1
+        let generation = bottomArrivalGeneration
+        let settle = animationSettle
+        Task { @MainActor [weak self] in
+            await settle()
+            guard let self, generation == self.bottomArrivalGeneration, !self.latch.isFollowing,
+                  self.isNearBottom else { return }
+            self.handle(.contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true))
+        }
     }
 
     func setStreaming(_ streaming: Bool) {

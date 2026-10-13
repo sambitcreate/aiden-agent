@@ -11392,6 +11392,56 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertFalse(controller.showsJumpButton)
     }
 
+    /// A reader scrolled away, then a gesture-free scroll (hardware keyboard,
+    /// VoiceOver) carries them from far above to the bottom in one report.
+    private func arriveAtTheBottomWithoutADrag(
+        _ settles: AidenManualPauses
+    ) -> AidenTranscriptFollowController {
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(900, interacting: true))
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        controller.updateMetrics(metrics(0))
+        return controller
+    }
+
+    func testAGestureFreeScrollThatStaysAtTheBottomReArmsFollow() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        XCTAssertFalse(controller.isFollowing, "one report from far above is not trusted yet")
+        await settles.waitForPending(1)
+        // The reply keeps growing a little while the scroll settles.
+        controller.setStreaming(true)
+        controller.updateMetrics(metrics(40))
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(controller.isFollowing)
+    }
+
+    func testAGestureFreeBottomThatScrollsAwayAgainKeepsFollowOff() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        await settles.waitForPending(1)
+        controller.updateMetrics(AidenChatScrollMetrics(
+            distanceFromBottom: 900, isUserInteracting: false, movedAwayFromBottom: true
+        ))
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.isFollowing)
+    }
+
+    func testADragAfterAGestureFreeArrivalKeepsFollowOff() async {
+        let settles = AidenManualPauses()
+        let controller = arriveAtTheBottomWithoutADrag(settles)
+        await settles.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        settles.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.isFollowing)
+    }
+
     func testAnIdleJumpThatLandsShortFinishesWithOneSnap() async {
         let settles = AidenManualPauses()
         let controller = AidenTranscriptFollowController(
