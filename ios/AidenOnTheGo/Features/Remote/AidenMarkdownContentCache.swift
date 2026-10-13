@@ -114,7 +114,7 @@ enum AidenMarkdownBlockSplitter {
         return false
     }
 
-    private struct Fence {
+    fileprivate struct Fence {
         let marker: UInt8
         let length: Int
 
@@ -322,7 +322,7 @@ enum AidenMarkdownChunkSpacing {
         if isThematicBreak(first) || isATXHeading(first) { return headingTop }
         // Don't treat a line as a Setext underline if the first line opens a
         // fenced code block (e.g., ```yaml\n--- should not be a heading).
-        if lines.count > 1, Fence(opening: lines[0].utf8) == nil,
+        if lines.count > 1, AidenMarkdownBlockSplitter.Fence(opening: lines[0].utf8) == nil,
            isSetextUnderline(lines[1]) { return headingTop }
         if first.hasPrefix(">") {
             for line in lines where line.hasPrefix(">") {

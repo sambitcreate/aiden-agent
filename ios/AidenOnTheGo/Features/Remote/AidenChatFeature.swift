@@ -9152,7 +9152,11 @@ extension AidenChatViewModel {
             }
             return false
         }
-        publishForeignRun(context: context)
+        var flushesText = true
+        if case let .content(content) = event.kind {
+            flushesText = content.type != .textDelta && content.type != .heartbeat
+        }
+        publishForeignRun(context: context, flushingText: flushesText)
         for effect in effects {
             guard isCurrentForeignRun(generation, context: context) else { return true }
             if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return true }
@@ -9193,14 +9197,12 @@ extension AidenChatViewModel {
         }
     }
 
-    private func publishForeignRun(context: AidenRemoteRequestContext) {
+    private func publishForeignRun(context: AidenRemoteRequestContext, flushingText: Bool = false) {
         guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
         receiveCumulativeLiveText(projection.liveText)
-        // Flush any buffered text before publishing structural events: a
-        // text_delta followed by tool_started or approval_required must show
-        // the text before the structural event, not after (matching the
-        // owned-stream path's apply method).
-        flushPendingStreamingContent()
+        // As on an owned stream, text received before a tool, approval or
+        // other structural event shows before it lands.
+        if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
         if streamState != projection.state { streamState = projection.state }
