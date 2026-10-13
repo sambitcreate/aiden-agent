@@ -9183,7 +9183,11 @@ extension AidenChatViewModel {
         foreignRunReconcileTask?.cancel()
         foreignRunReconcileTask = nil
         foreignRunIsLive = true
-        publishForeignRun(context: context)
+        // The retained replay lands at once: text it holds before a tool,
+        // approval or other structural state shows before that state.
+        let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+        publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
             chatID: chat.id,
