@@ -7,11 +7,6 @@ import android.content.IntentFilter
 import android.os.PowerManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -35,7 +30,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -61,6 +58,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
@@ -68,11 +66,11 @@ import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStep
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStepStatus
+import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
+import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
-import java.time.Duration
-import java.time.Instant
 
 /**
  * The "Lens" scan placeholder numbers. They mirror the desktop spec module
@@ -104,11 +102,28 @@ internal object AidenImagePlaceholderSpec {
     fun periodMs(elapsedSeconds: Long): Int =
         if (elapsedSeconds >= LONG_RUN_AFTER_SECONDS) LONG_PERIOD_MS else PERIOD_MS
 
-    /** "Generating · 12s", then "Still generating · 1m 05s" after a minute. */
-    fun caption(elapsedSeconds: Long): String {
+    /**
+     * Where the lens is in its pass, in [0, 1), after [elapsedMs]. The pass count
+     * accumulates across the slow-down at [LONG_RUN_AFTER_SECONDS], so the lens keeps
+     * its place instead of jumping when the period changes.
+     */
+    fun phase(elapsedMs: Long): Float {
+        val elapsed = elapsedMs.coerceAtLeast(0).toDouble()
+        val switchMs = LONG_RUN_AFTER_SECONDS * 1_000.0
+        val passes = if (elapsed < switchMs) elapsed / PERIOD_MS
+        else switchMs / PERIOD_MS + (elapsed - switchMs) / LONG_PERIOD_MS
+        return (passes - kotlin.math.floor(passes)).toFloat()
+    }
+
+    /**
+     * "Generating · 12s", then "Still generating · 1m 05s" after a minute, followed by
+     * " · <provider> · <model>" when the host named the model.
+     */
+    fun caption(elapsedSeconds: Long, model: AidenImageGenerationModelLabel? = null): String {
         val seconds = elapsedSeconds.coerceAtLeast(0)
-        if (seconds < LONG_RUN_AFTER_SECONDS) return "Generating · ${seconds}s"
-        return "Still generating · ${seconds / 60}m ${(seconds % 60).toString().padStart(2, '0')}s"
+        val time = if (seconds < LONG_RUN_AFTER_SECONDS) "Generating · ${seconds}s"
+        else "Still generating · ${seconds / 60}m ${(seconds % 60).toString().padStart(2, '0')}s"
+        return if (model == null) time else "$time · ${model.provider} · ${model.model}"
     }
 
     /** Lens travel progress (0 at the top, 1 past the bottom) for a phase in [0, 1). */
@@ -154,15 +169,50 @@ internal enum class AidenImagePlaceholderMotion {
     }
 }
 
+/**
+ * The provider and model a `generate_image` step names in its `target`
+ * ("<provider>/<model id>", split on the first slash).
+ */
+internal data class AidenImageGenerationModelLabel(val provider: String, val model: String) {
+    companion object {
+        const val MAX_TARGET_LENGTH = 160
+
+        fun fromTarget(target: String?): AidenImageGenerationModelLabel? {
+            if (target.isNullOrEmpty() || target.length > MAX_TARGET_LENGTH) return null
+            if (target.any { it.isISOControl() }) return null
+            val slash = target.indexOf('/')
+            if (slash < 0) return null
+            val provider = target.substring(0, slash).trim()
+            val model = target.substring(slash + 1).trim()
+            if (provider.isEmpty() || model.isEmpty()) return null
+            return AidenImageGenerationModelLabel(displayName(provider), model)
+        }
+
+        /** The desktop's provider names; an unknown provider shows as sent. */
+        private fun displayName(provider: String): String = when (provider.lowercase()) {
+            "openrouter" -> "OpenRouter"
+            "replicate" -> "Replicate"
+            "fal" -> "fal"
+            else -> provider
+        }
+    }
+}
+
 internal data class AidenImageGenerationPlaceholderItem(
     val id: String,
     val aspectRatio: AidenImageAspectRatio,
-    /** Host time of the step's last status change (when it started running). */
-    val runningSince: Instant
+    /**
+     * Milliseconds the call had been running by the latest host time in its timeline.
+     * Both ends are host timestamps, so a skewed phone clock does not shift it; the view
+     * adds local time from when it first saw the item.
+     */
+    val elapsedAtObservationMs: Long,
+    val model: AidenImageGenerationModelLabel? = null
 )
 
 internal object AidenImageGenerationPlaceholderState {
     const val TOOL_NAME = "generate_image"
+    const val DISPLAY_IMAGE_TOOL_NAME = "display_image"
 
     /**
      * One placeholder per `generate_image` call that is running, or that finished while
@@ -172,22 +222,63 @@ internal object AidenImageGenerationPlaceholderState {
      */
     fun items(timeline: AidenGenerationTimeline?): List<AidenImageGenerationPlaceholderItem> {
         if (timeline == null || timeline.status != AidenGenerationTimelineStatus.RUNNING) return emptyList()
-        return timeline.steps.filter { it.isWatchedImageGeneration() }.map { step ->
+        val hostNow = latestHostTime(timeline)
+        return timeline.steps.filter {
+            it.isGenerateImage() &&
+                (it.status == AidenAgentStepStatus.RUNNING || it.status == AidenAgentStepStatus.COMPLETED)
+        }.map { step ->
             AidenImageGenerationPlaceholderItem(
                 id = step.toolCallId ?: step.id,
                 aspectRatio = AidenImageAspectRatio.fromDetail(step.detail),
-                runningSince = Instant.ofEpochMilli(step.updatedAt.toLong())
+                elapsedAtObservationMs = (hostNow - step.startedAt).coerceAtLeast(0.0).toLong(),
+                model = AidenImageGenerationModelLabel.fromTarget(step.target)
             )
         }
     }
 
-    /** The generation whose settled image plays the arrival reveal. */
-    fun arrivalRevealGenerationId(timeline: AidenGenerationTimeline?): String? =
-        timeline?.takeIf { t -> t.steps.any { it.isWatchedImageGeneration() } }?.generationId
+    /** The newest host timestamp the timeline carries (ms); elapsed time is measured against it. */
+    fun latestHostTime(timeline: AidenGenerationTimeline): Double =
+        timeline.steps.fold(maxOf(timeline.startedAt, timeline.finishedAt ?: 0.0)) { latest, step ->
+            maxOf(latest, step.startedAt, step.updatedAt, step.finishedAt ?: 0.0)
+        }
 
-    private fun AidenAgentStep.isWatchedImageGeneration(): Boolean =
-        kind == AidenAgentStep.Kind.TOOL && toolName == TOOL_NAME &&
-            (status == AidenAgentStepStatus.RUNNING || status == AidenAgentStepStatus.COMPLETED)
+    /**
+     * Updates the generations whose settled image plays the arrival reveal. A generation
+     * is armed once one of its `generate_image` calls completes; while none has (still
+     * running, failed, denied, cancelled) it is not armed, so a failed call never leaves
+     * a reveal behind.
+     */
+    fun armedArrivalReveals(armed: Set<String>, timeline: AidenGenerationTimeline?): Set<String> {
+        if (timeline == null) return armed
+        return if (timeline.steps.any { it.isGenerateImage() && it.status == AidenAgentStepStatus.COMPLETED }) {
+            armed + timeline.generationId
+        } else {
+            armed - timeline.generationId
+        }
+    }
+
+    /**
+     * The one attachment of a settled message that plays the arrival reveal: its first
+     * listed image (visual snapshots excluded). Attachments carry no tool association, so
+     * when the turn also completed a `display_image` call the generated image cannot be
+     * told apart and nothing reveals.
+     */
+    fun arrivalRevealAttachmentId(message: AidenChatMessage): String? {
+        if (message.role != AidenChatRole.ASSISTANT) return null
+        val steps = message.timeline?.steps ?: return null
+        if (steps.none { it.isGenerateImage() && it.status == AidenAgentStepStatus.COMPLETED }) return null
+        if (steps.any {
+                it.kind == AidenAgentStep.Kind.TOOL && it.toolName == DISPLAY_IMAGE_TOOL_NAME &&
+                    it.status == AidenAgentStepStatus.COMPLETED
+            }
+        ) return null
+        val visuals = message.visuals.orEmpty()
+        val visible = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
+        return aidenEligibleImageAttachments(visible, visuals).firstOrNull()?.id
+    }
+
+    private fun AidenAgentStep.isGenerateImage(): Boolean =
+        kind == AidenAgentStep.Kind.TOOL && toolName == TOOL_NAME
 }
 
 /** True while Android battery saver is on; tracks changes while composed. */
@@ -337,16 +428,14 @@ internal fun AidenImageGenerationPlaceholder(
 ) {
     val motion = AidenImagePlaceholderMotion.resolve(aidenReduceMotion(), aidenPowerSaveMode())
     val colors = remember(palette) { AidenScanColors(palette) }
-    // The first observed start; a later status change must not restart the clock.
-    val since = rememberSaveable(item.id) { item.runningSince.toEpochMilli() }
-    var now by remember { mutableStateOf(Instant.now()) }
-    LaunchedEffect(since) {
-        while (true) {
-            now = Instant.now()
-            delay(1_000)
-        }
+    // Local start of the call: first sighting minus the host-measured elapsed time. It only
+    // moves earlier, so a later timeline update (or the call completing) never restarts it.
+    var sinceMs by rememberSaveable(item.id) {
+        mutableLongStateOf(System.currentTimeMillis() - item.elapsedAtObservationMs)
     }
-    val elapsed = Duration.between(Instant.ofEpochMilli(since), now).seconds.coerceAtLeast(0)
+    LaunchedEffect(item.elapsedAtObservationMs) {
+        sinceMs = minOf(sinceMs, System.currentTimeMillis() - item.elapsedAtObservationMs)
+    }
     val description = stringResource(R.string.chat_image_generation_placeholder, item.aspectRatio.wire)
 
     Column(
@@ -369,16 +458,14 @@ internal fun AidenImageGenerationPlaceholder(
                 val still = AidenImagePlaceholderSpec.stillLensTop(heightPx)
                 AidenScanLens(colors, heightPx) { still }
             } else {
-                val periodMs = AidenImagePlaceholderSpec.periodMs(elapsed)
-                val transition = rememberInfiniteTransition(label = "aiden_image_scan")
-                val phase by transition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(tween(periodMs, easing = LinearEasing), RepeatMode.Restart),
-                    label = "aiden_image_scan_phase"
-                )
-                // Read only inside the layer/draw lambdas, so a frame never recomposes.
+                // A frame clock read only inside the layer lambdas: frames never recompose,
+                // and the phase is a continuous function of elapsed time.
+                var frameMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(Unit) {
+                    while (true) withFrameMillis { frameMs = System.currentTimeMillis() }
+                }
                 AidenScanLens(colors, heightPx) {
+                    val phase = AidenImagePlaceholderSpec.phase(frameMs - sinceMs)
                     AidenImagePlaceholderSpec.lensTop(AidenImagePlaceholderSpec.lensProgress(phase), heightPx)
                 }
             }
@@ -395,13 +482,32 @@ internal fun AidenImageGenerationPlaceholder(
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(Modifier.size(6.dp).background(palette.accent.copy(alpha = 0.9f), CircleShape))
-            Text(
-                text = AidenImagePlaceholderSpec.caption(elapsed),
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.secondary
-            )
+            AidenImageGenerationCaption(sinceMs = sinceMs, model = item.model, palette = palette)
         }
     }
+}
+
+/** The ticking caption, isolated so its once-a-second update recomposes only this text. */
+@Composable
+private fun AidenImageGenerationCaption(
+    sinceMs: Long,
+    model: AidenImageGenerationModelLabel?,
+    palette: AidenPalette
+) {
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    Text(
+        text = AidenImagePlaceholderSpec.caption((nowMs - sinceMs) / 1_000, model),
+        style = MaterialTheme.typography.labelSmall,
+        color = palette.secondary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 /** The live turn's image placeholders, each spaced below the activity above it. */
@@ -431,12 +537,16 @@ internal fun Modifier.aidenImageArrivalReveal(
     val colors = remember(palette) { AidenScanColors(palette) }
     val progress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        progress.animateTo(
-            1f,
-            if (reduceMotion) tween(AidenImagePlaceholderSpec.REDUCED_ARRIVAL_MS)
-            else tween(AidenImagePlaceholderSpec.ARRIVAL_MS, easing = AidenImagePlaceholderSpec.arrivalEasing)
-        )
-        onFinished()
+        // One shot: leaving composition mid-reveal ends it too, so it never replays.
+        try {
+            progress.animateTo(
+                1f,
+                if (reduceMotion) tween(AidenImagePlaceholderSpec.REDUCED_ARRIVAL_MS)
+                else tween(AidenImagePlaceholderSpec.ARRIVAL_MS, easing = AidenImagePlaceholderSpec.arrivalEasing)
+            )
+        } finally {
+            onFinished()
+        }
     }
     if (reduceMotion) {
         graphicsLayer { alpha = progress.value }

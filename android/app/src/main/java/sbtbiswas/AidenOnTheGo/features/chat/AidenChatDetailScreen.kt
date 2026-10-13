@@ -1482,7 +1482,9 @@ private fun AssistantMessageRow(
                 attachments = imageAttachments,
                 edge = AidenMessageMediaEdge.LEADING,
                 loadData = loadAttachmentImage,
-                revealsArrival = imageArrivalRevealGenerationId != null,
+                revealAttachmentId = imageArrivalRevealGenerationId?.let {
+                    AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
+                },
                 onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
             )
         }

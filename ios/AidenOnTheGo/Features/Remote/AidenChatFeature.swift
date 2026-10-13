@@ -3891,9 +3891,10 @@ final class AidenChatViewModel {
         case .timeline:
             if let timeline = payload.timeline {
                 activityTimeline = timeline
-                if let generationID = AidenImageGenerationPlaceholderState.arrivalRevealGenerationID(timeline) {
-                    imageArrivalRevealGenerationIDs.insert(generationID)
-                }
+                imageArrivalRevealGenerationIDs = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                    imageArrivalRevealGenerationIDs,
+                    after: timeline
+                )
             }
         case .approvalRequired:
             await restorePendingApproval(
@@ -5683,6 +5684,9 @@ private struct AidenSettledMessageRows: View, Equatable {
         let revealGenerationID = message.timeline.map(\.generationId).flatMap {
             imageArrivalRevealIDs.contains($0) ? $0 : nil
         }
+        let revealAttachmentID = revealGenerationID.flatMap { _ in
+            AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: message)
+        }
 
         return AidenMessageView(
             message: message,
@@ -5696,7 +5700,7 @@ private struct AidenSettledMessageRows: View, Equatable {
             onAskAbout: onAskAbout,
             forkActions: onFork == nil ? [] : forkActions,
             onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } },
-            revealsImageArrival: revealGenerationID != nil,
+            imageArrivalRevealAttachmentID: revealAttachmentID,
             onImageArrivalRevealed: revealGenerationID.map { generationID in
                 { model.finishImageArrivalReveal(generationID: generationID) }
             }
@@ -5717,8 +5721,8 @@ private struct AidenMessageView: View, Equatable {
     var onAskAbout: ((String) -> Void)? = nil
     var forkActions: [AidenChatForkMenuAction] = []
     var onFork: ((AidenChatForkMenuAction) -> Void)? = nil
-    /// Plays the one-shot arrival reveal over this message's generated image.
-    var revealsImageArrival = false
+    /// The generated image that plays the one-shot arrival reveal, if any.
+    var imageArrivalRevealAttachmentID: String? = nil
     var onImageArrivalRevealed: (() -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
@@ -5733,7 +5737,7 @@ private struct AidenMessageView: View, Equatable {
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
             lhs.forkActions == rhs.forkActions &&
             (lhs.onFork == nil) == (rhs.onFork == nil) &&
-            lhs.revealsImageArrival == rhs.revealsImageArrival
+            lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID
     }
 
     private var selectableText: String {
@@ -5891,17 +5895,13 @@ private struct AidenMessageView: View, Equatable {
             // Snapshots appear once, inline at their visual, never in the strip.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
-                let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
-                let imageAttachments = attachments.filter { attachment in
-                    AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
-                        && identifierCounts[attachment.id] == 1
-                }
+                let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
                 if !imageAttachments.isEmpty {
                     AidenMessageImageAttachmentsView(
                         attachments: imageAttachments,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
-                        revealsArrival: message.role == .assistant && revealsImageArrival,
+                        revealAttachmentID: imageArrivalRevealAttachmentID,
                         onArrivalRevealed: onImageArrivalRevealed
                     )
                 }
@@ -6271,7 +6271,8 @@ private struct AidenMessageImageAttachmentsView: View {
     let attachments: [AidenMessageAttachment]
     let edge: AidenMessageMediaEdge
     let loadData: (AidenMessageAttachment) async -> Data?
-    var revealsArrival = false
+    /// Only this attachment plays the arrival reveal; the others draw as usual.
+    var revealAttachmentID: String? = nil
     var onArrivalRevealed: (() -> Void)? = nil
     @State private var gallerySelection: AidenAttachmentGallerySelection?
     @State private var deckSelection = 0
@@ -6288,7 +6289,7 @@ private struct AidenMessageImageAttachmentsView: View {
                     showsBackground: false,
                     imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
                     imageAlignment: edge.alignment,
-                    revealsArrival: revealsArrival,
+                    revealsArrival: attachments[0].id == revealAttachmentID,
                     onArrivalRevealed: onArrivalRevealed
                 )
                 .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
@@ -6378,7 +6379,7 @@ private struct AidenMessageImageAttachmentsView: View {
             showsBackground: false,
             imageCornerRadius: AidenInlineCardDeckLayout.cardCornerRadius,
             imageAlignment: edge.alignment,
-            revealsArrival: revealsArrival,
+            revealsArrival: attachment.id == revealAttachmentID,
             onArrivalRevealed: onArrivalRevealed
         )
         .frame(width: width)

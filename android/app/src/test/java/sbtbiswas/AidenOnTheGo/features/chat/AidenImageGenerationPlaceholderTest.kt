@@ -8,8 +8,13 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenAgentActivityPresentation
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStep
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStepStatus
+import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
+import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
+import sbtbiswas.AidenOnTheGo.models.AidenChatRole
+import sbtbiswas.AidenOnTheGo.models.AidenChatVisual
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
+import sbtbiswas.AidenOnTheGo.models.AidenMessageAttachment
 
 class AidenImageGenerationPlaceholderTest {
     private fun imageStep(
@@ -17,7 +22,9 @@ class AidenImageGenerationPlaceholderTest {
         detail: String? = null,
         index: Int = 1,
         toolName: String = "generate_image",
-        updatedAt: Double = 2_000.0
+        startedAt: Double = 1_000.0,
+        updatedAt: Double = 2_000.0,
+        target: String? = null
     ) = AidenAgentStep(
         id = "tool-$index",
         order = index - 1,
@@ -26,10 +33,11 @@ class AidenImageGenerationPlaceholderTest {
         toolName = toolName,
         label = "Generate image",
         status = status,
-        startedAt = 1_000.0,
+        startedAt = startedAt,
         updatedAt = updatedAt,
         finishedAt = if (status == AidenAgentStepStatus.COMPLETED) updatedAt else null,
         contentOffset = 0,
+        target = target,
         detail = detail
     )
 
@@ -55,7 +63,7 @@ class AidenImageGenerationPlaceholderTest {
                 AidenImageGenerationPlaceholderItem(
                     id = "call-1",
                     aspectRatio = AidenImageAspectRatio.LANDSCAPE_16_9,
-                    runningSince = Instant.ofEpochMilli(4_000)
+                    elapsedAtObservationMs = 3_000
                 )
             ),
             items
@@ -126,30 +134,160 @@ class AidenImageGenerationPlaceholderTest {
         )
     }
 
+    private fun armed(vararg timelines: AidenGenerationTimeline): Set<String> =
+        timelines.fold(emptySet()) { armed, timeline ->
+            AidenImageGenerationPlaceholderState.armedArrivalReveals(armed, timeline)
+        }
+
     @Test
-    fun arrivalRevealIsArmedOnlyForGenerationsWatchedRunning() {
+    fun arrivalRevealIsArmedOnlyWhenAGenerateImageCallCompletes() {
+        assertEquals(emptySet<String>(), armed(timeline(listOf(imageStep(AidenAgentStepStatus.RUNNING)))))
         assertEquals(
-            "generation-1",
-            AidenImageGenerationPlaceholderState.arrivalRevealGenerationId(
-                timeline(listOf(imageStep(AidenAgentStepStatus.RUNNING)))
+            setOf("generation-1"),
+            armed(
+                timeline(listOf(imageStep(AidenAgentStepStatus.RUNNING))),
+                timeline(listOf(imageStep(AidenAgentStepStatus.COMPLETED)))
             )
+        )
+        // A phone that joins after the call finished still reveals the image.
+        assertEquals(
+            setOf("generation-1"),
+            armed(timeline(listOf(imageStep(AidenAgentStepStatus.COMPLETED)), AidenGenerationTimelineStatus.COMPLETED))
+        )
+    }
+
+    @Test
+    fun failedOrCancelledCallsNeverArmTheReveal() {
+        listOf(
+            AidenAgentStepStatus.FAILED,
+            AidenAgentStepStatus.BLOCKED,
+            AidenAgentStepStatus.CANCELLED,
+            AidenAgentStepStatus.AWAITING_APPROVAL
+        ).forEach { status ->
+            assertEquals(
+                status.name,
+                emptySet<String>(),
+                armed(
+                    timeline(listOf(imageStep(AidenAgentStepStatus.RUNNING))),
+                    timeline(listOf(imageStep(status)), AidenGenerationTimelineStatus.FAILED)
+                )
+            )
+        }
+        // Another generation's armed reveal survives an unrelated failed turn.
+        assertEquals(
+            setOf("generation-0"),
+            AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                setOf("generation-0"),
+                timeline(listOf(imageStep(AidenAgentStepStatus.FAILED)), AidenGenerationTimelineStatus.FAILED)
+            )
+        )
+    }
+
+    private fun image(id: String) =
+        AidenMessageAttachment(id = id, name = "$id.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10)
+
+    private fun settledMessage(
+        steps: List<AidenAgentStep>,
+        attachments: List<AidenMessageAttachment>,
+        visuals: List<AidenChatVisual>? = null
+    ) = AidenChatMessage(
+        id = "assistant-1",
+        role = AidenChatRole.ASSISTANT,
+        text = "Here it is.",
+        attachments = attachments,
+        visuals = visuals,
+        timeline = timeline(steps, AidenGenerationTimelineStatus.COMPLETED),
+        createdAt = Instant.ofEpochSecond(9)
+    )
+
+    @Test
+    fun onlyTheGeneratedImageRevealsNotVisualSnapshots() {
+        val message = settledMessage(
+            steps = listOf(imageStep(AidenAgentStepStatus.COMPLETED)),
+            attachments = listOf(image("visual-snapshot_chart"), image("chart-png"), image("generated")),
+            visuals = listOf(
+                AidenChatVisual(id = "ui-1", kind = "ui", title = "Chart", snapshotAttachmentId = "chart-png")
+            )
+        )
+        assertEquals("generated", AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message))
+    }
+
+    @Test
+    fun displayImageResultsAndFailedCallsDoNotReveal() {
+        // Attachments carry no tool association, so a turn that also displayed an image
+        // cannot single out the generated one: nothing reveals.
+        val mixed = settledMessage(
+            steps = listOf(
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 1),
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 2, toolName = "display_image")
+            ),
+            attachments = listOf(image("shown"), image("generated"))
+        )
+        assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(mixed))
+        val displayOnly = settledMessage(
+            steps = listOf(imageStep(AidenAgentStepStatus.COMPLETED, toolName = "display_image")),
+            attachments = listOf(image("shown"))
+        )
+        assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(displayOnly))
+        val failed = settledMessage(listOf(imageStep(AidenAgentStepStatus.FAILED)), listOf(image("other")))
+        assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(failed))
+    }
+
+    @Test
+    fun elapsedTimeUsesHostTimestampsNotThePhoneClock() {
+        // Started at 1s host time; the newest host time in the timeline is 13s, so the
+        // call has run 12s whatever the phone's clock says.
+        val items = AidenImageGenerationPlaceholderState.items(
+            timeline(
+                listOf(
+                    imageStep(AidenAgentStepStatus.RUNNING, index = 1, startedAt = 1_000.0, updatedAt = 3_000.0),
+                    imageStep(
+                        AidenAgentStepStatus.RUNNING, index = 2, toolName = "read_file",
+                        startedAt = 13_000.0, updatedAt = 13_000.0
+                    )
+                )
+            )
+        )
+        assertEquals(listOf(12_000L), items.map { it.elapsedAtObservationMs })
+        val skewed = AidenImageGenerationPlaceholderState.items(
+            timeline(listOf(imageStep(AidenAgentStepStatus.RUNNING, startedAt = 5_000.0, updatedAt = 5_000.0)))
+        )
+        assertEquals(listOf(0L), skewed.map { it.elapsedAtObservationMs })
+    }
+
+    @Test
+    fun captionNamesTheModelWhenTheHostSendsAValidTarget() {
+        val item = AidenImageGenerationPlaceholderState.items(
+            timeline(
+                listOf(imageStep(AidenAgentStepStatus.RUNNING, target = "openrouter/google/gemini-2.5-flash-image"))
+            )
+        ).single()
+        assertEquals(
+            "Generating · 12s · OpenRouter · google/gemini-2.5-flash-image",
+            AidenImagePlaceholderSpec.caption(12, item.model)
         )
         assertEquals(
-            "generation-1",
-            AidenImageGenerationPlaceholderState.arrivalRevealGenerationId(
-                timeline(listOf(imageStep(AidenAgentStepStatus.COMPLETED)), AidenGenerationTimelineStatus.COMPLETED)
-            )
+            "Still generating · 1m 05s · fal · fal-ai/flux",
+            AidenImagePlaceholderSpec.caption(65, AidenImageGenerationModelLabel.fromTarget("fal/fal-ai/flux"))
         )
-        assertNull(
-            AidenImageGenerationPlaceholderState.arrivalRevealGenerationId(
-                timeline(listOf(imageStep(AidenAgentStepStatus.AWAITING_APPROVAL)))
-            )
+        listOf(null, "", "no-slash", "/model", "replicate/", "a".repeat(200) + "/m", "fal/x\ny").forEach { target ->
+            assertNull(target.toString(), AidenImageGenerationModelLabel.fromTarget(target))
+        }
+        assertEquals("Generating · 12s", AidenImagePlaceholderSpec.caption(12, null))
+    }
+
+    @Test
+    fun lensPhaseStaysContinuousWhenThePassSlowsAtOneMinute() {
+        assertEquals(
+            AidenImagePlaceholderSpec.phase(59_999),
+            AidenImagePlaceholderSpec.phase(60_001),
+            1e-3f
         )
-        assertNull(
-            AidenImageGenerationPlaceholderState.arrivalRevealGenerationId(
-                timeline(listOf(imageStep(AidenAgentStepStatus.BLOCKED)))
-            )
-        )
+        // Each regime still completes one pass per its own period.
+        assertEquals(0.5f, AidenImagePlaceholderSpec.phase(1_400), 1e-6f)
+        val advance = AidenImagePlaceholderSpec.phase(72_600) - AidenImagePlaceholderSpec.phase(70_000)
+        assertEquals(0.5f, advance - kotlin.math.floor(advance), 1e-4f)
+        assertEquals(0f, AidenImagePlaceholderSpec.phase(-5_000), 0f)
     }
 
     @Test

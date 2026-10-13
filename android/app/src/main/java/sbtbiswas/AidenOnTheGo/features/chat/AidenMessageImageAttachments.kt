@@ -189,7 +189,8 @@ internal fun AidenMessageImageAttachments(
     attachments: List<AidenMessageAttachment>,
     edge: AidenMessageMediaEdge,
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,
-    revealsArrival: Boolean = false,
+    /** Only this attachment plays the arrival reveal; the others draw as usual. */
+    revealAttachmentId: String? = null,
     onArrivalRevealed: () -> Unit = {}
 ) {
     if (attachments.isEmpty()) return
@@ -213,7 +214,7 @@ internal fun AidenMessageImageAttachments(
                     .clickable { galleryStart = 0 },
                 alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
                 imageCornerRadius = 16.dp,
-                revealsArrival = revealsArrival,
+                revealsArrival = attachments.first().id == revealAttachmentId,
                 onArrivalRevealed = onArrivalRevealed
             )
         } else {
@@ -224,7 +225,7 @@ internal fun AidenMessageImageAttachments(
                 onSelectionChange = { selection = it },
                 onOpen = { galleryStart = selection },
                 loadData = loadData,
-                revealsArrival = revealsArrival,
+                revealAttachmentId = revealAttachmentId,
                 onArrivalRevealed = onArrivalRevealed
             )
         }
@@ -309,7 +310,7 @@ private fun AidenInlineImageCardDeck(
     onSelectionChange: (Int) -> Unit,
     onOpen: () -> Unit,
     loadData: suspend (AidenMessageAttachment) -> ByteArray?,
-    revealsArrival: Boolean = false,
+    revealAttachmentId: String? = null,
     onArrivalRevealed: () -> Unit = {}
 ) {
     var rawDrag by remember { mutableFloatStateOf(0f) }
@@ -388,7 +389,7 @@ private fun AidenInlineImageCardDeck(
                     attachment = attachment,
                     maximumPixelSize = 960,
                     loadData = loadData,
-                    revealsArrival = revealsArrival,
+                    revealsArrival = attachment.id == revealAttachmentId,
                     onArrivalRevealed = onArrivalRevealed,
                     alignment = if (edge == AidenMessageMediaEdge.TRAILING) Alignment.CenterEnd else Alignment.CenterStart,
                     modifier = Modifier

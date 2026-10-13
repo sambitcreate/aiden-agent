@@ -1653,8 +1653,8 @@ class AidenChatViewModel(
             AidenRemoteEventType.TIMELINE -> {
                 event.payload?.timeline?.let { timeline ->
                     _activityTimeline.value = timeline
-                    AidenImageGenerationPlaceholderState.arrivalRevealGenerationId(timeline)?.let { id ->
-                        _imageArrivalRevealGenerationIds.update { it + id }
+                    _imageArrivalRevealGenerationIds.update {
+                        AidenImageGenerationPlaceholderState.armedArrivalReveals(it, timeline)
                     }
                 }
             }

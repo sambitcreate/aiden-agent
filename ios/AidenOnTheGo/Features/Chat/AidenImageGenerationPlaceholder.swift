@@ -32,11 +32,26 @@ enum AidenImagePlaceholderSpec {
         elapsed >= longRunAfter ? longPeriod : period
     }
 
-    /// "Generating · 12s", then "Still generating · 1m 05s" after a minute.
-    static func caption(elapsed: TimeInterval) -> String {
+    /// Where the lens is in its pass, in [0, 1), after `elapsed` seconds. The
+    /// pass count accumulates across the slow-down at `longRunAfter`, so the
+    /// lens keeps its place instead of jumping when the period changes.
+    static func phase(elapsed: TimeInterval) -> Double {
+        let elapsed = elapsed.isFinite ? max(0, elapsed) : 0
+        let passes = elapsed < longRunAfter
+            ? elapsed / period
+            : longRunAfter / period + (elapsed - longRunAfter) / longPeriod
+        return passes - passes.rounded(.down)
+    }
+
+    /// "Generating · 12s", then "Still generating · 1m 05s" after a minute,
+    /// followed by " · <provider> · <model>" when the host named the model.
+    static func caption(elapsed: TimeInterval, model: AidenImageGenerationModelLabel? = nil) -> String {
         let seconds = elapsed.isFinite ? max(0, Int(elapsed.rounded(.down))) : 0
-        guard seconds >= Int(longRunAfter) else { return "Generating · \(seconds)s" }
-        return "Still generating · \(seconds / 60)m \(String(format: "%02d", seconds % 60))s"
+        let time = seconds < Int(longRunAfter)
+            ? "Generating · \(seconds)s"
+            : "Still generating · \(seconds / 60)m \(String(format: "%02d", seconds % 60))s"
+        guard let model else { return time }
+        return "\(time) · \(model.provider) · \(model.model)"
     }
 
     /// Lens travel progress (0 at the top, 1 past the bottom) for a phase in [0, 1).
@@ -121,15 +136,49 @@ enum AidenImagePlaceholderMotion: Equatable {
     }
 }
 
+/// The provider and model a `generate_image` step names in its `target`
+/// ("<provider>/<model id>", split on the first slash).
+struct AidenImageGenerationModelLabel: Equatable, Sendable {
+    static let maxTargetLength = 160
+    let provider: String
+    let model: String
+
+    init?(target: String?) {
+        guard let target, !target.isEmpty, target.count <= Self.maxTargetLength,
+              !target.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }),
+              let slash = target.firstIndex(of: "/")
+        else { return nil }
+        let provider = target[..<slash].trimmingCharacters(in: .whitespaces)
+        let model = target[target.index(after: slash)...].trimmingCharacters(in: .whitespaces)
+        guard !provider.isEmpty, !model.isEmpty else { return nil }
+        self.provider = Self.displayName(provider: provider)
+        self.model = model
+    }
+
+    /// The desktop's provider names; an unknown provider shows as sent.
+    private static func displayName(provider: String) -> String {
+        switch provider.lowercased() {
+        case "openrouter": "OpenRouter"
+        case "replicate": "Replicate"
+        case "fal": "fal"
+        default: provider
+        }
+    }
+}
+
 struct AidenImageGenerationPlaceholderItem: Equatable, Identifiable {
     let id: String
     let aspectRatio: AidenImageAspectRatio
-    /// Host time of the step's last status change (when it started running).
-    let runningSince: Date
+    /// Seconds the call had been running by the latest host time in its
+    /// timeline. Both ends are host timestamps, so a skewed phone clock does
+    /// not shift it; the view adds local time from when it first saw the item.
+    let elapsedAtObservation: TimeInterval
+    var model: AidenImageGenerationModelLabel? = nil
 }
 
 enum AidenImageGenerationPlaceholderState {
     static let toolName = "generate_image"
+    static let displayImageToolName = "display_image"
 
     /// One placeholder per `generate_image` call that is running, or that
     /// finished while the turn is still streaming: the image itself reaches the
@@ -137,24 +186,63 @@ enum AidenImageGenerationPlaceholderState {
     /// Calls waiting for approval, failed, denied or cancelled show none.
     static func items(_ timeline: AidenGenerationTimeline?) -> [AidenImageGenerationPlaceholderItem] {
         guard let timeline, timeline.status == .running else { return [] }
+        let hostNow = latestHostTime(timeline)
         return timeline.steps.compactMap { step in
             guard isGenerateImage(step), step.status == .running || step.status == .completed else { return nil }
             return AidenImageGenerationPlaceholderItem(
                 id: step.toolCallId ?? step.id,
                 aspectRatio: AidenImageAspectRatio(detail: step.detail),
-                runningSince: Date(timeIntervalSince1970: step.updatedAt / 1_000)
+                elapsedAtObservation: max(0, hostNow - step.startedAt) / 1_000,
+                model: AidenImageGenerationModelLabel(target: step.target)
             )
         }
     }
 
-    /// The generation whose settled image should play the arrival reveal: one
-    /// where this phone watched a `generate_image` call run.
-    static func arrivalRevealGenerationID(_ timeline: AidenGenerationTimeline?) -> String? {
-        guard let timeline else { return nil }
-        let watched = timeline.steps.contains { step in
-            isGenerateImage(step) && (step.status == .running || step.status == .completed)
+    /// The newest host timestamp the timeline carries (milliseconds). Elapsed
+    /// time is measured against it rather than the phone's clock.
+    static func latestHostTime(_ timeline: AidenGenerationTimeline) -> Double {
+        timeline.steps.reduce(max(timeline.startedAt, timeline.finishedAt ?? 0)) { latest, step in
+            max(latest, step.startedAt, step.updatedAt, step.finishedAt ?? 0)
         }
-        return watched ? timeline.generationId : nil
+    }
+
+    /// Updates the generations whose settled image should play the arrival
+    /// reveal. A generation is armed once one of its `generate_image` calls
+    /// completes; while none has (still running, failed, denied, cancelled)
+    /// it is not armed, so a failed call never leaves a reveal behind.
+    static func armedArrivalReveals(
+        _ armed: Set<String>,
+        after timeline: AidenGenerationTimeline?
+    ) -> Set<String> {
+        guard let timeline else { return armed }
+        var next = armed
+        if timeline.steps.contains(where: { isGenerateImage($0) && $0.status == .completed }) {
+            next.insert(timeline.generationId)
+        } else {
+            next.remove(timeline.generationId)
+        }
+        return next
+    }
+
+    /// The one attachment of a settled message that plays the arrival reveal:
+    /// its first strip image (visual snapshots excluded). Attachments carry no
+    /// tool association, so when the turn also completed a `display_image`
+    /// call the generated image cannot be told apart and nothing reveals.
+    static func arrivalRevealAttachmentID(in message: AidenChatMessage) -> String? {
+        guard message.role == .assistant, let steps = message.timeline?.steps,
+              steps.contains(where: { isGenerateImage($0) && $0.status == .completed }),
+              !steps.contains(where: { $0.kind == .tool && $0.toolName == displayImageToolName && $0.status == .completed })
+        else { return nil }
+        return stripImageAttachments(for: message).first?.id
+    }
+
+    /// The images the attachment strip draws, in order.
+    static func stripImageAttachments(for message: AidenChatMessage) -> [AidenMessageAttachment] {
+        let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
+        let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
+        return attachments.filter { attachment in
+            AidenMessageAttachmentPresentation.isDisplayableImage(attachment) && identifierCounts[attachment.id] == 1
+        }
     }
 
     private static func isGenerateImage(_ step: AidenAgentStep) -> Bool {
@@ -300,13 +388,17 @@ struct AidenImageGenerationPlaceholderView: View {
     @Environment(\.aidenLowPowerMode) private var lowPowerMode
     @Environment(\.scenePhase) private var scenePhase
     let item: AidenImageGenerationPlaceholderItem
-    /// The first observed start; a later status change must not restart the clock.
+    /// Local start of the call: first sighting minus the host-measured elapsed
+    /// time. It only ever moves earlier, so a later timeline update (or the
+    /// call completing) never restarts the clock.
     @State private var since: Date?
     @State private var livePulse = false
 
+    private var observedStart: Date { Date().addingTimeInterval(-item.elapsedAtObservation) }
+
     var body: some View {
         let motion = AidenImagePlaceholderMotion.resolve(reduceMotion: reduceMotion, lowPowerMode: lowPowerMode)
-        let start = since ?? item.runningSince
+        let start = since ?? observedStart
         let colors = AidenScanColors(palette: palette, scheme: colorScheme)
         VStack(alignment: .leading, spacing: 7) {
             GeometryReader { proxy in
@@ -320,10 +412,7 @@ struct AidenImageGenerationPlaceholderView: View {
                         )
                     } else {
                         TimelineView(.animation(minimumInterval: 1 / 60, paused: scenePhase != .active)) { context in
-                            let elapsed = context.date.timeIntervalSince(start)
-                            let period = AidenImagePlaceholderSpec.period(elapsed: elapsed)
-                            let phase = context.date.timeIntervalSinceReferenceDate
-                                .truncatingRemainder(dividingBy: period) / period
+                            let phase = AidenImagePlaceholderSpec.phase(elapsed: context.date.timeIntervalSince(start))
                             AidenScanLens(
                                 size: proxy.size,
                                 top: AidenImagePlaceholderSpec.lensTop(
@@ -353,8 +442,13 @@ struct AidenImageGenerationPlaceholderView: View {
                     .frame(width: 6, height: 6)
                     .opacity(livePulse ? 0.25 : 0.9)
                 TimelineView(.periodic(from: start, by: 1)) { context in
-                    Text(AidenImagePlaceholderSpec.caption(elapsed: context.date.timeIntervalSince(start)))
-                        .monospacedDigit()
+                    Text(AidenImagePlaceholderSpec.caption(
+                        elapsed: context.date.timeIntervalSince(start),
+                        model: item.model
+                    ))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 }
             }
             .font(.caption)
@@ -365,13 +459,17 @@ struct AidenImageGenerationPlaceholderView: View {
         .accessibilityLabel("Generating image, \(item.aspectRatio.rawValue)")
         .accessibilityIdentifier("aiden.imageGeneration.placeholder")
         .onAppear {
-            if since == nil { since = item.runningSince }
+            if since == nil { since = observedStart }
             if motion == .animated {
                 withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { livePulse = true }
             }
         }
         .onChange(of: motion) { _, newValue in
             if newValue == .still { withAnimation(nil) { livePulse = false } }
+        }
+        .onChange(of: item.elapsedAtObservation) {
+            let observed = observedStart
+            if let current = since, observed < current { since = observed }
         }
     }
 }
@@ -408,6 +506,10 @@ struct AidenImageArrivalReveal: ViewModifier {
             }
             .clipped()
             .onAppear(perform: play)
+            // The reveal can be armed after the image is already on screen.
+            .onChange(of: active) { _, isActive in
+                if isActive { play() }
+            }
     }
 
     private func play() {
