@@ -278,12 +278,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A durable terminal message can reach the cache before detached ownership is
   // cleared. During that handoff there is no longer a response to stop or steer.
   const cachedMessages = chat.data?.messages;
-  const lastCachedAssistantMessage = cachedMessages?.[cachedMessages.length - 1];
-  const lastAssistantIsCurrentRun =
-    lastCachedAssistantMessage?.role === "assistant" &&
-    detachedProjection &&
-    lastCachedAssistantMessage.timeline?.generationId === detachedProjection.streamId;
-  const visibleDetachedProjection = lastAssistantIsCurrentRun ? null : detachedProjection;
+  // A mirrored run (a phone's turn) can start while the cache still ends with
+  // the previous turn's reply, so only its own saved reply hides it; the
+  // observer clears it once a read holds that reply.
+  const lastCachedMessage = cachedMessages?.[cachedMessages.length - 1];
+  const terminalMessageCached =
+    lastCachedMessage?.role === "assistant" &&
+    (detachedProjection?.observed !== true ||
+      lastCachedMessage.timeline?.generationId === detachedProjection.streamId);
+  const visibleDetachedProjection = terminalMessageCached ? null : detachedProjection;
   // Run input is admitted only for the document that owns the run, so a
   // mirrored run (a phone's turn) offers Stop and queueing but not Steer.
   const observedRunVisible = visibleDetachedProjection?.observed === true;

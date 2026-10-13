@@ -98,6 +98,7 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
   /** A read that never completed; the next frame asks again. */
   let readOwed = false;
   let releasing = false;
+  let releaseGeneration = 0;
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
   let stopObserving: () => void = () => {};
 
@@ -232,18 +233,21 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
       }
       // The run's end normally follows within one frame batch; if it never
       // arrives, a final read replaces the mirror before it goes.
+      const release = ++releaseGeneration;
       releaseTimer = setTimeout(() => {
         releaseTimer = null;
         if (closed || !releasing) return;
         void read().then(() => {
-          // Recheck release authority: retain() might have revoked it while the read was pending.
-          if (releasing && !closed) close();
+          // A retain() during the read revokes this release, even if a newer
+          // release has started since.
+          if (!closed && releasing && release === releaseGeneration) close();
         });
       }, OBSERVED_RELEASE_GRACE_MS);
     },
     retain: () => {
       if (closed) return;
       releasing = false;
+      releaseGeneration += 1;
       if (releaseTimer !== null) clearTimeout(releaseTimer);
       releaseTimer = null;
     },
