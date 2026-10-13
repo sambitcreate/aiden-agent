@@ -134,7 +134,6 @@ interface AssistantResponseProps {
   onStreamHandoffComplete?: () => void;
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
-  richLinks?: boolean;
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
   fork?: MessageForkAction;
@@ -183,7 +182,6 @@ function AssistantResponse({
   streamComplete,
   onStreamHandoffComplete,
   readAloud,
-  richLinks = true,
   footer,
   fork,
   imageActions,
@@ -267,34 +265,41 @@ function AssistantResponse({
           timeline.steps.filter((step) => isToolStep(step) && !isQuestionnaireStep(step)),
         )
       : null;
+    // Same slots as the chronological layout below, with the prose keyed like
+    // its first text row, so the reply keeps its elements when the first tool
+    // step arrives and the layout switches.
     return (
       <>
-        <ActivityFeed timeline={activityTimeline} animate={streaming} />
-        {timeline?.steps.filter(isQuestionnaireStep).map((step) => (
-          <AskUserQuestionRecap key={step.id} recap={step.questionnaire} />
-        ))}
-        {subagentChips}
-        {showReasoning ? (
-          <ReasoningBlock
-            content={reasoning ?? ""}
-            streaming={streaming && !streamComplete}
-            active={active}
-            label={reasoningLabel}
-          />
-        ) : null}
-        {content ? (
-          <SafeMessageBubble
-            role="assistant"
-            content={content}
-            streaming={streaming}
-            streamComplete={streamComplete}
-            onStreamHandoffComplete={onStreamHandoffComplete}
-            readAloud={readAloud}
-            richLinks={richLinks}
-            footer={footer}
-            fork={fork}
-          />
-        ) : null}
+        {null /* the chronological layout's leading subagent slot */}
+        {[
+          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
+            <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
+          )) ?? []),
+          subagentChips ? <React.Fragment key="subagents">{subagentChips}</React.Fragment> : null,
+          showReasoning ? (
+            <ReasoningBlock
+              key="reasoning"
+              content={reasoning ?? ""}
+              streaming={streaming && !streamComplete}
+              active={active}
+              label={reasoningLabel}
+            />
+          ) : null,
+          content ? (
+            <SafeMessageBubble
+              key="text-0"
+              role="assistant"
+              content={content}
+              streaming={streaming}
+              streamComplete={streamComplete}
+              onStreamHandoffComplete={onStreamHandoffComplete}
+              readAloud={readAloud}
+              footer={footer}
+              fork={fork}
+            />
+          ) : null,
+        ]}
         {media}
         {!content ? proselessActions(footer, fork) : null}
         {visualNodes(slots.trailing)}
@@ -362,7 +367,6 @@ function AssistantResponse({
             showCopy={isLastText}
             copyText={content}
             readAloud={isLastText ? readAloud : undefined}
-            richLinks={richLinks}
             footer={isLastText ? footer : undefined}
             fork={isLastText ? fork : undefined}
           />
@@ -394,9 +398,14 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 
 interface SettledMessageRowProps {
   chatId: string;
-  message: ChatMessage;
+  /** Absent only for the in-flight reply, which passes `live` instead. */
+  message?: ChatMessage;
+  /**
+   * The in-flight reply. It renders in the same row component, under the key
+   * its persisted message will take, so the finished reply settles in place.
+   */
+  live?: AssistantResponseProps;
   readAloud?: ReadAloudActionProps;
-  richLinks: boolean;
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Stable across renders so settled rows stay memoized. */
@@ -422,8 +431,8 @@ interface SettledMessageRowProps {
 const SettledMessageRow = React.memo(function SettledMessageRow({
   chatId,
   message,
+  live,
   readAloud,
-  richLinks,
   subagentsEnabled,
   onOpenSubagent,
   onFork,
@@ -434,23 +443,23 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   uiVisuals,
   renderSettledUiVisual,
 }: SettledMessageRowProps) {
+  const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
-    () => new Map((message.htmlArtifactPlacements ?? []).map((p) => [p.mediaId, p.toolCallId])),
-    [message.htmlArtifactPlacements],
+    () => new Map((placements ?? []).map((p) => [p.mediaId, p.toolCallId])),
+    [placements],
   );
   const wideVisuals = React.useMemo(
-    () =>
-      new Set(
-        (message.htmlArtifactPlacements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : [])),
-      ),
-    [message.htmlArtifactPlacements],
+    () => new Set((placements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : []))),
+    [placements],
   );
   const renderUiVisual = React.useCallback<RenderUiVisual>(
-    (visual) => renderSettledUiVisual?.(visual, message),
+    (visual) => (message ? renderSettledUiVisual?.(visual, message) : null),
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
+    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant")) {
+      return undefined;
+    }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
     return {
       onFork: () => onFork(message.id, position),
@@ -459,15 +468,19 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
         : {}),
       disabledReason: forkDisabledReason,
     };
-  }, [forkDisabledReason, message.id, message.role, onFork, onForkWithSummary]);
+  }, [forkDisabledReason, message, onFork, onForkWithSummary]);
+  const assistant = Boolean(live) || message?.role === "assistant";
   const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
+  const storedImagePlacements = message?.imagePlacements;
   const imagePlacements = React.useMemo(
-    () => new Map((message.imagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
-    [message.imagePlacements],
+    () => new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
+    [storedImagePlacements],
   );
   const row = (
     <div className="flex min-w-0 flex-col gap-3">
-      {message.role === "assistant" ? (
+      {live ? (
+        <AssistantResponse {...live} streaming />
+      ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
             content={message.content}
@@ -476,7 +489,6 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             // Snapshots exist for phones; this desktop draws the visual itself.
             attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
-            richLinks={richLinks}
             footer={settledTurnFooter(message)}
             fork={fork}
             imageActions={imageActions}
@@ -508,9 +520,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       )}
     </div>
   );
-  if (!fork) return row;
+  // A reply keeps its wrapper before it can fork, so settling does not remount it.
+  if (!fork && !assistant) return row;
   return (
-    <MessageForkContextMenu action={fork} kind={message.role === "user" ? "edit" : "fork"}>
+    <MessageForkContextMenu action={fork} kind={assistant ? "fork" : "edit"}>
       {row}
     </MessageForkContextMenu>
   );
@@ -557,15 +570,16 @@ function scheduleUiVisualStateSave(chatId: string, messageId: string, visualId: 
   );
 }
 
-export function richLinkHandoffDuplicateMessageId(
-  messages: readonly ChatMessage[],
-  streamingText: string | null,
-  streamComplete: boolean,
-  persistedHandoffMessageId: string | null,
-): string | null {
-  if (!streamComplete || streamingText === null || persistedHandoffMessageId === null) return null;
-  const message = messages.find((candidate) => candidate.id === persistedHandoffMessageId);
-  return message?.role === "assistant" && message.content === streamingText ? message.id : null;
+/**
+ * A reply is keyed by the message it answers, which is known before the reply
+ * is persisted: the live row and its saved message share one React identity.
+ */
+function replyRowKey(previous: ChatMessage | undefined): string {
+  return `reply:${previous?.id ?? "start"}`;
+}
+
+function transcriptRowKey(message: ChatMessage, previous: ChatMessage | undefined): string {
+  return message.role === "assistant" ? replyRowKey(previous) : `message:${message.id}`;
 }
 
 export function MessageList({
@@ -616,6 +630,10 @@ export function MessageList({
     [],
   );
   const transcriptRef = React.useRef<HTMLDivElement | null>(null);
+  const settledReplyKeysRef = React.useRef<ReadonlySet<string>>(new Set());
+  const liveKeyRef = React.useRef<{ base: string; key: string } | null>(null);
+  const handedOffKeysRef = React.useRef(new Map<string, string>());
+  const liveRunRef = React.useRef<{ promptId: string; handoffId: string | null } | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -626,14 +644,34 @@ export function MessageList({
   }, [messages]);
   const liveAttachments = React.useMemo(() => {
     const attachments: Attachment[] = [];
+    const seenIds = new Set<string>();
+
+    // Add attachments from streaming artifacts that aren't persisted elsewhere
     for (const artifact of streamingArtifacts) {
       if (!isChatImageArtifact(artifact)) continue;
       if (!persistedAttachmentIds.has(artifact.attachment.id)) {
         attachments.push(artifact.attachment);
+        seenIds.add(artifact.attachment.id);
       }
     }
+
+    // During handoff, include attachments from the persisted message that's being suppressed
+    // so they're shown exactly once in the live row instead of disappearing
+    if (persistedHandoffMessageId) {
+      const persistedMessage = messages.find((m) => m.id === persistedHandoffMessageId);
+      if (persistedMessage?.attachments) {
+        for (const attachment of persistedMessage.attachments) {
+          // Only add if not already included from streaming artifacts
+          if (!seenIds.has(attachment.id)) {
+            attachments.push(attachment);
+            seenIds.add(attachment.id);
+          }
+        }
+      }
+    }
+
     return attachments;
-  }, [persistedAttachmentIds, streamingArtifacts]);
+  }, [persistedAttachmentIds, streamingArtifacts, persistedHandoffMessageId, messages]);
   // While the streaming row is still mounted its live HTML cards stay exactly
   // where they appeared; the persisted copies wait hidden so the handoff is a
   // single atomic swap instead of an unmount/remount flash in two frames.
@@ -650,12 +688,6 @@ export function MessageList({
       liveHtmlArtifacts.length > 0 ||
       streamingUiVisuals.length > 0 ||
       streamingUiDrafts.size > 0,
-  );
-  const richLinkHandoffDuplicateId = richLinkHandoffDuplicateMessageId(
-    messages,
-    streamingText,
-    Boolean(streamComplete),
-    persistedHandoffMessageId,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -803,14 +835,108 @@ export function MessageList({
   const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
   const unforkablePromptId =
     forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
+  // The persisted copy of the reply still on screen waits until the live row
+  // hands over, then takes the live row's key: one reply, settled in place.
+  const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
+  const settlingIndex = settlingMessageId
+    ? messages.findIndex((message) => message.id === settlingMessageId)
+    : -1;
+  // The live row stands where its saved message will be, keyed by the message
+  // it answers: the prompt it started from stays its key while steering
+  // guidance or a queued prompt is saved before the handoff. A run whose
+  // handoff has finished gives way to the next one.
+  if (!streamingRowVisible || (liveRunRef.current?.handoffId && liveRunRef.current.handoffId !== settlingMessageId)) {
+    liveRunRef.current = null;
+  }
+  const startedFrom = liveRunRef.current
+    ? messages.find((message) => message.id === liveRunRef.current?.promptId)
+    : undefined;
+  const promptMessageForLiveRow =
+    startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+  // Every saved row's key is settled before the live row picks its own, so the
+  // two never collide in one render.
+  const settledRowKeys = new Map<string, string>();
+  const settledReplyKeys = new Set<string>();
+  {
+    let previous: ChatMessage | undefined;
+    for (const message of messages) {
+      if (message.id !== settlingMessageId) {
+        const key = handedOffKeysRef.current.get(message.id) ?? transcriptRowKey(message, previous);
+        settledRowKeys.set(message.id, key);
+        if (message.role === "assistant") settledReplyKeys.add(key);
+      }
+      previous = message;
+    }
+  }
+  const liveBaseKey = replyRowKey(promptMessageForLiveRow);
+  let liveKey = liveBaseKey;
+  if (streamingRowVisible) {
+    if (!liveRunRef.current && promptMessageForLiveRow) {
+      liveRunRef.current = { promptId: promptMessageForLiveRow.id, handoffId: null };
+    }
+    if (liveRunRef.current && settlingMessageId) liveRunRef.current.handoffId = settlingMessageId;
+    const held = liveKeyRef.current;
+    if (held?.base === liveBaseKey && !settledReplyKeys.has(held.key)) {
+      liveKey = held.key;
+    } else {
+      // A new reply to a prompt that already has a saved reply (a regenerated
+      // answer) starts fresh instead of inheriting that reply's open sections,
+      // and a saved reply that arrives without taking the live row's place (its
+      // text differs from what streamed) leaves the live row a key of its own.
+      for (
+        let n = 1;
+        settledReplyKeysRef.current.has(liveKey) || settledReplyKeys.has(liveKey);
+        n += 1
+      ) {
+        liveKey = `${liveBaseKey}~${n}`;
+      }
+    }
+    liveKeyRef.current = { base: liveBaseKey, key: liveKey };
+    if (settlingMessageId) handedOffKeysRef.current.set(settlingMessageId, liveKey);
+  } else {
+    liveKeyRef.current = null;
+  }
+  const liveRow = streamingRowVisible ? (
+    <SettledMessageRow
+      key={liveKey}
+      live={{
+        content: streamingText ?? "",
+        timeline,
+        reasoning: streamingReasoning,
+        attachments: liveAttachments,
+        subagentChips:
+          subagentsEnabled && liveSubagents.length > 0 ? (
+            <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+          ) : undefined,
+        streamComplete,
+        onStreamHandoffComplete,
+        visuals: htmlArtifactsByAnchor.get("streaming"),
+        visualPlacements: streamingArtifactPlacements,
+        imagePlacements: streamingArtifactPlacements,
+        wideVisuals: streamingWideVisuals,
+        visualDrafts: streamingVisualDrafts,
+        renderVisual,
+        uiVisuals: streamingUiVisuals,
+        uiDrafts: streamingUiDrafts,
+        renderUiVisual: renderLiveUiVisual,
+      }}
+      chatId={chatId}
+      subagentsEnabled={subagentsEnabled}
+      onOpenSubagent={onOpenSubagent}
+    />
+  ) : null;
+
   for (const message of messages) {
+    if (message.id === settlingMessageId) {
+      transcriptRows.push(liveRow);
+      continue;
+    }
     transcriptRows.push(
       <SettledMessageRow
-        key={`message:${message.id}`}
+        key={settledRowKeys.get(message.id)}
         chatId={chatId}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
-        richLinks={message.id !== richLinkHandoffDuplicateId}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
@@ -827,35 +953,10 @@ export function MessageList({
     }
   }
 
-  if (streamingRowVisible) {
-    transcriptRows.push(
-      <div key="streaming" className="flex min-w-0 flex-col gap-3">
-        <AssistantResponse
-          content={streamingText ?? ""}
-          timeline={timeline}
-          reasoning={streamingReasoning}
-          attachments={liveAttachments}
-          subagentChips={
-            subagentsEnabled && liveSubagents.length > 0 ? (
-              <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-            ) : undefined
-          }
-          streaming
-          streamComplete={streamComplete}
-          onStreamHandoffComplete={onStreamHandoffComplete}
-          visuals={htmlArtifactsByAnchor.get("streaming")}
-          visualPlacements={streamingArtifactPlacements}
-          imagePlacements={streamingArtifactPlacements}
-          wideVisuals={streamingWideVisuals}
-          visualDrafts={streamingVisualDrafts}
-          renderVisual={renderVisual}
-          uiVisuals={streamingUiVisuals}
-          uiDrafts={streamingUiDrafts}
-          renderUiVisual={renderLiveUiVisual}
-        />
-      </div>,
-    );
-  }
+  if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
+  React.useLayoutEffect(() => {
+    settledReplyKeysRef.current = settledReplyKeys;
+  });
 
   return (
     <MessageAttachmentPreviewProvider>

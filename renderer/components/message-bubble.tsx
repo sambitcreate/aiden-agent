@@ -1,7 +1,7 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
-import type * as React from "react";
+import * as React from "react";
 import { Callout, ErrorBoundary, Text } from "./ui";
 import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
@@ -34,8 +34,6 @@ export interface MessageBubbleProps {
   copyText?: string;
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
-  /** Disable rich previews for a duplicate transcript copy during handoff. */
-  richLinks?: boolean;
   /** Settled turn facts rendered at the trailing edge of the action row. */
   footer?: React.ReactNode;
   /** Fork from a settled reply, or edit a sent prompt in a fork. */
@@ -65,10 +63,14 @@ export function MessageBubble({
   showCopy = true,
   copyText,
   readAloud,
-  richLinks = true,
   footer,
   fork,
 }: MessageBubbleProps) {
+  // A reply first drawn while streaming keeps that one Markdown tree after it
+  // settles, so its blocks, code, and links stay the same elements.
+  const [revealed, setRevealed] = React.useState(Boolean(streaming));
+  if (streaming && !revealed) setRevealed(true);
+
   if (role === "user") {
     return (
       <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
@@ -117,24 +119,23 @@ export function MessageBubble({
   }
 
   return (
-    <RichLinkBudget
-      key={streaming ? "streaming" : "settled"}
-      limit={MAX_RICH_LINKS_PER_MESSAGE}
-    >
+    <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
       <div className="group flex w-full">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
         {attachments && attachments.length > 0 ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {streaming ? (
+        {revealed ? (
           <StreamingMarkdownReveal
             content={content}
-            complete={streamComplete}
+            // A reply that stops streaming (it settled, or a tool step closed
+            // this text) finishes its reveal in the same tree.
+            complete={streaming ? streamComplete : true}
             onHandoffComplete={onStreamHandoffComplete}
-            richLinks={richLinks}
+            richLinks
           />
         ) : (
-          <Markdown content={content} richLinks={richLinks} />
+          <Markdown content={content} richLinks />
         )}
         {content && showCopy ? (
           <MessageActions

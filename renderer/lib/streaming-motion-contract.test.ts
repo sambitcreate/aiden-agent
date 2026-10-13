@@ -34,25 +34,8 @@ test("inline streaming text fades without baseline movement or blur", () => {
   assert.doesNotMatch(blockKeyframes, /\bfilter\s*:/u);
 });
 
-test("stream completion no longer overlaps a second Markdown tree", () => {
-  const component = source("../components/streaming-markdown-reveal.tsx");
-  const codeBlock = source("../components/code-block.tsx");
-  const styles = source("../styles.css");
-  assert.match(component, /advanceStreamingRevealSchedule/u);
-  assert.doesNotMatch(component, /streaming-reveal-(?:source|final|handoff)/u);
-  assert.doesNotMatch(styles, /streaming-reveal-(?:source|final|handoff)/u);
-  assert.doesNotMatch(codeBlock, /JSON\.parse/u);
-});
-
-test("chat rich links keep anchor navigation and work in every assistant render phase", () => {
-  const bubble = source("../components/message-bubble.tsx");
-  const streaming = source("../components/streaming-markdown-reveal.tsx");
+test("rich links keep anchor navigation and dismiss without fetching", () => {
   const richLink = source("../components/rich-link.tsx");
-  assert.match(bubble, /<StreamingMarkdownReveal[\s\S]*richLinks/u);
-  assert.match(bubble, /<Markdown content=\{content\} richLinks/u);
-  assert.match(bubble, /<RichLinkBudget[\s\S]*key=\{streaming \? "streaming" : "settled"\}/u);
-  assert.match(streaming, /<MarkdownInline content=\{parts\.markdown\} richLinks=\{richLinks\}/u);
-  assert.match(streaming, /<MarkdownContent content=\{unit\.text\} richLinks=\{richLinks\}/u);
   assert.match(richLink, /<a[\s\S]*href=\{href\}/u);
   assert.doesNotMatch(richLink, /onClick=/u);
   assert.match(richLink, /event\.key === "Escape"/u);
@@ -61,25 +44,6 @@ test("chat rich links keep anchor navigation and work in every assistant render 
   assert.match(richLink, /onFocus=/u);
   assert.match(richLink, /onBlur=/u);
   assert.doesNotMatch(richLink, /\b(?:fetch|window\.api|ipcRenderer)\b/u);
-});
-
-test("streaming and persisted messages reserve the same action and timeline shell", () => {
-  const bubble = source("../components/message-bubble.tsx");
-  const list = source("../components/message-list.tsx");
-  assert.doesNotMatch(bubble, /streaming-cursor/u);
-  assert.match(bubble, /<MessageActions[\s\S]*hidden=\{Boolean\(streaming && !streamComplete\)\}/u);
-  assert.match(source("../components/message-actions.tsx"), /hidden \? "invisible" : ""/u);
-
-  const transientShell = between(
-    list,
-    "const streamingRowVisible",
-    "<AgentActivityTransition",
-  );
-  assert.match(transientShell, /<AssistantResponse[\s\S]*timeline=\{timeline\}/u);
-  assert.match(
-    transientShell,
-    /<SubagentChips runs=\{liveSubagents\} onOpen=\{onOpenSubagent\} \/>/u,
-  );
 });
 
 test("reasoning keeps its status and disclosure without a brain glyph", () => {

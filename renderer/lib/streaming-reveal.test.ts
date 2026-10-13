@@ -95,9 +95,10 @@ test("withholds ambiguous starters while previewing open code with a stable bloc
   assert.equal(closedClosingFence[0]?.text, beforeClosingFence[0]?.text);
   assert.equal(beforeClosingFence[0]?.text, "```ts\nconst answer = 1;\n```\n");
   // While open, the fence exposes its raw code so it can render unhighlighted;
-  // a stable closing fence hands it back to the highlighted Markdown path.
+  // once it closes the same code is marked settled, ready to highlight in place.
   assert.deepEqual(beforeClosingFence[0]?.openCode, { code: "const answer = 1;\n", lang: "ts" });
   assert.equal(closedClosingFence[0]?.openCode, undefined);
+  assert.deepEqual(closedClosingFence[0]?.fence, beforeClosingFence[0]?.openCode);
   assert.deepEqual(units("~~~\nplain\n")[0]?.openCode, { code: "plain\n" });
 
   const longerFence = units("````md\n```not a closing fence\n````");
