@@ -866,3 +866,23 @@ test("a score change that fails to save says so and clears the preview", async (
   await waitFor(() => assert.equal(suggestions().length, 0));
   assert.equal(server.settings().modelPadMetric, undefined);
 });
+
+test("a score change from the chip that fails to save moves focus to Arrange as the chip goes", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement }, failWrites: true });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const chip = await screen.findByRole("button", { name: /^Height: Coding score/u });
+  fireEvent.keyDown(chip, { key: "Enter" });
+  // General has scores, so the preview would follow it, but the save fails and ends it.
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "General" }));
+
+  await screen.findByText("Aiden couldn’t save your Model Pad.");
+  await waitFor(() => assert.ok(!screen.queryByRole("button", { name: /^Height:/u })));
+  await waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole("button", { name: "Arrange" }),
+      `focus is on Arrange, not ${document.activeElement?.outerHTML.slice(0, 120)}`,
+    ),
+  );
+});

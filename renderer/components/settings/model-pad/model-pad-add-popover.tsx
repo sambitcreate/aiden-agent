@@ -20,10 +20,15 @@ import {
   type ModelEntry,
 } from "../../../lib/model-picker-data";
 
-/** Keeps provider → name order: a row either matches the search or is hidden. */
+/**
+ * A row matches when every word of the search appears in its name, provider or
+ * model id, so "nova acme" finds Nova from Acme. Matches score 1 and the rest
+ * 0, which keeps the provider → name order.
+ */
 function filterAddRow(_value: string, search: string, keywords?: string[]): number {
-  const term = search.trim().toLocaleLowerCase();
-  return keywords?.some((keyword) => keyword.toLocaleLowerCase().includes(term)) ? 1 : 0;
+  const haystack = (keywords ?? []).join(" ").toLocaleLowerCase();
+  const terms = search.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+  return terms.every((term) => haystack.includes(term)) ? 1 : 0;
 }
 
 const AddRow = React.memo(function AddRow({
@@ -80,6 +85,7 @@ export function ModelPadAddPopover({
   recentEntries,
   placedValues,
   loading,
+  recentReady,
   onToggle,
 }: {
   triggerRef?: React.Ref<HTMLButtonElement>;
@@ -90,6 +96,8 @@ export function ModelPadAddPopover({
   /** Values of the models on the Pad. */
   placedValues: ReadonlySet<string>;
   loading: boolean;
+  /** Whether `recentEntries` has loaded (models and pinned/recent history). */
+  recentReady: boolean;
   onToggle: (entry: ModelEntry) => void;
 }) {
   // One stable toggle for every row, so a row re-renders only when its own state changes.
@@ -101,13 +109,16 @@ export function ModelPadAddPopover({
   const [query, setQuery] = React.useState("");
   const [open, setOpen] = React.useState(false);
   // Recent keeps the rows it opened with until the list closes: toggling one
-  // off the list must not remove its row, or the highlight would jump to
-  // another model and a second Enter would add that one instead. The rows are
-  // only picked up later when there were none yet (still loading on open).
+  // must neither remove nor add a row, or the highlight would jump to another
+  // model and a second Enter would toggle that one instead. Only a list opened
+  // before its data loaded picks the rows up once, when they arrive.
   const [shownRecent, setShownRecent] = React.useState<readonly ModelEntry[]>([]);
+  const [awaitingRecent, setAwaitingRecent] = React.useState(false);
   React.useEffect(() => {
-    if (open && shownRecent.length === 0 && recentEntries.length > 0) setShownRecent(recentEntries);
-  }, [open, shownRecent.length, recentEntries]);
+    if (!open || !awaitingRecent || !recentReady) return;
+    setAwaitingRecent(false);
+    setShownRecent(recentEntries);
+  }, [open, awaitingRecent, recentReady, recentEntries]);
   const searching = query.trim().length > 0;
   const sorted = React.useMemo(() => sortModelsByProviderAndName(entries), [entries]);
   // Recent is for browsing; a search looks through every model once.
@@ -119,6 +130,7 @@ export function ModelPadAddPopover({
       onOpenChange={(next) => {
         setOpen(next);
         setShownRecent(next ? recentEntries : []);
+        setAwaitingRecent(next && !recentReady);
         if (!next) setQuery("");
       }}
     >

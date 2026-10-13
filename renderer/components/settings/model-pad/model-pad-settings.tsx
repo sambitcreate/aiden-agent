@@ -217,6 +217,7 @@ export function ModelPadSettings() {
   const padRef = React.useRef<HTMLDivElement | null>(null);
   const canvasRef = React.useRef<HTMLDivElement | null>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  const headerRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -257,6 +258,8 @@ export function ModelPadSettings() {
     // Watch the body and scrollport only; observing the canvas height (square +
     // suggestion bar) would feed the bar back into the square size.
     observer.observe(body);
+    // The header wraps on a narrow card (and the chip comes and goes), moving the canvas down.
+    if (headerRef.current) observer.observe(headerRef.current);
     if (scrollport) observer.observe(scrollport);
     measure();
     window.addEventListener("resize", schedule);
@@ -759,7 +762,7 @@ export function ModelPadSettings() {
     });
   };
 
-  const changeMetric = (metric: ModelPadMetric, from: "menu" | "chip" = "menu") => {
+  const changeMetric = (metric: ModelPadMetric) => {
     if (metric === benchmarkMetric) return;
     savePadPreferences({ modelPadMetric: metric }).catch(() => {
       toast.error(SAVE_ERROR_MESSAGE);
@@ -767,12 +770,7 @@ export function ModelPadSettings() {
       setSuggestionPreview(undefined);
     });
     // An open preview follows the new score; focus stays where it is.
-    const shown = suggestionPreview ? previewSuggestions({ metric, focus: false }) : 0;
-    // The chip shows only for benchmark heights or a preview. When neither is
-    // left, the chip goes away with focus on it; Arrange takes it instead.
-    if (from === "chip" && !(placedCount > 0 && hasBenchmarkHeight) && shown === 0) {
-      focusArrangeWhenChipHidesRef.current = true;
-    }
+    if (suggestionPreview) previewSuggestions({ metric, focus: false });
   };
 
   /** Keep focus near the suggestions once the one that had it goes away. */
@@ -836,19 +834,20 @@ export function ModelPadSettings() {
     );
   };
 
-  const focusArrangeWhenChipHidesRef = React.useRef(false);
-  React.useEffect(() => {
-    if (showMetricChip || !focusArrangeWhenChipHidesRef.current) return;
-    focusArrangeWhenChipHidesRef.current = false;
+  /**
+   * The chip hides once no visible height comes from a benchmark and no
+   * preview is open (a score with no suggestions, a failed save, Dismiss…).
+   * If it or its menu held focus, Arrange takes it.
+   */
+  const focusArrangeForGoneChip = React.useCallback(() => {
     const arrange = arrangeButtonRef.current;
     arrange?.focus();
     // The chip's closing menu can still restore focus to its gone trigger; take it back once.
-    const timer = setTimeout(() => {
+    setTimeout(() => {
       const active = document.activeElement;
       if (!active || active === document.body || !active.isConnected) arrange?.focus();
     }, 0);
-    return () => clearTimeout(timer);
-  }, [showMetricChip]);
+  }, []);
 
   const dismissSuggestions = () => {
     setSuggestionPreview(undefined);
@@ -1051,7 +1050,7 @@ export function ModelPadSettings() {
   return (
     <>
       <FieldSet className="model-pad-fieldset">
-        <div className="model-pad-header">
+        <div ref={headerRef} className="model-pad-header">
           {placedCount > 0 ? (
             <span className="text-small text-secondary tabular-nums">
               {`${placedCount} model${placedCount === 1 ? "" : "s"}`}
@@ -1070,37 +1069,41 @@ export function ModelPadSettings() {
           {showMetricChip ? (
             <ModelPadMetricChip
               metric={benchmarkMetric}
-              onMetricChange={(metric) => changeMetric(metric, "chip")}
+              onMetricChange={changeMetric}
+              onRemovedWithFocus={focusArrangeForGoneChip}
             />
           ) : null}
-          <span className="flex-1" />
-          <ModelPadAddPopover
-            triggerRef={addButtonRef}
-            entries={entries}
-            recentEntries={recentToAdd}
-            placedValues={placedValues}
-            loading={loading}
-            onToggle={toggleModel}
-          />
-          <ModelPadArrangeMenu
-            triggerRef={arrangeButtonRef}
-            metric={benchmarkMetric}
-            onMetricChange={(metric) => changeMetric(metric)}
-            suggestUnavailableReason={suggestUnavailableReason}
-            onSuggest={() => previewSuggestions()}
-            paceReadyCount={measuredPace.ready}
-            paceUnavailableReason={measuredPace.reason}
-            onPace={setPaceFromMeasuredSpeed}
-            onCloseAutoFocus={(event) => {
-              if (!keepFocusOnMenuCloseRef.current) return;
-              keepFocusOnMenuCloseRef.current = false;
-              event.preventDefault();
-            }}
-          />
-          <ModelPadMoreMenu
-            removeAllUnavailableReason={placedCount === 0 ? "The Pad is empty" : undefined}
-            onRemoveAll={removeAll}
-          />
+          {/* The actions wrap together and stay right-aligned on a narrow card. */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <ModelPadAddPopover
+              triggerRef={addButtonRef}
+              entries={entries}
+              recentEntries={recentToAdd}
+              placedValues={placedValues}
+              loading={loading}
+              recentReady={!loading && preferencesReady}
+              onToggle={toggleModel}
+            />
+            <ModelPadArrangeMenu
+              triggerRef={arrangeButtonRef}
+              metric={benchmarkMetric}
+              onMetricChange={changeMetric}
+              suggestUnavailableReason={suggestUnavailableReason}
+              onSuggest={() => previewSuggestions()}
+              paceReadyCount={measuredPace.ready}
+              paceUnavailableReason={measuredPace.reason}
+              onPace={setPaceFromMeasuredSpeed}
+              onCloseAutoFocus={(event) => {
+                if (!keepFocusOnMenuCloseRef.current) return;
+                keepFocusOnMenuCloseRef.current = false;
+                event.preventDefault();
+              }}
+            />
+            <ModelPadMoreMenu
+              removeAllUnavailableReason={placedCount === 0 ? "The Pad is empty" : undefined}
+              onRemoveAll={removeAll}
+            />
+          </div>
         </div>
         <div ref={bodyRef} className="model-pad-body">
           <ModelPadCanvas

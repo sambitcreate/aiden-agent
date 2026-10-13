@@ -196,15 +196,52 @@ export function ModelPadMoreMenu({
 export function ModelPadMetricChip({
   metric,
   onMetricChange,
+  onRemovedWithFocus,
 }: {
   metric: ModelPadMetric;
   onMetricChange: (metric: ModelPadMetric) => void;
+  /** The chip is leaving the page while it or its menu holds focus. */
+  onRemovedWithFocus: () => void;
 }) {
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  // Whether focus was last inside the chip or its menu. A closing menu drops
+  // focus to the page body before handing it back to the trigger, so the chip
+  // can go away while nothing holds focus; it still counts as the chip's then.
+  const heldFocusRef = React.useRef(false);
+  const onRemovedWithFocusRef = React.useRef(onRemovedWithFocus);
+  React.useLayoutEffect(() => {
+    onRemovedWithFocusRef.current = onRemovedWithFocus;
+  });
+  const inside = (node: EventTarget | Element | null) =>
+    node instanceof Node &&
+    Boolean(triggerRef.current?.contains(node) || contentRef.current?.contains(node));
+  const trackFocus = {
+    onFocusCapture: () => {
+      heldFocusRef.current = true;
+    },
+    onBlurCapture: (event: React.FocusEvent) => {
+      // Focus moved to another real control: no longer the chip's.
+      if (event.relatedTarget && !inside(event.relatedTarget)) heldFocusRef.current = false;
+    },
+  };
+  // Layout cleanup runs before React removes the chip, while focus may still be inside it.
+  React.useLayoutEffect(
+    () => () => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected;
+      if (inside(active) || (lost && heldFocusRef.current)) onRemovedWithFocusRef.current();
+    },
+    // `inside` reads refs only, so the mount-time copy stays correct.
+    [],
+  );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
+          {...trackFocus}
           aria-label={`${modelPadHeightCaption(metric)} score. Change the benchmark score`}
           className="model-pad-metric-chip"
         >
@@ -212,7 +249,7 @@ export function ModelPadMetricChip({
           <ChevronDown aria-hidden="true" className="size-3" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-40">
+      <DropdownMenuContent ref={contentRef} align="end" className="min-w-40" {...trackFocus}>
         <DropdownMenuLabel className="text-mini text-tertiary">Height from</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={metric}

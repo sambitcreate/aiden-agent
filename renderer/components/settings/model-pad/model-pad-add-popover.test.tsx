@@ -198,3 +198,28 @@ test("Enter twice on a Recent row adds that model and then removes the same mode
   await waitFor(() => assert.deepEqual(server.stored(), {}));
   await screen.findByText("Removed Nova from Acme");
 });
+
+test("a search can name the model and its provider together", async () => {
+  editorServer({});
+  const dialog = await openAdd();
+  fireEvent.change(within(dialog).getByRole("combobox", { name: "Search models" }), {
+    target: { value: "nova acme" },
+  });
+  await waitFor(() => assert.deepEqual(listing(dialog), ["Add Nova from Acme to Pad"]));
+});
+
+test("Recent doesn't appear mid-session when a pinned model leaves the Pad", async () => {
+  editorServer({
+    modelPadPlacements: { "acme::nova": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
+    pinnedModels: ["acme::nova"],
+  });
+  const dialog = await openAdd();
+  // Every pinned model is on the Pad, so there is no Recent section.
+  await within(dialog).findByRole("option", { name: "Remove Nova from Acme from Pad" });
+  assert.equal(listing(dialog)[0], "All models");
+
+  fireEvent.click(within(dialog).getByRole("option", { name: "Remove Nova from Acme from Pad" }));
+  await screen.findByText("Removed Nova from Acme");
+  await within(dialog).findByRole("option", { name: "Add Nova from Acme to Pad" });
+  assert.equal(listing(dialog)[0], "All models");
+});

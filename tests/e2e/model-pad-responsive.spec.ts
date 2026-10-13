@@ -170,13 +170,21 @@ test("Model Pad and its tray fit resized settings and keep models usable at nati
         beside: trayBounds.left >= padBounds.right - 1 && trayBounds.top < padBounds.bottom,
         below: trayBounds.top >= padBounds.bottom - 1,
         trayCappedAtSquare: trayMaxHeight <= padBounds.height + 1,
+        // Add, Arrange and ⋯ stay right-aligned in the header, wrapped or not.
+        actionsRightAligned: (() => {
+          const header = element.closest(".model-pad-fieldset")!.querySelector(".model-pad-header")!;
+          const more = header.querySelector('[aria-label="More Pad actions"]')!;
+          const headerRight =
+            header.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(header).paddingRight);
+          return Math.abs(more.getBoundingClientRect().right - headerRight) <= 1;
+        })(),
       };
     });
     expect(layout, `tray placement at ${state}`).toEqual(
       layout.wide
-        ? { wide: true, beside: true, below: false, trayCappedAtSquare: true }
+        ? { wide: true, beside: true, below: false, trayCappedAtSquare: true, actionsRightAligned: true }
         : // Stacked under the square, the tray grows with the page instead.
-          { wide: false, beside: false, below: true, trayCappedAtSquare: false },
+          { wide: false, beside: false, below: true, trayCappedAtSquare: false, actionsRightAligned: true },
     );
   }
 

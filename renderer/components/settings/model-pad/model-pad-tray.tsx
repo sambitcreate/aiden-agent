@@ -2,7 +2,7 @@ import * as React from "react";
 import { X } from "lucide-react";
 import { ProviderIcon } from "../../provider-icon";
 import { InfoHint } from "../../ui-info-hint";
-import type { ModelEntry } from "../../../lib/model-picker-data";
+import { modelPlacementLabel, type ModelEntry } from "../../../lib/model-picker-data";
 import type { ModelPadPlacementKind } from "../../../lib/model-pad-layout";
 import { cn } from "../../../lib/ui-utils";
 
@@ -73,7 +73,7 @@ export function ModelPadTray({
       {rows.length > 0 ? (
         <ul className="model-pad-tray-list grid gap-px">
           {rows.map(({ entry, kind, sourceLabel, secondary }) => {
-            const label = `${entry.label} from ${entry.providerLabel}`;
+            const label = modelPlacementLabel(entry);
             return (
               <li
                 key={entry.value}
