@@ -230,6 +230,50 @@ test("a cache stored before skipped rows were recorded reports none skipped", as
   assert.equal(status.skippedAmbiguousCount, 0);
 });
 
+test("a cache written by the previous build (max_results=100, no skipped count) still reads offline", async () => {
+  const previousBuild = {
+    schemaVersion: 1,
+    source: {
+      name: "OpenRouter Benchmarks",
+      datasetSource: "artificial-analysis",
+      endpoint: "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=100",
+      sourceUrl: "https://artificialanalysis.ai",
+      version: "v1",
+      citation:
+        "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).",
+      license: "CC BY 4.0",
+      asOf: "2026-06-03T12:00:00.000Z",
+      fetchedAt: "2026-06-04T00:00:00.000Z",
+    },
+    models: [
+      {
+        modelPermaslug: "openai/gpt-5.4",
+        displayName: "GPT-5.4",
+        intelligence: 72.1,
+        coding: 81.4,
+        agentic: 69.3,
+      },
+    ],
+  };
+  const parsed = parseOpenRouterBenchmarkCache(JSON.parse(JSON.stringify(previousBuild)));
+  assert.equal(parsed.source.skippedAmbiguous, 0);
+  assert.equal(openRouterBenchmarkForModel(parsed, "openai", "gpt-5.4")?.coding, 81.4);
+  const status = await runtimeWith(parsed, parsed).status();
+  assert.equal(status.ready, true);
+  assert.equal(status.cachedModelCount, 1);
+
+  // Only the two known fixed endpoints are accepted, nothing else.
+  for (const endpoint of [
+    "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=50",
+    "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis",
+    "https://evil.example/api/v1/benchmarks?source=artificial-analysis&max_results=100",
+  ]) {
+    const tampered = JSON.parse(JSON.stringify(previousBuild)) as { source: Record<string, unknown> };
+    tampered.source.endpoint = endpoint;
+    assert.throws(() => parseOpenRouterBenchmarkCache(tampered), /metadata is invalid/u);
+  }
+});
+
 test("reasoning variants keep separate identities when matching models.dev rows", () => {
   const cache = buildOpenRouterBenchmarkCache(
     responsePayload([

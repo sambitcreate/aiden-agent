@@ -3,6 +3,20 @@ import { modelIdLeaf, openRouterAuthor } from "../../renderer/shared/model-catal
 
 export const OPENROUTER_BENCHMARK_ENDPOINT =
   "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=500";
+/**
+ * The fixed endpoint earlier builds requested. New requests never use it; caches
+ * those builds stored with it stay readable offline.
+ */
+export const OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT =
+  "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=100";
+/** Every fixed endpoint a stored cache may name: an explicit allow-list, nothing else. */
+const KNOWN_OPENROUTER_BENCHMARK_ENDPOINTS: ReadonlySet<unknown> = new Set([
+  OPENROUTER_BENCHMARK_ENDPOINT,
+  OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT,
+]);
+export type OpenRouterBenchmarkEndpoint =
+  | typeof OPENROUTER_BENCHMARK_ENDPOINT
+  | typeof OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT;
 export const OPENROUTER_BENCHMARK_SOURCE_URL = "https://artificialanalysis.ai";
 export const OPENROUTER_BENCHMARK_LICENSE = "CC BY 4.0" as const;
 export const MAX_OPENROUTER_BENCHMARK_MODELS = 500;
@@ -20,7 +34,7 @@ export interface OpenRouterBenchmarkCache {
   source: {
     name: "OpenRouter Benchmarks";
     datasetSource: "artificial-analysis";
-    endpoint: typeof OPENROUTER_BENCHMARK_ENDPOINT;
+    endpoint: OpenRouterBenchmarkEndpoint;
     sourceUrl: typeof OPENROUTER_BENCHMARK_SOURCE_URL;
     version: "v1";
     citation: string;
@@ -234,7 +248,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     !source ||
     source.name !== "OpenRouter Benchmarks" ||
     source.datasetSource !== "artificial-analysis" ||
-    source.endpoint !== OPENROUTER_BENCHMARK_ENDPOINT ||
+    !KNOWN_OPENROUTER_BENCHMARK_ENDPOINTS.has(source.endpoint) ||
     source.sourceUrl !== OPENROUTER_BENCHMARK_SOURCE_URL ||
     source.version !== "v1" ||
     source.license !== OPENROUTER_BENCHMARK_LICENSE
@@ -250,7 +264,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     source: {
       name: "OpenRouter Benchmarks",
       datasetSource: "artificial-analysis",
-      endpoint: OPENROUTER_BENCHMARK_ENDPOINT,
+      endpoint: source.endpoint as OpenRouterBenchmarkEndpoint,
       sourceUrl: OPENROUTER_BENCHMARK_SOURCE_URL,
       version: "v1",
       citation,
