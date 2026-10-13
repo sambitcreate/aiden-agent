@@ -103,7 +103,8 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 11. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings)
 
-- [ ] Secret-looking env and header values move to the keychain and are masked; externally added stdio servers need first-run approval.
+- [x] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
+- [x] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
 
 ### 12. Pi 1.2.0 lockstep upgrade
 

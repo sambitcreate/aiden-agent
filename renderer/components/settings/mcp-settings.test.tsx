@@ -55,6 +55,7 @@ function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
     "mcp:presets": () => catalogPresetStates(),
     "mcp:liveStatus": () => [],
     "mcp:dependents": () => ({ schedules: [], bots: [] }),
+    "mcp:launchApprovals": () => [],
     "providers:list": () => [],
     ...handlers,
   });
@@ -497,4 +498,65 @@ test("before any discovery the Tools list can load tools with a connection test 
   assert.ok(await screen.findByRole("switch", { name: "Let the model use search" }));
   assert.equal(channelCalls(calls, "mcp:testDraft").length, 1);
   assert.equal(savedServers(calls).length, 0);
+});
+
+const savedMarker = `aiden-secret:v1:${"c".repeat(32)}`;
+
+test("saved header values stay masked; Save sends back their marker and only replaced values as text", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauth: undefined, headers: { Authorization: savedMarker } }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  assert.equal(within(dialog).queryByDisplayValue(savedMarker), null);
+  assert.doesNotMatch(dialog.textContent ?? "", /aiden-secret/u);
+  assert.ok(within(dialog).getByText("Saved value of Authorization"));
+  // Unchanged: the marker goes back, so the stored value is kept.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { Authorization: savedMarker });
+  assert.deepEqual(channelCalls(calls, "mcp:save")[0]!.args[1], { approveLaunch: true });
+});
+
+test("replacing a saved value and adding a header send the typed values once", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, oauth: undefined, headers: { Authorization: savedMarker } }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Replace value of Authorization" }));
+  fireEvent.change(within(dialog).getByLabelText("Value of Authorization"), { target: { value: "Bearer rotated" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add header" }));
+  const names = within(dialog).getAllByRole("textbox", { name: "Header name" });
+  fireEvent.change(names[names.length - 1]!, { target: { value: "X-Team" } });
+  fireEvent.change(within(dialog).getByLabelText("Value of X-Team"), { target: { value: "blue" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { Authorization: "Bearer rotated", "X-Team": "blue" });
+});
+
+test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, envNames: ["TOKEN"] };
+  let approvals = [pending];
+  const calls = mount({
+    "mcp:launchApprovals": () => approvals,
+    "mcp:approveLaunch": () => { approvals = []; return { approved: true }; },
+    "mcp:save": (server: unknown) => server,
+  });
+  const group = await screen.findByRole("group", { name: "Files needs approval" });
+  assert.match(group.textContent ?? "", /Added outside Aiden — Approve to run/u);
+  assert.match(group.textContent ?? "", /npx\s*-y\s*@modelcontextprotocol\/server-filesystem\s*\/Users\/me\/My Docs/u);
+  assert.match(group.textContent ?? "", /TOKEN/u);
+  // No tool list or model-access control while it may not run.
+  assert.equal(screen.queryByRole("radiogroup", { name: "Model access for Files" }), null);
+  // Switching it on is not an approval.
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Files" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(channelCalls(calls, "mcp:save")[0]!.args[1], undefined);
+
+  fireEvent.click(within(group).getByRole("button", { name: "Approve Files to run" }));
+  await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:approveLaunch").map((call) => call.args), [["mcp-files", "d".repeat(64)]]));
+  assert.ok(await screen.findByRole("radiogroup", { name: "Model access for Files" }));
 });

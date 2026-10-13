@@ -31,6 +31,7 @@ import {
   initShortcutBindingsChanged,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
+import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
@@ -1815,6 +1816,10 @@ if (!ownsSingleInstanceLock) {
     () => {
       skillRegistry.invalidate();
       ipcMain.broadcast("app:config-externally-changed", {});
+      // Values typed into config.json by hand move into the keychain.
+      void sealPlaintextMcpServerFields().catch((error: unknown) =>
+        logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+      );
     },
     (error: unknown) =>
       logger.warn(
@@ -2165,6 +2170,10 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Env and header values still written in config.json move into the keychain.
+      await sealPlaintextMcpServerFields().catch((error: unknown) =>
+        logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+      );
       // Connect enabled MCP servers in the background so the first turn finds
       // warm connections and cached inventories. Never blocks startup.
       prewarmMcpServers();

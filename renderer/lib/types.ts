@@ -1155,6 +1155,7 @@ export type {
   McpServerDependents,
   McpStatus,
   McpToolSummary,
+  McpPendingLaunchApproval,
 } from "../shared/mcp-status";
 
 export interface ChatStartParams {

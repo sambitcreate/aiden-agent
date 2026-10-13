@@ -12,7 +12,7 @@ import {
 } from "../services/mcp-credential-cleanup-core.js";
 import type { McpServerDependents } from "../services/mcp-dependents.js";
 import type { McpLiveStatus } from "../services/mcp-status-events.js";
-import type { McpStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
+import type { McpPendingLaunchApproval, McpStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 import type { McpServer } from "../services/types.js";
 
 /** Longest API key a draft test accepts; matches what a pasted key can be. */
@@ -23,7 +23,11 @@ export interface McpDraftCredentials {
   apiKey?: string;
   /** The draft connects exactly like the saved server, so its stored credentials apply. */
   matchesSaved: boolean;
+  /** The draft reaches the saved server's endpoint or command, so its stored env/header values may be used. */
+  savedDestination: boolean;
 }
+
+export type { McpPendingLaunchApproval };
 
 export interface McpControlDependencies<Event> {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
@@ -44,6 +48,9 @@ export interface McpControlDependencies<Event> {
   liveStatus(): McpLiveStatus[];
   /** The server's full tool list from its last discovery in this process, if any. */
   toolList(serverId: string): McpToolSummary[] | undefined;
+  pendingLaunchApprovals(): Promise<McpPendingLaunchApproval[]>;
+  /** Approve `server` to run if it still has the launch fingerprint the user saw. */
+  approveLaunch(server: McpServer, fingerprint: string): Promise<boolean>;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -51,6 +58,13 @@ const INACTIVE = "MCP changes must come from the active application document.";
 function usesBrowserSignIn(server: McpServer): boolean {
   const preset = assertMcpPresetServer(server);
   return preset ? preset.auth.kind === "oauth" : server.transport !== "stdio" && server.oauth === true;
+}
+
+function sameDestination(saved: McpServer, draft: McpServer): boolean {
+  return saved.transport === draft.transport &&
+    (draft.transport === "stdio"
+      ? saved.command === draft.command && JSON.stringify(saved.args ?? []) === JSON.stringify(draft.args ?? [])
+      : saved.url === draft.url);
 }
 
 function notConnected(error: string): McpStatus {
@@ -105,7 +119,8 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
     if (usesBrowserSignIn(draft) && !matchesSaved) {
       return notConnected("Authorize this server to test the connection.");
     }
-    const test = () => deps.testDraft(draft, { matchesSaved, ...(apiKey ? { apiKey } : {}) }, isCurrent);
+    const savedDestination = Boolean(saved && sameDestination(saved, draft));
+    const test = () => deps.testDraft(draft, { matchesSaved, savedDestination, ...(apiKey ? { apiKey } : {}) }, isCurrent);
     if (!matchesSaved) {
       const status = await test();
       if (!isCurrent()) throw new Error(INACTIVE);
@@ -131,6 +146,25 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
   deps.handle("mcp:liveStatus", (event) => {
     live(event);
     return deps.liveStatus();
+  });
+
+  deps.handle("mcp:launchApprovals", async (event) => {
+    live(event);
+    return deps.pendingLaunchApprovals();
+  });
+
+  deps.handle("mcp:approveLaunch", async (event, id: unknown, fingerprint: unknown) => {
+    const isCurrent = live(event);
+    const serverId = asString(id, "id");
+    if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint)) throw new Error("Invalid launch fingerprint.");
+    const configured = await deps.configured(serverId);
+    if (!configured) throw new Error("This MCP server is no longer configured.");
+    if (configured.transport !== "stdio") throw new Error("Only local MCP servers need approval to run.");
+    if (!isCurrent()) throw new Error(INACTIVE);
+    const approved = await deps.approveLaunch(configured, fingerprint);
+    // The command changed after it was shown: show it again instead of approving it.
+    if (!approved) throw new Error("This server’s command changed. Review it again before approving.");
+    return { approved: true };
   });
 
   // Never connects: null until a discovery listed the server's tools.

@@ -35,6 +35,15 @@ export interface McpToolSummary {
   title?: string;
 }
 
+/** A local (stdio) server not approved to run on this device, with exactly what it would run. */
+export interface McpPendingLaunchApproval {
+  serverId: string;
+  fingerprint: string;
+  command: string;
+  args: string[];
+  envNames: string[];
+}
+
 export interface McpDependent {
   id: string;
   name: string;

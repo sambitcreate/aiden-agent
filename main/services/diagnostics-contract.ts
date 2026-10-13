@@ -217,7 +217,7 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   compactionReason: new Set(["threshold", "overflow", "manual"]),
   recoveryStage: new Set(["local-compiler", "semantic-summary", "checkpoint"]),
   localCompilerCause: new Set(["history_limit", "unsafe_boundary", "empty_summary", "insufficient_reduction", "busy", "cancelled", "timeout", "worker_failed", "worker_exited", "cleanup_failed"]),
-  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "mcp-recent-failure", "mcp-prewarm", "provider-request", "provider-compaction"]),
+  failurePhase: new Set(["renderer-script", "renderer-promise", "renderer-react", "renderer-route", "mcp-tool-discovery", "mcp-recent-failure", "mcp-prewarm", "mcp-stdio-approval", "provider-request", "provider-compaction"]),
   providerCategory: new Set(["authentication", "quota", "rate_limit", "context_window", "context_management", "output_limit", "interrupted", "timeout", "service_unavailable", "model_unavailable", "network", "invalid_request", "unknown"]),
   transportCause: new Set(["connection-error", "dns", "connection-reset", "connection-refused", "socket-closed", "fetch-failed", "network-unknown"]),
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),

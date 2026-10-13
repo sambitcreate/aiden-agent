@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import type {
   AppSettings,
   McpServer,
@@ -225,8 +226,9 @@ export function createScheduledTaskApplicationService(
       }
       return dependencies.listScripts({ workspaceRoot: workspace?.folderPath });
     },
+    // Servers switched off for the model cannot be chosen for a schedule.
     mcpServers: async () => (await dependencies.listMcpServers())
-      .filter((server) => server.enabled)
+      .filter((server) => server.enabled && mcpServerOffersTools(server))
       .map((server) => ({ id: server.id, name: server.name })),
     settings,
     updateSettings,

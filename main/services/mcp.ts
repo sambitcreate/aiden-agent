@@ -26,6 +26,9 @@ import {
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
+import { mcpFieldSecretMarkers } from "./mcp-field-secrets-core.js";
+import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
 import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
@@ -101,6 +104,19 @@ async function resolveAuth(
   if (!isCurrent())
     throw new Error("The renderer document is no longer active.");
   const preset = assertMcpPresetServer(server);
+  // A local command runs only once this exact launch was approved on this device.
+  if (server.transport === "stdio" && !(await mcpStdioApprovals.isApproved(server))) {
+    throw new McpStdioApprovalRequiredError(server.name || server.id);
+  }
+  if (!isCurrent())
+    throw new Error("The renderer document is no longer active.");
+  // Env and header values live in the secrets store; config.json holds markers.
+  if (mcpFieldSecretMarkers(server).length > 0) {
+    await reconcilePendingMcpCredentialCleanup();
+    server = await resolveStoredMcpFieldSecrets(server);
+    if (!isCurrent())
+      throw new Error("The renderer document is no longer active.");
+  }
   if (!preset || preset.auth.kind !== "apiKey") return server;
   await reconcilePendingMcpCredentialCleanup();
   const key = await secrets.getOrBindLegacyProviderKey(
@@ -748,7 +764,9 @@ class McpRecentFailureError extends Error {
   }
 }
 
-function writeMcpDegraded(error: unknown, failurePhase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
+function writeMcpDegraded(error: unknown, phase: "mcp-tool-discovery" | "mcp-recent-failure" | "mcp-prewarm", extra: Record<string, number> = {}): void {
+  // An unapproved local command is a distinct, expected state, not a failure to connect.
+  const failurePhase = error instanceof McpStdioApprovalRequiredError ? "mcp-stdio-approval" : phase;
   const projected = projectDiagnosticError(error);
   writeDiagnosticEvent({
     level: "warn",

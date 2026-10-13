@@ -21,6 +21,9 @@ import { mcpLiveStatus } from "../services/mcp-status-events.js";
 import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services/mcp-dependents.js";
 import { mcpApiKeyHeaderValue } from "../services/mcp-oauth-client-metadata.js";
 import type { McpServer } from "../services/types.js";
+import { mcpFieldSecretMarkers, mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "../services/mcp-field-secrets.js";
+import { saveConfiguredMcpServer } from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
 import {
   mutateCredentialForConfiguredMcp,
@@ -33,7 +36,6 @@ import {
   mcpRuntimeConnectionSnapshot,
   sameMcpRuntimeConnection,
   pendingMcpCredentialCleanupForRemove,
-  pendingMcpCredentialCleanupForSave,
   replaceMcpCredentialAfterDisconnect,
 } from "../services/mcp-credential-cleanup-core.js";
 import {
@@ -88,7 +90,17 @@ import {
 
 /** Credentials for a Settings draft test: never bound, saved, or borrowed across endpoints. */
 function draftCredentialResolver(credentials: McpDraftCredentials) {
-  return async (server: McpServer, isCurrent: () => boolean): Promise<McpServer> => {
+  return async (draft: McpServer, isCurrent: () => boolean): Promise<McpServer> => {
+    let server = draft;
+    // Stored env/header values only go where the saved server already connects.
+    if (mcpFieldSecretMarkers(server).length > 0) {
+      if (!credentials.savedDestination) {
+        throw new Error("Enter the header and environment values again to test a changed connection.");
+      }
+      await reconcilePendingMcpCredentialCleanup();
+      server = await resolveStoredMcpFieldSecrets(server);
+      if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+    }
     const preset = assertMcpPresetServer(server);
     if (!preset || preset.auth.kind !== "apiKey") return server;
     // A pending credential cleanup must finish before a saved key is read.
@@ -409,7 +421,7 @@ export function registerPhase2Handlers(): void {
     if (value) prewarmMcpServers([configured]);
     return { hasKey: Boolean(value) };
   });
-  ipcMain.handle("mcp:save", async (event, server: unknown) => {
+  ipcMain.handle("mcp:save", async (event, server: unknown, options: unknown) => {
     const owner = rendererDocumentOwner(
       event,
       () => new Error("MCP changes must come from the active application document."),
@@ -417,21 +429,13 @@ export function registerPhase2Handlers(): void {
     const isCurrent = () => !owner.isDestroyed();
     const parsed = parseMcpServer(server);
     assertMcpPresetServer(parsed);
-    return mutateMcpWithCredentialCleanup(
-      parsed.id,
-      (current) => pendingMcpCredentialCleanupForSave(current, parsed),
-      async () => {
-        await mcpManager.disconnect(parsed.id);
-        return withMcpConfigurationPublication(parsed.id, () =>
-          configStore.saveMcpServer(parsed, isCurrent),
-        );
-      },
-      isCurrent,
-    ).then((saved) => {
-      // Saving (or enabling) connects in the background so the next turn is warm.
-      prewarmMcpServers([parsed]);
-      return saved;
-    });
+    // Only the editor, which shows the command, approves a local server to run.
+    const approveLaunch = typeof options === "object" && options !== null && (options as { approveLaunch?: unknown }).approveLaunch === true;
+    const saved = await saveConfiguredMcpServer(parsed, isCurrent, { approveLaunch });
+    if (approveLaunch) mcpManager.clearFailure(saved.id);
+    // Saving (or enabling) connects in the background so the next turn is warm.
+    prewarmMcpServers([saved]);
+    return saved;
   });
   ipcMain.handle("mcp:remove", async (event, id: unknown) => {
     const owner = rendererDocumentOwner(
@@ -452,6 +456,7 @@ export function registerPhase2Handlers(): void {
       },
       isCurrent,
     );
+    await mcpStdioApprovals.forget(serverId);
     mcpLiveStatus.forget(serverId);
   });
   ipcMain.handle("mcp:status", async (event, server: unknown) => {
@@ -504,7 +509,8 @@ export function registerPhase2Handlers(): void {
         mcpRuntimeConnectionSnapshot(parsed),
         async () => {
           await mcpManager.disconnect(parsed.id);
-          await authorizeMcpServer(parsed, () => !owner.isDestroyed(), ownerAbort.signal, reserved);
+          // Sign-in reaches the server with its stored header values.
+          await authorizeMcpServer(await resolveStoredMcpFieldSecrets(parsed), () => !owner.isDestroyed(), ownerAbort.signal, reserved);
           reserved = undefined;
           prewarmMcpServers([parsed]);
           return { authorized: true };
@@ -575,6 +581,26 @@ export function registerPhase2Handlers(): void {
     dependents: mcpServerDependents,
     liveStatus: () => mcpLiveStatus.snapshot(),
     toolList: (serverId) => mcpLiveStatus.tools(serverId),
+    pendingLaunchApprovals: async () => {
+      const pending = [];
+      for (const server of await configStore.listMcpServers()) {
+        if (server.transport !== "stdio" || (await mcpStdioApprovals.isApproved(server))) continue;
+        pending.push({
+          serverId: server.id,
+          fingerprint: mcpStdioLaunchFingerprint(server),
+          command: server.command ?? "",
+          args: server.args ?? [],
+          envNames: Object.keys(server.env ?? {}),
+        });
+      }
+      return pending;
+    },
+    approveLaunch: async (server, fingerprint) => {
+      if (!(await mcpStdioApprovals.approveShown(server, fingerprint))) return false;
+      mcpManager.clearFailure(server.id);
+      prewarmMcpServers([server]);
+      return true;
+    },
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.

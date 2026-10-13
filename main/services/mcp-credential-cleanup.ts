@@ -17,6 +17,7 @@ import {
 import { clearOAuth, invalidateMcpOAuthOperation, suspendMcpOAuthOperations } from "./mcp-oauth.js";
 import { presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
+import { pruneStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
@@ -130,6 +131,9 @@ async function reconcileNow(
     if (cleanup.clearPresetKey) {
       await secrets.deleteKey(presetSecretId(pending.serverId), isCurrent);
     }
+    // Env/header values the configured record no longer references (all of
+    // them once the server is gone) leave the secrets store.
+    await pruneStoredMcpFieldSecrets(pending.serverId, current, isCurrent);
     assertCurrent(isCurrent);
     await clearPending();
   } finally {

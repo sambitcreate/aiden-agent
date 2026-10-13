@@ -38,6 +38,7 @@ import type {
   Workspace,
 } from "../lib/types";
 import { isAcpHarnessProvider } from "../shared/acp-harness";
+import { mcpServerOffersTools } from "../shared/mcp-exposure";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -73,23 +74,31 @@ const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
 
 /** The soft inline warning under the Provider select when an LLM task may not be able to run. */
 /**
- * The connections the editor lists: every enabled server plus each selected
+ * The connections the editor lists: every usable server plus each selected
  * one, including selections whose server is missing. A missing server is
- * named by its id so the person can tell which approval needs repair.
+ * named by its id so the person can tell which approval needs repair. A
+ * server switched off for the model is usable by no schedule: it is listed
+ * only when already selected, as unavailable with that reason.
  */
 export function scheduledTaskMcpServerChoices(
-  mcpServers: readonly Pick<McpServer, "id" | "name" | "enabled">[],
+  mcpServers: readonly Pick<McpServer, "id" | "name" | "enabled" | "exposure">[],
   selectedMcpIds: readonly string[],
 ): {
   unavailableMcpIds: string[];
-  visibleMcpServers: Array<Pick<McpServer, "id" | "name" | "enabled">>;
+  visibleMcpServers: Array<Pick<McpServer, "id" | "name" | "enabled"> & { unavailableReason?: string }>;
 } {
+  const usable = (server: Pick<McpServer, "enabled" | "exposure">) => server.enabled && mcpServerOffersTools(server);
   const enabledMcpIds = new Set(
-    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+    mcpServers.filter(usable).map((server) => server.id),
   );
   const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
   const visibleMcpServers = [
-    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
+    ...mcpServers
+      .filter((server) => usable(server) || selectedMcpIds.includes(server.id))
+      .map(({ id, name, enabled, exposure }) =>
+        enabled && !mcpServerOffersTools({ exposure })
+          ? { id, name, enabled: false, unavailableReason: "Off for the model in Settings → Plugins" }
+          : { id, name, enabled }),
     ...unavailableMcpIds
       .filter((id) => !mcpServers.some((server) => server.id === id))
       .map((id) => ({ id, name: `Unavailable MCP server (${id})`, enabled: false })),
@@ -765,7 +774,7 @@ export function ScheduledTaskEditor({
                         </Text>
                         {!server.enabled ? (
                           <Text variant="small" color="red" className="mt-0.5 block">
-                            Disabled or removed
+                            {server.unavailableReason ?? "Disabled or removed"}
                           </Text>
                         ) : null}
                       </span>

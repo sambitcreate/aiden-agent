@@ -40,12 +40,13 @@ import {
 import {
   queryKeys,
   useMcpDependents,
+  useMcpLaunchApprovals,
   useMcpLiveStatus,
   useMcpPresets,
   useMcpServers,
   useProviders,
 } from "../../lib/queries";
-import type { McpLiveStatus, McpPresetState, McpServer, McpServerDependents, McpTransport } from "../../lib/types";
+import type { McpLiveStatus, McpPendingLaunchApproval, McpPresetState, McpServer, McpServerDependents, McpTransport } from "../../lib/types";
 import {
   filterPluginCatalog,
   isConnectablePlugin,
@@ -59,6 +60,7 @@ import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpSignInControls } from "./mcp-sign-in-controls";
 import { McpExposureControls } from "./mcp-exposure-controls";
+import { McpSecretFields, mcpSecretFieldDrafts, mcpSecretFieldRecord } from "./mcp-secret-fields";
 
 const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -69,21 +71,6 @@ const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; labe
 
 function newServer(): McpServer {
   return { id: `mcp-${Date.now().toString(36)}`, name: "", transport: "stdio", enabled: true, args: [] };
-}
-
-function linesToRecord(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const idx = line.indexOf("=");
-    if (idx > 0) out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-  }
-  return out;
-}
-
-function recordToLines(record: Record<string, string> | undefined): string {
-  return Object.entries(record ?? {})
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
 }
 
 /** One argument per line, so arguments that contain spaces survive editing unchanged. */
@@ -125,6 +112,54 @@ function McpLiveIndicator({ server, status }: { server: McpServer; status: McpLi
   );
 }
 
+/**
+ * A local server added or changed outside Aiden never runs until approved
+ * here. Shows exactly what would run; approval binds to that launch.
+ */
+function McpLaunchApproval({
+  server,
+  approval,
+  onApproved,
+}: {
+  server: McpServer;
+  approval: McpPendingLaunchApproval;
+  onApproved: () => Promise<void>;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const label = server.name || "this server";
+  const approve = async () => {
+    setBusy(true);
+    try {
+      await mcpApi.approveLaunch(approval.serverId, approval.fingerprint);
+      toast.success(`${label} can run now.`);
+    } catch (error) {
+      toast.error(`Couldn’t approve ${label}: ${errorMessage(error)}`);
+    } finally {
+      await onApproved().catch(() => undefined);
+      setBusy(false);
+    }
+  };
+  return (
+    <Callout color="warning" className="mt-2 flex-col items-start gap-2" role="group" aria-label={`${label} needs approval`}>
+      <Text variant="small-strong">Added outside Aiden — Approve to run</Text>
+      <Text variant="small" color="secondary" className="block">
+        This command was added or changed outside Aiden and won’t run until you approve it.
+      </Text>
+      <code className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
+        {[approval.command, ...approval.args].join("\n")}
+      </code>
+      {approval.envNames.length ? (
+        <Text variant="small" color="secondary" className="block break-words">
+          Environment: {approval.envNames.join(", ")}
+        </Text>
+      ) : null}
+      <Button variant="filled" size="small" disabled={busy} aria-label={`Approve ${label} to run`} onClick={() => void approve()}>
+        {busy ? "Approving…" : "Approve to run"}
+      </Button>
+    </Callout>
+  );
+}
+
 /** “Scheduled task … and Bot … use this server.” plus what the action does to them. */
 function McpDependentsNote({
   dependents,
@@ -152,6 +187,7 @@ export function McpSettings() {
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
   const [disabling, setDisabling] = React.useState<{ server: McpServer; dependents: McpServerDependents } | null>(null);
   const live = useMcpLiveStatus();
+  const launchApprovals = useMcpLaunchApprovals();
   const removingDependents = useMcpDependents(removing?.id);
   const [pluginSearch, setPluginSearch] = React.useState("");
   const [pluginCategory, setPluginCategory] = React.useState<string | "all">("all");
@@ -166,6 +202,7 @@ export function McpSettings() {
     await Promise.all([
       qc.invalidateQueries({ queryKey: queryKeys.mcpServers }),
       qc.invalidateQueries({ queryKey: queryKeys.mcpPresets }),
+      qc.invalidateQueries({ queryKey: queryKeys.mcpLaunchApprovals }),
     ]);
   };
 
@@ -371,12 +408,16 @@ export function McpSettings() {
                     >
                       <McpLiveIndicator server={s} status={live.get(s.id)} />
                     </div>
-                    {s.enabled && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
+                    {s.enabled && !launchApprovals.has(s.id) && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
                       <Text variant="small" color="red" className="mt-0.5 block break-words">
                         {live.get(s.id)!.error}
                       </Text>
                     ) : null}
-                    <McpExposureControls server={s} toolCount={live.get(s.id)?.toolCount} onSave={saveExposure} />
+                    {launchApprovals.get(s.id) ? (
+                      <McpLaunchApproval server={s} approval={launchApprovals.get(s.id)!} onApproved={invalidate} />
+                    ) : (
+                      <McpExposureControls server={s} toolCount={live.get(s.id)?.toolCount} onSave={saveExposure} />
+                    )}
                   </div>
                   <Button
                     variant="filled"
@@ -711,9 +752,9 @@ function McpEditor({
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
   const [args, setArgs] = React.useState(argsToLines(server.args));
-  const [env, setEnv] = React.useState(recordToLines(server.env));
+  const [env, setEnv] = React.useState(() => mcpSecretFieldDrafts(server.env));
   const [url, setUrl] = React.useState(server.url ?? "");
-  const [headers, setHeaders] = React.useState(recordToLines(server.headers));
+  const [headers, setHeaders] = React.useState(() => mcpSecretFieldDrafts(server.headers));
   const providerConnection = JSON.stringify([authProvider, url.trim(), transport]);
   const providerApproved = approvedProviderConnection === providerConnection;
   const [oauth, setOauth] = React.useState(Boolean(server.oauth));
@@ -743,9 +784,9 @@ function McpEditor({
       setTransport(server.transport);
       setCommand(server.command ?? "");
       setArgs(argsToLines(server.args));
-      setEnv(recordToLines(server.env));
+      setEnv(mcpSecretFieldDrafts(server.env));
       setUrl(server.url ?? "");
-      setHeaders(recordToLines(server.headers));
+      setHeaders(mcpSecretFieldDrafts(server.headers));
       setOauth(Boolean(server.oauth));
       setAuthServerMetadataUrl(server.authServerMetadataUrl ?? "");
       setAuthorized(false);
@@ -776,9 +817,9 @@ function McpEditor({
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
     args: transport === "stdio" ? linesToArgs(args) : undefined,
-    env: transport === "stdio" ? linesToRecord(env) : undefined,
+    env: transport === "stdio" ? mcpSecretFieldRecord(env) : undefined,
     url: transport !== "stdio" ? url.trim() || undefined : undefined,
-    headers: transport !== "stdio" ? linesToRecord(headers) : undefined,
+    headers: transport !== "stdio" ? mcpSecretFieldRecord(headers) : undefined,
     oauth: transport !== "stdio" && !authProvider ? oauth || undefined : undefined,
     authProvider: transport === "http" ? authProvider || undefined : undefined,
     authServerMetadataUrl: transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
@@ -787,8 +828,7 @@ function McpEditor({
   const handleProviderConsent = async (allowed: boolean) => {
     setProviderAuthorizing(true);
     try {
-      const record = build();
-      await mcpApi.save(record);
+      const record = await mcpApi.save(build());
       await mcpApi.providerAuth(record, allowed);
       setApprovedProviderConnection(allowed ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport]) : undefined);
       onSaved();
@@ -822,11 +862,13 @@ function McpEditor({
               authServerMetadataUrl: draft.authServerMetadataUrl,
               oauthClientName: draft.oauthClientName,
             };
+      // Sign-in uses the stored record: its header values are markers once saved.
+      let stored = record;
       if (isNew || storedForSignIn.current || mcpConnectionChanged(server, record)) {
-        await mcpApi.save(record);
+        stored = await mcpApi.save(record);
         if (isNew) storedForSignIn.current = true;
       }
-      await mcpApi.authorize(record);
+      await mcpApi.authorize(stored);
       setOauth(true);
       setAuthorized(true);
       setNeedsSignIn(false);
@@ -904,7 +946,8 @@ function McpEditor({
         setSaving(true);
         setSaveError(null);
         try {
-          await mcpApi.save(build());
+          // Saving from the editor, which shows the command, approves a local server to run.
+          await mcpApi.save(build(), { approveLaunch: true });
           savedByUser.current = true;
         } catch (error) {
           const message = errorMessage(error);
@@ -965,8 +1008,8 @@ function McpEditor({
                 spellCheck={false}
               />
             </Field>
-            <Field label="Environment" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
-              <Textarea value={env} onChange={(e) => setEnv(e.target.value)} placeholder="API_KEY=..." className="max-h-40" />
+            <Field label="Environment" description="Values are encrypted in this Mac’s keychain, not in config.json, and are never shown again." orientation="vertical">
+              <McpSecretFields kind="env" fields={env} onChange={setEnv} />
             </Field>
           </>
         ) : (
@@ -981,8 +1024,8 @@ function McpEditor({
             >
               <Input aria-label="Server URL" value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
             </Field>
-            <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
-              <Textarea disabled={Boolean(authProvider)} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
+            <Field label="Headers" description="Values are encrypted in this Mac’s keychain, not in config.json, and are never shown again." orientation="vertical">
+              <McpSecretFields kind="headers" fields={headers} onChange={setHeaders} disabled={Boolean(authProvider)} />
             </Field>
             <Field
               label="OAuth sign-in"
@@ -1000,7 +1043,7 @@ function McpEditor({
             {transport === "http" ? <McpProviderAuthFields providerId={authProvider} endpoint={url.trim()} approved={providerApproved} busy={providerAuthorizing}
               disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !providers.data?.some((provider) => provider.id === authProvider && provider.isBuiltin && provider.hasKey))}
               providers={(providers.data ?? []).filter((provider) => provider.isBuiltin && (provider.hasKey || provider.id === authProvider))}
-              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders(""); setAuthServerMetadataUrl(""); setOauthClientName(""); } }}
+              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders([]); setAuthServerMetadataUrl(""); setOauthClientName(""); } }}
               onConsent={(allowed) => { void handleProviderConsent(allowed); }} /> : null}
             {oauth ? (
               <>
