@@ -1163,6 +1163,7 @@ final class AidenChatTests: XCTestCase {
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
         extraCapabilities: [AidenRemoteCapability] = [],
         networkPath: AidenNetworkPathSource? = nil,
+        streamingRevealTick: (@Sendable () async throws -> Void)? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         let cache = cache ?? testCache!
@@ -1232,6 +1233,7 @@ final class AidenChatTests: XCTestCase {
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
             networkPath: networkPath ?? AidenNetworkAvailability(),
+            streamingRevealTick: streamingRevealTick ?? { try await Task.sleep(for: AidenStreamingRevealGate.tick) },
             onChatUpdated: onChatUpdated
         )
     }
@@ -1627,6 +1629,53 @@ final class AidenChatTests: XCTestCase {
         fixture.allowReads = true
         try await waitUntil("recovered transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
         try await waitUntil("cleared live output") { model.liveText.isEmpty }
+    }
+
+    @MainActor
+    func testAMacRunsTextWaitsForTheRevealTickUntilAToolStarts() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { model.streamState == .running && ticks.pending == 1 }
+        XCTAssertEqual(model.liveText, "", "the Mac's text waits for the next reveal tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(3, "text_delta", #"{"text":"ld, "}"#))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "more text still waits for the tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(
+            4, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#
+        ))
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Hello world, ", "text received before the tool shows before it")
+    }
+
+    @MainActor
+    func testAMacRunsRetainedTextShowsWithTheToolThatFollowedItWhenThePhoneAttaches() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture(
+            replay: AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Checking the file"}"#)
+                + AidenLiveForeignRunFixture.frame(3, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+        )
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Checking the file", "the text before the tool shows with it, without waiting for a tick")
     }
 
     @MainActor
@@ -3282,6 +3331,159 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(model.isWaitingForNetwork)
         XCTAssertNil(model.presentedError)
         XCTAssertEqual(fixture.eventCursors, [0, 1], "one reconnect, resumed after the last applied sequence")
+    }
+
+    // MARK: - Streaming reveal gate
+
+    @MainActor
+    private func makeRevealModel(
+        ticks: AidenManualRevealTicks,
+        initialChat: AidenChat? = nil
+    ) async throws -> (AidenChatViewModel, AidenRevealStreamFixture) {
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            initialChat: initialChat,
+            streamingRevealTick: { await ticks.tick() }
+        )
+        let fixture = AidenRevealStreamFixture(chat: model.chat)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { fixture.response($0) }
+        try await testCache!.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "stream-reveal", turnId: "turn-reveal", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache!.reserveChatWrite()
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        return (model, fixture)
+    }
+
+    @MainActor
+    func testRevealTicksShowWholeWordsAndReleaseAHeldFragmentOnTheNextTick() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        let (model, _) = try await makeRevealModel(ticks: ticks)
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello wor"}"#))
+        try await waitUntil { ticks.pending == 1 && model.streamState == .running }
+        XCTAssertEqual(model.liveText, "", "received text waits for the next reveal tick")
+
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        XCTAssertEqual(model.liveText, "Hello ", "a tick shows whole words and holds the partial one")
+
+        // No whitespace arrives: the held fragment is released one tick later
+        // rather than stalling until the word completes.
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { model.liveText == "Hello wor" }
+
+        // A burst of tokens between ticks lands as one update.
+        for (offset, token) in ["ld, ", "how ", "are ", "you?"].enumerated() {
+            AidenChatProgressLifecycleURLProtocol.pushEvent(
+                AidenRevealStreamFixture.frame(2 + offset, "text_delta", #"{"text":"\#(token)"}"#)
+            )
+        }
+        try await waitUntil { ticks.pending == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "Hello wor")
+        ticks.releaseAll()
+        try await waitUntil { model.liveText != "Hello wor" }
+        XCTAssertEqual(model.liveText, "Hello world, how are ")
+    }
+
+    @MainActor
+    func testDoneRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "done", payload: #"{"messageId":"reply"}"#, state: .done)
+    }
+
+    @MainActor
+    func testErrorRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "error", payload: #"{"code":"internal_error","message":"Model failed"}"#, state: .error)
+    }
+
+    @MainActor
+    func testCancelRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
+        try await assertTerminalRevealsBufferedText(type: "cancelled", payload: #"{"source":"server"}"#, state: .cancelled)
+    }
+
+    @MainActor
+    private func assertTerminalRevealsBufferedText(
+        type: String,
+        payload: String,
+        state: AidenStreamState
+    ) async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello wor"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "text_delta", #"{"text":"ld"}"#))
+        try await waitUntil { ticks.pending == 1 }
+        XCTAssertEqual(model.liveText, "")
+        let readsBeforeTerminal = fixture.chatReads
+        let held = expectation(description: "\(type) transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, type, payload, terminal: true))
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.streamState, state)
+        XCTAssertEqual(model.liveText, "Hello world", "\(type) shows the whole reply without waiting for a tick")
+        XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1)
+    }
+
+    @MainActor
+    func testABotChatSnapshotDropsRevealedBufferedAndReasoningText() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let botChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8
+        ))
+        let (model, _) = try await makeRevealModel(ticks: ticks, initialChat: botChat)
+        XCTAssertTrue(model.chat.isBotChat)
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Old shown "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { model.liveText == "Old shown " }
+        // Reasoning, then reply text received but not yet revealed.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Thinking"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"old buffered "}"#))
+        try await waitUntil { ticks.pending == 1 && model.reasoning == "Thinking" }
+        XCTAssertEqual(model.liveText, "Old shown ")
+
+        let held = expectation(description: "snapshot transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":5}"#
+        ))
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.liveText, "")
+        XCTAssertEqual(model.reasoning, "")
+        // The tick that was waiting when the snapshot landed reveals nothing.
+        ticks.releaseAll()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "the buffered text was dropped with the old copy")
+
+        // The cumulative replacement after the reset starts from empty.
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        XCTAssertEqual(model.liveText, "Fresh copy ")
+    }
+
+    @MainActor
+    func testTextBeforeAToolStartIsShownBeforeTheToolRow() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        let (model, _) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Checking the bui"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "tool_started", #"{"toolId":"tool-1","name":"bash"}"#)
+        )
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Checking the bui")
+        XCTAssertEqual(model.tools.map(\.name), ["bash"])
     }
 
     @MainActor
@@ -7978,6 +8180,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     /// An override status that drops the connection instead of answering,
     /// as when the Mac commits a write but its response is lost.
     static let connectionLostStatus = -1
+    /// An override status that answers 200 with the given body and keeps the
+    /// response open, so the test can push further frames with `pushEvent`.
+    static let openEventStreamStatus = -2
     nonisolated(unsafe) private static var responseOverride: Override?
     static func setResponseOverride(_ handler: @escaping Override) {
         lock.withLock { responseOverride = handler }
@@ -8137,7 +8342,15 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
                 return
             }
-            result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
+            if custom.0 == Self.openEventStreamStatus {
+                shouldFinish = false
+                Self.lock.withLock {
+                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
+                }
+                result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: custom.2)
+            } else {
+                result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
+            }
         } else {
         switch path {
         case "/api/aiden/v1/server":
@@ -10482,6 +10695,40 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
 /// A Mac whose chat has a run started elsewhere: the phone attaches mid-run,
 /// the run ends on the reconnect, and transcript reads then fail until allowed.
+/// A Mac run that is live when the chat opens; its event response stays open,
+/// so the test pushes each later frame with `pushEvent`.
+private final class AidenLiveForeignRunFixture: @unchecked Sendable {
+    /// Events the Mac has retained for the run when the phone attaches.
+    private let replay: String
+
+    init(replay: String = AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Hello wor"}"#)) {
+        self.replay = replay
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe","runs:control"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data(#"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+            return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data((
+                Self.frame(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + replay
+            ).utf8))
+        default:
+            return nil
+        }
+    }
+
+    static func frame(_ sequence: Int, _ type: String, _ payload: String) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
+    }
+}
+
 private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var ended = false
@@ -11152,6 +11399,47 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
     }
 }
 
+// MARK: - Markdown content cache margin inference
+
+final class AidenMarkdownContentCacheTests: XCTestCase {
+    private typealias Cache = AidenMarkdownChunkSpacing
+
+    func testFencedCodeBlockStartingWithDashesIsNotASetextHeading() {
+        // A fenced YAML block whose first content line is `---` (the YAML
+        // document separator) was being misclassified as a Setext heading,
+        // causing an 8pt margin jump from 16pt to 24pt in rendered content.
+        let yaml = """
+        ```yaml
+        ---
+        foo: bar
+        ```
+        """
+        let topMargin = Cache.topMargin(ofFirstBlockIn: yaml)
+        XCTAssertEqual(topMargin, 0, "fenced code blocks should have zero top margin")
+    }
+
+    func testQuotedThematicBreakHasHeadingMargin() {
+        // Quoted thematic breaks should inherit the heading margin (24pt, the
+        // child's natural margin in MarkdownUI), not the block default (16pt).
+        // This matches topMargin behavior for quoted ATX headings and thematic
+        // breaks.
+        let quoted = "> ---"
+        let bottomMargin = Cache.bottomMargin(ofLastBlockIn: quoted)
+        // thematicBreak is 24.0
+        XCTAssertEqual(bottomMargin, 24.0, "quoted thematic breaks should use heading margin")
+    }
+
+    func testFencedBackticksAndTildesAreRecognized() {
+        // Sanity check: both ``` and ~~~ are valid fence markers, and both
+        // starting with `---` should not be treated as Setext headings.
+        for fence in ["```", "~~~"] {
+            let code = "\(fence)\n---\ncontent\n\(fence)"
+            let topMargin = Cache.topMargin(ofFirstBlockIn: code)
+            XCTAssertEqual(topMargin, 0)
+        }
+    }
+}
+
 // MARK: - Transcript follow latch (cases ported from Hermex ChatScrollPolicyTests)
 
 final class AidenChatScrollFollowTests: XCTestCase {
@@ -11756,6 +12044,70 @@ private struct AidenFollowTriggerOwner: View {
         return Color.clear.background {
             AidenStreamingFollowTrigger(trigger: { probe.trigger }) { probe.fires += 1 }
         }
+    }
+}
+
+/// Reveal ticks the test releases by hand, so a test sees exactly what one
+/// streaming tick shows.
+final class AidenManualRevealTicks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var pending: Int { lock.withLock { waiters.count } }
+
+    func tick() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock { waiters.append(continuation) }
+        }
+    }
+
+    func releaseAll() {
+        let released = lock.withLock {
+            let current = waiters
+            waiters = []
+            return current
+        }
+        released.forEach { $0.resume() }
+    }
+}
+
+/// A Mac with one running stream whose event response stays open, so the
+/// test pushes each frame with `pushEvent`.
+private final class AidenRevealStreamFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let chat: AidenChat
+    private var reads = 0
+    var chatReads: Int { lock.withLock { reads } }
+
+    init(chat: AidenChat) { self.chat = chat }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        lock.withLock {
+            let path = request.url!.path
+            if path.hasSuffix("/models") {
+                return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+            }
+            if path.hasSuffix("/chats/" + chat.id) {
+                reads += 1
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return (200, "application/json", try! encoder.encode(chat))
+            }
+            if path.hasSuffix("/streams/stream-reveal/events") {
+                return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data(": keepalive\n\n".utf8))
+            }
+            if path.hasSuffix("/streams/stream-reveal") {
+                return (200, "application/json", Data("""
+                {"streamId":"stream-reveal","chatId":"\(chat.id)","turnId":"turn-reveal","state":"running","lastSequence":0,"updatedAt":"2026-10-12T00:00:00Z"}
+                """.utf8))
+            }
+            if path.hasSuffix("/turns") { return (503, "application/json", Data()) }
+            return nil
+        }
+    }
+
+    static func frame(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-reveal\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-12T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
 

@@ -1280,6 +1280,19 @@ final class AidenChatViewModel {
     @ObservationIgnored private var pendingStreamingScrollTriggerTask: Task<Void, Never>?
     /// Bumped when the reader sends, so the transcript jumps to the new turn.
     private(set) var explicitSendCount = 0
+    /// Reply text received but not yet revealed. Each reveal tick moves it into
+    /// `liveText` through `AidenStreamingRevealGate`, so the transcript grows
+    /// in whole words at most once per tick instead of once per token.
+    @ObservationIgnored private var pendingLiveText = ""
+    /// UTF-8 length of everything received for the live reply, revealed or
+    /// not (`liveText` + `pendingLiveText`). Lets a cumulative update append
+    /// only its new suffix instead of re-reading the whole reply per event.
+    @ObservationIgnored private var receivedLiveTextUTF8Count = 0
+    /// Whether the last reveal tick held a trailing fragment back; the next
+    /// tick releases it even without new whitespace.
+    @ObservationIgnored private var heldStreamingFragmentLastTick = false
+    @ObservationIgnored private var pendingStreamingRevealTask: Task<Void, Never>?
+    @ObservationIgnored private let streamingRevealTick: @Sendable () async throws -> Void
     /// Generations whose image this phone watched being generated; their
     /// settled image plays the arrival reveal once.
     private(set) var imageArrivalRevealGenerationIDs: Set<String> = []
@@ -1387,10 +1400,14 @@ final class AidenChatViewModel {
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
+        streamingRevealTick: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: AidenStreamingRevealGate.tick)
+        },
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         let preferenceInstanceId = coordinator.activeInstanceId ?? ""
+        self.streamingRevealTick = streamingRevealTick
         runtime = .live(
             coordinator: coordinator,
             instanceId: preferenceInstanceId,
@@ -1436,6 +1453,7 @@ final class AidenChatViewModel {
         hapticScope = UUID()
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
+        streamingRevealTick = { try await Task.sleep(for: AidenStreamingRevealGate.tick) }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -1443,6 +1461,7 @@ final class AidenChatViewModel {
 
     deinit {
         pendingStreamingScrollTriggerTask?.cancel()
+        pendingStreamingRevealTask?.cancel()
         streamTask?.cancel()
         progressTask?.cancel()
         titleRefreshTask?.cancel()
@@ -1486,7 +1505,7 @@ final class AidenChatViewModel {
         }
         let removedStreamID = activeStreamID
         activeStreamID = nil
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
         activityTimeline = nil
@@ -1507,6 +1526,89 @@ final class AidenChatViewModel {
             self.pendingStreamingScrollTriggerTask = nil
             self.streamingScrollTrigger &+= 1
         }
+    }
+
+    /// Buffers received reply text and schedules a reveal tick.
+    private func receiveLiveText(_ text: String) {
+        guard !text.isEmpty else { return }
+        pendingLiveText += text
+        receivedLiveTextUTF8Count += text.utf8.count
+        scheduleStreamingReveal()
+    }
+
+    /// Mirrors a cumulative reply (a foreign run's projection). Growth that
+    /// extends what was already received goes through the reveal gate; any
+    /// other change replaces the visible text at once. Each update costs the
+    /// length of its new text, not of the whole reply.
+    private func receiveCumulativeLiveText(_ text: String) {
+        switch AidenCumulativeReplyText.update(
+            to: text,
+            receivedUTF8Count: receivedLiveTextUTF8Count,
+            receivedTail: receivedLiveTextTail(byteCount:)
+        ) {
+        case .append(let suffix): receiveLiveText(suffix)
+        case .replace: replaceLiveText(text)
+        }
+    }
+
+    /// The last `byteCount` UTF-8 bytes received, which may span the revealed
+    /// text and the buffer.
+    private func receivedLiveTextTail(byteCount: Int) -> [UInt8] {
+        let buffered = pendingLiveText.utf8.suffix(byteCount)
+        guard buffered.count < byteCount else { return Array(buffered) }
+        return Array(liveText.utf8.suffix(byteCount - buffered.count)) + Array(buffered)
+    }
+
+    /// Replaces the visible reply and drops anything still buffered.
+    private func replaceLiveText(_ text: String) {
+        cancelPendingStreamingReveal()
+        pendingLiveText = ""
+        heldStreamingFragmentLastTick = false
+        receivedLiveTextUTF8Count = text.utf8.count
+        liveText = text
+    }
+
+    /// Reveals all buffered reply text now, skipping the gate. Terminal,
+    /// structural and lost-stream paths call this so nothing received is
+    /// ever left hidden.
+    func flushPendingStreamingContent() {
+        cancelPendingStreamingReveal()
+        heldStreamingFragmentLastTick = false
+        guard !pendingLiveText.isEmpty else { return }
+        let text = pendingLiveText
+        pendingLiveText = ""
+        liveText += text
+    }
+
+    private func scheduleStreamingReveal() {
+        guard pendingStreamingRevealTask == nil else { return }
+        let tick = streamingRevealTick
+        pendingStreamingRevealTask = Task { @MainActor [weak self] in
+            try? await tick()
+            // A cancelled tick was already replaced or flushed; it must not
+            // clear the slot a newer tick owns.
+            guard let self, !Task.isCancelled else { return }
+            self.pendingStreamingRevealTask = nil
+            self.revealStreamingTick()
+        }
+    }
+
+    /// One reveal tick: shows buffered text through the gate, then
+    /// reschedules only while a fragment is held.
+    private func revealStreamingTick() {
+        let (shown, held) = AidenStreamingRevealGate.cut(
+            pendingLiveText,
+            heldPreviousTick: heldStreamingFragmentLastTick
+        )
+        pendingLiveText = held
+        heldStreamingFragmentLastTick = !held.isEmpty
+        if !shown.isEmpty { liveText += shown }
+        if heldStreamingFragmentLastTick { scheduleStreamingReveal() }
+    }
+
+    private func cancelPendingStreamingReveal() {
+        pendingStreamingRevealTask?.cancel()
+        pendingStreamingRevealTask = nil
     }
 
     var isConnected: Bool {
@@ -2752,7 +2854,7 @@ final class AidenChatViewModel {
             turnAttempts.reset()
             chat = acceptedChat
             selectedSkill = nil
-            liveText = ""
+            replaceLiveText("")
             reasoning = ""
             tools = []
             activityTimeline = nil
@@ -3739,6 +3841,7 @@ final class AidenChatViewModel {
 
                 // A stream that ended without a terminal frame is a lost stream
                 // too: offline, park before any status probe or reconnect.
+                flushPendingStreamingContent()
                 guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
                 guard !isRemoved, coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
@@ -3761,6 +3864,7 @@ final class AidenChatViewModel {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
+                flushPendingStreamingContent()
                 // Offline: park without a status probe, warning, or backoff and
                 // reopen from the last applied sequence when the path returns.
                 do {
@@ -3840,6 +3944,11 @@ final class AidenChatViewModel {
         guard !isRemoved, coordinator.isCurrent(context),
               activeStreamID == event.streamId,
               event.shouldApply else { return }
+        // Text received before any other event is shown before it lands, so
+        // tools, approvals and terminal states never overtake the reply.
+        if event.type != .textDelta, event.type != .heartbeat {
+            flushPendingStreamingContent()
+        }
         if event.type == .questionRequired {
             // Resolving an approval on the Mac emits the surviving question
             // with no running status in between, so a cached approval may
@@ -3869,7 +3978,7 @@ final class AidenChatViewModel {
                 // A projection reset is followed by a cumulative replacement.
                 // Bot progress is disclosure-only, so discard the old ephemeral
                 // copy before accepting that replacement instead of appending it.
-                liveText = ""
+                replaceLiveText("")
                 reasoning = ""
             }
             await reconcileChat(context: context)
@@ -3891,7 +4000,7 @@ final class AidenChatViewModel {
                 await publishLiveActivityStatus(streamID: event.streamId, state: state)
             }
         case .textDelta:
-            liveText += payload.text ?? ""
+            receiveLiveText(payload.text ?? "")
             streamState = .running
             if AidenQuietOpenChat.publishesAmbientProgress(isChatForegrounded: isAmbientSurfaceQuiet) {
                 await liveActivities.appendResponse(payload.text ?? "", instanceID: instanceId, streamID: event.streamId)
@@ -4619,7 +4728,7 @@ final class AidenChatViewModel {
         // A failed initial cache write must not keep a reconciled stream alive.
         // Conditional removal still preserves another owner's newer record.
         guard activeStreamID == expectedStreamID else { return }
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
         activityTimeline = nil
@@ -6985,11 +7094,12 @@ enum AidenMessageActionContent {
 struct AidenMessageTextView: View {
     let role: AidenChatRole
     let content: String
+    var isStreaming = false
 
     @ViewBuilder
     var body: some View {
         if role == .assistant {
-            AidenMarkdownView(content: content)
+            AidenMarkdownView(content: content, isStreaming: isStreaming)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(verbatim: content)
@@ -7039,9 +7149,23 @@ enum AidenMarkdownDocument {
     }
 }
 
+/// Renders a reply as one view per Markdown chunk: settled chunks reuse their
+/// cached parse and skip re-rendering (`.equatable()`), and only the open tail
+/// sees new text while a reply streams. Settled messages use the same layout,
+/// so a finished reply keeps its exact position when it settles.
 struct AidenMarkdownView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let content: String
+    /// While true, a chunk whose text was entirely off screen in the previous
+    /// render fades in once. Text already on screen never fades (including a
+    /// line that moves into its own chunk when its block seals), and nothing
+    /// animates under Reduce Motion or Low Power Mode.
+    var isStreaming = false
+    @State private var renderedLength = AidenRenderedMarkdownLength()
+
+    static let chunkFadeDuration: TimeInterval = 0.18
 
     var body: some View {
         Group {
@@ -7052,7 +7176,19 @@ struct AidenMarkdownView: View {
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                MarkdownUI.Markdown(AidenMarkdownContentCache.shared.content(for: content))
+                let chunks = AidenMarkdownContentCache.shared.chunks(for: content)
+                let fading = isStreaming && !reduceMotion && !lowPowerMode
+                    ? AidenMarkdownChunkReveal.newChunkIndices(
+                        chunks,
+                        previouslyRenderedUTF8Count: renderedLength.record(content)
+                    )
+                    : []
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(chunks, id: \.index) { chunk in
+                        AidenMarkdownChunkView(chunk: chunk, fadesIn: fading.contains(chunk.index))
+                            .equatable()
+                    }
+                }
                     .markdownTheme(.aidenChat(colorScheme: colorScheme))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
                     .markdownCodeSyntaxHighlighter(.plainText)
@@ -7069,11 +7205,51 @@ struct AidenMarkdownView: View {
                         configuration.label
                             .fixedSize(horizontal: false, vertical: true)
                             .relativeLineSpacing(.em(0.18))
-                            .markdownMargin(top: 0, bottom: 8)
+                            .markdownMargin(top: 0, bottom: AidenMarkdownChunkSpacing.paragraphBottom)
                     }
             }
         }
         .textSelection(.enabled)
+    }
+}
+
+/// How much text the previous render of one markdown view showed. Read and
+/// updated while the body is evaluated; it is not observed, so recording a
+/// render never triggers another one.
+private final class AidenRenderedMarkdownLength {
+    private var utf8Count: Int?
+
+    /// Returns the previous render's length (nil on the first render) and
+    /// records `content` as the latest.
+    func record(_ content: String) -> Int? {
+        defer { utf8Count = content.utf8.count }
+        return utf8Count
+    }
+}
+
+/// One chunk of a rendered reply. Equal chunks skip their body, so a sealed
+/// chunk is not re-laid out while the tail streams.
+private struct AidenMarkdownChunkView: View, Equatable {
+    let chunk: AidenMarkdownChunk
+    @State private var isRevealed: Bool
+
+    init(chunk: AidenMarkdownChunk, fadesIn: Bool) {
+        self.chunk = chunk
+        _isRevealed = State(initialValue: !fadesIn)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.chunk.leadingGap == rhs.chunk.leadingGap && lhs.chunk.text == rhs.chunk.text
+    }
+
+    var body: some View {
+        MarkdownUI.Markdown(chunk.content)
+            .padding(.top, chunk.leadingGap)
+            .opacity(isRevealed ? 1 : 0)
+            .onAppear {
+                guard !isRevealed else { return }
+                withAnimation(.easeOut(duration: AidenMarkdownView.chunkFadeDuration)) { isRevealed = true }
+            }
     }
 }
 
@@ -7105,7 +7281,6 @@ private extension MarkdownUI.Theme {
 
 private struct AidenLiveResponseView: View {
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
@@ -7284,7 +7459,7 @@ private struct AidenLiveResponseView: View {
             }
 
             if chronologicalRows == nil && !visibleText.isEmpty {
-                AidenMarkdownView(content: visibleText)
+                AidenMarkdownView(content: visibleText, isStreaming: model.isStreaming)
                     .padding(presentationStyle == .botMessages ? 12 : 0)
                     .background {
                         if presentationStyle == .botMessages {
@@ -7311,7 +7486,6 @@ private struct AidenLiveResponseView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.activityTimeline?.steps.last?.id)
     }
 }
 
@@ -7751,7 +7925,7 @@ private struct AidenChronologicalTranscript: View {
             ForEach(rows) { row in
                 switch row.kind {
                 case .text:
-                    AidenMessageTextView(role: .assistant, content: row.text)
+                    AidenMessageTextView(role: .assistant, content: row.text, isStreaming: active)
                         .foregroundStyle(palette.foreground)
                 case .reasoning:
                     if let step = row.steps.first {
@@ -8940,7 +9114,7 @@ extension AidenChatViewModel {
         foreignRun = nil
         foreignRunIsLive = false
         if wasLive, activeStreamID == nil {
-            liveText = ""
+            replaceLiveText("")
             reasoning = ""
             tools = []
             pendingApproval = nil
@@ -9024,7 +9198,11 @@ extension AidenChatViewModel {
             }
             return false
         }
-        publishForeignRun(context: context)
+        var flushesText = true
+        if case let .content(content) = event.kind {
+            flushesText = content.type != .textDelta && content.type != .heartbeat
+        }
+        publishForeignRun(context: context, flushingText: flushesText)
         for effect in effects {
             guard isCurrentForeignRun(generation, context: context) else { return true }
             if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return true }
@@ -9051,7 +9229,11 @@ extension AidenChatViewModel {
         foreignRunReconcileTask?.cancel()
         foreignRunReconcileTask = nil
         foreignRunIsLive = true
-        publishForeignRun(context: context)
+        // The retained replay lands at once: text it holds before a tool,
+        // approval or other structural state shows before that state.
+        let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+        publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
             chatID: chat.id,
@@ -9065,9 +9247,12 @@ extension AidenChatViewModel {
         }
     }
 
-    private func publishForeignRun(context: AidenRemoteRequestContext) {
+    private func publishForeignRun(context: AidenRemoteRequestContext, flushingText: Bool = false) {
         guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
-        liveText = projection.liveText
+        receiveCumulativeLiveText(projection.liveText)
+        // As on an owned stream, text received before a tool, approval or
+        // other structural event shows before it lands.
+        if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
         if streamState != projection.state { streamState = projection.state }
@@ -9192,6 +9377,7 @@ extension AidenChatViewModel {
     }
 
     private func endForeignRunQuietly(context: AidenRemoteRequestContext, reconcile: Bool) async {
+        if foreignRunIsLive, activeStreamID == nil { flushPendingStreamingContent() }
         let generation = foreignRunGeneration
         var reconciled = true
         if reconcile, foreignRunIsLive {
@@ -9220,7 +9406,7 @@ extension AidenChatViewModel {
     }
 
     private func clearForeignLiveOutput() {
-        liveText = ""
+        replaceLiveText("")
         reasoning = ""
         tools = []
     }
