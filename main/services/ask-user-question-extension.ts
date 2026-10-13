@@ -11,9 +11,11 @@ import {
   ASK_USER_MIN_TIMEOUT_SECONDS,
   ASK_USER_QUESTION_TOOL_NAME,
   ASK_USER_UNATTENDED_TIMEOUT_SECONDS,
+  buildAskUserQuestionRecap,
   formatAskUserQuestionAnswers,
   normalizeAskUserTimeoutSeconds,
   parseAskUserQuestions,
+  type AskUserQuestionRecapV1,
   type AskUserQuestionResponseV1,
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
@@ -133,7 +135,11 @@ export function createAskUserQuestionExtension(options: {
           }),
         ),
       }),
-      execute: async (toolCallId, parameters, signal): Promise<AgentToolResult<null>> => {
+      execute: async (
+        toolCallId,
+        parameters,
+        signal,
+      ): Promise<AgentToolResult<AskUserQuestionRecapV1 | null>> => {
         const questions = parseAskUserQuestions((parameters as { questions?: unknown }).questions);
         if (!questions) throw new Error("The questionnaire is invalid.");
         const timeoutSeconds = normalizeAskUserTimeoutSeconds(
@@ -142,7 +148,9 @@ export function createAskUserQuestionExtension(options: {
         const response = await options.request(toolCallId, questions, signal, timeoutSeconds);
         return {
           content: [{ type: "text", text: formatAskUserQuestionResponse(questions, response) }],
-          details: null,
+          // The transcript recap of what the owner chose. A stopped run settles
+          // as cancelled too, but nobody skipped anything, so it gets none.
+          details: signal?.aborted ? null : (buildAskUserQuestionRecap(questions, response) ?? null),
         };
       },
     },

@@ -652,6 +652,26 @@ body {
   opacity: 0.42;
 }
 
+.ask-user-question-recap-card {
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+  box-shadow: inset 0 0 0 1px var(--border-separator);
+}
+
+.ask-user-question-key {
+  display: inline-grid;
+  min-width: 1.15rem;
+  height: 1.05rem;
+  place-items: center;
+  padding-inline: 0.25rem;
+  border-radius: 0.3rem;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1;
+}
+
 @keyframes ask-user-question-in {
   from {
     opacity: 0;

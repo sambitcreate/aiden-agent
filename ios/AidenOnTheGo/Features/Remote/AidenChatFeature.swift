@@ -5843,13 +5843,22 @@ private struct AidenMessageView: View, Equatable {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
             }
-            if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
-                AidenActivityFeed(
-                    timeline: timeline,
-                    active: false,
-                    progressText: botReply?.progressText,
-                    showsRunningRowsWhenCollapsed: presentationStyle != .botMessages
-                )
+            if message.role == .assistant, let timeline = message.timeline {
+                let activitySteps = timeline.steps.filter { !$0.isQuestionnaire }
+                if !activitySteps.isEmpty {
+                    AidenActivityFeed(
+                        timeline: timeline,
+                        active: false,
+                        progressText: botReply?.progressText,
+                        showsRunningRowsWhenCollapsed: presentationStyle != .botMessages,
+                        steps: activitySteps
+                    )
+                }
+                ForEach(AidenAgentActivityPresentation.questionnaireSteps(timeline)) { step in
+                    if let recap = step.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
@@ -7126,8 +7135,20 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if chronologicalRows == nil && !model.tools.isEmpty {
+            } else if chronologicalRows == nil && AidenAgentActivityPresentation.showsLiveToolRows(
+                model.tools,
+                timeline: model.activityTimeline,
+                reasoningVisible: !model.reasoning.isEmpty
+            ) {
                 AidenToolActivityCard(tools: model.tools)
+            }
+
+            if chronologicalRows == nil {
+                ForEach(AidenAgentActivityPresentation.questionnaireSteps(model.activityTimeline)) { step in
+                    if let recap = step.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
+                }
             }
 
             if let chronologicalRows {
@@ -7663,11 +7684,101 @@ private struct AidenChronologicalTranscript: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                case .questionnaire:
+                    if let recap = row.steps.first?.questionnaire {
+                        AidenQuestionnaireRecapView(recap: recap)
+                    }
                 case .visual(let visual):
                     visualContent?(visual)
                 }
             }
         }
+    }
+}
+
+/// A settled `ask_user_question` card in the transcript: each question with
+/// the owner's choice beneath it, right-aligned like the owner's own messages.
+struct AidenQuestionnaireRecapView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recap: AidenQuestionnaireRecap
+
+    var body: some View {
+        AidenTrailingFractionLayout(fraction: 0.8) {
+            VStack(alignment: .trailing, spacing: 8) {
+                ForEach(Array(recap.items.enumerated()), id: \.offset) { _, item in
+                    card(for: item)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Your answers")
+    }
+
+    private func card(for item: AidenQuestionnaireRecap.Item) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: item.question)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            answer(for: item)
+        }
+        .foregroundStyle(palette.foreground)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(palette.raised, in: shape)
+        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func answer(for item: AidenQuestionnaireRecap.Item) -> some View {
+        switch item.answer(for: recap.outcome) {
+        case .chosen(let text):
+            Text(verbatim: text)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.foreground)
+        case .custom(let text):
+            Text(verbatim: text)
+                .font(.subheadline)
+                .foregroundStyle(palette.foreground)
+        case .unanswered(let label):
+            // Tertiary level of the card's foreground, so it follows the theme.
+            Text(verbatim: label)
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// Places its single child against the trailing edge and caps it at a
+/// fraction of the offered width, while letting it shrink to fit its content.
+private struct AidenTrailingFractionLayout: Layout {
+    let fraction: CGFloat
+
+    private func cappedWidth(_ proposal: ProposedViewSize) -> CGFloat? {
+        guard let width = proposal.width, width.isFinite else { return nil }
+        return width * fraction
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let size = child.sizeThatFits(.init(width: cappedWidth(proposal), height: nil))
+        guard let width = proposal.width, width.isFinite else { return size }
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        let maximum = bounds.width * fraction
+        let size = child.sizeThatFits(.init(width: maximum, height: nil))
+        child.place(
+            at: CGPoint(x: bounds.maxX, y: bounds.minY),
+            anchor: .topTrailing,
+            proposal: .init(width: min(size.width, maximum), height: size.height)
+        )
     }
 }
 

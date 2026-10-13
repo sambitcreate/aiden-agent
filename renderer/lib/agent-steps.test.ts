@@ -161,7 +161,7 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
         ? [row.kind, row.content]
         : row.kind === "activity"
           ? [row.kind, row.steps.map((entry) => entry.id)]
-          : [row.kind, row.content],
+          : [row.kind],
     ),
     [
       ["text", "Before."],
@@ -170,6 +170,49 @@ test("alternates prose and grouped activity at exact assistant-text boundaries",
       ["activity", ["tool-2", "tool-3"]],
       ["text", "After."],
     ],
+  );
+});
+
+test("an answered questionnaire becomes its own row and leaves the activity group", () => {
+  const recap = {
+    version: 1 as const,
+    outcome: "answered" as const,
+    items: [{ question: "Which database?", header: "Database", kind: "option" as const, answers: ["Postgres"] }],
+  };
+  const asked = step("ask", 1, "ask_user_question", "completed", { contentOffset: 7, questionnaire: recap });
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [
+      positionedTool(0, 7),
+      asked,
+      positionedTool(2, 7, "grep"),
+    ]),
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : row.kind === "questionnaire"
+            ? [row.kind, row.step.questionnaire.items[0]?.answers]
+            : [row.kind],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1"]],
+      ["questionnaire", ["Postgres"]],
+      ["activity", ["tool-3"]],
+      ["text", "After."],
+    ],
+  );
+
+  // A questionnaire that settled without a recap (a stopped run) keeps its activity line.
+  const stopped = step("ask", 1, "ask_user_question", "cancelled", { contentOffset: 7 });
+  const stoppedRows = assistantPresentationRows("Before.", timeline("cancelled", [stopped]));
+  assert.deepEqual(
+    stoppedRows?.map((row) => row.kind),
+    ["text", "activity"],
   );
 });
 
@@ -194,7 +237,7 @@ test("reasoning rows follow prose and tools in event order", () => {
     { ...thinking("think-2", 2, 600), contentOffset: 7, reasoningStartOffset: 7, reasoningEndOffset: 13 },
   ];
   const rows = assistantPresentationRows("Before.After.", timeline("completed", steps), "First\n\nSecond");
-  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : row.content]), [
+  assert.deepEqual(rows?.map((row) => [row.kind, row.kind === "activity" ? row.steps[0]?.id : "content" in row ? row.content : row.step.id]), [
     ["reasoning", "First"],
     ["activity", "tool-2"],
     ["text", "Before."],
