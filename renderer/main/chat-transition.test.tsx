@@ -349,7 +349,8 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
-  assert.match(pane, /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u);
+  // The visibility rule is now tested behaviorally in chat-terminal-sync.test.ts:
+  // "a saved reply hides an own run, but a mirrored run only by its own reply"
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
   // Stop closes busy admission synchronously, before React re-renders.

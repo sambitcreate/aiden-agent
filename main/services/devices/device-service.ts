@@ -51,6 +51,7 @@ import {
   installedToolVersions,
   isToolInstalled,
 } from "./device-toolchain.js";
+import { requireDeviceNode } from "./local-device-host.js";
 import { runToolMaintenance, type ToolMaintenanceSpec } from "./device-tool-maintenance.js";
 import type { SshDeviceHost } from "./ssh-device-host.js";
 import {
@@ -106,7 +107,7 @@ export interface DeviceServiceDeps {
   ): Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }>;
   /** SSH device hosts. Absent in tests that only cover this Mac and paired Macs. */
   ssh?: DeviceSshPort;
-  /** Electron-as-Node, which runs the local agent-device shim and tool maintenance. */
+  /** Standalone Node override for the local agent-device shim and tool maintenance. */
   nodePath?: string;
   /** Reclaims old helper versions under the maintenance lock; injectable for tests. */
   runMaintenance?(input: {
@@ -481,7 +482,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
   /** This Mac's helper versions, read from disk only. */
   let localTools: DeviceToolVersions | undefined;
   let localToolsError: string | undefined;
-  const nodePath = deps.nodePath ?? process.execPath;
+  const localNodePath = async () => deps.nodePath ?? host.current()?.nodePath ?? await requireDeviceNode();
   const maintain = deps.runMaintenance ?? ((input) => runToolMaintenance(input));
 
   const sshInfo = (entry: SshEntry): DeviceHostInfo => {
@@ -1277,9 +1278,9 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
 
   async function reclaimLocal(specs: ToolMaintenanceSpec[]): Promise<void> {
     // Keeps the newest previous install as a fallback; never touches a version a running helper uses.
-    await maintain({ nodePath, toolsRoot: path.join(deps.baseDir, "tools"), specs, policy: "reclaim" }).catch(
-      () => undefined,
-    );
+    await localNodePath()
+      .then((nodePath) => maintain({ nodePath, toolsRoot: path.join(deps.baseDir, "tools"), specs, policy: "reclaim" }))
+      .catch(() => undefined);
   }
 
   const installApproval = (): InstallApproval => ({ streaming: streamingEpoch, agent: agentEpoch });
@@ -1378,7 +1379,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     // The local agent-device CLI drives the host's daemon through the forwarded port.
     const shim = await ensureAgentDeviceShim({
       baseDir: deps.baseDir,
-      nodePath,
+      nodePath: await localNodePath(),
       entryPath: deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath,
     });
     shimDir = shim.shimDir;
@@ -1485,7 +1486,7 @@ export function createDeviceService(deps: DeviceServiceDeps): DeviceService {
     async pruneTools() {
       // Under the maintenance lock; a version a running helper was started from stays.
       await maintain({
-        nodePath,
+        nodePath: await localNodePath(),
         toolsRoot: path.join(deps.baseDir, "tools"),
         specs: [DEVICE_HUB, AGENT_DEVICE],
         policy: "prune",
