@@ -804,6 +804,21 @@ export function MessageList({
     : undefined;
   const promptMessageForLiveRow =
     startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+  // Every saved row's key is settled before the live row picks its own, so the
+  // two never collide in one render.
+  const settledRowKeys = new Map<string, string>();
+  const settledReplyKeys = new Set<string>();
+  {
+    let previous: ChatMessage | undefined;
+    for (const message of messages) {
+      if (message.id !== settlingMessageId) {
+        const key = handedOffKeysRef.current.get(message.id) ?? transcriptRowKey(message, previous);
+        settledRowKeys.set(message.id, key);
+        if (message.role === "assistant") settledReplyKeys.add(key);
+      }
+      previous = message;
+    }
+  }
   const liveBaseKey = replyRowKey(promptMessageForLiveRow);
   let liveKey = liveBaseKey;
   if (streamingRowVisible) {
@@ -812,12 +827,18 @@ export function MessageList({
     }
     if (liveRunRef.current && settlingMessageId) liveRunRef.current.handoffId = settlingMessageId;
     const held = liveKeyRef.current;
-    if (held?.base === liveBaseKey) {
+    if (held?.base === liveBaseKey && !settledReplyKeys.has(held.key)) {
       liveKey = held.key;
     } else {
       // A new reply to a prompt that already has a saved reply (a regenerated
-      // answer) starts fresh instead of inheriting that reply's open sections.
-      for (let n = 1; settledReplyKeysRef.current.has(liveKey); n += 1) {
+      // answer) starts fresh instead of inheriting that reply's open sections,
+      // and a saved reply that arrives without taking the live row's place (its
+      // text differs from what streamed) leaves the live row a key of its own.
+      for (
+        let n = 1;
+        settledReplyKeysRef.current.has(liveKey) || settledReplyKeys.has(liveKey);
+        n += 1
+      ) {
         liveKey = `${liveBaseKey}~${n}`;
       }
     }
@@ -854,20 +875,14 @@ export function MessageList({
     />
   ) : null;
 
-  const settledReplyKeys = new Set<string>();
-  let previous: ChatMessage | undefined;
   for (const message of messages) {
     if (message.id === settlingMessageId) {
       transcriptRows.push(liveRow);
-      previous = message;
       continue;
     }
-    const key = handedOffKeysRef.current.get(message.id) ?? transcriptRowKey(message, previous);
-    if (message.role === "assistant") settledReplyKeys.add(key);
-    previous = message;
     transcriptRows.push(
       <SettledMessageRow
-        key={key}
+        key={settledRowKeys.get(message.id)}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
         subagentsEnabled={subagentsEnabled}
