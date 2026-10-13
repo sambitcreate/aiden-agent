@@ -910,7 +910,6 @@ class AidenChatViewModel(
         val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
         if (!historical) {
             if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
-            // The first snapshot is the baseline; the attach made on opening covers it.
             val hadRoster = agentEpoch != null
             if (agentEpoch != null && agentEpoch != snapshot.epoch) {
                 agentRosterSelectionTicket += 1
@@ -924,23 +923,14 @@ class AidenChatViewModel(
             val previousTurnId = currentRosterTurnId
             currentRosterTurnId = snapshot.turnId
             _agentRoster.value = snapshot
-            // New turn observed: either a roster change or the first roster with an active turn.
-            // For Finding 2: ensure the first roster with a new turn also triggers attachment,
-            // even if the opening lookup already completed with 404.
-            // For Finding 3: mark that a new turn was discovered while a lookup was active,
-            // to retry after the current lookup completes.
             if (snapshot.turnId != null && snapshot.turnId != previousTurnId &&
                 snapshot.turnId != lastLocalTurnId
             ) {
-                if (progressForeground) {
-                    if (foreignRunJob?.isActive == true) {
-                        // A lookup is in flight: retain this discovery and retry after it finishes.
-                        pendingForeignRunTurnDiscovery = true
-                    } else {
-                        // No lookup active: start one now.
-                        startForeignRunObservation(retryNotFound = true)
-                    }
-                }
+                // A turn started on the Mac: follow it if nothing is attached. This
+                // phone's own turn can be announced after its stream has ended. The
+                // first snapshot may name a run registered after the opening lookup
+                // was answered, so it is looked up once more, without the retry.
+                announceForeignRunTurn(retryNotFound = hadRoster)
             }
             if (selectedRosterTurnId == null || selectedRosterTurnId == previousTurnId || selectedRosterTurnId == snapshot.turnId) {
                 selectedRosterTurnId = snapshot.turnId
@@ -2225,8 +2215,10 @@ class AidenChatViewModel(
     private var foreignSettleRunId: String? = null
     /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
     private var foreignReconcileJob: Job? = null
-    /** Pending roster turn discovered while a lookup was active; retry after it completes. */
-    private var pendingForeignRunTurnDiscovery = false
+    /** Bumped for each turn the roster announces; a lookup that saw it change looks again. */
+    private var foreignRunTurnSignal = 0L
+    /** Whether the newest announced turn earns a lookup's not-found retry. */
+    private var foreignRunTurnRetry = false
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -2257,7 +2249,26 @@ class AidenChatViewModel(
         if (!foreignRunAccess(AidenRemoteCapability.RUNS_OBSERVE)) return
         val client = activeClient() ?: return
         foreignSettleDeadlineNanos = null
-        foreignRunJob = viewModelScope.launch { observeForeignRun(client, retryNotFound) }
+        foreignRunJob = viewModelScope.launch {
+            var retry = retryNotFound
+            while (true) {
+                val signal = foreignRunTurnSignal
+                observeForeignRun(client, retry)
+                // A turn announced while this lookup was out may have registered
+                // after it was answered, so look for it again.
+                if (foreignRunTurnSignal == signal || !progressForeground || activeStreamId != null ||
+                    _isStarting.value || activeClient() !== client
+                ) break
+                retry = foreignRunTurnRetry
+                foreignSettleDeadlineNanos = null
+            }
+        }
+    }
+
+    private fun announceForeignRunTurn(retryNotFound: Boolean) {
+        foreignRunTurnSignal += 1
+        foreignRunTurnRetry = retryNotFound
+        if (progressForeground) startForeignRunObservation(retryNotFound)
     }
 
     /**
@@ -2352,21 +2363,7 @@ class AidenChatViewModel(
                 delay(progressRetryDelay(reconnects))
             }
         } finally {
-            if (foreignRunJob?.isActive != true) {
-                foreignRunJob = null
-                // Check if a new roster turn was discovered while this lookup was in flight.
-                // Retry to ensure we don't miss attaching to a run that started while we
-                // were waiting for the opening lookup or for a 404 retry (Finding 3).
-                if (pendingForeignRunTurnDiscovery && progressForeground &&
-                    coroutineContext.isActive && activeStreamId == null && !_isStarting.value) {
-                    pendingForeignRunTurnDiscovery = false
-                    // Reschedule the next lookup outside this coroutine to avoid
-                    // blocking the finally block.
-                    viewModelScope.launch {
-                        startForeignRunObservation(retryNotFound = true)
-                    }
-                }
-            }
+            if (foreignRunJob?.isActive != true) foreignRunJob = null
         }
     }
 
