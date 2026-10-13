@@ -61,6 +61,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
 class AidenChatTest {
     @Test
@@ -376,6 +377,7 @@ class AidenChatTest {
     private fun withForeignRunChat(
         initial: AidenChat?,
         route: (String, RecordedRequest) -> MockResponse,
+        features: List<String> = listOf("phone-run-control-v1"),
         body: suspend CoroutineScope.(AidenChatViewModel) -> Unit
     ) {
         val directory = kotlin.io.path.createTempDirectory("aiden-foreign-run-").toFile()
@@ -389,7 +391,7 @@ class AidenChatTest {
         )
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (val path = request.requestUrl!!.encodedPath) {
-                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(features)},"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
                 else -> route(path.removePrefix("/api/aiden/v1"), request)
             }
         }
@@ -529,6 +531,58 @@ class AidenChatTest {
             // Recovery re-reads the chat on its own; the answer moves into the transcript.
             withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
             withTimeout(5_000) { model.liveText.first { it.isEmpty() } }
+        }
+    }
+
+    @Test
+    fun aTitleRefreshHoldingAForeignRunsReplyRetiresItsCardWhileRecoveryRetries() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val runEnded = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failedRead = CountDownLatch(1)
+        val answer = AidenChatMessage("reply-mac", AidenChatRole.ASSISTANT, "Visible answer", createdAt = Instant.EPOCH)
+        // The title is settled with the run, so the title refresh keeps reading until the run has ended.
+        fun chat() = if (runEnded.get()) foreignRunChat(listOf(answer)) else foreignRunChat().apply { titlePending = true }
+        withForeignRunChat(initial = chat(), features = listOf(
+            "phone-run-control-v1", AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE,
+            AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_METADATA_FEATURE
+        ), route = { path, _ ->
+            when (path) {
+                // Transcript reads, including the recovery after the run ends, page the
+                // latest messages; every one of them fails once the run is over.
+                "/chats/chat-mac/messages" -> if (runEnded.get()) {
+                    failedRead.countDown()
+                    MockResponse().setResponseCode(500).setBody("""{"code":"internal_error","message":"Try again."}""")
+                } else chat().let {
+                    MockResponse().setBody(wireJson.encodeToString(AidenChatMessagesWindow(
+                        it.id, it.revision, it.messages, hasOlder = false, workspaceId = it.workspaceId, title = it.title,
+                        titlePending = it.titlePending, createdAt = it.createdAt, updatedAt = it.updatedAt
+                    )))
+                }
+                // Only the title refresh reads the whole chat.
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(chat()))
+                "/chats/chat-mac/runs/current/events" -> runFeed(
+                    runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                        runFrame(2, "text_delta", """{"text":"Visible answer"}""")
+                )
+                "/runs/run-mac/events" -> {
+                    runEnded.set(true)
+                    runFeed(
+                        runFrame(3, "done", """{"messageId":"reply-mac"}""", terminal = true) +
+                            runFrame(3, "run.ended", """{"runId":"run-mac","chatId":"chat-mac","state":"done"}""", terminal = true)
+                    )
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Visible answer" } }
+            assertTrue(withContext(Dispatchers.IO) { failedRead.await(10, TimeUnit.SECONDS) })
+            withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
+            // The reply is in the transcript now, so its finished live card goes, though
+            // the recovery that was keeping it on screen never gets a page.
+            withTimeout(2_000) { model.liveText.first { it.isEmpty() } }
+            assertFalse(AidenChatScroll.showsLiveCard(model.streamState.value, model.liveText.value.isNotEmpty()))
         }
     }
 

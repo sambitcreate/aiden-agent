@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
@@ -2216,6 +2217,8 @@ class AidenChatViewModel(
     private var foreignSettleRunId: String? = null
     /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
     private var foreignReconcileJob: Job? = null
+    /** Transcript reads reserved after this write token were issued once the foreign run had ended. */
+    private var foreignRunEndedWriteToken = 0L
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -2398,6 +2401,7 @@ class AidenChatViewModel(
         foreignRunId = null
         foreignProjection = null
         val client = activeClient()
+        foreignRunEndedWriteToken = chatCache.reserveChatWrite()
         val reconciled = reconcileChat()
         if (activeStreamId != null || _isStarting.value) return
         _pendingApproval.value = null
@@ -2896,6 +2900,16 @@ class AidenChatViewModel(
         if (ended != null && ended.streamId == activeStreamId && ended.isIn(presented.messages)) {
             clearRecoveryWarning()
             clearFinishedStream(ended.streamId)
+        }
+        // Likewise a read issued after a foreign run ended holds its reply, so
+        // the recovery keeping that run's response on screen can stand down.
+        val recovery = foreignReconcileJob
+        if (recovery?.isActive == true && writeToken > foreignRunEndedWriteToken &&
+            foreignRunId == null && activeStreamId == null
+        ) {
+            if (recovery !== currentCoroutineContext()[Job]) recovery.cancel()
+            foreignReconcileJob = null
+            clearForeignLiveOutput()
         }
         resolveModelSelection()
         if (scheduleTitleRefresh && presented.isTitlePending) {
