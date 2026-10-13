@@ -2,77 +2,46 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   distributeCapabilityOnlyModelPadSuggestions,
-  emptyModelPadLayout,
   measureModelPadAvailableSize,
   MODEL_PAD_MIN_SIZE_PX,
-  MODEL_PAD_SETTINGS_CHROME_PX,
-  MODEL_PAD_VIEWPORT_GUTTER_PX,
   modelPadGridSize,
-  modelPadLayoutsEqual,
+  modelPadGridSizeForPlacements,
+  addModelPadPlacement,
+  MODEL_PAD_KNOB_TAG_GUTTER_PX,
+  modelPadKnobTagLayout,
+  modelPadKnobTagSide,
+  modelPadLabelPlacement,
+  modelPadLeftPercent,
+  modelPadTopPercent,
   modelPadPointKey,
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
   nextModelPadPlacement,
   parseModelPadLayout,
-  readModelPadLayout,
   reflowVisibleModelPadPlacements,
+  rerankModelPadBenchmarkHeights,
   snapToModelPadGrid,
-  writeModelPadLayout,
   type ModelPadPlacement,
 } from "./model-pad-layout.js";
 
-function memoryStorage(initial: string | null = null) {
-  let value = initial;
-  return {
-    getItem: () => value,
-    setItem: (_key: string, next: string) => {
-      value = next;
-    },
-  };
-}
-
-test("model Pad layouts fail closed and retain only valid placements", () => {
-  assert.deepEqual(parseModelPadLayout(null), emptyModelPadLayout());
-  assert.deepEqual(
-    parseModelPadLayout({
-      schemaVersion: 1,
-      placements: {
-        "openai::gpt": { x: 0.2, y: 0.8, source: "user" },
-        "bad::range": { x: 4, y: 0.2, source: "user" },
-        "bad::source": { x: 0.2, y: 0.2, source: "generated" },
-      },
-    }),
-    {
-      schemaVersion: 2,
-      placements: {
-        "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "user" },
-      },
-    },
-  );
-});
-
-test("v1 model Pad layouts migrate and round-trip as axis-aware v2 layouts", () => {
-  const storage = memoryStorage();
+test("model Pad layouts fail closed and retain only valid axis-aware placements", () => {
+  assert.deepEqual(parseModelPadLayout(null), { placements: {} });
+  assert.deepEqual(parseModelPadLayout([]), { placements: {} });
+  assert.deepEqual(parseModelPadLayout({ placements: [] }), { placements: {} });
   const layout = parseModelPadLayout({
-    schemaVersion: 1,
     placements: {
+      "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
+      "bad::range": { x: 4, y: 0.2, xSource: "user", ySource: "user" },
+      "bad::source": { x: 0.2, y: 0.2, xSource: "generated", ySource: "user" },
+      // Retired v1 single-source placements are not migrated.
       "anthropic::claude": { x: 0.42, y: 0.86, source: "artificial-analysis" },
     },
   });
   assert.deepEqual(layout, {
-    schemaVersion: 2,
     placements: {
-      "anthropic::claude": {
-        x: 0.42,
-        y: 0.86,
-        xSource: "benchmark",
-        ySource: "benchmark",
-      },
+      "openai::gpt": { x: 0.2, y: 0.8, xSource: "user", ySource: "benchmark" },
     },
   });
-  assert.deepEqual(writeModelPadLayout(layout, storage), layout);
-  assert.deepEqual(readModelPadLayout(storage), layout);
-  assert.equal(modelPadLayoutsEqual(layout, readModelPadLayout(storage)), true);
 });
 
 test("new models receive deterministic, non-overlapping personal positions", () => {
@@ -98,6 +67,76 @@ test("adaptive grids start at seven and scale by visible model count", () => {
   assert.equal(modelPadGridSize(10), 9);
   assert.equal(modelPadGridSize(40), 17);
   assert.equal(modelPadGridSize(100), 25);
+});
+
+test("the Pad grid counts only placed, visible models", () => {
+  const placements: Record<string, ModelPadPlacement> = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => [
+      `placed-${index}`,
+      { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } satisfies ModelPadPlacement,
+    ]),
+  );
+  const placedValues = Object.keys(placements);
+  const catalog = [
+    ...placedValues,
+    ...Array.from({ length: 290 }, (_, index) => `unplaced-${index}`),
+  ];
+
+  assert.equal(modelPadGridSizeForPlacements(placements, catalog), 9);
+  assert.equal(modelPadGridSizeForPlacements(placements, placedValues), 9);
+  // Hidden or unavailable placements do not grow the grid.
+  assert.equal(modelPadGridSizeForPlacements(placements, placedValues.slice(0, 8)), 7);
+  assert.equal(modelPadGridSizeForPlacements({}, catalog), 7);
+});
+
+test("adding a model places it against the grid for one more placed model", () => {
+  const placements: Record<string, ModelPadPlacement> = {};
+  for (let index = 0; index < 9; index += 1) {
+    placements[`model-${index}`] = nextModelPadPlacement(placements);
+  }
+  // With nine models already placed, the tenth is placed on the 9x9 grid for ten models.
+  const tenth = nextModelPadPlacement(placements, 10);
+  const nineByNine = modelPadGridSize(10);
+  assert.equal(nineByNine, 9);
+  assert.deepEqual(snapToModelPadGrid(tenth, nineByNine), { x: tenth.x, y: tenth.y });
+  assert.notDeepEqual(snapToModelPadGrid(tenth, 7), { x: tenth.x, y: tenth.y });
+});
+
+test("adding after a removal keeps existing dots on the grid they will share with the new one", () => {
+  const ninth = (column: number, row: number): ModelPadPlacement => ({
+    x: column / 8,
+    y: row / 8,
+    xSource: "user",
+    ySource: "user",
+  });
+  // Nine models laid out on the 9x9 lattice; one is then removed (eight placed -> 7x7 grid).
+  const placements: Record<string, ModelPadPlacement> = {
+    m1: ninth(2, 4),
+    m2: ninth(6, 4),
+    m3: ninth(4, 1),
+    m4: ninth(4, 7),
+    m5: ninth(0, 0),
+    m6: ninth(8, 8),
+    m7: ninth(1, 6),
+    m8: ninth(7, 2),
+    offline: { x: 0.33, y: 0.66, xSource: "user", ySource: "benchmark" },
+  };
+  const visibleValues = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "new"];
+  assert.equal(modelPadGridSizeForPlacements(placements, visibleValues), 7);
+
+  const next = addModelPadPlacement(placements, visibleValues, "new");
+
+  // Back to nine placed models on the 9x9 grid: every existing dot returns to where it was.
+  for (const value of ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"]) {
+    assert.deepEqual(next[value], placements[value], value);
+  }
+  assert.deepEqual(next.offline, placements.offline);
+  assert.equal(next.new.xSource, "user");
+  assert.deepEqual(snapToModelPadGrid(next.new, 9), { x: next.new.x, y: next.new.y });
+  const cells = visibleValues.map((value) => modelPadPointKey(next[value], 9));
+  assert.equal(new Set(cells).size, visibleValues.length);
+  // An already placed model is left alone.
+  assert.equal(addModelPadPlacement(placements, visibleValues, "m1"), placements);
 });
 
 test("pointer targets snap to nodes and choose the nearest free node", () => {
@@ -219,24 +258,28 @@ test("capability-only distribution fails closed for invalid and duplicate sugges
   assert.equal(placements.valid.y, 5 / 6);
 });
 
-test("Model Pad available size ignores label wrap and never exceeds the scrollport", () => {
-  const canvasTop = 120;
-  const viewportBottom = 600;
-  const canvasWidth = 480;
-  const scrollportClientHeight = 360;
-  const size = measureModelPadAvailableSize({
-    viewportBottom,
-    canvasTop,
-    canvasWidth,
-    scrollportClientHeight,
-  });
-  const heightBudget =
-    viewportBottom - canvasTop - MODEL_PAD_SETTINGS_CHROME_PX - MODEL_PAD_VIEWPORT_GUTTER_PX;
+test("Model Pad available size leaves room for the suggestion bar and never exceeds the scrollport", () => {
+  // 480px from the canvas top to the viewport bottom: the square, then the
+  // suggestion bar row under it (48px) and the 24px gutter.
   assert.equal(
-    size,
-    Math.floor(Math.min(scrollportClientHeight - 1, canvasWidth, heightBudget)),
+    measureModelPadAvailableSize({
+      viewportBottom: 600,
+      canvasTop: 120,
+      canvasWidth: 1_000,
+      scrollportClientHeight: 1_000,
+    }),
+    408,
   );
-  assert.ok(size <= scrollportClientHeight);
+  // A narrow column caps it at the column width.
+  assert.equal(
+    measureModelPadAvailableSize({
+      viewportBottom: 600,
+      canvasTop: 120,
+      canvasWidth: 300,
+      scrollportClientHeight: 1_000,
+    }),
+    300,
+  );
   assert.equal(
     measureModelPadAvailableSize({
       viewportBottom: 800,
@@ -260,4 +303,168 @@ test("keyboard movement advances by nodes and skips occupied points on its axis"
   const next = moveModelPadPoint({ x: 0.5, y: 0.5 }, "right", 1, 7, [{ x: 4 / 6, y: 0.5 }]);
   assert.deepEqual(next, { x: 5 / 6, y: 0.5 });
   assert.deepEqual(moveModelPadPoint(next, "up", 3, 7, []), { x: 5 / 6, y: 1 });
+});
+
+test("marker labels flip below near the top edge and hug the left and right edges", () => {
+  assert.deepEqual(modelPadLabelPlacement({ x: 0.5, y: 0.5 }), { align: "center", side: "top" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 0, y: 0 }), { align: "start", side: "top" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 1, y: 1 }), { align: "end", side: "bottom" });
+  assert.deepEqual(modelPadLabelPlacement({ x: 0.2, y: 0.8 }), { align: "center", side: "top" });
+});
+
+test("marker label thresholds are exclusive at the edges", () => {
+  assert.equal(modelPadLabelPlacement({ x: 0.16, y: 0.5 }).align, "center");
+  assert.equal(modelPadLabelPlacement({ x: 0.84, y: 0.5 }).align, "center");
+  assert.equal(modelPadLabelPlacement({ x: 0.1599, y: 0.5 }).align, "start");
+  assert.equal(modelPadLabelPlacement({ x: 0.8401, y: 0.5 }).align, "end");
+  assert.equal(modelPadLabelPlacement({ x: 0.5, y: 0.82 }).side, "top");
+  assert.equal(modelPadLabelPlacement({ x: 0.5, y: 0.8201 }).side, "bottom");
+});
+
+/** Knob center in pixels for a normalized capability on a Pad of the given height. */
+function knobTopPx(y: number, padHeight: number): number {
+  return (modelPadTopPercent(y) / 100) * padHeight;
+}
+
+test("the knob tag drops below when a short Pad has no room above the knob", () => {
+  // Minimum composer Pad (160px) with a two-line tag at a 14px UI font (38px).
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.75, 160), padHeight: 160, tagHeight: 38 }), "bottom");
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.8, 160), padHeight: 160, tagHeight: 38 }), "bottom");
+  // An 18px UI font (46px tag) clips even on the second row of a seven-column grid.
+  assert.equal(
+    modelPadKnobTagSide({ knobTop: knobTopPx(5 / 6, 160), padHeight: 160, tagHeight: 46 }),
+    "bottom",
+  );
+  // The same rows keep the tag above on a full-size Pad.
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0.75, 300), padHeight: 300, tagHeight: 38 }), "top");
+  // Near the bottom edge above is preferred, and it fits.
+  assert.equal(modelPadKnobTagSide({ knobTop: knobTopPx(0, 160), padHeight: 160, tagHeight: 52 }), "top");
+  // When neither side fits, the roomier side wins.
+  assert.equal(modelPadKnobTagSide({ knobTop: 20, padHeight: 60, tagHeight: 50 }), "bottom");
+  assert.equal(modelPadKnobTagSide({ knobTop: 40, padHeight: 60, tagHeight: 50 }), "top");
+});
+
+test("the knob tag stays inside the Pad gutters on every side and size", () => {
+  const gutter = MODEL_PAD_KNOB_TAG_GUTTER_PX;
+  const epsilon = 1e-9;
+  for (const padSize of [160, 216, 300]) {
+    // 90px is a three-line tag (name, provider, "Also via") that fits on neither side
+    // of a mid-height knob on the smallest Pad, so it is clamped inside the gutters.
+    for (const tagHeight of [38, 46, 60, 90]) {
+      for (const x of [0, 0.1, 0.1599, 0.16, 0.3, 0.5, 0.7, 0.84, 0.8401, 0.9, 1]) {
+        for (const y of [0, 1 / 6, 0.5, 0.75, 0.8, 5 / 6, 1]) {
+          const layout = modelPadKnobTagLayout({
+            point: { x, y },
+            padWidth: padSize,
+            padHeight: padSize,
+            tagHeight,
+          });
+          const width = layout.maxWidth;
+          const [left, right] =
+            layout.align === "start"
+              ? [layout.x, layout.x + width]
+              : layout.align === "end"
+                ? [layout.x - width, layout.x]
+                : [layout.x - width / 2, layout.x + width / 2];
+          const [top, bottom] =
+            layout.side === "top" ? [layout.y - tagHeight, layout.y] : [layout.y, layout.y + tagHeight];
+          const where = `${padSize}px pad, ${tagHeight}px tag at (${x}, ${y})`;
+          assert.ok(width > 0, `${where} has room for text`);
+          assert.ok(left >= gutter - epsilon, `${where} left edge`);
+          assert.ok(right <= padSize - gutter + epsilon, `${where} right edge`);
+          assert.ok(top >= gutter - epsilon, `${where} top edge`);
+          assert.ok(bottom <= padSize - gutter + epsilon, `${where} bottom edge`);
+        }
+      }
+    }
+  }
+});
+
+test("edge-aligned knob tags line up with the knob's outer edge when there is room", () => {
+  const padWidth = 300;
+  const start = modelPadKnobTagLayout({ point: { x: 0, y: 0.5 }, padWidth, padHeight: 300, tagHeight: 38 });
+  const end = modelPadKnobTagLayout({ point: { x: 1, y: 0.5 }, padWidth, padHeight: 300, tagHeight: 38 });
+  const knobLeft = (modelPadLeftPercent(0) / 100) * padWidth;
+  const knobRight = (modelPadLeftPercent(1) / 100) * padWidth;
+  assert.equal(start.align, "start");
+  assert.equal(start.x, knobLeft - 12);
+  assert.equal(end.align, "end");
+  assert.equal(end.x, knobRight + 12);
+});
+
+test("switching the height metric re-ranks benchmark heights in their own columns and keeps the rest", () => {
+  const benchmark = (x: number, y: number, yMetric?: ModelPadPlacement["yMetric"]): ModelPadPlacement => ({
+    x,
+    y,
+    xSource: "neutral",
+    ySource: "benchmark",
+    ...(yMetric ? { yMetric } : {}),
+  });
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::a": benchmark(0, 0, "coding"),
+    "p::b": benchmark(0.5, 0.5, "coding"),
+    "p::c": benchmark(1, 1, "coding"),
+    "p::user": { x: 1, y: 0, xSource: "user", ySource: "user" },
+    "p::no-general": benchmark(0.5, 1 / 6, "coding"),
+    "p::unstamped": benchmark(0, 0.5),
+    "p::hidden": benchmark(0.3, 0.3, "coding"),
+  };
+  const visible = ["p::a", "p::b", "p::c", "p::user", "p::no-general", "p::unstamped"];
+  assert.equal(modelPadGridSizeForPlacements(placements, visible), 7);
+  // General ranks run the other way from Coding.
+  const general = new Map([
+    ["p::a", 1],
+    ["p::b", 0.5],
+    ["p::c", 0],
+  ]);
+
+  const result = rerankModelPadBenchmarkHeights(placements, visible, {
+    percentiles: general,
+    metric: "intelligence",
+    previousMetric: "coding",
+  });
+
+  assert.deepEqual(result.updated.sort(), ["p::a", "p::b", "p::c"]);
+  assert.deepEqual(result.kept.sort(), ["p::no-general", "p::unstamped"]);
+  const next = result.placements;
+  // Vertical order flips; every model keeps its column.
+  assert.ok(next["p::a"].y > next["p::b"].y && next["p::b"].y > next["p::c"].y);
+  for (const value of visible) assert.equal(next[value].x, placements[value].x, value);
+  assert.deepEqual(next["p::a"], benchmark(0, 1, "intelligence"));
+  assert.deepEqual(next["p::b"], benchmark(0.5, 0.5, "intelligence"));
+  // The bottom dot of its column is the user's, so it takes the nearest free one.
+  assert.deepEqual(next["p::c"], benchmark(1, 1 / 6, "intelligence"));
+  // The user's own spot and axes stay.
+  assert.deepEqual(next["p::user"], placements["p::user"]);
+  // No General score: same spot, and it keeps naming the score it came from.
+  assert.deepEqual(next["p::no-general"], placements["p::no-general"]);
+  assert.deepEqual(next["p::unstamped"], benchmark(0, 0.5, "coding"));
+  assert.deepEqual(next["p::hidden"], placements["p::hidden"]);
+  const spots = visible.map((value) => modelPadPointKey(next[value], 7));
+  assert.equal(new Set(spots).size, spots.length);
+});
+
+test("re-ranking returns the same layout when no benchmark height has a score for the metric", () => {
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+    "p::user": { x: 1, y: 0, xSource: "user", ySource: "user" },
+  };
+  const result = rerankModelPadBenchmarkHeights(placements, Object.keys(placements), {
+    percentiles: new Map([["p::user", 1]]),
+    metric: "agentic",
+    previousMetric: "coding",
+  });
+  assert.equal(result.placements, placements);
+  assert.deepEqual(result.updated, []);
+
+  // A height saved before its metric was recorded is stamped with the old one,
+  // so the new global metric does not relabel it.
+  const unstamped = rerankModelPadBenchmarkHeights(
+    { "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark" } },
+    ["p::a"],
+    { percentiles: new Map(), metric: "agentic", previousMetric: "coding" },
+  );
+  assert.deepEqual(unstamped.placements, {
+    "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+  });
 });

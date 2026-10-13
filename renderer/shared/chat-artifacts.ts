@@ -49,6 +49,15 @@ export interface HtmlArtifactPlacementV1 {
   layout?: "wide";
 }
 
+/**
+ * Which generate_image call produced a generated image attachment, so the
+ * image renders at that call's activity row. Lenient like the HTML placements.
+ */
+export interface ChatImagePlacementV1 {
+  attachmentId: string;
+  toolCallId: string;
+}
+
 /** Where a visual sits: the reading column (default) or the full chat pane. */
 export type HtmlArtifactLayout = "column" | "wide";
 
@@ -346,6 +355,22 @@ export function parseHtmlArtifactPlacements(value: unknown): HtmlArtifactPlaceme
       toolCallId: record.toolCallId,
       ...(record.layout === "wide" ? { layout: "wide" as const } : {}),
     });
+  }
+  return placements.length ? placements : undefined;
+}
+
+/** Lenient: unknown fields and bad entries are dropped, never fatal. */
+export function parseChatImagePlacements(value: unknown): ChatImagePlacementV1[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const placements: ChatImagePlacementV1[] = [];
+  for (const entry of value.slice(0, MAX_PLACEMENTS)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (!isToolCallId(record.attachmentId) || !isToolCallId(record.toolCallId)) continue;
+    if (seen.has(record.attachmentId)) continue;
+    seen.add(record.attachmentId);
+    placements.push({ attachmentId: record.attachmentId, toolCallId: record.toolCallId });
   }
   return placements.length ? placements : undefined;
 }

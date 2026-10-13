@@ -100,6 +100,39 @@ test("catalog status and insight reads never fetch, and model metadata fetch is 
   assert.ok(readFileSync(join(dir, "models-dev.json"), "utf8").includes('"schemaVersion": 1'));
 });
 
+test("/models info attaches cached OpenRouter benchmark scores offline and ignores a missing or invalid cache", async (t) => {
+  const dir = temporary(t), originalEntry = process.env.AIDEN_CLI_ENTRY, originalFetch = globalThis.fetch;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  globalThis.fetch = async () => { throw new Error("/models info must not use the network"); };
+  t.after(() => { globalThis.fetch = originalFetch; if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
+  const commands = new Map();
+  api.createProviderParityExtension(dir).factory({ registerProvider: () => {}, on: () => {}, registerCommand: (name, command) => commands.set(name, command) });
+  const model = { provider: "openai", id: "gpt-cli-bench", name: "GPT CLI Bench", baseUrl: "https://api.openai.com/v1", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 4096 };
+  async function info() {
+    const notes = [];
+    await commands.get("models").handler("info openai/gpt-cli-bench", { modelRegistry: { getAll: () => [model] }, ui: { notify: (text) => notes.push(text) } });
+    return JSON.parse(notes.at(-1));
+  }
+  const missing = await info();
+  assert.equal(missing.id, "gpt-cli-bench");
+  assert.equal(missing.metadata.benchmark, undefined);
+  const cache = api.buildOpenRouterBenchmarkCache({
+    data: [{ source: "artificial-analysis", model_permaslug: "openai/gpt-cli-bench", display_name: "GPT CLI Bench", intelligence_index: 61.5, coding_index: 70.2, agentic_index: 55 }],
+    meta: { as_of: "2026-09-30T00:00:00.000Z", version: "v1", source: "artificial-analysis", source_url: "https://artificialanalysis.ai", citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).", model_count: 1 },
+  }, "2026-10-01T00:00:00.000Z");
+  api.atomicJson(join(dir, "openrouter-insights.json"), cache);
+  const matched = await info();
+  assert.equal(matched.metadata.benchmark.intelligence, 61.5);
+  assert.equal(matched.metadata.benchmark.coding, 70.2);
+  assert.equal(matched.metadata.benchmark.agentic, 55);
+  assert.equal(matched.metadata.benchmark.asOf, "2026-09-30T00:00:00.000Z");
+  assert.deepEqual({ ...matched.metadata, benchmark: undefined }, { ...missing.metadata, benchmark: undefined });
+  api.atomicJson(join(dir, "openrouter-insights.json"), { ...cache, source: { ...cache.source, endpoint: "https://example.com/benchmarks" } });
+  assert.deepEqual(await info(), missing);
+  writeFileSync(join(dir, "openrouter-insights.json"), "{ not json");
+  assert.deepEqual(await info(), missing);
+});
+
 test("schedule CRUD uses shared validation, preview and persisted state", async (t) => {
   const dir = temporary(t), input = join(dir, "input.json");
   writeFileSync(input, JSON.stringify({ name: "Review", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Review the repository", permission: "read-only", enabled: false }));

@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import type { NodeProps } from "@xyflow/react";
 import { Badge, Button } from "../../components/ui";
 import { CanvasNodeChrome } from "../../canvas";
@@ -19,6 +20,7 @@ export function GenerateImageNodeBody({
   stale = false,
   onModel,
   onRunFromHere,
+  onOpenSettings,
 }: {
   model: ImageModelRef | undefined;
   models: readonly ImageModelOption[];
@@ -27,10 +29,11 @@ export function GenerateImageNodeBody({
   stale?: boolean;
   onModel(model: ImageModelRef): void;
   onRunFromHere(): void;
+  onOpenSettings?: () => void;
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <ModelPicker value={model} models={models} onChange={onModel} />
+      <ModelPicker value={model} models={models} onChange={onModel} onOpenSettings={onOpenSettings} />
       {attempt ? <AttemptBadge attempt={attempt} /> : null}
       {stale ? <Badge color="warning">{STALE_LABEL}</Badge> : null}
       <Button size="small" variant="muted" className="nodrag" disabled={running} onClick={onRunFromHere}>
@@ -42,6 +45,7 @@ export function GenerateImageNodeBody({
 
 export function GenerateImageNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) {
   const editor = useWorkflowEditor();
+  const navigate = useNavigate();
   const node = data.node;
   if (node.type !== "generate-image") return null;
   return (
@@ -55,6 +59,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<WorkflowFlow
           stale={editor.stale.has(id)}
           onModel={(model) => editor.apply({ type: "set-model", nodeId: id, model })}
           onRunFromHere={() => editor.runFromHere(id)}
+          onOpenSettings={() => void navigate({ to: "/settings", search: { section: "imageGeneration" } })}
         />
       </CanvasNodeChrome>
       <NodePorts type="generate-image" />

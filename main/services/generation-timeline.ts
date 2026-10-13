@@ -16,6 +16,8 @@ import {
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
 
+import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
+import { isImageGenerationProviderId } from "../../renderer/shared/image-generation/types.js";
 import { parseProducedFile } from "../../renderer/shared/produced-file.js";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
@@ -204,6 +206,21 @@ function safeDetail(value: unknown): string | undefined {
   return cleaned || undefined;
 }
 
+const IMAGE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
+
+/**
+ * `<provider>/<model id>` for a generate_image call, from a closed provider set
+ * and a conservative id alphabet; anything else is dropped. Never the prompt.
+ */
+function safeImageModelTarget(provider: unknown, model: unknown): string | undefined {
+  if (!isImageGenerationProviderId(provider) || typeof model !== "string") return undefined;
+  if (!IMAGE_MODEL_ID.test(model) || model.includes("..") || model.includes("//") || model.endsWith("/")) {
+    return undefined;
+  }
+  const target = `${provider}/${model}`;
+  return target.length <= MAX_TARGET_LENGTH ? target : undefined;
+}
+
 function titleCaseToolName(toolName: string): string {
   return safeToolName(toolName)
     .split(/[_:.-]+/u)
@@ -251,6 +268,14 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Run command", detail: safeDetail(values.description) };
     case "share_image":
       return { label: "Share image", target: path };
+    case "generate_image":
+      // Only the requested shape, from a closed set: the prompt never leaves the
+      // host. Paired phones size their in-progress placeholder from this detail.
+      return {
+        label: "Generate image",
+        target: safeImageModelTarget(values.provider, values.model),
+        detail: isImageAspectRatio(values.aspectRatio) ? values.aspectRatio : undefined,
+      };
     case "web_search":
       return { label: "Web search", detail: safeDetail(values.query) };
     case "schedule_task":

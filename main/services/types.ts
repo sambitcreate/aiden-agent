@@ -15,7 +15,7 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
@@ -23,6 +23,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -328,6 +329,8 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Producing generate_image call per generated image attachment. */
+  imagePlacements?: ChatImagePlacementV1[];
   /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
   uiVisuals?: ChatUiVisualV1[];
   /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
@@ -342,17 +345,8 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-export interface ModelRanking {
-  /** Fixed-snapshot percentile, where 1 is the most capable model. */
-  capabilityPercentile: number;
-  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 /** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
 export interface ModelBenchmarkScores {
@@ -368,10 +362,17 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -400,8 +401,11 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
@@ -411,6 +415,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
@@ -713,6 +719,17 @@ export interface AppSettings {
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

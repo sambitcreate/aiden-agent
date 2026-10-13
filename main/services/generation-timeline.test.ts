@@ -217,6 +217,37 @@ test("projects display_image as a safe relative GUI artifact action", () => {
   });
 });
 
+test("projects generate_image with only its model and a known aspect ratio, never the prompt", () => {
+  const descriptor = safeToolDescriptor("generate_image", {
+    provider: "fal",
+    model: "fal-ai/flux",
+    prompt: "SECRET PROMPT",
+    aspectRatio: "16:9",
+  });
+  assert.deepEqual(descriptor, { label: "Generate image", target: "fal/fal-ai/flux", detail: "16:9" });
+  assert.equal(JSON.stringify(descriptor).includes("SECRET"), false);
+  assert.deepEqual(safeToolDescriptor("generate_image", { prompt: "x", aspectRatio: "21:9" }), {
+    label: "Generate image",
+    target: undefined,
+    detail: undefined,
+  });
+  // Only known providers and plain model ids become targets.
+  for (const [provider, model] of [
+    ["openai", "dall-e-3"],
+    ["fal", "../secrets"],
+    ["fal", "fal-ai/flux prompt text"],
+    ["fal", "/abs"],
+    ["replicate", "a".repeat(300)],
+    ["openrouter", 42],
+  ]) {
+    assert.equal(safeToolDescriptor("generate_image", { provider, model }).target, undefined, `${provider}/${model}`);
+  }
+  assert.equal(
+    safeToolDescriptor("generate_image", { provider: "openrouter", model: "google/gemini-2.5-flash-image" }).target,
+    "openrouter/google/gemini-2.5-flash-image",
+  );
+});
+
 test("terminal cancellation settles active steps", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
