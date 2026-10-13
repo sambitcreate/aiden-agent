@@ -36,10 +36,12 @@ export function createDisplayImageInlineExtension(options: {
 			return true;
 		},
 	});
-	const original = runtime.extension.tools?.[0] as
+	// A workspace root is always supplied, so the display_image contribution exists.
+	const extension = runtime.extension;
+	const original = extension?.tools?.[0] as
 		| { execute: (id: string, params: unknown, signal: AbortSignal) => Promise<{ content: unknown[] }> }
 		| undefined;
-	if (!original) {
+	if (!extension || !original) {
 		throw new Error("display_image tool missing from the Aiden display-image core");
 	}
 	const wrappedTool = {
@@ -55,8 +57,8 @@ export function createDisplayImageInlineExtension(options: {
 		},
 	};
 	return aidenExtensionToInlineFactory("aiden-display-image", {
-		id: runtime.extension.id,
-		systemPrompt: runtime.extension.systemPrompt,
+		id: extension.id,
+		systemPrompt: extension.systemPrompt,
 		tools: [wrappedTool],
 	} as AidenExtensionShape);
 }
