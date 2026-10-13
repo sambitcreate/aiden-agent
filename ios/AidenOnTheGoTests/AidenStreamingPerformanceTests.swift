@@ -217,6 +217,162 @@ final class AidenStreamingPerformanceTests: XCTestCase {
         XCTAssertEqual(cache.parsedCharacterCount - parsedBefore, "Tail.\n".utf8.count)
     }
 
+    @MainActor
+    func testStreamedChunksRenderTheSameDocumentAsAFullParse() {
+        for fixture in Self.markdownFixtures {
+            let cache = AidenMarkdownContentCache()
+            var prefix = ""
+            for character in fixture {
+                prefix.append(character)
+                let chunks = cache.chunks(for: prefix)
+                XCTAssertEqual(chunks.map(\.index), Array(chunks.indices))
+                XCTAssertEqual(chunks.map(\.text).joined(), prefix)
+                XCTAssertEqual(
+                    MarkdownContent { for chunk in chunks { chunk.content } },
+                    MarkdownContent(prefix),
+                    "Chunked rendering diverged at prefix: \(prefix.debugDescription)"
+                )
+            }
+        }
+    }
+
+    @MainActor
+    func testSealedChunksKeepTheirPlaceAndAreNeverReparsedWhileTheTailGrows() {
+        let cache = AidenMarkdownContentCache()
+        var reply = "# Plan\n\nFirst paragraph is long enough to matter.\n\nSecond paragraph\n"
+        XCTAssertEqual(
+            cache.chunks(for: reply).map(\.text),
+            ["# Plan\n\n", "First paragraph is long enough to matter.\n\n", "Second paragraph\n"]
+        )
+        for word in ["keeps ", "streaming ", "in ", "words."] {
+            let parsedBefore = cache.parsedCharacterCount
+            reply += word
+            let chunks = cache.chunks(for: reply)
+            XCTAssertEqual(chunks.map(\.index), [0, 1, 2], "The growing tail keeps one identity")
+            XCTAssertEqual(chunks[1].text, "First paragraph is long enough to matter.\n\n")
+            XCTAssertEqual(
+                cache.parsedCharacterCount - parsedBefore,
+                chunks[2].text.utf8.count,
+                "Each update parses only the open tail, never the sealed chunks"
+            )
+        }
+    }
+
+    @MainActor
+    func testOnlyTextThatWasNotOnScreenFadesIn() {
+        let cache = AidenMarkdownContentCache()
+        let shown = "Intro paragraph.\n\nSecond paragraph strea"
+        // The first render fades nothing.
+        XCTAssertEqual(AidenMarkdownChunkReveal.newChunkIndices(cache.chunks(for: shown), previouslyRenderedUTF8Count: nil), [])
+
+        // The second paragraph's first line completes and moves into its own
+        // chunk; its text was already on screen in the tail, so it must not flash.
+        let sealed = "Intro paragraph.\n\nSecond paragraph streams.\n"
+        let sealedChunks = cache.chunks(for: sealed)
+        XCTAssertEqual(sealedChunks.count, 2)
+        XCTAssertEqual(
+            AidenMarkdownChunkReveal.newChunkIndices(sealedChunks, previouslyRenderedUTF8Count: shown.utf8.count),
+            []
+        )
+
+        // A burst (a terminal flush, or attaching to a run mid-reply) brings
+        // whole new blocks at once: only those fade in.
+        let burst = sealed + "\n## Next\n\nNew body text.\n"
+        let burstChunks = cache.chunks(for: burst)
+        XCTAssertEqual(burstChunks.map(\.text).suffix(2), ["## Next\n\n", "New body text.\n"])
+        XCTAssertEqual(
+            AidenMarkdownChunkReveal.newChunkIndices(burstChunks, previouslyRenderedUTF8Count: sealed.utf8.count),
+            [2, 3]
+        )
+    }
+
+    @MainActor
+    func testChunkGapsMatchTheSingleDocumentBlockMargins() {
+        let cases: [(previous: String, next: String, gap: CGFloat)] = [
+            ("Paragraph.\n\n", "Next paragraph.", 8),
+            ("Paragraph.\n\n", "## Heading", 24),
+            ("Paragraph.\n\n", "Setext heading\n---", 24),
+            ("## Heading\n\n", "Paragraph.", 16),
+            ("```swift\nlet x = 1\n```\n\n", "Paragraph.", 16),
+            ("| a | b |\n|---|---|\n| 1 | 2 |\n\n", "Paragraph.", 16),
+            ("Paragraph.\n\n", "---", 24),
+            ("---\n\n", "Paragraph.", 24),
+            ("- item\n\n  ```\n  code\n  ```\n\n", "After the list.", 16),
+            ("> quoted\n\n", "Paragraph.", 8),
+            ("Paragraph.\n\n", "> # Quoted heading", 24),
+        ]
+        for testCase in cases {
+            XCTAssertEqual(
+                AidenMarkdownChunkSpacing.gap(after: testCase.previous, before: testCase.next),
+                testCase.gap,
+                "\(testCase.previous.debugDescription) -> \(testCase.next.debugDescription)"
+            )
+        }
+    }
+
+    // MARK: - Streaming reveal gate
+
+    func testRevealCutsAtTheLastWhitespaceAndHoldsThePartialWord() {
+        let cut = AidenStreamingRevealGate.cut("alpha beta gam", heldPreviousTick: false)
+        XCTAssertEqual(cut.shown, "alpha beta ")
+        XCTAssertEqual(cut.held, "gam")
+    }
+
+    func testRevealTrailingWhitespaceShowsEverything() {
+        let cut = AidenStreamingRevealGate.cut("alpha beta\n", heldPreviousTick: false)
+        XCTAssertEqual(cut.shown, "alpha beta\n")
+        XCTAssertEqual(cut.held, "")
+    }
+
+    func testRevealReleasesAFragmentHeldLastTickWithoutNewWhitespace() {
+        XCTAssertEqual(AidenStreamingRevealGate.cut("gam", heldPreviousTick: false).held, "gam")
+        let released = AidenStreamingRevealGate.cut("gamma", heldPreviousTick: true)
+        XCTAssertEqual(released.shown, "gamma")
+        XCTAssertEqual(released.held, "")
+    }
+
+    func testRevealShowsAHeldFragmentFinishedByWhitespaceWithTheCut() {
+        let cut = AidenStreamingRevealGate.cut("gamma delt", heldPreviousTick: true)
+        XCTAssertEqual(cut.shown, "gamma ")
+        XCTAssertEqual(cut.held, "delt")
+    }
+
+    func testRevealHoldsCJKWithoutWhitespaceForOneTickThenReleasesIt() {
+        let first = AidenStreamingRevealGate.cut("你好世界", heldPreviousTick: false)
+        XCTAssertEqual(first.shown, "")
+        XCTAssertEqual(first.held, "你好世界")
+        let second = AidenStreamingRevealGate.cut("你好世界，再见", heldPreviousTick: true)
+        XCTAssertEqual(second.shown, "你好世界，再见")
+        XCTAssertEqual(second.held, "")
+    }
+
+    func testRevealShowsABurstInOneCut() {
+        let words = (0..<100).map { "word\($0) " }.joined()
+        let cut = AidenStreamingRevealGate.cut(words + "tail", heldPreviousTick: false)
+        XCTAssertEqual(cut.shown, words)
+        XCTAssertEqual(cut.held, "tail")
+    }
+
+    func testRevealOfAnEmptyBufferShowsAndHoldsNothing() {
+        for held in [false, true] {
+            let cut = AidenStreamingRevealGate.cut("", heldPreviousTick: held)
+            XCTAssertEqual(cut.shown, "")
+            XCTAssertEqual(cut.held, "")
+        }
+    }
+
+    func testRevealNeverSplitsAGraphemeCluster() {
+        let text = "café 👩‍👩‍👧‍👦"
+        let cut = AidenStreamingRevealGate.cut(text, heldPreviousTick: false)
+        XCTAssertEqual(cut.shown, "café ")
+        XCTAssertEqual(cut.held, "👩‍👩‍👧‍👦")
+        XCTAssertEqual(cut.shown + cut.held, text)
+        let decomposed = "cafe\u{301} x"
+        let decomposedCut = AidenStreamingRevealGate.cut(decomposed, heldPreviousTick: false)
+        XCTAssertEqual(decomposedCut.shown, "cafe\u{301} ")
+        XCTAssertEqual(decomposedCut.held, "x")
+    }
+
     // MARK: - Scene refresh
 
     func testTransientInactiveBouncesNeverRefetchButBackgroundReturnsDo() {

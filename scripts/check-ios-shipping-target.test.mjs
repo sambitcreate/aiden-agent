@@ -67,6 +67,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
   "AidenOnTheGo/Features/Chat/AidenChatFork.swift",
   "AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift",
+  "AidenOnTheGo/Features/Chat/AidenStreamingRevealGate.swift",
   "AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift",
   "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
@@ -752,7 +753,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     chat,
-    /case \.snapshot:[\s\S]*?if chat\.isBotChat \{[\s\S]*?liveText = ""[\s\S]*?reasoning = ""/u,
+    /case \.snapshot:[\s\S]*?if chat\.isBotChat \{[\s\S]*?(?:liveText = ""|replaceLiveText\(""\))[\s\S]*?reasoning = ""/u,
   );
   assert.match(
     chat,

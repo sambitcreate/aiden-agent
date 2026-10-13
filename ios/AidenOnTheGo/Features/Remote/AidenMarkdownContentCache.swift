@@ -201,6 +201,33 @@ final class AidenMarkdownContentCache {
         }
     }
 
+    /// The reply as independently rendered chunks: every settled chunk (parse
+    /// reused from the cache) followed by the open tail. A chunk keeps its
+    /// index as it grows and seals, so a view keyed by index keeps its
+    /// identity and only the tail's view sees new text while a reply streams.
+    func chunks(for markdown: String) -> [AidenMarkdownChunk] {
+        let split = AidenMarkdownBlockSplitter.split(markdown)
+        guard !split.settled.isEmpty else {
+            return [AidenMarkdownChunk(index: 0, text: markdown, content: parse(markdown), leadingGap: 0)]
+        }
+        var pieces = split.settled.map { (text: String($0), sealed: true) }
+        if !split.tail.isEmpty { pieces.append((String(split.tail), false)) }
+        var chunks: [AidenMarkdownChunk] = []
+        chunks.reserveCapacity(pieces.count)
+        for (index, piece) in pieces.enumerated() {
+            let gap = index == 0
+                ? 0
+                : AidenMarkdownChunkSpacing.gap(after: pieces[index - 1].text, before: piece.text)
+            chunks.append(AidenMarkdownChunk(
+                index: index,
+                text: piece.text,
+                content: piece.sealed ? cachedContent(for: piece.text) : parse(piece.text),
+                leadingGap: gap
+            ))
+        }
+        return chunks
+    }
+
     func removeAll() {
         entries.removeAll()
         retainedCharacters = 0
@@ -239,5 +266,139 @@ final class AidenMarkdownContentCache {
             entries.removeValue(forKey: key)
             retainedCharacters -= key.utf8.count
         }
+    }
+}
+
+/// One independently parsed piece of a reply. `leadingGap` is the space the
+/// single-document layout would put between this chunk and the previous one.
+struct AidenMarkdownChunk {
+    let index: Int
+    let text: String
+    let content: MarkdownContent
+    let leadingGap: CGFloat
+}
+
+/// Which chunks of a streaming reply fade in. Only a chunk whose text starts
+/// at or after the end of what the previous render showed is new: a block
+/// usually seals only after its first line was already visible in the tail,
+/// and that text must not flash when it moves into its own chunk. The first
+/// render fades nothing.
+enum AidenMarkdownChunkReveal {
+    static func newChunkIndices(
+        _ chunks: [AidenMarkdownChunk],
+        previouslyRenderedUTF8Count previous: Int?
+    ) -> Set<Int> {
+        guard let previous else { return [] }
+        var start = 0
+        var indices: Set<Int> = []
+        for chunk in chunks {
+            if start >= previous { indices.insert(chunk.index) }
+            start += chunk.text.utf8.count
+        }
+        return indices
+    }
+}
+
+/// The gap between two rendered chunks, matching what MarkdownUI's block
+/// sequence would draw between the same blocks in one document: the larger of
+/// the previous block's bottom margin and the next block's top margin, where a
+/// block's margin is the largest of the blocks it contains. Values mirror the
+/// chat theme (MarkdownUI's GitHub theme with an 8pt paragraph bottom margin).
+enum AidenMarkdownChunkSpacing {
+    static let paragraphBottom: CGFloat = 8
+    static let blockBottom: CGFloat = 16
+    static let headingTop: CGFloat = 24
+    static let thematicBreak: CGFloat = 24
+
+    static func gap(after previous: String, before next: String) -> CGFloat {
+        max(bottomMargin(ofLastBlockIn: previous), topMargin(ofFirstBlockIn: next))
+    }
+
+    static func topMargin(ofFirstBlockIn chunk: String) -> CGFloat {
+        let lines = nonBlankLeadingLines(of: chunk)
+        guard let first = lines.first else { return 0 }
+        if isThematicBreak(first) || isATXHeading(first) { return headingTop }
+        if lines.count > 1, isSetextUnderline(lines[1]) { return headingTop }
+        if first.hasPrefix(">") {
+            for line in lines where line.hasPrefix(">") {
+                let quoted = stripQuoteMarkers(line)
+                if isATXHeading(quoted) || isThematicBreak(quoted) { return headingTop }
+            }
+        }
+        return 0
+    }
+
+    static func bottomMargin(ofLastBlockIn chunk: String) -> CGFloat {
+        let lines = chunk.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.hasSuffix("\r") ? $0.dropLast() : $0 }
+        guard let lastIndex = lines.lastIndex(where: { !isBlank($0) }) else { return 0 }
+        // The last top-level block starts at the latest unindented line that
+        // follows a blank line (or the chunk start).
+        var start = lastIndex
+        while start > 0 {
+            let line = lines[start]
+            if !isBlank(line), !line.hasPrefix(" "), !line.hasPrefix("\t"), isBlank(lines[start - 1]) { break }
+            start -= 1
+        }
+        let block = lines[start...lastIndex].filter { !isBlank($0) }
+        if block.count == 1, isThematicBreak(block[0]) { return thematicBreak }
+        if block.count > 1, isSetextUnderline(block[block.count - 1]) { return blockBottom }
+        for line in block {
+            let content = stripQuoteMarkers(line)
+            if content.hasPrefix("```") || content.hasPrefix("~~~")
+                || content.hasPrefix("|") || isATXHeading(content) {
+                return blockBottom
+            }
+            if line.hasPrefix("    "), block.first.map({ $0.hasPrefix("    ") }) == true {
+                return blockBottom // indented code
+            }
+        }
+        return paragraphBottom
+    }
+
+    private static func nonBlankLeadingLines(of chunk: String) -> [Substring] {
+        var result: [Substring] = []
+        for line in chunk.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.hasSuffix("\r") ? line.dropLast() : line
+            if isBlank(trimmed) { break }
+            result.append(trimmed)
+        }
+        return result
+    }
+
+    private static func isBlank(_ line: Substring) -> Bool {
+        line.allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    private static func stripQuoteMarkers(_ line: Substring) -> Substring {
+        var rest = line.drop { $0 == " " }
+        while rest.hasPrefix(">") {
+            rest = rest.dropFirst().drop { $0 == " " }
+        }
+        return rest
+    }
+
+    private static func isATXHeading(_ line: Substring) -> Bool {
+        let content = line.drop { $0 == " " }
+        guard line.count - content.count <= 3 else { return false }
+        let hashes = content.prefix { $0 == "#" }.count
+        guard (1...6).contains(hashes) else { return false }
+        let after = content.dropFirst(hashes)
+        return after.isEmpty || after.first == " " || after.first == "\t"
+    }
+
+    private static func isThematicBreak(_ line: Substring) -> Bool {
+        let content = line.filter { $0 != " " && $0 != "\t" }
+        guard content.count >= 3, let marker = content.first, "-*_".contains(marker) else { return false }
+        return content.allSatisfy { $0 == marker } && line.prefix { $0 == " " }.count <= 3
+    }
+
+    private static func isSetextUnderline(_ line: Substring) -> Bool {
+        let content = line.drop { $0 == " " }
+        guard line.count - content.count <= 3, let marker = content.first, marker == "=" || marker == "-" else {
+            return false
+        }
+        let run = content.prefix { $0 == marker }
+        return content.dropFirst(run.count).allSatisfy { $0 == " " || $0 == "\t" }
     }
 }
