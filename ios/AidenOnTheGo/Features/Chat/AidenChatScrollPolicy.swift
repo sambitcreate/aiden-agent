@@ -56,6 +56,10 @@ enum AidenChatScrollPolicy {
     /// and hides immediately on return.
     static let jumpButtonRevealDelay: Duration = .milliseconds(150)
 
+    /// How long an animated follow scroll (0.2s ease-out) gets to come to rest
+    /// before its landing is checked.
+    static let animatedFollowSettleDelay: Duration = .milliseconds(260)
+
     /// Scroll events that drive the follow latch.
     enum FollowEvent: Equatable {
         /// An explicit jump to the latest content: Jump to latest or a send.
@@ -213,6 +217,10 @@ final class AidenTranscriptFollowController {
     /// `Task.yield()` and 16ms.
     @ObservationIgnored private let followPause: @MainActor () async -> Void
     @ObservationIgnored private let jumpButtonDelay: @MainActor () async -> Void
+    /// Runs after an animated follow scroll before checking where it landed.
+    @ObservationIgnored private let animationSettle: @MainActor () async -> Void
+    /// The newest reported distance from the bottom.
+    @ObservationIgnored private var distanceFromBottom: CGFloat = 0
     @ObservationIgnored private var followGeneration: UInt64 = 0
     @ObservationIgnored private var jumpButtonGeneration: UInt64 = 0
     @ObservationIgnored private var isJumpButtonRevealPending = false
@@ -224,10 +232,14 @@ final class AidenTranscriptFollowController {
         },
         jumpButtonDelay: @escaping @MainActor () async -> Void = {
             try? await Task.sleep(for: AidenChatScrollPolicy.jumpButtonRevealDelay)
+        },
+        animationSettle: @escaping @MainActor () async -> Void = {
+            try? await Task.sleep(for: AidenChatScrollPolicy.animatedFollowSettleDelay)
         }
     ) {
         self.followPause = followPause
         self.jumpButtonDelay = jumpButtonDelay
+        self.animationSettle = animationSettle
     }
 
     var isFollowing: Bool { latch.isFollowing }
@@ -244,6 +256,7 @@ final class AidenTranscriptFollowController {
             isStreaming: isStreaming
         )
         let wasNearBottom = isNearBottom
+        distanceFromBottom = metrics.distanceFromBottom
         if nearBottom != isNearBottom { isNearBottom = nearBottom }
         handle(.contentScrolled(
             isAtBottom: AidenChatScrollPolicy.isAtBottom(distanceFromBottom: metrics.distanceFromBottom),
@@ -265,6 +278,12 @@ final class AidenTranscriptFollowController {
     /// the latch when it fires, so a drag that began in the pause wins.
     /// `perform` receives whether to animate: never while streaming, because
     /// the next reveal tick would cut the animation off before it settles.
+    ///
+    /// An animated scroll targets the bottom sentinel through a lazy stack's
+    /// estimated row heights, so it can land short once the rows it passed
+    /// are measured. After it settles, one non-animated scroll finishes the
+    /// trip if the reader is still more than the re-arm tolerance away and
+    /// nothing newer (a drag, another follow) has happened since.
     @discardableResult
     func scheduleFollowScroll(
         isUserInitiated: Bool,
@@ -283,7 +302,13 @@ final class AidenTranscriptFollowController {
             await pause()
             guard let self, !Task.isCancelled, generation == self.followGeneration else { return }
             if !isUserInitiated, !self.latch.isFollowing { return }
-            perform(animated && !self.isStreaming)
+            let animates = animated && !self.isStreaming
+            perform(animates)
+            guard animates else { return }
+            await self.animationSettle()
+            guard !Task.isCancelled, generation == self.followGeneration, self.latch.isFollowing,
+                  !AidenChatScrollPolicy.isAtBottom(distanceFromBottom: self.distanceFromBottom) else { return }
+            perform(false)
         }
     }
 

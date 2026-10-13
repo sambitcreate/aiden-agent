@@ -241,7 +241,11 @@ struct AidenChatScrollObserver: UIViewRepresentable {
             trackMomentum(scrollView)
 
             guard let geometry = geometry(of: scrollView) else { return }
-            let isUserInteracting = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
+            // A finger resting on the glass (a tap, a long press, a pause
+            // before a drag) sets `isTracking` without moving anything, and no
+            // pan ends to re-arm follow afterwards. Only a drag that has moved
+            // the content, or its momentum, counts as the reader scrolling.
+            let isUserInteracting = scrollView.isDragging || scrollView.isDecelerating
             let metrics = AidenChatScrollMetrics(
                 distanceFromBottom: geometry.distanceFromBottom,
                 isUserInteracting: isUserInteracting,

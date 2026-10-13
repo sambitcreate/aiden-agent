@@ -11392,23 +11392,134 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertFalse(controller.showsJumpButton)
     }
 
+    func testAnIdleJumpThatLandsShortFinishesWithOneSnap() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            // Estimated row heights: the animation stops 300pt short.
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await settles.waitForPending(1)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true, false])
+    }
+
+    func testAnIdleJumpThatReachesTheBottomDoesNotSnapAgain() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        controller.updateMetrics(metrics(900))
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            if animated { controller.updateMetrics(self.metrics(4)) }
+        }
+        await settles.waitForPending(1)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
+    func testADragWhileAJumpSettlesCancelsTheCorrectiveSnap() async {
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: {}, jumpButtonDelay: {}, animationSettle: { await settles.pause() }
+        )
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await settles.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
+    func testAFingerRestingOnTheTranscriptKeepsFollowWhileTheReplyGrows() {
+        let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        scrollView.contentSize = CGSize(width: 320, height: 1_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 520)
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        let coordinator = AidenChatScrollObserver.Coordinator(
+            onFollowEvent: { controller.handle($0) },
+            onMetrics: { controller.updateMetrics($0) }
+        )
+        let content = UIView()
+        scrollView.addSubview(content)
+        coordinator.attachIfNeeded(from: content)
+        defer { coordinator.detach() }
+        drainMainQueue()
+
+        // A tap or long press: the finger is down, nothing has moved yet, and
+        // streaming growth keeps the reader pinned at the bottom.
+        scrollView.touchIsTracking = true
+        for step in 1...3 {
+            scrollView.contentSize.height = 1_000 + CGFloat(step) * 120
+            scrollView.contentOffset.y = 520 + CGFloat(step) * 120
+            drainMainQueue()
+        }
+        XCTAssertTrue(controller.isFollowing)
+
+        // The same finger now drags the content: that is the reader scrolling.
+        scrollView.touchIsDragging = true
+        scrollView.contentOffset.y -= 200
+        drainMainQueue()
+        XCTAssertFalse(controller.isFollowing)
+    }
+
     func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
         let probe = AidenFollowTriggerProbe()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         window.rootViewController = UIHostingController(rootView: AidenFollowTriggerOwner(probe: probe))
         window.makeKeyAndVisible()
-        window.layoutIfNeeded()
         defer { window.isHidden = true; window.rootViewController = nil }
+        XCTAssertTrue(runMainLoop(until: { probe.ownerPasses == 1 }))
 
-        for _ in 0..<3 {
+        for expected in 1...3 {
             probe.trigger += 1
-            window.rootViewController?.view.setNeedsLayout()
-            window.layoutIfNeeded()
+            // SwiftUI applies the Observation change on its next update pass;
+            // run the main loop until that pass has fired the leaf.
+            XCTAssertTrue(runMainLoop(until: { probe.fires == expected }), "bump \(expected) never fired")
         }
 
+        drainMainQueue()
         XCTAssertEqual(probe.fires, 3)
         XCTAssertEqual(probe.ownerPasses, 1)
     }
+
+    /// Runs the main run loop briefly so queued main-queue deliveries and
+    /// SwiftUI update passes happen.
+    private func drainMainQueue() {
+        for _ in 0..<5 { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    /// Runs the main run loop until `condition` holds or `timeout` passes.
+    private func runMainLoop(until condition: () -> Bool, timeout: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
+    }
+}
+
+/// A scroll view whose touch state a test can set directly.
+private final class AidenTouchableScrollView: UIScrollView {
+    var touchIsTracking = false
+    var touchIsDragging = false
+    override var isTracking: Bool { touchIsTracking }
+    override var isDragging: Bool { touchIsDragging }
+    override var isDecelerating: Bool { false }
 }
 
 @Observable
