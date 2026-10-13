@@ -222,3 +222,43 @@ export function mcpCredentialCleanupAfterConfig(
     clearPresetKey: pending.kind !== "disable-oauth" || !reachedIntendedTarget,
   };
 }
+
+/**
+ * Credential transitions Aiden made itself that change no credential: moving
+ * a server's plain-text env/header values into the keychain swaps each value
+ * for a marker, which changes the snapshot hashes while every value (and so
+ * OAuth tokens, provider grants and preset keys) stays valid. The save path
+ * registers the exact before/after snapshots; the portable-config snapshot
+ * listener, which sees only the before and after records, then treats that
+ * exact transition as no credential change.
+ */
+export class McpCredentialEquivalences {
+  private readonly entries = new Map<string, { from: string; to: string }>();
+
+  register(serverId: string, from: McpCredentialConnectionSnapshot, to: McpCredentialConnectionSnapshot): void {
+    this.entries.set(serverId, { from: JSON.stringify(from), to: JSON.stringify(to) });
+  }
+
+  equivalent(serverId: string, from: McpCredentialConnectionSnapshot | null, to: McpCredentialConnectionSnapshot | null): boolean {
+    const entry = this.entries.get(serverId);
+    return Boolean(entry && from && to && entry.from === JSON.stringify(from) && entry.to === JSON.stringify(to));
+  }
+}
+
+export const mcpCredentialEquivalences = new McpCredentialEquivalences();
+
+/**
+ * The cleanup an observed config transition needs (as the portable-config
+ * listener sees it), or null when no credential changed, including an
+ * equivalence the save path registered.
+ */
+export function externalMcpCredentialCleanupKind(
+  before: McpServer,
+  after: McpServer | undefined,
+  equivalences: McpCredentialEquivalences = mcpCredentialEquivalences,
+): PendingMcpCredentialCleanupV1["kind"] | null {
+  const previous = mcpCredentialConnectionSnapshot(before);
+  const target = after ? mcpCredentialConnectionSnapshot(after) : null;
+  if (sameMcpCredentialConnection(previous, target) || equivalences.equivalent(before.id, previous, target)) return null;
+  return !after ? "remove" : before.oauth && !after.oauth ? "disable-oauth" : "replace";
+}

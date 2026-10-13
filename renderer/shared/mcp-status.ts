@@ -41,8 +41,12 @@ export interface McpPendingLaunchApproval {
   fingerprint: string;
   command: string;
   args: string[];
-  /** Each variable's value as written in config.json; omitted for one already moved to the keychain. */
-  env: { name: string; value?: string }[];
+  /**
+   * Each variable's value as written in config.json; omitted for one already
+   * in the keychain. `unavailable`: its keychain value was saved for another
+   * variable (or is gone), so it will not be used and must be entered again.
+   */
+  env: { name: string; value?: string; unavailable?: true }[];
 }
 
 export interface McpDependent {

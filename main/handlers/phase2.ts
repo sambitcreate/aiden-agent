@@ -20,9 +20,9 @@ import { registerMcpControlHandlers, type McpDraftCredentials } from "./mcp-cont
 import { mcpLiveStatus } from "../services/mcp-status-events.js";
 import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services/mcp-dependents.js";
 import type { McpServer } from "../services/types.js";
-import { isMcpFieldSecretMarker, mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
 import { resolveMcpConnectionCredentials } from "../services/mcp-connection-credentials.js";
-import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "../services/mcp-field-secrets.js";
+import { mcpStdioApprovals, resolveStoredMcpFieldSecrets, storedMcpEnvForApproval } from "../services/mcp-field-secrets.js";
 import { saveConfiguredMcpServer, sealPlaintextMcpServerFields } from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
 import {
@@ -577,9 +577,9 @@ export function registerPhase2Handlers(): void {
           fingerprint: mcpStdioLaunchFingerprint(server),
           command: server.command ?? "",
           args: server.args ?? [],
-          // Unapproved servers keep env in config.json, so the person sees exactly what would run.
-          env: Object.entries(server.env ?? {}).map(([name, value]) =>
-            isMcpFieldSecretMarker(value) ? { name } : { name, value }),
+          // Unapproved servers keep env in config.json, so the person sees exactly
+          // what would run; a stored value referenced under another name is unusable.
+          env: await storedMcpEnvForApproval(server),
         });
       }
       return pending;

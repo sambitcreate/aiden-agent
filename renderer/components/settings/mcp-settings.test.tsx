@@ -538,7 +538,7 @@ test("replacing a saved value and adding a header send the typed values once", a
 });
 
 test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
-  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }] };
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
   let approvals = [pending];
   const calls = mount({
     "mcp:launchApprovals": () => approvals,
@@ -552,6 +552,8 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   const env = within(group).getByLabelText("Files environment");
   assert.match(env.textContent ?? "", /NODE_OPTIONS=--require \/tmp\/p\.js/u);
   assert.match(env.textContent ?? "", /TOKEN=\(saved value, not shown\)/u);
+  // A stored value moved under another name outside Aiden is not presented as saved.
+  assert.match(env.textContent ?? "", /EXTRA=\(not available — enter it again in Edit\)/u);
   // No tool list or model-access control while it may not run.
   assert.equal(screen.queryByRole("radiogroup", { name: "Model access for Files" }), null);
   // Switching it on is not an approval.

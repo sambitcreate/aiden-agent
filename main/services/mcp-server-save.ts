@@ -7,11 +7,18 @@ import { configStore } from "./config-store.js";
 import { logger } from "../platform.js";
 import { mcpManager } from "./mcp.js";
 import { mutateMcpWithCredentialCleanup } from "./mcp-credential-cleanup.js";
-import { pendingMcpCredentialCleanupForSave } from "./mcp-credential-cleanup-core.js";
+import {
+  mcpCredentialEquivalences,
+  pendingMcpCredentialCleanupForSave,
+  type McpCredentialConnectionSnapshot,
+} from "./mcp-credential-cleanup-core.js";
+import { getMcpPresetForServerId, presetSecretId } from "./mcp-presets.js";
+import { secrets } from "./secrets.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
 import {
   hasPlaintextMcpFields,
   mcpFieldSecretCleanupBaseline,
+  mcpFieldSecretSealingTransition,
   mcpStdioLaunchFingerprint,
   type McpFieldSecretPlan,
 } from "./mcp-field-secrets-core.js";
@@ -42,6 +49,18 @@ export async function saveConfiguredMcpServer(
 ): Promise<McpServer> {
   const saved = await saveWithFieldSecrets(server.id, () => server, isCurrent, options);
   return saved!;
+}
+
+async function rebindPresetKey(
+  serverId: string,
+  from: McpCredentialConnectionSnapshot,
+  to: McpCredentialConnectionSnapshot,
+  isCurrent: () => boolean,
+): Promise<void> {
+  const preset = getMcpPresetForServerId(serverId);
+  if (preset?.auth.kind !== "apiKey") return;
+  const key = await secrets.getOrBindLegacyProviderKey(presetSecretId(serverId), JSON.stringify(from));
+  if (key) await secrets.setProviderKey(presetSecretId(serverId), key, JSON.stringify(to), isCurrent);
 }
 
 /** A local server's env stays readable in config.json until it was approved to run. */
@@ -83,7 +102,15 @@ async function saveWithFieldSecrets(
       // Values left behind by an earlier save whose publication failed, or
       // bound to an address the record no longer has, go first.
       await pruneStoredMcpFieldSecrets(serverId, current, isCurrent);
-      await storeMcpFieldSecretPlan(serverId, plan, isCurrent, { allowNewDestination: options.approveLaunch === true });
+      await storeMcpFieldSecretPlan(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true, current });
+      // A pure move of unchanged values into the keychain keeps every credential:
+      // the preset key follows the record it is bound to, and the config
+      // listener is told this exact transition is no credential change.
+      const sealing = mcpFieldSecretSealingTransition(current, plan);
+      if (sealing) {
+        await rebindPresetKey(serverId, sealing.from, sealing.to, isCurrent);
+        mcpCredentialEquivalences.register(serverId, sealing.from, sealing.to);
+      }
       // Approve before publishing, so the first connection after the save is already allowed.
       const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
         mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(plan.server) &&
