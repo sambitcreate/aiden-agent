@@ -73,9 +73,8 @@ function MarkerTag({ tag }: { tag: ModelPadTag }) {
 }
 
 /**
- * The Pad square: the dot lattice, axis captions, markers, suggestion ghosts,
- * the metric chip and the empty state. Under it, the suggestion bar while a
- * preview is open.
+ * The Pad square: the dot lattice, axis captions, markers, suggestion ghosts
+ * and the empty state. Under it, the suggestion bar while a preview is open.
  */
 export function ModelPadCanvas({
   padRef,
@@ -85,7 +84,6 @@ export function ModelPadCanvas({
   ghosts,
   dragging,
   describedBy,
-  metricChip,
   emptyState,
   previewBar,
   children,
@@ -99,7 +97,6 @@ export function ModelPadCanvas({
   ghosts: readonly ModelPadGhostView[];
   dragging: boolean;
   describedBy: string;
-  metricChip?: React.ReactNode;
   emptyState?: React.ReactNode;
   previewBar?: React.ReactNode;
   /** Screen reader help and announcements, outside the square. */
@@ -149,7 +146,6 @@ export function ModelPadCanvas({
           );
         })}
 
-        {metricChip}
         {emptyState}
 
         {markers.map((marker) => {

@@ -192,7 +192,11 @@ test("Fetch latest shows its busy state, then the failure text in the row", asyn
 
   fail({ ok: false, code: "rate_limited", message: "OpenRouter is rate limiting requests." });
   await within(benchmarkRow()).findByText("OpenRouter is rate limiting requests.");
-  within(benchmarkRow()).getByRole("button", { name: "Fetch latest" });
+  const fetchLatest = within(benchmarkRow()).getByRole("button", { name: "Fetch latest" });
+  // The button was disabled while busy; focus comes back to it to try again.
+  await waitFor(() =>
+    assert.ok(document.activeElement === fetchLatest, `focus is on ${describe(document.activeElement)}`),
+  );
 });
 
 test("Replace key… opens an empty replacement field and never shows the stored key", async () => {
@@ -265,4 +269,37 @@ test("Measured speed offers Clear… only with speeds, and asks before clearing"
   await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));
   assert.equal(server.calls("modelPace:clear").length, 0);
   await waitFor(() => assert.ok(document.activeElement === clear, `focus is on ${describe(document.activeElement)}`));
+});
+
+test("while a key is connecting Connect can't close the row, and a failure refocuses the key field", async () => {
+  let settle: (result: ModelInsightsActionResult) => void = () => {};
+  insightsServer({ connect: () => new Promise((resolve) => (settle = resolve)) });
+  mount();
+  const connectButton = await within(benchmarkRow()).findByRole("button", { name: "Connect" });
+  fireEvent.click(connectButton);
+  fireEvent.change(keyField()!, { target: { value: "sk-or-bad" } });
+  const submit = screen.getByRole("button", { name: "Connect & fetch" });
+  submit.focus();
+  fireEvent.click(submit);
+
+  await within(benchmarkRow()).findByRole("button", { name: "Connecting…" });
+  assert.equal((connectButton as HTMLButtonElement).disabled, true);
+  fireEvent.click(connectButton);
+  assert.ok(keyField(), "the key row stays open while connecting");
+
+  settle({ ok: false, code: "invalid_key", message: "OpenRouter rejected this key." });
+  await within(benchmarkRow()).findByText("OpenRouter rejected this key.");
+  await waitFor(() =>
+    assert.ok(document.activeElement === keyField(), `focus is on ${describe(document.activeElement)}`),
+  );
+  assert.equal((connectButton as HTMLButtonElement).disabled, false);
+});
+
+test("the benchmark hint explains when scores are fetched and names their licence", async () => {
+  insightsServer({ status: ready });
+  mount();
+  fireEvent.click(within(benchmarkRow()).getByRole("button", { name: "About benchmark scores" }));
+  const hint = await screen.findByRole("tooltip");
+  assert.match(hint.textContent ?? "", /only when you choose Connect & fetch or Fetch latest/u);
+  await waitFor(() => assert.match(hint.textContent ?? "", /Scores: Artificial Analysis, CC BY 4\.0\./u));
 });

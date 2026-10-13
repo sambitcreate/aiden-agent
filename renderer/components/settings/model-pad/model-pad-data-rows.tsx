@@ -196,6 +196,8 @@ function ModelPadBenchmarkRow({
   const moreButtonRef = React.useRef<HTMLButtonElement | null>(null);
   // Replace key… closes its menu; the key field takes focus instead of the trigger.
   const focusKeyOnMenuCloseRef = React.useRef(false);
+  // What takes focus back once a failed operation re-enables its controls.
+  const refocusAfterFailureRef = React.useRef<"key" | "fetch" | null>(null);
   const keyRowId = React.useId();
   const busy = operation !== null;
   const hasKey = Boolean(status?.hasKey);
@@ -206,6 +208,23 @@ function ModelPadBenchmarkRow({
   React.useEffect(() => {
     if (keyRow) keyInputRef.current?.focus();
   }, [keyRow]);
+
+  // The busy controls were disabled, which drops focus; return it once they
+  // are enabled again: to the key field to correct the key, or to Fetch latest
+  // to try again.
+  React.useEffect(() => {
+    if (operation !== null) return;
+    const target = refocusAfterFailureRef.current;
+    refocusAfterFailureRef.current = null;
+    if (target === "key") {
+      keyInputRef.current?.focus();
+    } else if (target === "fetch") {
+      const active = document.activeElement;
+      if (!active || active === document.body || !active.isConnected || active === fetchButtonRef.current) {
+        fetchButtonRef.current?.focus();
+      }
+    }
+  }, [operation]);
 
   /** Focus the row's main action once it renders, after the focused control left. */
   const focusRowAction = () => {
@@ -250,6 +269,7 @@ function ModelPadBenchmarkRow({
       const result = await modelInsightsApi.connect(key);
       if (!result.ok) {
         await reconcileAfterFailure();
+        refocusAfterFailureRef.current = "key";
         fail(result.message);
         return;
       }
@@ -260,6 +280,7 @@ function ModelPadBenchmarkRow({
       focusRowAction();
     } catch {
       await reconcileAfterFailure();
+      refocusAfterFailureRef.current = "key";
       fail("Aiden couldn’t connect the benchmark key.");
     } finally {
       setOperation(null);
@@ -275,6 +296,7 @@ function ModelPadBenchmarkRow({
       const result = await modelInsightsApi.refresh();
       if (!result.ok) {
         await reconcileAfterFailure();
+        refocusAfterFailureRef.current = "fetch";
         fail(result.message);
         return;
       }
@@ -282,6 +304,7 @@ function ModelPadBenchmarkRow({
       toast.success("Latest benchmark scores are cached.");
     } catch {
       await reconcileAfterFailure();
+      refocusAfterFailureRef.current = "fetch";
       fail("Aiden couldn’t fetch the latest benchmark scores.");
     } finally {
       setOperation(null);
@@ -402,6 +425,7 @@ function ModelPadBenchmarkRow({
     <Button
       ref={connectButtonRef}
       size="small"
+      disabled={busy}
       aria-expanded={keyRow === "connect"}
       aria-controls={keyRow === "connect" ? keyRowId : undefined}
       onClick={() => {
@@ -425,10 +449,11 @@ function ModelPadBenchmarkRow({
         hint={
           <>
             <p>
-              Optional. A separate OpenRouter key fetches public scores only when you choose Fetch
-              latest. It never sends chats and doesn’t add OpenRouter models.
+              Optional. A separate OpenRouter key fetches public scores only when you choose
+              Connect & fetch or Fetch latest. It never sends chats and doesn’t add OpenRouter
+              models.
             </p>
-            <p>Scores: Artificial Analysis, CC BY 4.0.</p>
+            <p>{`Scores: Artificial Analysis, ${status?.license ?? "CC BY 4.0"}.`}</p>
           </>
         }
         secondary={<span aria-live="polite" className="contents">{secondary}</span>}

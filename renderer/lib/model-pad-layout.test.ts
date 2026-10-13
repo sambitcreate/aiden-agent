@@ -4,8 +4,6 @@ import {
   distributeCapabilityOnlyModelPadSuggestions,
   measureModelPadAvailableSize,
   MODEL_PAD_MIN_SIZE_PX,
-  MODEL_PAD_SETTINGS_CHROME_PX,
-  MODEL_PAD_VIEWPORT_GUTTER_PX,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   addModelPadPlacement,
@@ -259,24 +257,28 @@ test("capability-only distribution fails closed for invalid and duplicate sugges
   assert.equal(placements.valid.y, 5 / 6);
 });
 
-test("Model Pad available size ignores label wrap and never exceeds the scrollport", () => {
-  const canvasTop = 120;
-  const viewportBottom = 600;
-  const canvasWidth = 480;
-  const scrollportClientHeight = 360;
-  const size = measureModelPadAvailableSize({
-    viewportBottom,
-    canvasTop,
-    canvasWidth,
-    scrollportClientHeight,
-  });
-  const heightBudget =
-    viewportBottom - canvasTop - MODEL_PAD_SETTINGS_CHROME_PX - MODEL_PAD_VIEWPORT_GUTTER_PX;
+test("Model Pad available size leaves room for the suggestion bar and never exceeds the scrollport", () => {
+  // 480px from the canvas top to the viewport bottom: the square, then the
+  // suggestion bar row under it (48px) and the 24px gutter.
   assert.equal(
-    size,
-    Math.floor(Math.min(scrollportClientHeight - 1, canvasWidth, heightBudget)),
+    measureModelPadAvailableSize({
+      viewportBottom: 600,
+      canvasTop: 120,
+      canvasWidth: 1_000,
+      scrollportClientHeight: 1_000,
+    }),
+    408,
   );
-  assert.ok(size <= scrollportClientHeight);
+  // A narrow column caps it at the column width.
+  assert.equal(
+    measureModelPadAvailableSize({
+      viewportBottom: 600,
+      canvasTop: 120,
+      canvasWidth: 300,
+      scrollportClientHeight: 1_000,
+    }),
+    300,
+  );
   assert.equal(
     measureModelPadAvailableSize({
       viewportBottom: 800,

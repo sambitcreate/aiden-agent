@@ -202,8 +202,13 @@ function suggestions(): HTMLElement[] {
 
 function suggestionNames(): string[] {
   return suggestions().map((ghost) =>
-    (ghost.getAttribute("aria-label") ?? "").replace(/^Keep suggestion: (\S+) from Test$/u, "$1"),
+    (ghost.getAttribute("aria-label") ?? "").replace(/^Keep suggestion: (\S+) from Test(?:, .*)?$/u, "$1"),
   );
+}
+
+/** A previewed suggestion's ghost; its name goes on to say the model's score. */
+function ghost(model: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(`^Keep suggestion: ${model} from Test(?:,|$)`, "u") });
 }
 
 function position(element: HTMLElement): string {
@@ -235,12 +240,10 @@ function previewBar(): HTMLElement {
   return screen.getByRole("group", { name: "Benchmark suggestions" });
 }
 
-test("an empty Pad puts focus on Add once loading finishes", async () => {
+test("an empty Pad offers both quick starts and the tray says what will appear", async () => {
   editorServer();
   mountEditor();
-  await waitFor(() => assert.ok(document.activeElement === addButton(), "Add has focus"));
-  // The empty Pad offers both quick starts and the tray says what will appear.
-  assert.ok(screen.getByRole("button", { name: "Add pinned & recent" }));
+  assert.ok(await screen.findByRole("button", { name: "Add pinned & recent" }));
   assert.ok(screen.getByRole("button", { name: "Start from benchmarks" }));
   assert.ok(screen.getByText("Models you add appear here."));
 });
@@ -258,35 +261,6 @@ test("Add lists the available models and counts them in the singular and plural"
   mountEditor();
   fireEvent.click(addButton());
   assert.ok(await screen.findByPlaceholderText("Search 1 model"));
-});
-
-test("a Pad with models leaves focus where it was", async () => {
-  editorServer({
-    placements: { "test::m1": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
-  });
-  mountEditor();
-
-  await waitFor(() => assert.equal(markerCount(), 1));
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-  assert.ok(document.activeElement !== addButton(), "Add did not take focus");
-});
-
-test("Add takes focus only on the first visit, not when the Pad empties again", async () => {
-  const server = editorServer({ pinnedModels: ["test::m3"] });
-  mountEditor();
-  await waitFor(() => assert.ok(document.activeElement === addButton()));
-
-  const add = screen.getByRole("button", { name: "Add pinned & recent" });
-  await waitFor(() => assert.notEqual(add.getAttribute("aria-disabled"), "true"));
-  fireEvent.click(add);
-  await screen.findByText("Added 1 model");
-  await waitFor(assertFocusOnMarker);
-  act(() => (document.activeElement as HTMLElement | null)?.blur());
-  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  await waitFor(() => assert.deepEqual(server.stored(), {}));
-  await waitFor(() => assert.equal(markerCount(), 0));
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-  assert.ok(document.activeElement !== addButton(), "Add was not refocused");
 });
 
 test("Add pinned & recent places pinned then recent models on the empty Pad, with Undo", async () => {
@@ -435,11 +409,9 @@ test("keeping one suggestion saves only that model where it was previewed, with 
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
-  const before = new Map(
-    suggestions().map((ghost) => [ghost.getAttribute("aria-label"), position(ghost)]),
-  );
+  const before = new Map(suggestionNames().map((name, index) => [name, position(suggestions()[index])]));
 
-  fireEvent.click(screen.getByRole("button", { name: "Keep suggestion: M5 from Test" }));
+  fireEvent.click(ghost("M5"));
 
   await screen.findByText("Added M5 from Test");
   const stored = server.stored();
@@ -447,12 +419,12 @@ test("keeping one suggestion saves only that model where it was previewed, with 
   assert.equal(stored["test::m5"].xSource, "neutral");
   assert.equal(stored["test::m5"].ySource, "benchmark");
   await waitFor(() => assert.equal(markerCount(), 2));
-  assert.equal(position(marker("M5")), before.get("Keep suggestion: M5 from Test"));
+  assert.equal(position(marker("M5")), before.get("M5"));
   // The other suggestions stay where they were.
   assert.equal(suggestions().length, 7);
-  for (const ghost of suggestions()) {
-    assert.equal(position(ghost), before.get(ghost.getAttribute("aria-label")));
-  }
+  suggestionNames().forEach((name, index) => {
+    assert.equal(position(suggestions()[index]), before.get(name));
+  });
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(Object.keys(server.stored()), ["test::m0"]));
@@ -466,12 +438,7 @@ test("Keep all places every suggestion where it was previewed", async () => {
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
-  const previewed = new Map(
-    suggestions().map((ghost) => [
-      (ghost.getAttribute("aria-label") ?? "").replace(/^Keep suggestion: (\S+) from Test$/u, "$1"),
-      position(ghost),
-    ]),
-  );
+  const previewed = new Map(suggestionNames().map((name, index) => [name, position(suggestions()[index])]));
   previewed.set("M0", position(marker("M0")));
 
   fireEvent.click(keepAllButton()!);
@@ -550,7 +517,7 @@ test("Dismiss returns focus to Arrange", async () => {
   assert.ok(document.activeElement === screen.getByRole("button", { name: "Arrange" }), "focus is on Arrange");
 });
 
-test("Start from benchmarks uses the saved metric and the Pad's chip names it", async () => {
+test("Start from benchmarks uses the saved metric and the header chip names it", async () => {
   const server = editorServer({ insightsReady: true, metric: "intelligence" });
   mountEditor();
   const start = await screen.findByRole("button", { name: "Start from benchmarks" });
@@ -564,7 +531,9 @@ test("Start from benchmarks uses the saved metric and the Pad's chip names it", 
     ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"].map((model) => `test::${model}`),
   );
   const chip = await screen.findByRole("button", { name: /^Height: General score/u });
-  assert.equal(chip.textContent, "General");
+  assert.equal(chip.textContent, "Height: General");
+  // It sits in the Pad header, never over a marker in the square.
+  assert.ok(!pad().contains(chip), "the chip is outside the square");
   // The chip switches the score too.
   fireEvent.keyDown(chip, { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "Agentic" }));
@@ -663,13 +632,13 @@ test("a failed keep keeps the suggestion on the Pad", async () => {
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
 
-  const ghost = screen.getByRole("button", { name: "Keep suggestion: M5 from Test" });
-  ghost.focus();
-  fireEvent.click(ghost);
+  const kept = ghost("M5");
+  kept.focus();
+  fireEvent.click(kept);
 
   await screen.findByText("Aiden couldn’t save your Model Pad.");
   await waitFor(() => assert.equal(suggestions().length, 8));
-  assert.ok(screen.getByRole("button", { name: "Keep suggestion: M5 from Test" }));
+  assert.ok(ghost("M5"));
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });
 
@@ -714,7 +683,7 @@ test("a failed keep of the last suggestion brings it back", async () => {
   await openPreview();
   assert.deepEqual(suggestionNames(), ["M9"]);
 
-  fireEvent.click(screen.getByRole("button", { name: "Keep suggestion: M9 from Test" }));
+  fireEvent.click(ghost("M9"));
   await failHeldWrite(server, 10);
 
   await waitFor(() => assert.deepEqual(suggestionNames(), ["M9"]));
@@ -854,4 +823,37 @@ test("a recent benchmark snapshot is not marked out of date", async () => {
   const row = await screen.findByRole("group", { name: "Benchmark scores" });
   await within(row).findByText(/^Artificial Analysis via OpenRouter · /u);
   assert.ok(!within(row).queryByText("Out of date"));
+});
+
+test("switching the chip to a score with no suggestions hides the chip and focuses Arrange", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  // Every height is the user's own, so only the preview shows the chip.
+  const chip = await screen.findByRole("button", { name: /^Height: Coding score/u });
+  fireEvent.keyDown(chip, { key: "Enter" });
+  // No model has an Agentic score, so the preview ends and takes the chip with it.
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Agentic" }));
+
+  await waitFor(() => assert.equal(suggestions().length, 0));
+  await waitFor(() => assert.ok(!screen.queryByRole("button", { name: /^Height:/u })));
+  await waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole("button", { name: "Arrange" }),
+      "focus is on Arrange",
+    ),
+  );
+});
+
+test("benchmark heights and suggestions announce their score", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m9": { ...userPlacement, ySource: "benchmark" } } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  // Coding scores run 10 + n for model mn.
+  await waitFor(() =>
+    assert.match(marker("M9").getAttribute("aria-label") ?? "", /, Coding score 19[,.]/u),
+  );
+  await openPreview();
+  assert.match(ghost("M8").getAttribute("aria-label") ?? "", /^Keep suggestion: M8 from Test, Coding score 18$/u);
 });

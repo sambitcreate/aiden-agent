@@ -43,11 +43,16 @@ function ModelPadMenuAction({
   onSelect: () => void;
 }) {
   const labelId = React.useId();
+  const detailId = React.useId();
   const reasonId = React.useId();
+  // The label alone names the item; the detail and the reason describe it.
+  const describedBy = [detail ? detailId : null, unavailableReason ? reasonId : null]
+    .filter(Boolean)
+    .join(" ");
   return (
     <DropdownMenuItem
       aria-labelledby={labelId}
-      aria-describedby={unavailableReason ? reasonId : undefined}
+      aria-describedby={describedBy || undefined}
       aria-disabled={unavailableReason ? true : undefined}
       color={destructive && !unavailableReason ? "status-red" : undefined}
       className={cn("group flex-col items-stretch gap-0", unavailableReason && "opacity-45")}
@@ -64,7 +69,10 @@ function ModelPadMenuAction({
           {label}
         </span>
         {detail ? (
-          <span className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+          <span
+            id={detailId}
+            className="text-small text-tertiary group-data-[highlighted]:text-accent-foreground"
+          >
             {detail}
           </span>
         ) : null}
@@ -183,7 +191,7 @@ export function ModelPadMoreMenu({
 }
 
 /**
- * The Pad's corner chip naming the score behind benchmark heights. It opens a
+ * The Pad header's chip naming the score behind benchmark heights. It opens a
  * menu to switch the score.
  */
 export function ModelPadMetricChip({
@@ -201,7 +209,7 @@ export function ModelPadMetricChip({
           aria-label={`${modelPadHeightCaption(metric)} score. Change the benchmark score`}
           className="model-pad-metric-chip"
         >
-          {MODEL_PAD_METRIC_LABELS[metric]}
+          {modelPadHeightCaption(metric)}
           <ChevronDown aria-hidden="true" className="size-3" />
         </button>
       </DropdownMenuTrigger>

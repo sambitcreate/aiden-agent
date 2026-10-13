@@ -85,11 +85,13 @@ export const MODEL_PAD_MIN_SIZE_PX = 160;
 /** Gutter below the measured canvas so the square does not kiss the scrollport edge. */
 export const MODEL_PAD_VIEWPORT_GUTTER_PX = 24;
 /**
- * Reserved height for the two axis captions and the legend. Using a fixed
- * reservation keeps the square outline stable when legend copy wraps or
- * marker labels appear; those must not feed back into `--model-pad-available-size`.
+ * Reserved height for what sits under the square in the canvas column: the
+ * suggestion bar row (its top margin plus a row of small buttons). The axis
+ * captions live inside the square. A fixed reservation keeps the square the
+ * same size whether or not the bar is showing; the bar must not feed back into
+ * `--model-pad-available-size`.
  */
-export const MODEL_PAD_SETTINGS_CHROME_PX = 128;
+export const MODEL_PAD_SETTINGS_CHROME_PX = 48;
 
 export function measureModelPadAvailableSize(input: {
   viewportBottom: number;

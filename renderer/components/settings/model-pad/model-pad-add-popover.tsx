@@ -96,6 +96,15 @@ export function ModelPadAddPopover({
   onToggle: (entry: ModelEntry) => void;
 }) {
   const [query, setQuery] = React.useState("");
+  const [open, setOpen] = React.useState(false);
+  // Recent keeps the rows it opened with until the list closes: toggling one
+  // off the list must not remove its row, or the highlight would jump to
+  // another model and a second Enter would add that one instead. The rows are
+  // only picked up later when there were none yet (still loading on open).
+  const [shownRecent, setShownRecent] = React.useState<readonly ModelEntry[]>([]);
+  React.useEffect(() => {
+    if (open && shownRecent.length === 0 && recentEntries.length > 0) setShownRecent(recentEntries);
+  }, [open, shownRecent.length, recentEntries]);
   const term = query.trim().toLocaleLowerCase();
   const sorted = React.useMemo(() => sortModelsForAdding(entries), [entries]);
   const matches = term
@@ -103,10 +112,17 @@ export function ModelPadAddPopover({
         `${entry.label} ${entry.providerLabel} ${entry.model}`.toLocaleLowerCase().includes(term),
       )
     : sorted;
-  const recent = term ? [] : recentEntries.slice(0, MODEL_PAD_ADD_RECENT_LIMIT);
+  const recent = term ? [] : shownRecent.slice(0, MODEL_PAD_ADD_RECENT_LIMIT);
 
   return (
-    <Popover onOpenChange={(open) => (open ? undefined : setQuery(""))}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        setShownRecent(next ? recentEntries : []);
+        if (!next) setQuery("");
+      }}
+    >
       <PopoverTrigger asChild>
         <Button ref={triggerRef} size="small" variant="accent">
           <Plus aria-hidden="true" />

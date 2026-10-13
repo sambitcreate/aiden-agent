@@ -246,3 +246,17 @@ test("dragging a marker saves once, on release", async () => {
   assert.equal(moved.xSource, "user");
   await screen.findByText("Moved Mine from Test");
 });
+
+test("releasing the pointer over a marker without dragging it moves nothing", async () => {
+  const server = settingsServer();
+  const pad = await mountEditor();
+  pad.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+  const mine = marker(pad, "Mine")!;
+  const start = `${mine.style.left} ${mine.style.top}`;
+
+  fireEvent.pointerUp(mine, { button: 0, pointerId: 1, clientX: 90, clientY: 80 });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  assert.equal(server.writes().length, 0);
+  assert.equal(`${marker(pad, "Mine")!.style.left} ${marker(pad, "Mine")!.style.top}`, start);
+});

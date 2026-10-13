@@ -853,6 +853,7 @@ textarea {
 
 .model-pad-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem;
   padding: 0.75rem 0.75rem 0 1rem;
@@ -872,8 +873,16 @@ textarea {
   align-items: center;
 }
 
+/* Beside the square, the tray is never taller than it: the same size the
+   square resolves to (`.model-pad` width), with the list scrolling inside. */
+.model-pad-tray {
+  display: flex;
+  max-height: min(30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  flex-direction: column;
+}
+
 .model-pad-tray-list {
-  max-height: max(12rem, var(--model-pad-available-size, 28rem));
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -890,19 +899,18 @@ textarea {
   background: var(--accent);
 }
 
-/* Names the score behind benchmark heights, in the square's top-right inset. */
+/* Names the score behind benchmark heights, in the Pad header so it never
+   covers a marker in the square. */
 .model-pad-metric-chip {
-  position: absolute;
-  z-index: 5;
-  top: 0.375rem;
-  right: 0.5rem;
   display: inline-flex;
   height: 1.25rem;
+  min-width: 0;
   align-items: center;
   gap: 0.25rem;
   padding-inline: 0.5rem;
   border: 0;
-  border-radius: 0.625rem;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
   background: var(--surface-control);
   color: var(--text-secondary);
   font-size: var(--text-mini);
@@ -1514,7 +1522,7 @@ textarea {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-pad-tray-list {
+  .model-pad-tray {
     max-height: none;
   }
 }

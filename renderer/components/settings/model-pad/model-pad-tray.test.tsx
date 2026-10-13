@@ -150,3 +150,32 @@ test("removing the last tray row moves focus to Add and the tray explains itself
     "focus moved to Add",
   );
 });
+
+test("removing a row with the mouse leaves focus alone and doesn't light the next row", async () => {
+  editorServer();
+  const { tray } = await mountEditor();
+  fireEvent.click(within(tray).getByRole("button", { name: "Remove Left from Test from Pad" }), {
+    detail: 1,
+  });
+
+  await screen.findByText("Removed Left from Test");
+  await waitFor(() => assert.deepEqual(rowValues(tray), ["test::high", "test::middle", "test::low"]));
+  assert.ok(!tray.contains(document.activeElement), "focus stayed out of the tray");
+  assert.equal(row(tray, "test::middle").dataset.hot, undefined);
+});
+
+test("a mouse removal that held focus hands it to the next row without lighting it", async () => {
+  editorServer();
+  const { pad, tray } = await mountEditor();
+  const remove = within(tray).getByRole("button", { name: "Remove Left from Test from Pad" });
+  remove.focus();
+  fireEvent.click(remove, { detail: 1 });
+
+  await screen.findByText("Removed Left from Test");
+  assert.ok(
+    document.activeElement === within(row(tray, "test::middle")).getAllByRole("button")[0],
+    "focus moved to the next row",
+  );
+  assert.equal(row(tray, "test::middle").dataset.hot, undefined);
+  assert.equal(marker(pad, "test::middle").dataset.hot, undefined);
+});

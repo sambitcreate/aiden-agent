@@ -174,3 +174,27 @@ test("arrow keys move through the list and Enter toggles the highlighted model",
   fireEvent.keyDown(search, { key: "Enter" });
   await waitFor(() => assert.deepEqual(Object.keys(server.stored()), ["acme::comet"]));
 });
+
+test("Enter twice on a Recent row adds that model and then removes the same model", async () => {
+  const server = editorServer({ recentModels: ["acme::nova", "zephyr::atlas"] });
+  const dialog = await openAdd();
+  const search = within(dialog).getByRole("combobox", { name: "Search models" });
+  await waitFor(() => assert.equal(listing(dialog)[0], "Recent"));
+
+  // The list starts on the first Recent row, Nova.
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => assert.deepEqual(Object.keys(server.stored()), ["acme::nova"]));
+  await screen.findByText("Added Nova from Acme");
+  // Nova stays in Recent, checked, until the list closes.
+  await waitFor(() =>
+    assert.deepEqual(listing(dialog).slice(0, 3), [
+      "Recent",
+      "Remove Nova from Acme from Pad",
+      "Add Atlas from Zephyr to Pad",
+    ]),
+  );
+
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() => assert.deepEqual(server.stored(), {}));
+  await screen.findByText("Removed Nova from Acme");
+});

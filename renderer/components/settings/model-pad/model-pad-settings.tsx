@@ -216,7 +216,6 @@ export function ModelPadSettings() {
   const [dragState, setDragState] = React.useState<ModelPadDragState>();
   const [announcement, setAnnouncement] = React.useState("");
   const padRef = React.useRef<HTMLDivElement | null>(null);
-  const trayRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
     const pad = padRef.current;
@@ -361,6 +360,12 @@ export function ModelPadSettings() {
     [occupiedCells, shownSuggestions, gridSize],
   );
   const previewActive = previewFits && shownSuggestions.length > 0;
+  const hasBenchmarkHeight = React.useMemo(
+    () => modelPadHasBenchmarkHeight(placements, visibleValues),
+    [placements, visibleValues],
+  );
+  // The header chip names the score while any visible height comes from it.
+  const showMetricChip = previewActive || (placedCount > 0 && hasBenchmarkHeight);
   React.useEffect(() => {
     if (!suggestionPreview) return;
     // The Pad outgrew the preview grid, or every suggestion is on the Pad and
@@ -371,17 +376,6 @@ export function ModelPadSettings() {
   }, [suggestionPreview, previewFits, previewActive, acceptsInFlight]);
   const preferencesReady = padPreferences.ready;
   const loading = providersQuery.isLoading || catalog.isLoading;
-  // The first visit to an empty Pad starts at Add. Decided once, after
-  // loading, and only when nothing else has focus, so it never steals focus.
-  const firstVisitSettledRef = React.useRef(false);
-  React.useLayoutEffect(() => {
-    if (firstVisitSettledRef.current || loading || !preferencesReady) return;
-    firstVisitSettledRef.current = true;
-    const focused = document.activeElement;
-    if (placedCount === 0 && (!focused || focused === document.body)) {
-      addButtonRef.current?.focus();
-    }
-  }, [loading, preferencesReady, placedCount]);
   const coverage = React.useMemo(
     () => benchmarkCoverage(entries, placements),
     [entries, placements],
@@ -714,7 +708,7 @@ export function ModelPadSettings() {
   const previewSuggestions = ({
     metric = benchmarkMetric,
     focus = true,
-  }: { metric?: ModelPadMetric; focus?: boolean } = {}) => {
+  }: { metric?: ModelPadMetric; focus?: boolean } = {}): number => {
     flushPendingMove();
     const percentiles =
       metric === benchmarkMetric ? benchmarkPercentiles : modelBenchmarkPercentiles(entries, metric);
@@ -743,6 +737,7 @@ export function ModelPadSettings() {
         ? `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} shown on the Pad. Keep one at a time, or keep all.`
         : "No suggestions to show.",
     );
+    return suggestions.length;
   };
 
   /** Set the pace of every placed model with enough measured chats from its speed. */
@@ -760,7 +755,7 @@ export function ModelPadSettings() {
     });
   };
 
-  const changeMetric = (metric: ModelPadMetric) => {
+  const changeMetric = (metric: ModelPadMetric, from: "menu" | "chip" = "menu") => {
     if (metric === benchmarkMetric) return;
     savePadPreferences({ modelPadMetric: metric }).catch(() => {
       toast.error(SAVE_ERROR_MESSAGE);
@@ -768,7 +763,12 @@ export function ModelPadSettings() {
       setSuggestionPreview(undefined);
     });
     // An open preview follows the new score; focus stays where it is.
-    if (suggestionPreview) previewSuggestions({ metric, focus: false });
+    const shown = suggestionPreview ? previewSuggestions({ metric, focus: false }) : 0;
+    // The chip shows only for benchmark heights or a preview. When neither is
+    // left, the chip goes away with focus on it; Arrange takes it instead.
+    if (from === "chip" && !(placedCount > 0 && hasBenchmarkHeight) && shown === 0) {
+      focusArrangeWhenChipHidesRef.current = true;
+    }
   };
 
   /** Keep focus near the suggestions once the one that had it goes away. */
@@ -832,6 +832,20 @@ export function ModelPadSettings() {
     );
   };
 
+  const focusArrangeWhenChipHidesRef = React.useRef(false);
+  React.useEffect(() => {
+    if (showMetricChip || !focusArrangeWhenChipHidesRef.current) return;
+    focusArrangeWhenChipHidesRef.current = false;
+    const arrange = arrangeButtonRef.current;
+    arrange?.focus();
+    // The chip's closing menu can still restore focus to its gone trigger; take it back once.
+    const timer = setTimeout(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body || !active.isConnected) arrange?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [showMetricChip]);
+
   const dismissSuggestions = () => {
     setSuggestionPreview(undefined);
     setAnnouncement("Suggestions dismissed.");
@@ -844,19 +858,6 @@ export function ModelPadSettings() {
     [...(padRef.current?.querySelectorAll<HTMLElement>(".model-pad-marker") ?? [])]
       .find((element) => element.dataset.value === value)
       ?.focus();
-  };
-
-  /** Remove from the tray; focus moves to the next row, else to Add. */
-  const removeFromTray = (entry: ModelEntry, rows: readonly ModelPadTrayRow[]) => {
-    const index = rows.findIndex((row) => row.entry.value === entry.value);
-    const neighbor = (rows[index + 1] ?? rows[index - 1])?.entry.value;
-    const neighborRow = [
-      ...(trayRef.current?.querySelectorAll<HTMLElement>("li[data-value]") ?? []),
-    ].find((element) => element.dataset.value === neighbor);
-    // The removed row takes its buttons with it; move focus before it goes.
-    (neighborRow?.querySelector<HTMLElement>("button") ?? addButtonRef.current)?.focus();
-    setHotValue((current) => (current === entry.value ? undefined : current));
-    removeModel(entry);
   };
 
   React.useEffect(() => {
@@ -889,17 +890,27 @@ export function ModelPadSettings() {
       paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
     const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
     const score = benchmarkScore(entry, benchmarkMetric);
-    const detail =
-      measuredSpeed ??
-      (score === undefined
+    const scoreLabel =
+      score === undefined
         ? undefined
-        : `${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score ${formatScore(score)}`);
+        : `${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score ${formatScore(score)}`;
+    // The tag has room for one detail: measured speed wins over the score.
+    const detail = measuredSpeed ?? scoreLabel;
     return [
       {
         value: entry.value,
         point,
         kind: modelPadPlacementKind(sourcePlacement),
-        ariaLabel: `${placementLabel(entry)}, ${modelPadPlacementSourceLabel(sourcePlacement)}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`,
+        ariaLabel: `${[
+          placementLabel(entry),
+          modelPadPlacementSourceLabel(sourcePlacement),
+          paceDescription,
+          measuredSpeed,
+          scoreLabel,
+          alsoVia,
+        ]
+          .filter(Boolean)
+          .join(", ")}. Drag to another dot; use arrow keys to move one dot.`,
         selected: activeValue === entry.value,
         dragging: dragState?.value === entry.value,
         linked: linkedValues.has(entry.value),
@@ -932,16 +943,15 @@ export function ModelPadSettings() {
             if (snapped) setDragState({ value: entry.value, ...snapped });
           },
           onPointerUp: (event) => {
-            const snapped = snapPointer(entry.value, event);
-            const dropPoint = snapped?.point ?? dragState?.point;
-            const displaced = snapped?.displaced ?? dragState?.displaced ?? false;
             if (event.currentTarget.hasPointerCapture(event.pointerId)) {
               event.currentTarget.releasePointerCapture(event.pointerId);
             }
-            const moved =
-              dropPoint &&
-              modelPadPointKey(dropPoint, gridSize) !== modelPadPointKey(sourcePlacement, gridSize);
-            if (dropPoint && moved) {
+            // Only a drag that started on this marker can drop it.
+            if (dragState?.value !== entry.value) return;
+            const snapped = snapPointer(entry.value, event);
+            const dropPoint = snapped?.point ?? dragState.point;
+            const displaced = snapped?.displaced ?? dragState.displaced;
+            if (modelPadPointKey(dropPoint, gridSize) !== modelPadPointKey(sourcePlacement, gridSize)) {
               dropPlacement(entry, dropPoint);
               setAnnouncement(
                 `${entry.label} moved to ${gridLocation(dropPoint, gridSize)}.${
@@ -986,10 +996,14 @@ export function ModelPadSettings() {
   const previewMetric = suggestionPreview?.metric ?? benchmarkMetric;
   const ghosts: ModelPadGhostView[] = shownSuggestions.map(({ entry, ...suggestion }) => {
     const score = benchmarkScore(entry, previewMetric);
+    const scoreLabel =
+      score === undefined
+        ? ""
+        : `, ${MODEL_PAD_METRIC_LABELS[previewMetric]} score ${formatScore(score)}`;
     return {
       value: suggestion.value,
       point: suggestion.placement,
-      ariaLabel: `Keep suggestion: ${placementLabel(entry)}`,
+      ariaLabel: `Keep suggestion: ${placementLabel(entry)}${scoreLabel}`,
       hot: hotValue === suggestion.value,
       tag: {
         title: entry.label,
@@ -1024,9 +1038,6 @@ export function ModelPadSettings() {
     .sort((left, right) => right.placement.y - left.placement.y || left.placement.x - right.placement.x)
     .map(({ placement: _placement, ...row }) => row);
 
-  const showMetricChip =
-    previewActive || (placedCount > 0 && modelPadHasBenchmarkHeight(placements, visibleValues));
-
   return (
     <>
       <FieldSet className="model-pad-fieldset">
@@ -1046,6 +1057,12 @@ export function ModelPadSettings() {
               (<kbd>⇧</kbd> moves 3). Every change saves; Undo is in the toast.
             </p>
           </InfoHint>
+          {showMetricChip ? (
+            <ModelPadMetricChip
+              metric={benchmarkMetric}
+              onMetricChange={(metric) => changeMetric(metric, "chip")}
+            />
+          ) : null}
           <span className="flex-1" />
           <ModelPadAddPopover
             triggerRef={addButtonRef}
@@ -1058,7 +1075,7 @@ export function ModelPadSettings() {
           <ModelPadArrangeMenu
             triggerRef={arrangeButtonRef}
             metric={benchmarkMetric}
-            onMetricChange={changeMetric}
+            onMetricChange={(metric) => changeMetric(metric)}
             suggestUnavailableReason={suggestUnavailableReason}
             onSuggest={() => previewSuggestions()}
             paceReadyCount={measuredPace.ready}
@@ -1084,11 +1101,6 @@ export function ModelPadSettings() {
             ghosts={ghosts}
             dragging={Boolean(dragState)}
             describedBy={`${helpId} ${statusId}`}
-            metricChip={
-              showMetricChip ? (
-                <ModelPadMetricChip metric={benchmarkMetric} onMetricChange={changeMetric} />
-              ) : null
-            }
             emptyState={
               placedCount === 0 && !previewActive ? (
                 <div className="model-pad-empty-state">
@@ -1155,16 +1167,15 @@ export function ModelPadSettings() {
               {announcement}
             </p>
           </ModelPadCanvas>
-          <div ref={trayRef} className="min-w-0">
-            <ModelPadTray
-              rows={trayRows}
-              hotValue={hotPlaced}
-              selectedValue={activeValue}
-              onHotChange={setHot}
-              onShow={showOnPad}
-              onRemove={(entry) => removeFromTray(entry, trayRows)}
-            />
-          </div>
+          <ModelPadTray
+            rows={trayRows}
+            hotValue={hotPlaced}
+            selectedValue={activeValue}
+            onHotChange={setHot}
+            onShow={showOnPad}
+            onRemove={removeModel}
+            fallbackFocus={() => addButtonRef.current}
+          />
         </div>
       </FieldSet>
       <ModelPadDataRows

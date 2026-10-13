@@ -1,3 +1,4 @@
+import * as React from "react";
 import { X } from "lucide-react";
 import { ProviderIcon } from "../../provider-icon";
 import { InfoHint } from "../../ui-info-hint";
@@ -25,6 +26,7 @@ export function ModelPadTray({
   onHotChange,
   onShow,
   onRemove,
+  fallbackFocus,
 }: {
   rows: readonly ModelPadTrayRow[];
   hotValue?: string;
@@ -32,7 +34,28 @@ export function ModelPadTray({
   onHotChange: (value: string, hot: boolean) => void;
   onShow: (value: string) => void;
   onRemove: (entry: ModelEntry) => void;
+  /** Takes focus when the last row is removed from the keyboard. */
+  fallbackFocus: () => HTMLElement | null;
 }) {
+  const showButtons = React.useRef(new Map<string, HTMLButtonElement>());
+
+  /**
+   * The removed row takes its buttons with it. A keyboard removal, or one that
+   * held focus, hands focus to the next row (else the previous one, else
+   * `fallbackFocus`) before the row goes; only a keyboard removal lights it.
+   */
+  const remove = (entry: ModelEntry, row: HTMLElement, fromKeyboard: boolean) => {
+    if (fromKeyboard || row.contains(document.activeElement)) {
+      const index = rows.findIndex((candidate) => candidate.entry.value === entry.value);
+      const neighbor = (rows[index + 1] ?? rows[index - 1])?.entry.value;
+      const target = (neighbor && showButtons.current.get(neighbor)) || fallbackFocus();
+      target?.focus();
+      if (!fromKeyboard && neighbor) onHotChange(neighbor, false);
+    }
+    onHotChange(entry.value, false);
+    onRemove(entry);
+  };
+
   return (
     <aside className="model-pad-tray min-w-0" aria-label="On your Pad">
       <div className="flex items-center justify-between px-1 pb-1.5 pt-0.5 text-small text-secondary">
@@ -62,6 +85,10 @@ export function ModelPadTray({
                 onPointerLeave={() => onHotChange(entry.value, false)}
               >
                 <button
+                  ref={(element) => {
+                    if (element) showButtons.current.set(entry.value, element);
+                    else showButtons.current.delete(entry.value);
+                  }}
                   type="button"
                   aria-label={`${label}, ${sourceLabel}. Show on the Pad`}
                   className="flex min-w-0 flex-1 cursor-default items-center gap-2 rounded-control py-1 pl-1.5 text-left outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
@@ -93,7 +120,10 @@ export function ModelPadTray({
                   className={cn(
                     "grid size-6 shrink-0 cursor-default place-items-center rounded-lg text-tertiary opacity-0 outline-none transition-opacity duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-focus-ring group-hover:opacity-100 group-data-[hot=true]:opacity-100",
                   )}
-                  onClick={() => onRemove(entry)}
+                  // A keyboard-activated click has no pointer press count.
+                  onClick={(event) =>
+                    remove(entry, event.currentTarget.closest("li")!, event.detail === 0)
+                  }
                 >
                   <X aria-hidden="true" className="size-3.5" />
                 </button>

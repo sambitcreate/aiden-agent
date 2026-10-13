@@ -95,6 +95,15 @@ async function openPaceAction(): Promise<HTMLElement> {
   return screen.findByRole("menuitem", { name: "Pace from my chats" });
 }
 
+/** The text of every element that describes `item`. */
+function description(item: HTMLElement): string {
+  return (item.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ")
+    .trim();
+}
+
 function unavailableReason(item: HTMLElement): string {
   assert.equal(item.getAttribute("aria-disabled"), "true");
   return document.getElementById(item.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
@@ -125,6 +134,8 @@ test("Pace from my chats saves measured X for well-sampled models and can be und
   await waitFor(() => assert.notEqual(action.getAttribute("aria-disabled"), "true"));
   // Fast and Slow have three or more chats; Fresh has two.
   assert.match(action.textContent ?? "", /2 ready/u);
+  // The count is part of the item's accessible description, not only its text.
+  assert.match(description(action), /^2 ready$/u);
 
   fireEvent.click(action);
 
