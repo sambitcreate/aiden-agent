@@ -2865,6 +2865,16 @@ class AidenChatViewModel(
         // A send or newer reconcile may have started while the cache was on disk.
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
         val presented = beforePublishing(admitted)
+
+        // Retire the live output if this transcript contains the ended run's replacement reply.
+        // When an accepted transcript contains a new message and we have an active terminal stream,
+        // the new message is the stream's result, so retire the live presentation immediately.
+        val previousMessageCount = _chat.value?.messages?.size ?: 0
+        if (activeStreamId != null && _streamState.value?.isTerminal == true &&
+            presented.messages.size > previousMessageCount) {
+            liveTranscript.reset()
+        }
+
         _chat.value = presented
         resolveModelSelection()
         if (scheduleTitleRefresh && presented.isTitlePending) {
