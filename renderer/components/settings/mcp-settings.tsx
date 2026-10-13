@@ -10,6 +10,7 @@ import {
   AlertDialog,
   Badge,
   Button,
+  Callout,
   Dialog,
   Field,
   FieldSet,
@@ -72,6 +73,22 @@ function recordToLines(record: Record<string, string> | undefined): string {
     .join("\n");
 }
 
+/** One argument per line, so arguments that contain spaces survive editing unchanged. */
+function argsToLines(args: readonly string[] | undefined): string {
+  return (args ?? []).join("\n");
+}
+
+function linesToArgs(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/\r$/u, ""))
+    .filter((line) => line.trim().length > 0);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function McpSettings() {
   const qc = useQueryClient();
   const servers = useMcpServers();
@@ -83,6 +100,10 @@ export function McpSettings() {
   const [pluginCategory, setPluginCategory] = React.useState<string | "all">("all");
   const [pluginFilter, setPluginFilter] = React.useState<PluginCompatibilityFilter>("all");
   const [pluginDetails, setPluginDetails] = React.useState<PluginCatalogEntry | null>(null);
+  const [toggling, setToggling] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [removeBusy, setRemoveBusy] = React.useState(false);
+  const [removeError, setRemoveError] = React.useState<string | null>(null);
+  const [resetting, setResetting] = React.useState(false);
 
   const invalidate = async () => {
     await Promise.all([
@@ -92,8 +113,50 @@ export function McpSettings() {
   };
 
   const toggle = async (server: McpServer, enabled: boolean) => {
-    await mcpApi.save({ ...server, enabled });
-    await invalidate();
+    if (toggling.has(server.id)) return;
+    setToggling((current) => new Set(current).add(server.id));
+    try {
+      await mcpApi.save({ ...server, enabled });
+    } catch (error) {
+      toast.error(
+        `Couldn’t ${enabled ? "enable" : "disable"} ${server.name || "this server"}: ${errorMessage(error)}`,
+      );
+    } finally {
+      await invalidate().catch(() => undefined);
+      setToggling((current) => {
+        const next = new Set(current);
+        next.delete(server.id);
+        return next;
+      });
+    }
+  };
+
+  const resetConnections = async () => {
+    setResetting(true);
+    try {
+      await mcpApi.reconnect();
+      toast.success("Connections reset. Enabled servers reconnect with your next message.");
+    } catch (error) {
+      toast.error(`Couldn’t reset connections: ${errorMessage(error)}`);
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const confirmRemove = async () => {
+    if (!removing) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await mcpApi.remove(removing.id);
+      setRemoving(null);
+      await invalidate().catch(() => undefined);
+    } catch (error) {
+      // The confirmation stays open and shows the reason inline.
+      setRemoveError(errorMessage(error));
+    } finally {
+      setRemoveBusy(false);
+    }
   };
 
   const openServer = (server: McpServer) => {
@@ -116,6 +179,10 @@ export function McpSettings() {
 
   const list = servers.data ?? [];
   const catalogReady = servers.isSuccess && presets.isSuccess;
+  const loadErrors = [
+    servers.isError ? { label: "configured MCP servers", query: servers } : null,
+    presets.isError ? { label: "plugin connection details", query: presets } : null,
+  ].filter((entry) => entry !== null);
   const visiblePlugins = filterPluginCatalog(
     PLUGIN_CATALOG,
     pluginSearch,
@@ -139,15 +206,34 @@ export function McpSettings() {
           variant="transparent"
           size="small"
           className="shrink-0"
-          onClick={async () => {
-            await mcpApi.reconnect();
-            toast.success("Connections reset. Enabled servers reconnect with your next message.");
-          }}
+          disabled={resetting}
+          onClick={() => void resetConnections()}
         >
           <RefreshCw className="size-4" />
-          Reset connections
+          {resetting ? "Resetting…" : "Reset connections"}
         </Button>
       </div>
+
+      {loadErrors.map(({ label, query }) => (
+        <Callout key={label} color="red" role="alert" className="flex-row items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <Text variant="small-strong">Couldn’t load {label}</Text>
+            <Text variant="small" className="mt-0.5 block">
+              {errorMessage(query.error)}
+            </Text>
+          </div>
+          <Button
+            variant="filled"
+            size="small"
+            className="shrink-0"
+            disabled={query.isFetching}
+            aria-label={`Retry loading ${label}`}
+            onClick={() => void query.refetch()}
+          >
+            {query.isFetching ? "Retrying…" : "Retry"}
+          </Button>
+        </Callout>
+      ))}
 
       <div className="flex items-center justify-between gap-4 settings-card rounded-card px-3.5 py-3">
         <div className="min-w-0 flex-1">
@@ -199,12 +285,28 @@ export function McpSettings() {
                     variant="filled"
                     size="small"
                     disabled={Boolean(s.presetId) && !catalogReady}
+                    aria-label={`${s.presetId ? "Manage" : "Edit"} ${s.name || "untitled server"}`}
                     onClick={() => openServer(s)}
                   >
                     {s.presetId ? "Manage" : "Edit"}
                   </Button>
-                  <Switch aria-label={`Enable ${s.name || "MCP server"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
-                  <Button variant="transparent" size="small" iconOnly aria-label="Remove server" onClick={() => setRemoving(s)}>
+                  <Switch
+                    aria-label={`Enable ${s.name || "MCP server"}`}
+                    checked={s.enabled}
+                    disabled={toggling.has(s.id)}
+                    aria-busy={toggling.has(s.id) || undefined}
+                    onCheckedChange={(v) => void toggle(s, v)}
+                  />
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label={`Remove ${s.name || "untitled server"}`}
+                    onClick={() => {
+                      setRemoveError(null);
+                      setRemoving(s);
+                    }}
+                  >
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
@@ -281,7 +383,7 @@ export function McpSettings() {
         <Text variant="small" color="tertiary" aria-live="polite">
           {visiblePlugins.length} plugin{visiblePlugins.length === 1 ? "" : "s"}
         </Text>
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <div className="settings-plugin-grid">
           {visiblePlugins.map((plugin) => {
             const state = presets.data?.find((entry) => entry.preset.id === plugin.id);
             return (
@@ -379,16 +481,23 @@ export function McpSettings() {
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title="Remove this MCP server?"
-        description={removing ? `“${removing.name || "Untitled server"}” will be disconnected and removed.` : null}
-        confirmLabel="Remove"
+        description={
+          removing ? (
+            <>
+              “{removing.name || "Untitled server"}” will be disconnected and removed.
+              {removeError ? (
+                <Text as="p" variant="small" color="red" role="alert" className="mt-2">
+                  Couldn’t remove it: {removeError}
+                </Text>
+              ) : null}
+            </>
+          ) : null
+        }
+        confirmLabel={removeBusy ? "Removing…" : removeError ? "Try again" : "Remove"}
         confirmVariant="destructive"
-        onConfirm={async () => {
-          if (removing) {
-            await mcpApi.remove(removing.id);
-            await invalidate();
-          }
-          setRemoving(null);
-        }}
+        busy={removeBusy}
+        keepOpenOnConfirm
+        onConfirm={confirmRemove}
       />
     </div>
   );
@@ -431,11 +540,17 @@ function PluginCard({
         <div className="flex items-center gap-2">
           {badge ? <Badge color={badge.color}>{badge.label}</Badge> : null}
           {connectable ? (
-            <Button variant="filled" size="small" disabled={!catalogReady} onClick={onSetup}>
+            <Button
+              variant="filled"
+              size="small"
+              disabled={!catalogReady}
+              aria-label={`${state?.configured ? "Manage" : "Set Up"} ${plugin.name}`}
+              onClick={onSetup}
+            >
               {state?.configured ? "Manage" : "Set Up"}
             </Button>
           ) : (
-            <Button variant="filled" size="small" onClick={onDetails}>
+            <Button variant="filled" size="small" aria-label={`Details for ${plugin.name}`} onClick={onDetails}>
               Details
             </Button>
           )}
@@ -454,7 +569,7 @@ function McpEditor({
   server: McpServer;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => Promise<void> | void;
 }) {
   const providers = useProviders();
   const [authProvider, setAuthProvider] = React.useState(server.authProvider ?? "");
@@ -465,7 +580,7 @@ function McpEditor({
   const [oauthClientName, setOauthClientName] = React.useState(server.oauthClientName ?? "");
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
-  const [args, setArgs] = React.useState((server.args ?? []).join(" "));
+  const [args, setArgs] = React.useState(argsToLines(server.args));
   const [env, setEnv] = React.useState(recordToLines(server.env));
   const [url, setUrl] = React.useState(server.url ?? "");
   const [headers, setHeaders] = React.useState(recordToLines(server.headers));
@@ -477,9 +592,12 @@ function McpEditor({
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (open) {
+      setSaveError(null);
       setName(server.name);
       setAuthProvider(server.authProvider ?? "");
       setApprovedProviderConnection(undefined);
@@ -487,7 +605,7 @@ function McpEditor({
       setOauthClientName(server.oauthClientName ?? "");
       setTransport(server.transport);
       setCommand(server.command ?? "");
-      setArgs((server.args ?? []).join(" "));
+      setArgs(argsToLines(server.args));
       setEnv(recordToLines(server.env));
       setUrl(server.url ?? "");
       setHeaders(recordToLines(server.headers));
@@ -511,7 +629,7 @@ function McpEditor({
     transport,
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
-    args: transport === "stdio" ? args.trim().split(/\s+/).filter(Boolean) : undefined,
+    args: transport === "stdio" ? linesToArgs(args) : undefined,
     env: transport === "stdio" ? linesToRecord(env) : undefined,
     url: transport !== "stdio" ? url.trim() || undefined : undefined,
     headers: transport !== "stdio" ? linesToRecord(headers) : undefined,
@@ -577,11 +695,23 @@ function McpEditor({
       title={server.name ? `Edit ${server.name}` : "Add MCP server"}
       description="Configure how Aiden connects to this tool server."
       size="large"
-      confirmLabel="Save"
+      confirmLabel={saving ? "Saving…" : "Save"}
+      busy={saving}
       confirmDisabled={Boolean(metadataError) || !name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
       onConfirm={async () => {
-        await mcpApi.save(build());
-        onSaved();
+        setSaving(true);
+        setSaveError(null);
+        try {
+          await mcpApi.save(build());
+        } catch (error) {
+          const message = errorMessage(error);
+          setSaveError(message);
+          toast.error(`Couldn’t save ${name.trim() || "this server"}: ${message}`);
+          return;
+        } finally {
+          setSaving(false);
+        }
+        await Promise.resolve(onSaved()).catch(() => undefined);
         onOpenChange(false);
       }}
     >
@@ -599,8 +729,8 @@ function McpEditor({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="stdio">Local command (stdio)</SelectItem>
-              <SelectItem value="http">Remote URL (HTTP)</SelectItem>
-              <SelectItem value="sse">Remote URL (SSE)</SelectItem>
+              <SelectItem value="http">Remote URL (Streamable HTTP)</SelectItem>
+              <SelectItem value="sse">Remote URL (SSE, legacy)</SelectItem>
             </SelectContent>
           </Select>
         </Field>
@@ -610,8 +740,19 @@ function McpEditor({
             <Field label="Command">
               <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
             </Field>
-            <Field label="Arguments" description="Space-separated arguments passed to the command.">
-              <Input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-filesystem /path" />
+            <Field
+              label="Arguments"
+              description="One argument per line, passed to the command exactly as written. Spaces inside a line stay part of that argument."
+              orientation="vertical"
+            >
+              <Textarea
+                aria-label="Arguments"
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/Users/me/My Documents"}
+                className="max-h-40 font-mono"
+                spellCheck={false}
+              />
             </Field>
             <Field label="Environment" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
               <Textarea value={env} onChange={(e) => setEnv(e.target.value)} placeholder="API_KEY=..." className="max-h-40" />
@@ -619,8 +760,15 @@ function McpEditor({
           </>
         ) : (
           <>
-            <Field label="Server URL">
-              <Input value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
+            <Field
+              label="Server URL"
+              description={
+                transport === "sse"
+                  ? "SSE is the older MCP transport and is deprecated. Prefer Streamable HTTP unless this server only supports SSE."
+                  : undefined
+              }
+            >
+              <Input aria-label="Server URL" value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
             </Field>
             <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this device." orientation="vertical">
               <Textarea disabled={Boolean(authProvider)} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
@@ -673,6 +821,11 @@ function McpEditor({
           </Button>
         </Field>
       </FieldSet>
+      {saveError ? (
+        <Text as="p" variant="small" color="red" role="alert" className="mt-3">
+          Couldn’t save: {saveError}
+        </Text>
+      ) : null}
     </Dialog>
   );
 }

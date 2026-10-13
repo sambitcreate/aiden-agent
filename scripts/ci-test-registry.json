@@ -326,6 +326,7 @@
         "main/handlers/bots.contract.test.ts",
         "main/handlers/local-runs.test.ts",
         "main/handlers/mcp-provider-auth.test.ts",
+        "main/handlers/mcp-preset-states.test.ts",
         "main/handlers/peer-host-live.test.ts",
         "main/handlers/peer-pairing.test.ts",
         "main/handlers/scheduled-tasks-parse.test.ts",

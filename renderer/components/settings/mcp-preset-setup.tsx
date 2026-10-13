@@ -4,9 +4,11 @@
 // (never in config.json); OAuth presets reuse the browser sign-in flow.
 
 import * as React from "react";
-import { Badge, Button, Dialog, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
+import { useQueryClient } from "@tanstack/react-query";
+import { Badge, Button, Callout, Dialog, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
 import { ShieldCheck } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
+import { queryKeys } from "../../lib/queries";
 import { mcpPresetCredentialReady } from "../../lib/mcp-preset-state";
 import type { McpPresetState, McpServer } from "../../lib/types";
 import { McpPresetIcon } from "./mcp-preset-icons";
@@ -23,9 +25,20 @@ export function PresetSetupDialog({
   server?: McpServer;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => Promise<void> | void;
+  /** Extra refresh after a save; server and preset caches are always refreshed. */
+  onSaved?: () => Promise<void> | void;
 }) {
   const { preset } = state;
+  const queryClient = useQueryClient();
+  // Every caller (Settings, Bot setup) must see the saved record and its new
+  // credential state, so the dialog owns the shared cache refresh.
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets }),
+    ]);
+    await onSaved?.();
+  };
   const [name, setName] = React.useState(server?.name ?? preset.name);
   const [url, setUrl] = React.useState(server?.url ?? preset.url);
   const [key, setKey] = React.useState("");
@@ -84,7 +97,7 @@ export function PresetSetupDialog({
       await mcpApi.save(record);
       await mcpApi.authorize(record);
       setAuthorized(true);
-      await onSaved();
+      await refresh();
       toast.success(`Authorized — you're signed in to ${preset.name}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -98,7 +111,7 @@ export function PresetSetupDialog({
     try {
       await mcpApi.save(build());
       await persistKey(); // store a freshly pasted key before connecting
-      await onSaved();
+      await refresh();
       const status = await mcpApi.status(build());
       if (status.connected)
         toast.success(
@@ -117,7 +130,7 @@ export function PresetSetupDialog({
       await mcpApi.setPresetKey(state.serverId, "");
       setHasKey(false);
       setKey("");
-      await onSaved();
+      await refresh();
       toast.success(`Removed the saved ${preset.name} key.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -131,7 +144,7 @@ export function PresetSetupDialog({
     setToggling(true);
     try {
       await mcpApi.save({ ...build(), enabled: nextEnabled });
-      await onSaved();
+      await refresh();
     } catch (error) {
       setEnabled(previous);
       toast.error(error instanceof Error ? error.message : String(error));
@@ -174,7 +187,7 @@ export function PresetSetupDialog({
         try {
           await mcpApi.save(build());
           await persistKey();
-          await onSaved();
+          await refresh();
           if (enabled) {
             const status = await mcpApi.status(build());
             if (!status.connected) throw new Error(status.error ?? "Saved, but the connection is not ready. Try connecting again.");
@@ -189,6 +202,14 @@ export function PresetSetupDialog({
         }
       }}
     >
+      {state.error ? (
+        <Callout color="red" role="alert" className="mb-3">
+          <Text variant="small-strong">This saved connection needs repair</Text>
+          <Text variant="small">
+            {state.error} Saving here restores {preset.name}’s official settings.
+          </Text>
+        </Callout>
+      ) : null}
       <FieldSet>
         {server ? (
           <Field

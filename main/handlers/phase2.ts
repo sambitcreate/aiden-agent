@@ -1,4 +1,5 @@
 import { registerMcpProviderAuthHandler } from "./mcp-provider-auth.js";
+import { buildMcpPresetStates } from "./mcp-preset-states.js";
 import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mcp-provider-auth.js";
 // Phase-2 IPC handlers: Skills, MCP servers, Exa web search, and voice transcription.
 
@@ -291,33 +292,26 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("mcp:list", async () => configStore.listMcpServers());
   // Built-in provider catalog with per-preset connection state. Preset API keys
   // live in the encrypted secrets store ("mcp:<serverId>"), never in config.json.
-  ipcMain.handle("mcp:presets", async () => {
-    const servers = await configStore.listMcpServers();
-    return Promise.all(
-      MCP_PRESETS.map(async (preset) => {
-        const serverId = presetServerId(preset.id);
-        const existing = servers.find((s) => s.id === serverId && s.presetId === preset.id);
-        if (existing) assertMcpPresetServer(existing);
-        const ready =
-          preset.auth.kind === "apiKey"
-            ? Boolean(
-                existing &&
-                (await secrets.getOrBindLegacyProviderKey(
-                  presetSecretId(serverId),
-                  JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
-                )),
-              )
-            : await hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName);
-        return {
-          preset,
-          serverId,
-          configured: Boolean(existing),
-          enabled: existing?.enabled ?? true,
-          ready,
-        };
-      }),
-    );
-  });
+  ipcMain.handle("mcp:presets", async () =>
+    buildMcpPresetStates({
+      presets: MCP_PRESETS,
+      servers: await configStore.listMcpServers(),
+      serverIdFor: (preset) => presetServerId(preset.id),
+      validate: (server) => {
+        assertMcpPresetServer(server);
+      },
+      isReady: async (preset, serverId, existing) =>
+        preset.auth.kind === "apiKey"
+          ? Boolean(
+              existing &&
+              (await secrets.getOrBindLegacyProviderKey(
+                presetSecretId(serverId),
+                JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
+              )),
+            )
+          : hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName),
+    }),
+  );
   // Save or clear a preset's API key. Empty key clears; the key is never returned.
   ipcMain.handle("mcp:setPresetKey", async (event, serverId: unknown, key: unknown) => {
     const owner = rendererDocumentOwner(
