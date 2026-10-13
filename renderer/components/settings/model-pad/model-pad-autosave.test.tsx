@@ -1,13 +1,15 @@
 import "../../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../../main/bots/test-dom";
-import { createBotTestQueryClient } from "../../../main/bots/test-providers";
+import { createBotTestQueryClient, mountWithBotRouter } from "../../../main/bots/test-providers";
 import type { AppSettings, Provider } from "../../../lib/types";
 import type { ModelPadPlacements } from "../../../shared/model-pad-preferences";
 import { Toaster, toast } from "../../ui";
+import { ModelPicker } from "../../model-picker";
 import { ModelPadSettings } from "./model-pad-settings";
 
 afterEach(() => {
@@ -311,4 +313,84 @@ test("an open nudge burst saves before the next action, which owns the only Undo
   await waitFor(() => assert.equal(server.writes().length, 3));
   assert.deepEqual(Object.keys(server.stored() ?? {}).sort(), ["test::mine", "test::other"]);
   assert.deepEqual(server.stored()?.["test::mine"], moved);
+});
+
+/** The settings editor and the composer picker, sharing one settings cache as in the app. */
+async function mountEditorWithPicker() {
+  const pickerProvider: Provider = { ...provider, models: [...provider.models, "beta"] };
+  let current = { modelPadPlacements: initialPlacements, pinnedModels: [] } as AppSettings;
+  installBotTestIpc({
+    "providers:list": () => [pickerProvider],
+    "models:info": () => ({}),
+    "modelInsights:status": () => ({ connected: false }),
+    "modelPace:summaries": () => ({}),
+    "settings:get": () => structuredClone(current),
+    "settings:set": (patch: unknown) => {
+      current = { ...current, ...(patch as Partial<AppSettings>) };
+      return structuredClone(current);
+    },
+  });
+  function Surfaces() {
+    const [editorShown, setEditorShown] = React.useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setEditorShown(false)}>
+          Leave settings
+        </button>
+        {editorShown ? <ModelPadSettings /> : null}
+        <ModelPicker
+          providers={[pickerProvider]}
+          providerId="test"
+          model="mine"
+          onChange={() => {}}
+        />
+        <Toaster />
+      </>
+    );
+  }
+  await mountWithBotRouter(<Surfaces />);
+  return { stored: () => current.modelPadPlacements ?? {} };
+}
+
+async function addBetaFromPickerList() {
+  fireEvent.click(screen.getByRole("button", { name: /Choose a model/u }));
+  fireEvent.click(await screen.findByRole("tab", { name: "List" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add Beta to Pad" }));
+}
+
+test("an editor Undo never erases a later picker edit: it says the Pad changed instead", async () => {
+  const surfaces = await mountEditorWithPicker();
+  await addExtra();
+  await screen.findByText("Added Extra from Test");
+
+  await addBetaFromPickerList();
+  await waitFor(() => assert.ok(surfaces.stored()["test::beta"]));
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await screen.findByText("Can’t undo — the Pad changed since");
+  assert.deepEqual(Object.keys(surfaces.stored()).sort(), [
+    "test::beta",
+    "test::extra",
+    "test::mine",
+    "test::other",
+  ]);
+  assert.ok(!screen.queryByRole("button", { name: "Undo" }));
+});
+
+test("leaving the editor dismisses its action toast, so no stale Undo survives navigation", async () => {
+  const surfaces = await mountEditorWithPicker();
+  await addExtra();
+  await screen.findByText("Added Extra from Test");
+
+  fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
+  await waitFor(() =>
+    assert.ok(!screen.queryByRole("group", { name: "Personal Model Pad arrangement" })),
+  );
+  await waitFor(() => assert.ok(!screen.queryByText("Added Extra from Test")));
+  assert.ok(!screen.queryByRole("button", { name: "Undo" }));
+
+  await addBetaFromPickerList();
+  await waitFor(() => assert.ok(surfaces.stored()["test::beta"]));
+  assert.ok(surfaces.stored()["test::extra"]);
 });

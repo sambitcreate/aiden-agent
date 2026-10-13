@@ -46,7 +46,11 @@ import {
   type MeasuredPaceResult,
 } from "../../../lib/model-pad-pace";
 import { useModelPadPreferences } from "../../../lib/model-pad-preferences";
-import type { ModelPadPlacement, ModelPadPlacements } from "../../../shared/model-pad-preferences";
+import {
+  sameModelPadPlacements,
+  type ModelPadPlacement,
+  type ModelPadPlacements,
+} from "../../../shared/model-pad-preferences";
 import {
   useModelInsightsStatus,
   useModelPaceSummaries,
@@ -96,6 +100,7 @@ const NUDGE_BURST_MS = 500;
 const SAVE_ERROR_MESSAGE = "Aiden couldn’t save your Model Pad.";
 /** Every action toast shares one id, so only the latest action is ever undoable. */
 const ACTION_TOAST_ID = "model-pad-action";
+const STALE_UNDO_MESSAGE = "Can’t undo — the Pad changed since";
 
 /** A move shown on the Pad ahead of its save: a dropped drag, or an open nudge burst. */
 interface PendingModelPadMove {
@@ -447,16 +452,43 @@ export function ModelPadSettings() {
         ? `No model off the Pad has a ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`
         : undefined;
 
+  // Saves can settle after the editor is gone (a flushed nudge on unmount);
+  // their toast would offer Undo on a page that no longer shows the Pad.
+  const mountedRef = React.useRef(false);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      toast.dismiss(ACTION_TOAST_ID);
+    };
+  }, []);
+
+  /**
+   * Undo one action: restore the layout from just before it, but only while
+   * the Pad still holds exactly what the action saved. Any later edit (the
+   * composer picker, another window) makes the snapshot stale, and restoring
+   * it would silently erase that edit, so nothing is saved then.
+   */
   const restorePlacements = React.useCallback(
-    (snapshot: ModelPadPlacements) => {
+    (snapshot: ModelPadPlacements, after: ModelPadPlacements) => {
       // Undo supersedes a nudge burst that has not been saved yet.
       clearTimeout(nudgeTimerRef.current);
       pendingMoveRef.current = undefined;
       setPendingMove(undefined);
       saveGenerationRef.current += 1;
-      savePadPreferences({ modelPadPlacements: snapshot }).catch(() => {
-        toast.error(SAVE_ERROR_MESSAGE);
-      });
+      let stale = false;
+      savePadPreferences((current) => {
+        stale = !sameModelPadPlacements(current.placements, after);
+        return stale ? {} : { modelPadPlacements: snapshot };
+      }).then(
+        () => {
+          // Replaces the action toast; its Undo must not carry over.
+          if (stale) toast(STALE_UNDO_MESSAGE, { id: ACTION_TOAST_ID, action: undefined });
+        },
+        () => {
+          toast.error(SAVE_ERROR_MESSAGE);
+        },
+      );
     },
     [savePadPreferences],
   );
@@ -470,6 +502,7 @@ export function ModelPadSettings() {
   const persistAction = React.useCallback(
     (compute: (current: ModelPadPlacements) => ModelPadAction | null) => {
       let snapshot: ModelPadPlacements | undefined;
+      let after: ModelPadPlacements = {};
       let message = "";
       let generation = 0;
       return savePadPreferences((current) => {
@@ -478,6 +511,7 @@ export function ModelPadSettings() {
         if (!action) return {};
         generation = ++saveGenerationRef.current;
         snapshot = current.placements;
+        after = action.placements;
         message = action.message;
         return { modelPadPlacements: action.placements };
       }).then(
@@ -486,13 +520,13 @@ export function ModelPadSettings() {
           if (!before) return false;
           // A later action or Undo owns the toast now; undoing this one
           // would silently revert everything after it.
-          if (generation !== saveGenerationRef.current) return true;
+          if (generation !== saveGenerationRef.current || !mountedRef.current) return true;
           toast(message, {
             id: ACTION_TOAST_ID,
             action: {
               label: "Undo",
               onClick: () => {
-                if (generation === saveGenerationRef.current) restorePlacements(before);
+                if (generation === saveGenerationRef.current) restorePlacements(before, after);
               },
             },
           });

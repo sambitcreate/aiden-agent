@@ -88,6 +88,25 @@ export function normalizeModelPadPlacements(value: unknown): ModelPadPlacements 
   return result;
 }
 
+/** True when both layouts hold the same models at the same spots with the same provenance. */
+export function sameModelPadPlacements(left: unknown, right: unknown): boolean {
+  const a = normalizeModelPadPlacements(left) ?? {};
+  const b = normalizeModelPadPlacements(right) ?? {};
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => {
+    const other = b[key];
+    const mine = a[key];
+    return (
+      other !== undefined &&
+      mine.x === other.x &&
+      mine.y === other.y &&
+      mine.xSource === other.xSource &&
+      mine.ySource === other.ySource
+    );
+  });
+}
+
 /** Keep distinct valid pins in order, capped at {@link MAX_PINNED_MODELS}. */
 export function normalizePinnedModels(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
