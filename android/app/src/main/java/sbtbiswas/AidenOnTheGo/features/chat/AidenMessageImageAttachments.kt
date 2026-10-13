@@ -188,10 +188,11 @@ internal fun aidenEligibleImageAttachments(
 internal fun AidenMessageImageAttachments(
     attachments: List<AidenMessageAttachment>,
     edge: AidenMessageMediaEdge,
-    loadData: suspend (AidenMessageAttachment) -> ByteArray?,
     /** Only this attachment plays the arrival reveal; the others draw as usual. */
     revealAttachmentId: String? = null,
-    onArrivalRevealed: () -> Unit = {}
+    onArrivalRevealed: () -> Unit = {},
+    // Last, so callers can still pass the loader as a trailing lambda.
+    loadData: suspend (AidenMessageAttachment) -> ByteArray?
 ) {
     if (attachments.isEmpty()) return
     var galleryStart by remember { mutableStateOf<Int?>(null) }
