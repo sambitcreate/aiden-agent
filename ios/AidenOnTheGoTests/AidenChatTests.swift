@@ -3055,11 +3055,15 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     private func waitForChatWrite(_ gate: AidenChatWriteTestGate) async {
-        for _ in 0..<200 {
-            if await gate.isHolding { return }
-            try? await Task.sleep(for: .milliseconds(10))
+        // Wakes as soon as the caller parks on the gate; the timer only bounds
+        // a caller that never arrives, so a slow simulator does not fail it.
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(10))
+            await gate.stopWaitingForHold()
         }
-        XCTFail("Expected caller to reach held chat write")
+        let reached = await gate.untilHolding()
+        deadline.cancel()
+        if !reached { XCTFail("Expected caller to reach held chat write") }
     }
 
     @MainActor
@@ -7874,8 +7878,12 @@ final class AidenChatTests: XCTestCase {
 @MainActor
 private final class AidenHeldAttachmentPreparation {
     private var continuation: CheckedContinuation<Void, Never>?
+    /// A release before the preparation parks lets it pass straight through
+    /// instead of suspending forever.
+    private var released = false
 
     func wait(onStart: () -> Void) async {
+        guard !released else { return onStart() }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             onStart()
@@ -7883,6 +7891,7 @@ private final class AidenHeldAttachmentPreparation {
     }
 
     func release() {
+        released = true
         continuation?.resume()
         continuation = nil
     }
@@ -10609,16 +10618,33 @@ private final class AidenHeldChatCacheFileManager: FileManager, @unchecked Senda
 private actor AidenChatWriteTestGate {
     private var armed = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var holdWaiters: [CheckedContinuation<Bool, Never>] = []
     var isHolding: Bool { continuation != nil }
     func arm() { armed = true }
     func waitIfArmed() async {
         guard armed else { return }
         armed = false
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { continuation = $0; resumeHoldWaiters(true) }
     }
+    /// Resolves true once a caller parks on the gate, or false if
+    /// `stopWaitingForHold` runs first.
+    func untilHolding() async -> Bool {
+        if continuation != nil { return true }
+        return await withCheckedContinuation { holdWaiters.append($0) }
+    }
+    func stopWaitingForHold() { resumeHoldWaiters(false) }
+    /// Releases a parked caller. A release that arrives before the caller
+    /// parks disarms the gate instead, so the late caller passes straight
+    /// through rather than suspending forever.
     func release() {
+        armed = false
         continuation?.resume()
         continuation = nil
+    }
+    private func resumeHoldWaiters(_ holding: Bool) {
+        let waiters = holdWaiters
+        holdWaiters = []
+        for waiter in waiters { waiter.resume(returning: holding) }
     }
 }
 
