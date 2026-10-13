@@ -87,8 +87,9 @@ export function StreamingMarkdownReveal({
     [parser, parsedComplete, released],
   );
 
-  // New blocks keep fading in until the last release has finished its fade.
-  const [fadeDone, setFadeDone] = React.useState(false);
+  // New blocks keep fading in until the last release has finished its fade;
+  // a reply that mounts finished shows at once.
+  const [fadeDone, setFadeDone] = React.useState(complete);
   React.useEffect(() => {
     if (!complete) {
       setFadeDone(false);
