@@ -136,7 +136,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 28)
+        XCTAssertEqual(fixture.contractRevision, 29)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -149,7 +149,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(Set(fixture.capabilities), Set(AidenRemoteCapability.v1Known))
         let allEvents = fixture.events + fixture.chatProgressEvents
         XCTAssertEqual(Set(allEvents.map(\.type)), Set(AidenRemoteEventType.v1Known))
-        // Revision 28: the host's answered questionnaire survives the stream decode.
+        // Revision 29: the host's answered questionnaire survives the stream decode.
         let recap = try XCTUnwrap(
             fixture.events.lazy.compactMap(\.payload?.timeline).flatMap(\.steps)
                 .first { $0.toolName == AidenQuestionnaireRecap.toolName }?.questionnaire

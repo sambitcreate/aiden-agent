@@ -137,7 +137,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 28);
+  assert.equal(fixture.contractRevision, 29);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -430,6 +430,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
+  // Message visuals are revision 28.
+  for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
   delete revision19.pairingRequests;
   assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
@@ -2308,6 +2310,39 @@ test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG 
     }),
     /require contract revision 26/u,
   );
+});
+
+test("chat visuals arrive in revision 28 and a malformed visual never costs its message", async () => {
+  const raw = await json("fixtures/contract.json");
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const message = fixture.chat.messages.find((entry) => entry.visuals?.length);
+  assert.deepEqual(message?.visuals?.map((visual) => [visual.kind, visual.toolCallId]), [["html", "call-1"], ["ui", "call-2"]]);
+  // Every snapshot names an image attachment on the same message.
+  for (const visual of message?.visuals ?? []) {
+    assert.equal(message?.attachments?.find((attachment) => attachment.id === visual.snapshotAttachmentId)?.kind, "image");
+  }
+
+  const chat = structuredClone(record(raw, "fixture").chat) as { messages: Record<string, unknown>[] };
+  const target = chat.messages.find((entry) => Array.isArray(entry.visuals))!;
+  const [html, ui] = target.visuals as Record<string, unknown>[];
+  target.visuals = [
+    { ...html, snapshotAttachmentId: "attachment-that-is-not-here" },
+    { ...ui, kind: "video" },
+    { ...ui, id: "ui_fixture_02", title: " padded " },
+    { ...ui, id: "ui_fixture_03", toolCallId: "tool_fixture_01" },
+    { ...ui, id: "ui_fixture_04", privateTree: {} },
+    ui,
+  ];
+  const parsed = parseAidenRemoteChatProjection(chat);
+  const kept = parsed.messages.find((entry) => entry.id === target.id);
+  assert.equal(kept?.text, target.text);
+  assert.deepEqual(kept?.visuals?.map((visual) => visual.id), ["ui_fixture_01"]);
+
+  // A revision-27 Mac (Bot memory, no visuals) cannot carry them.
+  const revision27 = structuredClone(raw) as Record<string, unknown>;
+  revision27.contractRevision = 27;
+  record(revision27.hostHealth, "hostHealth").contractRevision = 27;
+  assert.throws(() => parseAidenRemoteContractFixture(revision27), /require contract revision 28/u);
 });
 
 test("failed-turn entries parse strictly, with and without a message to retry", async () => {

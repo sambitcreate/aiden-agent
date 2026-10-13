@@ -4,6 +4,7 @@
 // one window (focused, else most recently focused), so only one dialog opens.
 
 import { BrowserWindow, app } from "electron";
+import { isAuxiliaryWindow } from "../windows/auxiliary-windows.js";
 import { logger } from "../platform.js";
 import { connectionSuggestionFor } from "../../renderer/shared/bot-connections.js";
 import { connectionSetupTarget, createFocusHistory } from "./bot-connection-setup-core.js";
@@ -30,7 +31,7 @@ export function openConnectionSetup(pluginId: string): boolean {
   trackConnectionSetupFocus();
   const target = connectionSetupTarget({
     all: () =>
-      BrowserWindow.getAllWindows().map((window) => ({
+      BrowserWindow.getAllWindows().filter((window) => !isAuxiliaryWindow(window)).map((window) => ({
         id: window.id,
         isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
         isFocused: () => window.isFocused(),

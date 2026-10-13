@@ -100,6 +100,16 @@ test("distinguishes discovery tools from other agent work", () => {
   });
 });
 
+test("render_ui also surfaces the Visualizing phase", () => {
+  assert.deepEqual(
+    resolveAgentActivity({
+      ...idle,
+      toolActivity: { state: "running", label: "Draw visual", toolName: "render_ui" },
+    }),
+    { phase: "visualizing", label: "Visualizing", mark: "scan-grid" },
+  );
+});
+
 test("render_artifact surfaces a Visualizing phase", () => {
   const rendering: ToolActivity = {
     state: "running",

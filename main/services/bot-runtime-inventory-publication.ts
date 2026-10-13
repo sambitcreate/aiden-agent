@@ -67,6 +67,7 @@ export function invalidateChangedBotSettingsAuthority(
       normalizedWebSearchAuthority(previous.settings) !==
         normalizedWebSearchAuthority(next.settings) ||
       previous.settings.computerUseEnabled !== next.settings.computerUseEnabled ||
+      previous.settings.computerUseAlwaysAllow !== next.settings.computerUseAlwaysAllow ||
       previous.settings.scheduledTasksEnabled !== next.settings.scheduledTasksEnabled)
   ) {
     invalidate("settings");

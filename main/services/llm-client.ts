@@ -165,10 +165,17 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
-import type {
-  ComputerUseApprovalDescriptor,
-  ComputerUseController,
-} from "./computer-use/controller.js";
+import type { ComputerUseController } from "./computer-use/controller.js";
+import {
+  authorizeAllowedComputerUseAction,
+  COMPUTER_USE_ACCESS_SUMMARY,
+  createComputerUseAccessGate,
+  type ComputerUseAccessDecision,
+} from "./computer-use/access-gate.js";
+import {
+  COMPUTER_USE_ACCESS_APPROVAL_KIND,
+  COMPUTER_USE_ACCESS_SCOPES,
+} from "../../renderer/shared/computer-use-access.js";
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
@@ -215,7 +222,7 @@ import {
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
 import type { PiSessionPort } from "./pi-session-port.js";
-import { createComputerUseController } from "./computer-use/runtime.js";
+import { computerUseCanEverRun, createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { computerUseSupported } from "./computer-use/platform.js";
 import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-timeline.js";
@@ -252,9 +259,9 @@ import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
+  activateComputerUseStream,
   activatedComputerUseStreamIds,
   cancelComputerUseAndSettle,
-  ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
@@ -394,6 +401,17 @@ import {
   GENERATIVE_UI_TOOL_NAME,
   shouldEnableGenerativeUiExtension,
 } from "./generative-ui-extension.js";
+import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
+import { createUiDraftSession } from "./aiden-ui-draft.js";
+import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
+import { visualSnapshotImages } from "./visual-snapshot-core.js";
+import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
+import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
+import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
+import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -473,6 +491,8 @@ export interface GenerationExecutionOptions {
   onTurnAccepted?: () => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
+  /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
+  visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
   /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
@@ -500,6 +520,8 @@ interface ActiveGeneration {
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
   computerUse?: ComputerUseController;
+  /** Set when a computer_use or fill_form call first reaches the access gate. */
+  computerUseActivated?: boolean;
   formFill?: FormFillService;
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
@@ -532,7 +554,6 @@ const initializing = new Map<
   }
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
-const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
 const runInputAdmission = createChatRunInputAdmission({
@@ -786,6 +807,23 @@ function savedGenerationThinkingLevel(
           : undefined;
 }
 
+/**
+ * A ready inline preview for a just-presented visual, so the renderer swaps
+ * the draft for a loaded document. The guest asks for the live theme on
+ * load. Best effort: without it the renderer fetches a preview as usual.
+ */
+function readyPreviewSrc(title: string, html: string): { src?: string } {
+  try {
+    return {
+      src: registerGenerativeUiPreviewDocument(
+        wrapGenerativeUiHtml(html, title, undefined, { inline: true }),
+      ),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -793,7 +831,7 @@ async function prepareGeneration(
   botContext: BotGenerationAuthorityContext | undefined,
   signal: AbortSignal,
   computerUseGateSnapshot: number,
-  activatedComputerUse: (controller: ComputerUseController) => void,
+  ownComputerUse: (controller: ComputerUseController) => void,
   ownerDocumentId: string,
   rendererOwner: boolean,
   browserOwner: ChatGenerationOwner,
@@ -804,10 +842,15 @@ async function prepareGeneration(
   const displayedImageIds = new Set<string>();
   const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
   const displayedHtmlIds = new Set<string>();
+  /** mediaId → the render_artifact call it renders after. */
+  const htmlArtifactPlacements = createArtifactPlacementLedger();
+  const displayedUiVisuals: ChatUiVisualV1[] = [];
+  /** visual id → the render_ui call it renders after. */
+  const uiVisualPlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => message.attachments ?? []),
+    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -816,7 +859,7 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => message.attachments ?? []);
+      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
   const shareImage = (attachment: Attachment) => {
@@ -862,6 +905,9 @@ async function prepareGeneration(
       mcpServerInstructions: createMcpInstructionCollector().snapshot(),
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages: runtimeSupportsImages(designModel),
       thinkingLevel: resolveGenerationThinkingLevel(
         params.providerId,
@@ -1004,36 +1050,36 @@ async function prepareGeneration(
     model,
     params.thinkingLevel ?? savedThinkingLevel,
   );
+  // With the beta on, the model always gets the tool on a build and OS that
+  // can run it (a cheap static check; no driver probe here). Access is asked
+  // once per chat on its first call (see computer-use/access-gate.ts), and the
+  // controller only starts its driver host on first use, so readiness is
+  // checked there rather than here. Offering the tool does not count as using
+  // Computer Use: the stream is activated only on its first call.
   let computerUse: ComputerUseController | undefined;
   if (
     computerUseSupported() &&
+    computerUseCanEverRun() &&
     options.allowComputerUse !== false &&
     (!botContext || botHasOrdinaryCapability(botContext, "computer_use")) &&
     settings.computerUseEnabled === true &&
-    chat.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
   ) {
-    const status = await computerUseStatus.status({ signal });
-    if (
-      computerUseGenerationGate.isCurrent(computerUseGateSnapshot) &&
-      status.enabled &&
-      !status.ready
-    ) {
-      throw new Error(`Computer Use is enabled for this chat but is not ready. ${status.detail}`);
-    }
-    if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
-      computerUse = createComputerUseController(streamId, supportsImages);
-      activatedComputerUse(computerUse);
-    }
+    computerUse = createComputerUseController(streamId, supportsImages);
+    ownComputerUse(computerUse);
   }
   // The Form Fill Specialist is layered on Computer Use: it exists only when
-  // CU itself is live for this generation, the user enabled the specialist,
-  // and the verified model package is already on disk (status is offline).
+  // CU itself is available and ready for this generation, the user enabled the
+  // specialist, and the verified model package is already on disk (status is
+  // offline).
   let formFill: FormFillService | undefined;
   const sourceAttachments = currentFormFillAttachments(chat.messages);
   if (FORM_FILL_MUTATION_AVAILABLE && computerUse && settings.formFillSpecialistEnabled === true && sourceAttachments.length) {
-    const artifact = await formFillArtifacts.refresh();
-    if (artifact.state === "ready") {
+    const status = await computerUseStatus.status({ signal });
+    const artifact = status.ready && computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
+      ? await formFillArtifacts.refresh()
+      : undefined;
+    if (artifact?.state === "ready") {
       formFill = new FormFillService({
         controller: computerUse,
         scorer: formFillRuntime,
@@ -1507,7 +1553,7 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => message.attachments ?? []),
+                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,
@@ -1722,6 +1768,8 @@ async function prepareGeneration(
       workspaceRoot: folderPath,
       permission,
       excluded: options.excludeToolNames?.has(GENERATIVE_UI_TOOL_NAME) ?? false,
+      inlineVisuals: params.inlineVisuals,
+      visualize: params.visualize === true,
     })
   ) {
     const htmlStoreAvailability = generativeUiArtifactStore.availability();
@@ -1746,12 +1794,29 @@ async function prepareGeneration(
     }
     const visualize = params.visualize === true;
     const generativeUiRuntime = createGenerativeUiExtensionRuntime({
-      workspaceRoot: folderPath!,
+      // Inline HTML works in every chat; reading a workspace .html file
+      // additionally needs a workspace with file access.
+      workspaceRoot: folderPath && permission !== "none" ? folderPath : undefined,
       artifactNamespace: `${streamId}:html`,
       existingChatHtmlBytes: existingHtmlUsage.bytes + pendingHtmlAfterReconcile.bytes,
       existingChatHtmlCount: existingHtmlUsage.count + pendingHtmlAfterReconcile.count,
       preferArtifactThisTurn: visualize,
-      onArtifact: async (artifact, html) => {
+      ...(options.visualAudience ? { audience: options.visualAudience } : {}),
+      existingChatUiCount: displayedAssistantUiCount(chat.messages),
+      onUiVisual: (visual, context) => {
+        uiVisualPlacements.record(visual.id, context.toolCallId, visual.layout ?? "column");
+        const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+        const placed: ChatUiVisualV1 = toolCallId ? { ...visual, toolCallId } : visual;
+        const index = displayedUiVisuals.findIndex((item) => item.id === visual.id);
+        if (index >= 0) displayedUiVisuals[index] = placed;
+        else displayedUiVisuals.push(placed);
+        sendGeneration(streamId, "chat:artifact", {
+          streamId,
+          event: { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual: placed },
+        });
+        return true;
+      },
+      onArtifact: async (artifact, html, context) => {
         await generativeUiArtifactStore.stage({
           chatId: params.chatId,
           generationId: streamId,
@@ -1769,12 +1834,17 @@ async function prepareGeneration(
           displayedHtmlIds.add(artifact.mediaId);
           displayedHtmlArtifacts.push(artifact);
         }
+        htmlArtifactPlacements.record(artifact.mediaId, context.toolCallId, context.layout);
+        const placedToolCallId = htmlArtifactPlacements.publicIdFor(artifact.mediaId);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
+            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
+            ...(readyPreviewSrc(artifact.title, html)),
+            ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
           },
         });
         return true;
@@ -1825,6 +1895,9 @@ async function prepareGeneration(
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
     displayedImages,
     displayedHtmlArtifacts,
+    htmlArtifactPlacements,
+    displayedUiVisuals,
+    uiVisualPlacements,
     supportsImages,
     thinkingLevel,
     computerUse,
@@ -1892,9 +1965,6 @@ export const llmClient = {
       }
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
-      }
-      if (chatComputerUseMutationGate.isChanging(params.chatId)) {
-        throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
       }
       if (chatWorkspaceMutationGate.isChanging(params.chatId)) {
         throw new Error("This chat is changing workspaces. Try again in a moment.");
@@ -2187,6 +2257,9 @@ export const llmClient = {
       mcpServerInstructions,
       displayedImages,
       displayedHtmlArtifacts,
+      htmlArtifactPlacements,
+      displayedUiVisuals,
+      uiVisualPlacements,
       supportsImages,
       thinkingLevel,
       computerUse,
@@ -2254,10 +2327,110 @@ export const llmClient = {
         timeline: snapshot,
       });
     });
+    // One access card per chat, asked on the first computer_use call. A deny
+    // holds for the rest of this stream.
+    const computerUseAccess = computerUse
+      ? createComputerUseAccessGate({
+          readGrant: async () =>
+            (await configStore.getSettings()).computerUseAlwaysAllow === true ||
+            (await chatStore.get(params.chatId))?.computerUseAllowed === true,
+          status: (statusOptions) => computerUseStatus.status(statusOptions),
+          requestAccess: async (toolCallId, approvalSignal) => {
+            timeline.toolAwaitingApproval(toolCallId);
+            const publicToolCallId = timeline.publicToolCallId(toolCallId);
+            if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
+            const outcome = await approvals.request(
+              {
+                streamId,
+                toolCallId: publicToolCallId,
+                toolName: COMPUTER_USE_TOOL_NAME,
+                summary: COMPUTER_USE_ACCESS_SUMMARY,
+                details: { kind: COMPUTER_USE_ACCESS_APPROVAL_KIND },
+                scopes: COMPUTER_USE_ACCESS_SCOPES,
+              },
+              approvalSignal,
+              owner.documentId,
+            );
+            const scope =
+              outcome === "allowed"
+                ? approvals.takeDecisionPayload(streamId, publicToolCallId)?.scope
+                : undefined;
+            return { outcome, scope };
+          },
+          grantChat: () => chatStore.setComputerUseAllowed(params.chatId, true),
+          grantAlways: () => configStore.setSettings({ computerUseAlwaysAllow: true }),
+          setPendingContinue: (pending) =>
+            chatStore.setComputerUsePendingContinue(params.chatId, pending),
+          cancellationOrigin: () =>
+            active.get(streamId)?.cancellationOrigin ?? initialization.cancellationOrigin,
+          warn: (message, error) => logger.warn("pi", message, error),
+        })
+      : undefined;
+    // computer_use and fill_form share the access gate. The first call marks
+    // the stream as using Computer Use, so only such streams are cancelled
+    // when the beta, Form Fill or its model goes away.
+    const authorizeComputerUseAccess = async (
+      toolCallId: string,
+      accessSignal?: AbortSignal,
+    ): Promise<ComputerUseAccessDecision> => {
+      if (!computerUseAccess) {
+        return { allowed: false, reason: "Computer Use is not enabled for this response." };
+      }
+      if (
+        !activateComputerUseStream(
+          computerUseGenerationGate,
+          computerUseGateSnapshot,
+          active.get(streamId),
+        )
+      ) {
+        return {
+          allowed: false,
+          reason: "Computer Use was turned off during this response. Ask again to use it.",
+        };
+      }
+      return computerUseAccess.authorize(toolCallId, accessSignal);
+    };
     if (formFill) {
       formFill.progressSink = (toolCallId, completed, total) =>
         timeline.toolDetail(toolCallId, `${completed} of ${total} fields`);
     }
+    // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
+    htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    // Drafts only stream when render_artifact is really registered this turn
+    // (not when visuals are Off, or for surfaces that never get the tool).
+    const visualsRegistered = generationExtensions.some(
+      (extension) => extension.id === GENERATIVE_UI_EXTENSION_ID,
+    );
+    const htmlVisualDrafts = createGenerativeUiDraftSession({
+      enabled: visualsRegistered,
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
+    const uiVisualDrafts = createUiDraftSession({
+      enabled: visualsRegistered,
+      publicToolCallId: (rawToolCallId) => timeline.publicToolCallId(rawToolCallId),
+      send: (event) => sendGeneration(streamId, "chat:artifact", { streamId, event }),
+    });
+    // Each session ignores tool calls that are not its own.
+    const visualDrafts = {
+      delta(rawToolCallId: string, toolName: string, args: unknown) {
+        htmlVisualDrafts.delta(rawToolCallId, toolName, args);
+        uiVisualDrafts.delta(rawToolCallId, toolName, args);
+      },
+      end(rawToolCallId: string) {
+        htmlVisualDrafts.end(rawToolCallId);
+        uiVisualDrafts.end(rawToolCallId);
+      },
+      cancel(rawToolCallId: string) {
+        htmlVisualDrafts.cancel(rawToolCallId);
+        uiVisualDrafts.cancel(rawToolCallId);
+      },
+      dispose() {
+        htmlVisualDrafts.dispose();
+        uiVisualDrafts.dispose();
+      },
+    };
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
@@ -2278,7 +2451,8 @@ export const llmClient = {
         !subagents &&
         !providerFailure &&
         assistantAttachments.length === 0 &&
-        displayedHtmlArtifacts.length === 0
+        displayedHtmlArtifacts.length === 0 &&
+        displayedUiVisuals.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -2314,6 +2488,13 @@ export const llmClient = {
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
+            htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
+            uiVisuals: displayedUiVisuals.length
+              ? displayedUiVisuals.map((visual) => {
+                  const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
+                  return toolCallId ? { ...visual, toolCallId } : visual;
+                })
+              : undefined,
           },
           {
             providerId: params.providerId,
@@ -2347,6 +2528,30 @@ export const llmClient = {
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
           }
+        }
+        if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
+          // Snapshots for clients that cannot draw visuals; never delays this reply.
+          enqueueVisualSnapshots({
+            chatId: params.chatId,
+            messageId,
+            visuals: [
+              ...displayedHtmlArtifacts.map((artifact) => ({
+                kind: "html" as const,
+                visualId: artifact.mediaId,
+                title: artifact.title,
+                ...(htmlArtifactPlacements.layoutFor(artifact.mediaId) === "wide" ? { layout: "wide" as const } : {}),
+              })),
+              ...displayedUiVisuals.map((visual) => ({
+                kind: "ui" as const,
+                visualId: visual.id,
+                title: visual.title,
+                visual,
+                // The same images the saved message draws beside this visual.
+                attachments: visualSnapshotImages(visual, assistantAttachments),
+                ...(visual.layout === "wide" ? { layout: "wide" as const } : {}),
+              })),
+            ],
+          });
         }
         return { chat, error: undefined, messageId };
       } catch (error) {
@@ -3035,12 +3240,11 @@ export const llmClient = {
           }
           return changed ? { context: nextContext } : undefined;
         },
-        // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
+        // Computer Use asks once per chat. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
           timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
-          let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
@@ -3075,34 +3279,33 @@ export const llmClient = {
           }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
+            const blockComputerUse = (reason: string) => {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason };
+            };
             if (!computerUse) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason: "Computer Use is not enabled for this response.",
-              };
+              return blockComputerUse("Computer Use is not enabled for this response.");
             }
+            const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
+            if (!access.allowed) return blockComputerUse(access.reason);
+            // The chat is allowed, so input actions run without a per-action card.
             try {
-              const descriptor = await computerUse.approvalFor(
+              await authorizeAllowedComputerUseAction(
+                computerUse,
+                context.toolCall.id,
                 context.args as ComputerUseArgs,
                 signal,
               );
-              if (!descriptor) {
-                timeline.toolRunning(context.toolCall.id);
-                return undefined;
-              }
-              computerUseApproval = descriptor;
-              summary = descriptor.summary;
             } catch (error) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason:
-                  error instanceof Error ? error.message : "Computer Use rejected this action.",
-              };
+              return blockComputerUse(
+                error instanceof Error ? error.message : "Computer Use rejected this action.",
+              );
             }
+            timeline.toolRunning(context.toolCall.id);
+            return undefined;
           } else if (context.toolCall.name === FORM_FILL_TOOL_NAME) {
             if (!formFill) {
               deniedToolCalls.add(context.toolCall.id);
@@ -3111,6 +3314,15 @@ export const llmClient = {
                 block: true,
                 reason: "The Form Fill Specialist is not enabled or its model is not ready.",
               };
+            }
+            // Form Fill drives the computer, so it needs the same chat access.
+            const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
+            if (!access.allowed) {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason: access.reason };
             }
             try {
               const descriptor = await formFill.approvalFor(context.args, signal);
@@ -3460,23 +3672,6 @@ export const llmClient = {
               };
             }
           }
-          if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
-            try {
-              if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
-              computerUse.authorize(
-                context.toolCall.id,
-                context.args as ComputerUseArgs,
-                computerUseApproval,
-              );
-            } catch (error) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-              return {
-                block: true,
-                reason: error instanceof Error ? error.message : "Computer Use approval expired.",
-              };
-            }
-          }
           return allowed
             ? undefined
             : {
@@ -3499,6 +3694,7 @@ export const llmClient = {
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();
+            visualDrafts.dispose();
             break;
           case "message_start":
             if (event.message.role === "assistant") {
@@ -3537,6 +3733,17 @@ export const llmClient = {
                 typeof block.name === "string"
               ) {
                 timeline.toolStarted(block.id, block.name, {});
+              }
+            }
+            if (e.type === "toolcall_delta" || e.type === "toolcall_end") {
+              // Stream a render_artifact call's partial HTML to a draft preview.
+              const block = e.partial.content[e.contentIndex];
+              if (block?.type === "toolCall" && typeof block.id === "string" && block.id) {
+                if (e.type === "toolcall_delta") {
+                  visualDrafts.delta(block.id, block.name, block.arguments);
+                } else {
+                  visualDrafts.end(block.id);
+                }
               }
             }
             if (e.type === "text_delta") {
@@ -3669,6 +3876,10 @@ export const llmClient = {
                 : event.isError
                   ? "failed"
                   : "completed";
+            // Retract the call's draft whatever the outcome: a successful call
+            // has already presented (and a same-title replace presents under
+            // the first call's id, so its own draft would otherwise linger).
+            visualDrafts.cancel(event.toolCallId);
             if (
               attendedAssistant &&
               event.isError &&
@@ -3704,6 +3915,7 @@ export const llmClient = {
       });
     } catch (error) {
       cacheWarmer?.dispose();
+      visualDrafts.dispose();
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       formFill?.revoke();
@@ -3940,6 +4152,7 @@ export const llmClient = {
         );
       });
       cacheWarmer?.dispose();
+      visualDrafts.dispose();
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       formFill?.revoke();
@@ -3963,6 +4176,16 @@ export const llmClient = {
         params.workspaceId,
       );
       return false;
+    }
+
+    if (generationChat.computerUsePendingContinue === true) {
+      // A new turn that actually started supersedes the post-restart Continue
+      // callout. Cleared only now, so a start that fails keeps it.
+      try {
+        await chatStore.setComputerUsePendingContinue(params.chatId, false);
+      } catch (error) {
+        logger.warn("pi", "Could not clear the chat's Computer Use continue marker.", error);
+      }
     }
 
     // Accepted steer input that Pi never emitted into the visible chat (Stop,
@@ -4143,6 +4366,7 @@ export const llmClient = {
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
+              displayedUiVisuals.length +
               (designRun?.acceptedCount() ?? 0),
           ) &&
           !wasCancelled
@@ -4218,6 +4442,7 @@ export const llmClient = {
         try {
           endLoadMonitor(activeGeneration, streamId, false);
           cacheWarmer?.dispose();
+          visualDrafts.dispose();
           resetGenerationAgent(agent, streamId);
           formFill?.revoke();
           await computerUse?.close().catch(() => {});
@@ -4442,10 +4667,6 @@ export const llmClient = {
     return finish;
   },
 
-  beginComputerUseSettingChange(chatId: string): (() => void) | null {
-    return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
-  },
-
   beginChatWorkspaceChange(chatId: string): (() => void) | null {
     if (chatDeletionGate.isDeleting(chatId)) return null;
     return chatWorkspaceMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
@@ -4469,8 +4690,7 @@ export const llmClient = {
       chatTurnAdmission.requiresAppendReconciliation(ownerId) ||
       chatDeletionGate.isDeleting(chatId) ||
       chatCopyGate.isChanging(chatId) ||
-      chatWorkspaceMutationGate.isChanging(chatId) ||
-      chatComputerUseMutationGate.isChanging(chatId)
+      chatWorkspaceMutationGate.isChanging(chatId)
     ) {
       return null;
     }

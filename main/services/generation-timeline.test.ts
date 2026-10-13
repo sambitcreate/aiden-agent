@@ -207,6 +207,10 @@ test("projects display_image as a safe relative GUI artifact action", () => {
     label: "Render artifact",
     detail: "Dependencies",
   });
+  assert.deepEqual(safeToolDescriptor("render_ui", { title: "Q3 revenue", markup: "<Visual />" }), {
+    label: "Draw visual",
+    detail: "Q3 revenue",
+  });
   assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
     label: "Display image",
     target: undefined,

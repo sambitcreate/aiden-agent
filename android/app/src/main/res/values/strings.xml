@@ -778,6 +778,12 @@
     <string name="chat_questionnaire_dismissed">Dismissed</string>
     <string name="chat_questionnaire_no_answer">No answer</string>
 
+    <!-- Chat: inline visuals (contract revision 28) -->
+    <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
+    <string name="chat_visual_snapshot_open">Open snapshot</string>
+    <string name="chat_visual_show_more">Show more</string>
+    <string name="chat_visual_show_less">Show less</string>
+
     <!-- Chat: message actions -->
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_message_select_text_action">Select text</string>

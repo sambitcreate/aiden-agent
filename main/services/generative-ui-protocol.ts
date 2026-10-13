@@ -1,31 +1,18 @@
-import { randomBytes } from "node:crypto";
 import { protocol, type Session } from "electron";
 import {
-  GENERATIVE_UI_GUEST_CSP,
-  GENERATIVE_UI_PREVIEW_HOST,
   GENERATIVE_UI_PROTOCOL_SCHEME,
   generativeUiHostLibraryNameFromUrl,
   generativeUiPreviewTokenFromUrl,
 } from "../../renderer/shared/generative-ui.js";
 import { readGenerativeUiHostLibrary } from "./generative-ui-host-libraries.js";
+import { generativeUiPreviewResponse } from "./generative-ui-preview-store.js";
+
+export {
+  openGenerativeUiDraftStream,
+  registerGenerativeUiPreviewDocument,
+} from "./generative-ui-preview-store.js";
 
 let handlerRegistered = false;
-
-const PREVIEW_TTL_MS = 30 * 60 * 1000;
-const previews = new Map<string, { body: string; expiresAt: number }>();
-
-function prunePreviews(now = Date.now()): void {
-  for (const [token, preview] of previews) {
-    if (preview.expiresAt <= now) previews.delete(token);
-  }
-}
-
-export function registerGenerativeUiPreviewDocument(body: string): string {
-  prunePreviews();
-  const token = randomBytes(32).toString("hex");
-  previews.set(token, { body, expiresAt: Date.now() + PREVIEW_TTL_MS });
-  return `${GENERATIVE_UI_PROTOCOL_SCHEME}://${GENERATIVE_UI_PREVIEW_HOST}/${token}`;
-}
 
 function utf8Response(
   body: string | Uint8Array,
@@ -44,31 +31,24 @@ function utf8Response(
   });
 }
 
+function notFound(): Response {
+  return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
+}
+
 export function registerGenerativeUiProtocol(_session?: Session): void {
   if (handlerRegistered) return;
   protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, async (request) => {
     const library = generativeUiHostLibraryNameFromUrl(request.url);
     if (library) {
       const file = await readGenerativeUiHostLibrary(library);
-      if (!file) {
-        return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
-      }
+      if (!file) return notFound();
       return utf8Response(new Uint8Array(file.bytes), file.mimeType, {
         "cache-control": "public, max-age=31536000, immutable",
       });
     }
     const token = generativeUiPreviewTokenFromUrl(request.url);
-    if (!token) {
-      return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
-    }
-    prunePreviews();
-    const preview = previews.get(token);
-    if (!preview) {
-      return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
-    }
-    return utf8Response(preview.body, "text/html; charset=utf-8", {
-      "content-security-policy": GENERATIVE_UI_GUEST_CSP,
-    });
+    if (!token) return notFound();
+    return generativeUiPreviewResponse(token) ?? notFound();
   });
   handlerRegistered = true;
 }

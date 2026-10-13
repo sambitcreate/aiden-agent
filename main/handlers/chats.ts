@@ -6,7 +6,6 @@ import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
-import { computerUseStatus } from "../services/computer-use/status.js";
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -25,6 +24,7 @@ import {
 } from "../services/workspace-operation-registry.js";
 import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import { closeDeviceSessionsForChat } from "./devices.js";
+import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import { createFirstMessageCommitter } from "../services/chat-first-message-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
@@ -39,7 +39,6 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
-import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
@@ -111,10 +110,6 @@ export function registerChatHistoryHandlers(): void {
       }
     },
     workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
-    requireComputerUseReady: async (signal) => {
-      const status = await computerUseStatus.status({ signal });
-      if (!status.ready) throw new Error(status.detail);
-    },
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   ipcMain.handle("chats:createWithFirstMessage", (event, input: unknown) => {
@@ -443,33 +438,7 @@ export function registerChatHistoryHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "chats:setComputerUse",
-    async (event, id: unknown, enabled: unknown) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () =>
-          new Error(
-            "Computer Use settings require the active application document.",
-          ),
-      );
-      const chatId = asString(id, "id");
-      if (typeof enabled !== "boolean")
-        throw new Error("Invalid Computer Use chat setting.");
-      return chatForRenderer(
-        await applyComputerUseSettingChange(owner, chatId, enabled, {
-          begin: (targetChatId) =>
-            llmClient.beginComputerUseSettingChange(targetChatId),
-          status: (signal) => computerUseStatus.status({ signal }),
-          persist: (targetChatId, nextEnabled, isCurrent) =>
-            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
-          // Aiden Live owns separate per-session authority and is unaffected
-          // by an ordinary chat's Computer Use toggle.
-          revokeLive: () => undefined,
-        }),
-      );
-    },
-  );
+  ipcMain.handle("chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue);
 
   ipcMain.handle("chats:remove", rendererChats.remove);
 
@@ -491,6 +460,15 @@ export function registerChatHistoryHandlers(): void {
       return wrapStoredHtmlArtifact({ chatId, mediaId, theme: record.theme });
     },
   );
+
+  ipcMain.handle("chats:updateUiVisualState", async (event, input: unknown) => {
+    rendererDocumentOwner(
+      event,
+      () => new Error("Saving a visual's state requires the active application document."),
+    );
+    const update = parseUiVisualStateUpdate(input);
+    return chatStore.updateUiVisualState(update.chatId, update.messageId, update.visualId, update.state);
+  });
 
   ipcMain.handle(
     "chats:exportHtmlArtifact",
