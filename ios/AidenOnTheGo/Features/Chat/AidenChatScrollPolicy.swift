@@ -102,11 +102,11 @@ enum AidenChatScrollPolicy {
     /// back to zero distance, so only an actual scroll (status-bar tap,
     /// VoiceOver, hardware keyboard) can carry the reader out that far.
     /// Keyboard insets change the viewport and are excluded.
-    /// Offset movement is required: content growth at an unchanged reader offset
-    /// (e.g., streaming tokens) must not opt out of following.
+    /// The offset must also move up: content growth under a reader who has not
+    /// moved (streaming tokens between snaps) must not opt out of following.
     static func isScrollingAwayFromBottom(previous: ScrollGeometry?, current: ScrollGeometry) -> Bool {
         guard let previous, previous.visibleHeight == current.visibleHeight else { return false }
-        let offsetMoved = current.offsetY > previous.offsetY + 0.5
+        let offsetMoved = current.offsetY < previous.offsetY - 0.5
         let distance = current.distanceFromBottom
         return offsetMoved
             && distance > previous.distanceFromBottom + 0.5
