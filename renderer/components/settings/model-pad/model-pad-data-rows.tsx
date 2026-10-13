@@ -1,7 +1,23 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
-import { AlertDialog, Badge, Button, Callout, Field, FieldSet, Input, Text, toast } from "../../ui";
+import { ExternalLink, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  FieldSet,
+  Input,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Text,
+  toast,
+} from "../../ui";
+import { InfoHint } from "../../ui-info-hint";
 import { modelInsightsApi } from "../../../lib/ipc";
 import {
   beginModelInsightsAction,
@@ -13,36 +29,215 @@ import {
 import { BENCHMARK_STALE_DAYS, isOlderThanDays } from "../../../lib/model-details";
 import type { BenchmarkCoverage } from "../../../lib/model-picker-data";
 import { MODEL_PAD_METRIC_LABELS, type ModelPadMetric } from "../../../lib/model-pad-layout";
+import { cn } from "../../../lib/ui-utils";
 
 type ModelInsightsOperation = "connect" | "refresh" | "disconnect";
+/** Which key row is showing under the benchmark row, if any. */
+type KeyRowMode = "connect" | "replace";
 
-const MODEL_INSIGHTS_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+const OPENROUTER_KEYS_URL = "https://openrouter.ai/settings/keys";
 
-function modelInsightsDate(value: string | undefined): string | null {
+const FETCHED_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+
+function fetchedDate(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? MODEL_INSIGHTS_DATE_FORMATTER.format(date) : null;
+  return Number.isFinite(date.getTime()) ? FETCHED_DATE_FORMATTER.format(date) : null;
 }
 
-function ModelPadBenchmarkConnection() {
+function plural(count: number, one: string, many = `${one}s`): string {
+  return count === 1 ? one : many;
+}
+
+/**
+ * One row of the Data card: a label with its ⓘ, a secondary line, trailing
+ * actions, and an optional panel under it (the key row). The group is named by
+ * the label alone so the ⓘ button's name stays out of it.
+ */
+function ModelPadDataRow({
+  label,
+  hint,
+  secondary,
+  trailing,
+  children,
+}: {
+  label: string;
+  hint: React.ReactNode;
+  secondary: React.ReactNode;
+  trailing?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const labelId = React.useId();
+  return (
+    <div
+      role="group"
+      aria-labelledby={labelId}
+      className="settings-field relative grid gap-3 p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1 basis-52">
+          <div className="flex items-center gap-1.5">
+            <span id={labelId} className="text-strong text-primary">
+              {label}
+            </span>
+            <InfoHint topic={label.toLowerCase()}>{hint}</InfoHint>
+          </div>
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small text-secondary">
+            {secondary}
+          </div>
+        </div>
+        {trailing ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">{trailing}</div>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** What the "<n> of <m> models" button opens: how far the scores reach. */
+function ModelPadCoveragePopover({
+  coverage,
+  matchedWithoutMetric,
+  metric,
+  skippedAmbiguousCount,
+}: {
+  coverage: BenchmarkCoverage;
+  matchedWithoutMetric: number;
+  metric: ModelPadMetric;
+  skippedAmbiguousCount: number;
+}) {
+  const { visible, pad, unmatchedPad } = coverage;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          size="small"
+          variant="transparent"
+          aria-label={`Benchmark coverage: ${visible.matched} of ${visible.total} ${plural(visible.total, "model")}`}
+          className="tabular-nums text-secondary hover:text-primary"
+        >
+          {`${visible.matched} of ${visible.total} ${plural(visible.total, "model")}`}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        aria-label="Benchmark coverage"
+        className="grid w-[min(20rem,calc(100vw-2rem))] gap-2 px-3 py-2.5 text-small"
+      >
+        <ul className="grid gap-0.5 text-secondary">
+          <li className="text-primary">
+            {pad.total === 0
+              ? "No models on the Pad yet"
+              : `${pad.matched} of ${pad.total} Pad ${plural(pad.total, "model")} matched`}
+          </li>
+          {matchedWithoutMetric > 0 ? (
+            <li>
+              {`${matchedWithoutMetric} matched visible ${plural(matchedWithoutMetric, "model")} ${plural(matchedWithoutMetric, "has", "have")} no ${MODEL_PAD_METRIC_LABELS[metric]} score`}
+            </li>
+          ) : null}
+          {skippedAmbiguousCount > 0 ? (
+            <li>
+              {`${skippedAmbiguousCount} ambiguous benchmark ${plural(skippedAmbiguousCount, "row")} skipped`}
+            </li>
+          ) : null}
+        </ul>
+        {unmatchedPad.length > 0 ? (
+          <section aria-label="Pad models without a score" className="grid gap-1">
+            <Text as="p" variant="small" color="tertiary">
+              {`${unmatchedPad.length} on the Pad ${plural(unmatchedPad.length, "has", "have")} no score. Scores cover hosted models; reasoning variants match separately.`}
+            </Text>
+            <ul className="-mr-1 grid max-h-56 gap-0.5 overflow-y-auto pr-1">
+              {unmatchedPad.map((model) => (
+                <li key={model.value} className="flex min-w-0 items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate text-primary">
+                    {`${model.label} · ${model.providerLabel}`}
+                  </span>
+                  <span className="shrink-0 text-tertiary">
+                    {model.reason === "local" ? "Local model" : "No benchmark row"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * The benchmark scores row: status, coverage, Fetch latest and the ⋯ menu when
+ * a key is stored; Connect and an inline key row otherwise. The stored key is
+ * never read back into the page.
+ */
+function ModelPadBenchmarkRow({
+  coverage,
+  matchedWithoutMetric,
+  metric,
+  fallbackFocus,
+}: {
+  coverage?: BenchmarkCoverage;
+  matchedWithoutMetric: number;
+  metric: ModelPadMetric;
+  fallbackFocus: () => HTMLElement | null;
+}) {
   const queryClient = useQueryClient();
   const statusQuery = useModelInsightsStatus();
+  const status = statusQuery.data;
   const [keyDraft, setKeyDraft] = React.useState("");
+  const [keyRow, setKeyRow] = React.useState<KeyRowMode | null>(null);
   const [operation, setOperation] = React.useState<ModelInsightsOperation | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = React.useState(false);
   const keyInputRef = React.useRef<HTMLInputElement | null>(null);
-  const disconnectButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const status = statusQuery.data;
+  const connectButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const fetchButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const moreButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  // Replace key… closes its menu; the key field takes focus instead of the trigger.
+  const focusKeyOnMenuCloseRef = React.useRef(false);
+  const keyRowId = React.useId();
   const busy = operation !== null;
-  const fetchedAt = modelInsightsDate(status?.fetchedAt);
+  const hasKey = Boolean(status?.hasKey);
+  const ready = Boolean(status?.ready);
+  const stale = ready && isOlderThanDays(status?.fetchedAt, BENCHMARK_STALE_DAYS);
+  const fetchedOn = fetchedDate(status?.fetchedAt);
+
+  React.useEffect(() => {
+    if (keyRow) keyInputRef.current?.focus();
+  }, [keyRow]);
+
+  /** Focus the row's main action once it renders, after the focused control left. */
+  const focusRowAction = () => {
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) return;
+      const target = [fetchButtonRef.current, connectButtonRef.current].find(
+        (element) => element?.isConnected,
+      );
+      (target ?? fallbackFocus())?.focus();
+    }, 0);
+  };
+
+  const closeKeyRow = () => {
+    setKeyRow(null);
+    setKeyDraft("");
+    setTimeout(() => {
+      const target = [connectButtonRef.current, moreButtonRef.current].find(
+        (element) => element?.isConnected,
+      );
+      (target ?? fallbackFocus())?.focus();
+    }, 0);
+  };
 
   const reconcileAfterFailure = React.useCallback(async () => {
     await refreshModelInsightsState(queryClient).catch(() => undefined);
   }, [queryClient]);
+
+  const fail = (message: string) => {
+    setError(message);
+    toast.error(message);
+  };
 
   const connect = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -55,18 +250,17 @@ function ModelPadBenchmarkConnection() {
       const result = await modelInsightsApi.connect(key);
       if (!result.ok) {
         await reconcileAfterFailure();
-        setError(result.message);
-        toast.error(result.message);
+        fail(result.message);
         return;
       }
       setKeyDraft("");
+      setKeyRow(null);
       await commitModelInsightsState(queryClient, result.status);
-      toast.success("Model Pad benchmark insights are ready.");
+      toast.success("Benchmark scores are ready.");
+      focusRowAction();
     } catch {
       await reconcileAfterFailure();
-      const message = "Aiden couldn’t connect the Model Pad benchmark key.";
-      setError(message);
-      toast.error(message);
+      fail("Aiden couldn’t connect the benchmark key.");
     } finally {
       setOperation(null);
     }
@@ -81,17 +275,14 @@ function ModelPadBenchmarkConnection() {
       const result = await modelInsightsApi.refresh();
       if (!result.ok) {
         await reconcileAfterFailure();
-        setError(result.message);
-        toast.error(result.message);
+        fail(result.message);
         return;
       }
       await commitModelInsightsState(queryClient, result.status);
-      toast.success("Latest Model Pad benchmark insights are cached.");
+      toast.success("Latest benchmark scores are cached.");
     } catch {
       await reconcileAfterFailure();
-      const message = "Aiden couldn’t fetch the latest Model Pad benchmark insights.";
-      setError(message);
-      toast.error(message);
+      fail("Aiden couldn’t fetch the latest benchmark scores.");
     } finally {
       setOperation(null);
     }
@@ -107,249 +298,223 @@ function ModelPadBenchmarkConnection() {
       if (!result.ok) {
         await reconcileAfterFailure();
         setConfirmDisconnect(false);
-        setError(result.message);
-        toast.error(result.message);
+        fail(result.message);
         return;
       }
       setKeyDraft("");
+      setKeyRow(null);
       await commitModelInsightsState(queryClient, result.status);
       setConfirmDisconnect(false);
-      toast.success("Model Pad OpenRouter key and benchmark cache removed.");
+      toast.success("Benchmark key and cached scores removed.");
     } catch {
       await reconcileAfterFailure();
       setConfirmDisconnect(false);
-      const message = "Aiden couldn’t remove the Model Pad OpenRouter connection.";
-      setError(message);
-      toast.error(message);
+      fail("Aiden couldn’t remove the benchmark connection.");
     } finally {
       setOperation(null);
     }
   };
 
+  const secondary: React.ReactNode = error ? (
+    <span className="text-status-red">{error}</span>
+  ) : statusQuery.isError ? (
+    <span className="text-status-red">Aiden couldn’t read the benchmark connection.</span>
+  ) : statusQuery.isLoading ? (
+    "Checking…"
+  ) : ready ? (
+    <>
+      <span>{`Artificial Analysis via OpenRouter${fetchedOn ? ` · ${fetchedOn}` : ""}`}</span>
+      {stale ? (
+        <Badge
+          color="warning"
+          className="h-5 px-1.5 text-mini"
+          title={`Fetched over ${BENCHMARK_STALE_DAYS} days ago`}
+        >
+          Out of date
+        </Badge>
+      ) : null}
+    </>
+  ) : hasKey ? (
+    "Key saved · no scores fetched yet"
+  ) : (
+    "Not connected"
+  );
+
+  const trailing = hasKey ? (
+    <>
+      {coverage ? (
+        <ModelPadCoveragePopover
+          coverage={coverage}
+          matchedWithoutMetric={matchedWithoutMetric}
+          metric={metric}
+          skippedAmbiguousCount={status?.skippedAmbiguousCount ?? 0}
+        />
+      ) : null}
+      <Button
+        ref={fetchButtonRef}
+        size="small"
+        onClick={() => void refresh()}
+        disabled={busy}
+        aria-busy={operation === "refresh"}
+      >
+        {operation === "refresh" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+        {operation === "refresh" ? "Fetching…" : "Fetch latest"}
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            ref={moreButtonRef}
+            size="small"
+            variant="transparent"
+            iconOnly
+            disabled={busy}
+            aria-label="Benchmark connection options"
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-48"
+          onCloseAutoFocus={(event) => {
+            if (!focusKeyOnMenuCloseRef.current) return;
+            focusKeyOnMenuCloseRef.current = false;
+            event.preventDefault();
+            keyInputRef.current?.focus();
+          }}
+        >
+          <DropdownMenuItem
+            onSelect={() => {
+              focusKeyOnMenuCloseRef.current = true;
+              setError(null);
+              setKeyRow("replace");
+            }}
+          >
+            Replace key…
+          </DropdownMenuItem>
+          <DropdownMenuItem color="status-red" onSelect={() => setConfirmDisconnect(true)}>
+            Disconnect
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  ) : statusQuery.isLoading ? null : (
+    <Button
+      ref={connectButtonRef}
+      size="small"
+      aria-expanded={keyRow === "connect"}
+      aria-controls={keyRow === "connect" ? keyRowId : undefined}
+      onClick={() => {
+        if (keyRow) closeKeyRow();
+        else {
+          setError(null);
+          setKeyRow("connect");
+        }
+      }}
+    >
+      Connect
+    </Button>
+  );
+
+  const replacing = keyRow === "replace";
+
   return (
     <>
-      <Field
-        label="OpenRouter key for Model Pad"
-        description="Optional. Connect a dedicated key to fetch source-aware benchmark scores; later updates happen only when you choose Fetch latest."
-        orientation="vertical"
+      <ModelPadDataRow
+        label="Benchmark scores"
+        hint={
+          <>
+            <p>
+              Optional. A separate OpenRouter key fetches public scores only when you choose Fetch
+              latest. It never sends chats and doesn’t add OpenRouter models.
+            </p>
+            <p>Scores: Artificial Analysis, CC BY 4.0.</p>
+          </>
+        }
+        secondary={<span aria-live="polite" className="contents">{secondary}</span>}
+        trailing={trailing}
       >
-        <Callout
-          aria-live="polite"
-          role={statusQuery.isError || error ? "alert" : undefined}
-          color={statusQuery.isError || error ? "red" : undefined}
-        >
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex min-w-0 flex-1 basis-72 items-start gap-2.5">
-              {busy ? (
-                <Loader2
-                  aria-hidden="true"
-                  className="mt-0.5 size-4 shrink-0 animate-spin text-tertiary"
-                />
-              ) : status?.ready ? (
-                <CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-green" />
-              ) : statusQuery.isError ? (
-                <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-red" />
-              ) : (
-                <KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-tertiary" />
-              )}
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Text variant="small-strong">
-                    {status?.ready
-                      ? "Benchmark insights ready"
-                      : status?.hasKey
-                        ? "Key connected"
-                        : statusQuery.isLoading
-                          ? "Checking"
-                          : "Not connected"}
-                  </Text>
-                  {status?.ready ? <Badge>{`${status.cachedModelCount} model${status.cachedModelCount === 1 ? "" : "s"}`}</Badge> : null}
-                  {status?.license ? <Badge>{status.license}</Badge> : null}
-                </div>
-                <Text as="p" variant="small" color="secondary" className="mt-1">
-                  {error ??
-                    (statusQuery.isError
-                      ? "Aiden couldn’t read the local Model Pad connection."
-                      : status?.ready
-                        ? `Artificial Analysis scores via OpenRouter${fetchedAt ? ` · Fetched ${fetchedAt}` : ""}.`
-                        : status?.hasKey
-                          ? "The key is stored securely; fetch when you want a new benchmark snapshot."
-                          : "Paste a key below to validate it and fetch the first benchmark snapshot.")}
-                </Text>
-                {!error && status?.ready && isOlderThanDays(status.fetchedAt, BENCHMARK_STALE_DAYS) ? (
-                  <Text as="p" variant="small" color="secondary" className="mt-1">
-                    {`Benchmarks are over ${BENCHMARK_STALE_DAYS} days old. Fetch latest to update.`}
-                  </Text>
-                ) : null}
-              </div>
-            </div>
-            {status?.hasKey ? (
-              <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                <Button size="small" onClick={() => void refresh()} disabled={busy}>
-                  {operation === "refresh" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  {operation === "refresh" ? "Fetching…" : "Fetch latest"}
-                </Button>
-                <Button
-                  ref={disconnectButtonRef}
-                  size="small"
-                  variant="transparent"
-                  onClick={() => setConfirmDisconnect(true)}
-                  disabled={busy}
-                >
-                  Disconnect
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </Callout>
-
-        <div className="mt-3 rounded-control bg-background/35 px-3 py-2.5">
-          <Text as="p" variant="small-strong">
-            Benchmark-only connection
-          </Text>
-          <Text as="p" variant="small" color="secondary" className="mt-1 text-pretty">
-            This key is separate from OpenRouter chat providers. It does not enable inference and
-            will not add OpenRouter’s 500+ models to your model list. Aiden sends it only to the
-            fixed OpenRouter benchmark endpoint when you choose Connect &amp; fetch or Fetch latest.
-          </Text>
-        </div>
-
-        <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => void connect(event)}>
-          <Input
-            ref={keyInputRef}
-            className="min-w-0 flex-1 basis-72"
-            type="password"
-            value={keyDraft}
-            onChange={(event) => {
-              setKeyDraft(event.target.value);
-              setError(null);
+        {keyRow ? (
+          <form
+            id={keyRowId}
+            className="flex min-w-0 flex-wrap items-center gap-2"
+            onSubmit={(event) => void connect(event)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape" || busy) return;
+              event.preventDefault();
+              closeKeyRow();
             }}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={status?.hasKey ? "Paste a replacement OpenRouter key" : "sk-or-v1-…"}
-            aria-label={
-              status?.hasKey
-                ? "Replacement OpenRouter API key for Model Pad"
-                : "OpenRouter API key for Model Pad"
-            }
-            aria-invalid={Boolean(error)}
-            disabled={busy}
-          />
-          <Button type="submit" size="medium" disabled={!keyDraft.trim() || busy}>
-            {operation === "connect" ? <Loader2 className="animate-spin" /> : <KeyRound />}
-            {operation === "connect"
-              ? "Connecting…"
-              : status?.hasKey
-                ? "Replace & fetch"
-                : "Connect & fetch"}
-          </Button>
-        </form>
-
-        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
-          <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 basis-72">
-            Stored with operating-system secure encryption; normalized public scores stay in Aiden’s local
-            offline cache. Create or manage keys in{" "}
+          >
+            <Input
+              ref={keyInputRef}
+              className="min-w-0 flex-1 basis-60"
+              type="password"
+              value={keyDraft}
+              onChange={(event) => {
+                setKeyDraft(event.target.value);
+                setError(null);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="OpenRouter key (sk-or-…)"
+              aria-label={
+                replacing
+                  ? "Replacement OpenRouter key for benchmark scores"
+                  : "OpenRouter key for benchmark scores"
+              }
+              aria-invalid={Boolean(error)}
+              disabled={busy}
+            />
+            <Button
+              type="submit"
+              size="small"
+              variant="accent"
+              disabled={!keyDraft.trim() || busy}
+            >
+              {operation === "connect" ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+              {operation === "connect" ? "Connecting…" : replacing ? "Replace & fetch" : "Connect & fetch"}
+            </Button>
+            {replacing ? (
+              <Button size="small" variant="transparent" disabled={busy} onClick={closeKeyRow}>
+                Cancel
+              </Button>
+            ) : null}
             <a
-              href="https://openrouter.ai/settings/keys"
+              href={OPENROUTER_KEYS_URL}
               target="_blank"
               rel="noreferrer"
-              className="text-primary underline decoration-separator underline-offset-2 hover:text-secondary"
+              className={cn(
+                "inline-flex items-center gap-1 rounded-control px-1 text-small text-secondary underline decoration-separator underline-offset-2 outline-none hover:text-primary",
+                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
+              )}
             >
-              OpenRouter API Keys
-              <ExternalLink aria-hidden="true" className="ml-1 inline size-3" />
+              Get a key
+              <ExternalLink aria-hidden="true" className="size-3" />
             </a>
-            .
-          </Text>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Badge>Separate key</Badge>
-            <Badge>Manual fetch</Badge>
-            <Badge>Offline cache</Badge>
-          </div>
-        </div>
-      </Field>
-
+          </form>
+        ) : null}
+      </ModelPadDataRow>
       <AlertDialog
         open={confirmDisconnect}
         onOpenChange={setConfirmDisconnect}
-        title="Disconnect Model Pad from OpenRouter?"
-        description="Aiden will remove the dedicated encrypted key and cached benchmark data from this device. Your providers, model list, and saved Model Pad positions will not change."
+        title="Disconnect benchmark scores?"
+        description="Aiden removes the benchmark key and cached scores from this Mac. Your providers, model list and Pad stay as they are."
         confirmLabel="Disconnect"
         confirmVariant="destructive"
         busy={operation === "disconnect"}
         keepOpenOnConfirm
-        returnFocus={() => {
-          const button = disconnectButtonRef.current;
-          return button?.isConnected ? button : keyInputRef.current;
-        }}
+        returnFocus={() =>
+          [moreButtonRef.current, connectButtonRef.current].find((element) => element?.isConnected) ??
+          fallbackFocus()
+        }
         onConfirm={disconnect}
       />
     </>
   );
 }
 
-
-/** How much of the Pad and the visible models the cached benchmark snapshot covers. */
-function ModelPadBenchmarkCoverage({
-  coverage,
-  matchedWithoutMetric,
-  metric,
-  skippedAmbiguousCount,
-}: {
-  coverage: BenchmarkCoverage;
-  matchedWithoutMetric: number;
-  metric: ModelPadMetric;
-  skippedAmbiguousCount: number;
-}) {
-  return (
-    <Field label="Benchmark coverage" orientation="vertical">
-      <ul className="grid gap-0.5 text-small text-secondary">
-        <li>
-          {coverage.pad.total === 0
-            ? "No models on the Pad yet"
-            : `${coverage.pad.matched} of ${coverage.pad.total} Pad model${coverage.pad.total === 1 ? "" : "s"} matched`}
-        </li>
-        <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible model${coverage.visible.total === 1 ? "" : "s"}`}</li>
-        {matchedWithoutMetric > 0 ? (
-          <li>
-            {`${matchedWithoutMetric} matched visible model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[metric]} score`}
-          </li>
-        ) : null}
-        {skippedAmbiguousCount > 0 ? (
-          <li>
-            {`${skippedAmbiguousCount} ambiguous benchmark row${skippedAmbiguousCount === 1 ? "" : "s"} skipped`}
-          </li>
-        ) : null}
-      </ul>
-      {coverage.unmatchedPad.length > 0 ? (
-        <details className="model-pad-coverage-details -mx-2">
-          <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
-            {`Unmatched Pad models (${coverage.unmatchedPad.length})`}
-          </summary>
-          <div className="grid gap-1.5 px-2 pb-1 pt-1">
-            <Text as="p" variant="small" color="tertiary">
-              Benchmarks cover hosted models; reasoning variants are matched separately.
-            </Text>
-            <ul className="grid gap-1 text-small">
-              {coverage.unmatchedPad.map((model) => (
-                <li key={model.value} className="flex min-w-0 items-baseline justify-between gap-3">
-                  <span className="min-w-0 truncate text-primary">
-                    {`${model.label} · ${model.providerLabel}`}
-                  </span>
-                  <span className="shrink-0 text-tertiary">
-                    {model.reason === "local" ? "Local model" : "No benchmark row"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </details>
-      ) : null}
-    </Field>
-  );
-}
-
-/** Forget the speeds measured from the user's chats, after a confirmation. */
-function ModelPadMeasuredSpeed({
+/** The measured speed row: how many models have speeds, and Clear… */
+function ModelPadMeasuredSpeedRow({
   measuredCount,
   fallbackFocus,
 }: {
@@ -376,31 +541,39 @@ function ModelPadMeasuredSpeed({
   };
 
   return (
-    <Field
-      label="Measured speed"
-      description={
-        measuredCount > 0
-          ? `${measuredCount} model${measuredCount === 1 ? "" : "s"} · from your chats on this Mac`
-          : "Nothing measured yet"
-      }
-    >
-      <div className="flex justify-end">
-        {measuredCount > 0 ? (
-          <Button
-            ref={clearButtonRef}
-            size="small"
-            variant="transparent"
-            onClick={() => setConfirmClear(true)}
-          >
-            Clear measured speeds
-          </Button>
-        ) : null}
-      </div>
+    <>
+      <ModelPadDataRow
+        label="Measured speed"
+        hint={
+          <>
+            <p>Time to first token and tokens per second, taken from real replies. Stays on this Mac.</p>
+            <p>A model needs 3 chats before Arrange can use it.</p>
+          </>
+        }
+        secondary={
+          measuredCount > 0
+            ? `${measuredCount} ${plural(measuredCount, "model")} · from your chats on this Mac`
+            : "Nothing measured yet"
+        }
+        trailing={
+          measuredCount > 0 ? (
+            <Button
+              ref={clearButtonRef}
+              size="small"
+              variant="transparent"
+              aria-label="Clear measured speeds"
+              onClick={() => setConfirmClear(true)}
+            >
+              Clear…
+            </Button>
+          ) : null
+        }
+      />
       <AlertDialog
         open={confirmClear}
         onOpenChange={setConfirmClear}
         title="Clear measured speeds?"
-        description="Aiden will forget the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
+        description="Aiden forgets the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
         confirmLabel="Clear speeds"
         confirmVariant="destructive"
         busy={clearing}
@@ -411,13 +584,13 @@ function ModelPadMeasuredSpeed({
         }}
         onConfirm={clear}
       />
-    </Field>
+    </>
   );
 }
 
 /**
- * The Data group under the Pad: the benchmark connection and its coverage,
- * and the speeds measured from the user's chats.
+ * The Data group under the Pad: benchmark scores (connection, coverage) and
+ * the speeds measured from the user's chats, as two quiet settings rows.
  */
 export function ModelPadDataRows({
   coverage,
@@ -433,19 +606,15 @@ export function ModelPadDataRows({
   measuredCount: number;
   fallbackFocus: () => HTMLElement | null;
 }) {
-  const status = useModelInsightsStatus().data;
   return (
     <FieldSet title="Data">
-      <ModelPadBenchmarkConnection />
-      {coverage ? (
-        <ModelPadBenchmarkCoverage
-          coverage={coverage}
-          matchedWithoutMetric={matchedWithoutMetric}
-          metric={metric}
-          skippedAmbiguousCount={status?.skippedAmbiguousCount ?? 0}
-        />
-      ) : null}
-      <ModelPadMeasuredSpeed measuredCount={measuredCount} fallbackFocus={fallbackFocus} />
+      <ModelPadBenchmarkRow
+        coverage={coverage}
+        matchedWithoutMetric={matchedWithoutMetric}
+        metric={metric}
+        fallbackFocus={fallbackFocus}
+      />
+      <ModelPadMeasuredSpeedRow measuredCount={measuredCount} fallbackFocus={fallbackFocus} />
     </FieldSet>
   );
 }

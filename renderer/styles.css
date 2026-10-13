@@ -1179,22 +1179,6 @@ textarea {
   transform: translate(0, 0) scale(1);
 }
 
-.model-pad-coverage-details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.model-pad-coverage-details > summary::after {
-  float: right;
-  color: var(--text-tertiary);
-  content: "›";
-  transform: rotate(90deg);
-  transition: transform 150ms ease-out;
-}
-
-.model-pad-coverage-details[open] > summary::after {
-  transform: rotate(-90deg);
-}
-
 .model-pad-model {
   width: 0.5rem;
   height: 0.5rem;

@@ -722,7 +722,17 @@ test("a failed keep of the last suggestion brings it back", async () => {
   assert.equal(Object.keys(server.stored()).length, 9);
 });
 
-test("benchmark insights report Pad and visible coverage and why Pad models are unmatched", async () => {
+/** Open the Data card's coverage popover from its "<n> of <m> models" button. */
+async function openCoverage(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: /^Benchmark coverage: / }));
+  return screen.findByRole("dialog", { name: "Benchmark coverage" });
+}
+
+function coverageButton(): HTMLElement | null {
+  return screen.queryByRole("button", { name: /^Benchmark coverage: / });
+}
+
+test("benchmark coverage reports Pad and visible coverage and why Pad models are unmatched", async () => {
   editorServer({
     insightsReady: true,
     scoredModels: ["m0", "m1", "m2"],
@@ -736,15 +746,13 @@ test("benchmark insights report Pad and visible coverage and why Pad models are 
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 3));
-  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
-  await within(panel).findByText("1 of 3 Pad models matched");
-  within(panel).getByText("3 of 11 visible models");
-  within(panel).getByText("3 ambiguous benchmark rows skipped");
-  const details = within(panel).getByText("Unmatched Pad models (2)").closest("details");
-  assert.ok(details);
-  assert.equal(details.open, false, "the unmatched list starts collapsed");
+  await waitFor(() => assert.equal(coverageButton()?.textContent, "3 of 11 models"));
+  const popover = await openCoverage();
+  within(popover).getByText("1 of 3 Pad models matched");
+  within(popover).getByText("3 ambiguous benchmark rows skipped");
+  const unmatched = within(popover).getByRole("region", { name: "Pad models without a score" });
   assert.deepEqual(
-    within(details)
+    within(unmatched)
       .getAllByRole("listitem")
       .map((item) => item.textContent),
     ["M5 · TestNo benchmark row", "Llama · OllamaLocal model"],
@@ -759,53 +767,52 @@ test("a single skipped benchmark row is counted in the singular", async () => {
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
-  await within(panel).findByText("1 ambiguous benchmark row skipped");
+  const popover = await openCoverage();
+  within(popover).getByText("1 ambiguous benchmark row skipped");
 });
 
 test("benchmark coverage omits the unmatched list and skipped rows when there are none", async () => {
   editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
-  await within(panel).findByText("1 of 1 Pad model matched");
-  assert.ok(!within(panel).queryByText(/Unmatched Pad models/u));
-  assert.ok(!within(panel).queryByText(/ambiguous benchmark rows skipped/u));
-  assert.ok(!within(panel).queryByText(/ha(?:s|ve) no .+ score/u));
+  const popover = await openCoverage();
+  within(popover).getByText("1 of 1 Pad model matched");
+  assert.ok(!within(popover).queryByRole("region", { name: "Pad models without a score" }));
+  assert.ok(!within(popover).queryByText(/ambiguous benchmark rows? skipped/u));
+  assert.ok(!within(popover).queryByText(/ha(?:s|ve) no .+ score/u));
 });
 
 test("benchmark coverage stays hidden until insights are ready", async () => {
   editorServer({ scored: true });
   mountEditor();
   await modelsLoaded();
-  assert.ok(!screen.queryByText(/Pad models? matched/u));
+  await screen.findByText("Not connected");
+  assert.ok(!coverageButton());
 });
 
 test("benchmark coverage waits for the model list instead of counting nothing", async () => {
   editorServer({ insightsReady: true, providersPending: true });
   mountEditor();
-  await screen.findByText("Benchmark insights ready");
-  assert.ok(!screen.queryByRole("group", { name: "Benchmark coverage" }));
-  assert.ok(!screen.queryByText(/visible models?$/u));
+  await screen.findByText(/^Artificial Analysis via OpenRouter/u);
+  assert.ok(!coverageButton());
 });
 
 test("benchmark coverage stays hidden when model details can't be read", async () => {
   editorServer({ insightsReady: true, infoFails: true });
   mountEditor();
   await modelsLoaded();
-  await screen.findByText("Benchmark insights ready");
-  assert.ok(!screen.queryByRole("group", { name: "Benchmark coverage" }));
-  assert.ok(!screen.queryByText(/visible models?$/u));
+  await screen.findByText(/^Artificial Analysis via OpenRouter/u);
+  assert.ok(!coverageButton());
 });
 
 test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
   editorServer({ insightsReady: true });
   mountEditor();
   await modelsLoaded();
-  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
-  await within(panel).findByText("No models on the Pad yet");
-  within(panel).getByText("10 of 10 visible models");
-  assert.ok(!within(panel).queryByText(/Pad models? matched/u));
+  await waitFor(() => assert.equal(coverageButton()?.textContent, "10 of 10 models"));
+  const popover = await openCoverage();
+  within(popover).getByText("No models on the Pad yet");
+  assert.ok(!within(popover).queryByText(/Pad models? matched/u));
 });
 
 test("benchmark coverage counts matched visible models without a score for the chosen metric", async () => {
@@ -817,27 +824,34 @@ test("benchmark coverage counts matched visible models without a score for the c
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
-  await within(panel).findByText("1 of 1 Pad model matched");
-  within(panel).getByText("3 matched visible models have no Agentic score");
+  const popover = await openCoverage();
+  within(popover).getByText("1 of 1 Pad model matched");
+  within(popover).getByText("3 matched visible models have no Agentic score");
+  fireEvent.keyDown(popover, { key: "Escape" });
+  await waitFor(() => assert.ok(!screen.queryByRole("dialog", { name: "Benchmark coverage" })));
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "Coding" }));
-  await waitFor(() => assert.ok(!within(panel).queryByText(/matched models? ha(?:s|ve) no/u)));
+  fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+  await waitFor(() => assert.ok(!screen.queryByRole("menu")));
+  const after = await openCoverage();
+  assert.ok(!within(after).queryByText(/matched visible models? ha(?:s|ve) no/u));
 });
 
-test("the benchmark connection suggests fetching again once the snapshot is over 60 days old", async () => {
+test("an over-60-day-old benchmark snapshot is marked out of date", async () => {
   editorServer({
     insightsReady: true,
     fetchedAt: new Date(Date.now() - 61 * 24 * 60 * 60 * 1_000).toISOString(),
   });
   mountEditor();
-  await screen.findByText("Benchmarks are over 60 days old. Fetch latest to update.");
+  const row = await screen.findByRole("group", { name: "Benchmark scores" });
+  await within(row).findByText("Out of date");
 });
 
-test("a recent benchmark snapshot shows no staleness hint", async () => {
+test("a recent benchmark snapshot is not marked out of date", async () => {
   editorServer({ insightsReady: true, fetchedAt: new Date(Date.now() - 3_600_000).toISOString() });
   mountEditor();
-  await screen.findByText(/Fetched /u);
-  assert.ok(!screen.queryByText(/over 60 days old/u));
+  const row = await screen.findByRole("group", { name: "Benchmark scores" });
+  await within(row).findByText(/^Artificial Analysis via OpenRouter · /u);
+  assert.ok(!within(row).queryByText("Out of date"));
 });

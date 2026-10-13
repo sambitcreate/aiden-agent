@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { ProviderIcon } from "../../provider-icon";
+import { InfoHint } from "../../ui-info-hint";
 import type { ModelEntry } from "../../../lib/model-picker-data";
 import type { ModelPadPlacementKind } from "../../../lib/model-pad-layout";
 import { cn } from "../../../lib/ui-utils";
@@ -35,7 +36,15 @@ export function ModelPadTray({
   return (
     <aside className="model-pad-tray min-w-0" aria-label="On your Pad">
       <div className="flex items-center justify-between px-1 pb-1.5 pt-0.5 text-small text-secondary">
-        <span>On your Pad</span>
+        <span className="flex items-center gap-1">
+          On your Pad
+          <InfoHint topic="models on your Pad">
+            <p>
+              Positions for models that are temporarily unavailable are kept and come back with
+              them.
+            </p>
+          </InfoHint>
+        </span>
         {rows.length > 0 ? <span className="tabular-nums text-tertiary">{rows.length}</span> : null}
       </div>
       {rows.length > 0 ? (
