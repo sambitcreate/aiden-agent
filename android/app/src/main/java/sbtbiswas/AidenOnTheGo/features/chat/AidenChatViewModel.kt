@@ -2995,6 +2995,7 @@ class AidenChatViewModel(
         ) {
             if (recovery !== currentCoroutineContext()[Job]) recovery.cancel()
             foreignReconcileJob = null
+            clearRecoveryWarning()
             clearForeignLiveOutput()
         }
         resolveModelSelection()
