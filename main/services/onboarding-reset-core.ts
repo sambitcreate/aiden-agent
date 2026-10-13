@@ -1,6 +1,8 @@
 export interface OnboardingResetOperations {
   disconnectArtificialAnalysis(): Promise<unknown>;
   clearModelInsights(): Promise<unknown>;
+  /** Image-generation keys and the device-local Image Generation settings. */
+  clearImageGeneration(): Promise<unknown>;
   clearModelPace(): Promise<void>;
   resetConfiguration(): Promise<void>;
   clearLegacySecrets(): Promise<void>;
@@ -72,6 +74,7 @@ export async function performOnboardingReset(operations: OnboardingResetOperatio
   await Promise.all([
     captureFailure(failures, operations.disconnectArtificialAnalysis),
     captureFailure(failures, operations.clearModelInsights),
+    captureFailure(failures, operations.clearImageGeneration),
     captureFailure(failures, operations.clearModelPace),
   ]);
 

@@ -1134,7 +1134,8 @@ type DialogProps = React.PropsWithChildren<{
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
-  size?: "large";
+  /** "full" fills the window (an image's full view). */
+  size?: "large" | "full";
   layer?: DialogLayer;
   /**
    * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
@@ -1221,6 +1222,7 @@ export function Dialog({
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
+            size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >
           <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
@@ -1231,7 +1233,7 @@ export function Dialog({
               <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
             </DialogPrimitive.Description>
           ) : null}
-          <div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div>
+          <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
           <div className="mt-5 flex shrink-0 justify-end gap-2">
             {cancelKeepsOpen ? (
               <Button

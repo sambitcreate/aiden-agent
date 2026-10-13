@@ -547,6 +547,7 @@ object AidenAgentActivityPresentation {
         "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context"),
+        "generate_image" to Pair("Generating image", "Generated image"),
         // Activity an ACP agent (for example, Google Antigravity) ran itself.
         "delete_file" to Pair("Deleting", "Deleted"),
         "move_file" to Pair("Moving", "Moved"),

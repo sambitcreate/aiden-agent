@@ -1,5 +1,6 @@
 import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
 import { configStore } from "./config-store.js";
+import { imageGeneration } from "./image-generation/runtime-main.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
@@ -23,6 +24,7 @@ export function resetOnboardingData(): Promise<void> {
   return performOnboardingReset({
     disconnectArtificialAnalysis: () => artificialAnalysisRuntime.disconnect(),
     clearModelInsights: () => openRouterBenchmarkRuntime.disconnect(),
+    clearImageGeneration: () => imageGeneration.clearAll(),
     clearModelPace: () => modelPaceRecorder.clear(),
     resetConfiguration: () => configStore.resetUserSetup(),
     clearLegacySecrets: () => secrets.clearAll(),

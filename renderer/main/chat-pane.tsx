@@ -1298,14 +1298,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
             // Seed main's ready preview before the frame mounts so the final
             // visual replaces its draft without a loading placeholder.
             if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
-            if (artifact.kind === "html" && event.toolCallId) {
+            if (event.toolCallId) {
               const toolCallId = event.toolCallId;
-              // mediaIds are unique per generation, so this map only grows;
-              // entries for artifacts no longer shown are never looked up.
+              // Visuals key by mediaId, generated images by attachment id. Both
+              // are unique per generation, so this map only grows; entries for
+              // artifacts no longer shown are never looked up.
+              const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
               setStreamingArtifactPlacements((current) =>
-                current.get(artifact.mediaId) === toolCallId
-                  ? current
-                  : new Map(current).set(artifact.mediaId, toolCallId),
+                current.get(key) === toolCallId ? current : new Map(current).set(key, toolCallId),
               );
             }
             if (artifact.kind === "html") {

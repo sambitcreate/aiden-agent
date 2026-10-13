@@ -176,6 +176,7 @@ fun AidenChatDetailScreen(
     val runInputReceipt by viewModel.runInputReceipt.collectAsStateWithLifecycle()
     val isRespondingToApproval by viewModel.isRespondingToApproval.collectAsStateWithLifecycle()
     val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
+    val imageArrivalRevealIds by viewModel.imageArrivalRevealGenerationIds.collectAsStateWithLifecycle()
     val isRespondingToQuestion by viewModel.isRespondingToQuestion.collectAsStateWithLifecycle()
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsStateWithLifecycle()
@@ -1071,7 +1072,10 @@ fun AidenChatDetailScreen(
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl,
-                            forkActions = forkActions
+                            forkActions = forkActions,
+                            imageArrivalRevealGenerationId = message.timeline?.generationId
+                                ?.takeIf { it in imageArrivalRevealIds },
+                            onImageArrivalRevealed = viewModel::finishImageArrivalReveal
                         )
                     }
                     // The summary stands where the copied conversation ends.
@@ -1346,7 +1350,10 @@ private fun AssistantMessageRow(
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit,
-    forkActions: AidenMessageForkActions? = null
+    forkActions: AidenMessageForkActions? = null,
+    /** Set while this message's generated image should play the one-shot arrival reveal. */
+    imageArrivalRevealGenerationId: String? = null,
+    onImageArrivalRevealed: (String) -> Unit = {}
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1483,7 +1490,11 @@ private fun AssistantMessageRow(
             AidenMessageImageAttachments(
                 attachments = imageAttachments,
                 edge = AidenMessageMediaEdge.LEADING,
-                loadData = loadAttachmentImage
+                loadData = loadAttachmentImage,
+                revealAttachmentId = imageArrivalRevealGenerationId?.let {
+                    AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
+                },
+                onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
             )
         }
         fallbackAttachments.forEach { attachment ->
@@ -1680,6 +1691,7 @@ internal fun ActiveStreamingCard(
             (activityTimeline == null && liveText.isEmpty())
         )
     val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
+    val imagePlaceholders = remember(activityTimeline) { AidenImageGenerationPlaceholderState.items(activityTimeline) }
     val chronologicalRows = remember(isBotChat, liveText, reasoning, activityTimeline) {
         if (isBotChat) null else AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
     }
@@ -1712,6 +1724,7 @@ internal fun ActiveStreamingCard(
                     onOpenUrl = {},
                     enteredRecaps = enteredRecaps
                 )
+                AidenImageGenerationPlaceholderList(imagePlaceholders, palette)
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
                         row.steps.any { it.toolName == "render_artifact" && it.isActive }
@@ -1783,6 +1796,7 @@ internal fun ActiveStreamingCard(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
+            AidenImageGenerationPlaceholderList(imagePlaceholders, palette)
 
             fallbackQuestionnaires.forEach { step ->
                 step.questionnaireRecap?.let { recap ->

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderIcon } from "../components/provider-icon.js";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
@@ -221,10 +224,10 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     new URL("../components/provider-icon.tsx", import.meta.url),
     "utf8",
   );
-  const providersSettingsSource = readFileSync(
-    new URL("../components/settings/providers-settings.tsx", import.meta.url),
-    "utf8",
-  );
+  // The built-in provider row lives in the shared ProviderSetupRow.
+  const providersSettingsSource = ["providers-settings.tsx", "provider-setup-row.tsx"]
+    .map((file) => readFileSync(new URL(`../components/settings/${file}`, import.meta.url), "utf8"))
+    .join("\n");
   const codexProviderSettingsSource = readFileSync(
     new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
     "utf8",
@@ -236,7 +239,12 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.ok(multicolorProviderSlugs);
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
-  assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  const monoMark = renderToStaticMarkup(
+    createElement(ProviderIcon, { providerId: "openai", providerLabel: "OpenAI" }),
+  );
+  assert.match(monoMark, /data-provider-icon="openai"/u);
+  assert.match(monoMark, /background-color:currentColor/u);
+  assert.match(monoMark, /mask-image:url\(&quot;[^"]*openai\.svg&quot;\)/u);
   assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
   assert.match(
     providerIconSource,

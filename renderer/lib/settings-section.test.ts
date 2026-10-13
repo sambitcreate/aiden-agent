@@ -140,3 +140,21 @@ test("settings search also matches the page description", () => {
   );
   assert.equal(searchIds("").length, SETTINGS_DESTINATIONS.length);
 });
+
+test("Image Generation is an Agent destination reachable by deep link and model names", () => {
+  assert.deepEqual(parseSettingsSearch({ section: "imageGeneration" }), {
+    section: "imageGeneration",
+  });
+  const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "imageGeneration");
+  assert.equal(destination?.title, "Image Generation");
+  assert.equal(destination?.group, "Agent");
+  for (const term of ["replicate", "fal", "nano banana", "flux", "seedream", "image api keys"]) {
+    assert.ok(searchIds(term).includes("imageGeneration"), term);
+  }
+  // Every platform shows it; no capability gates image generation.
+  assert.ok(
+    availableSettingsDestinations({ computerUse: false, devices: false }).some(
+      (entry) => entry.id === "imageGeneration",
+    ),
+  );
+});
