@@ -906,6 +906,8 @@
         "renderer/components/settings/model-pad/model-pad-first-visit.test.tsx",
         "renderer/components/settings/model-pad/model-pad-siblings.test.tsx",
         "renderer/components/settings/model-pad/model-pad-measured-pace.test.tsx",
+        "renderer/components/settings/model-pad/model-pad-add-popover.test.tsx",
+        "renderer/components/settings/model-pad/model-pad-tray.test.tsx",
         "renderer/components/model-pad-markers.test.tsx",
         "renderer/components/model-picker-pad.test.tsx",
         "renderer/components/model-picker.test.tsx",
