@@ -9,25 +9,48 @@ import {
   DropdownMenuTrigger,
   Text,
 } from "../components/ui";
+import { ImageModelLogo } from "../components/image-model-logo";
 import type { ImageModelOption } from "../shared/images/port";
 import type { ImageModelRef } from "../shared/images/schema";
 
 const keyOf = (provider: string, model: string) => `${provider}\u0000${model}`;
 
+function OptionLogo({ option }: { option: ImageModelOption }) {
+  return (
+    <ImageModelLogo
+      maker={option.maker}
+      providerId={option.provider}
+      modelId={option.model}
+      label={option.label}
+      className="size-3.5 text-secondary"
+    />
+  );
+}
+
 export function ModelPicker({
   value,
   models,
   onChange,
+  onOpenSettings,
 }: {
   value?: ImageModelRef;
   models: readonly ImageModelOption[];
   onChange(model: ImageModelRef): void;
+  /** Opens Settings → Image Generation from the empty state. */
+  onOpenSettings?: () => void;
 }) {
   if (models.length === 0) {
     return (
-      <Text variant="small" color="secondary">
-        Add an OpenRouter key in Settings → Providers to generate images.
-      </Text>
+      <div className="flex flex-col items-start gap-1.5">
+        <Text variant="small" color="secondary">
+          Add an image key in Settings → Image Generation.
+        </Text>
+        {onOpenSettings ? (
+          <Button size="small" variant="muted" className="nodrag" onClick={onOpenSettings}>
+            Open Image Generation
+          </Button>
+        ) : null}
+      </div>
     );
   }
   const current = value ? models.find((option) => option.provider === value.provider && option.model === value.id) : undefined;
@@ -38,6 +61,7 @@ export function ModelPicker({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button size="small" variant="muted" className="nodrag max-w-full justify-start" aria-label="Image model">
+          {current ? <OptionLogo option={current} /> : null}
           <span className="truncate">{current?.label ?? (value ? `${value.id} (unavailable)` : "Choose a Model")}</span>
         </Button>
       </DropdownMenuTrigger>
@@ -54,7 +78,8 @@ export function ModelPicker({
               <DropdownMenuLabel>{providerLabel}</DropdownMenuLabel>
               {options.map((option) => (
                 <DropdownMenuRadioItem key={keyOf(option.provider, option.model)} value={keyOf(option.provider, option.model)}>
-                  {option.label}
+                  <OptionLogo option={option} />
+                  <span className="min-w-0 truncate">{option.label}</span>
                 </DropdownMenuRadioItem>
               ))}
             </React.Fragment>

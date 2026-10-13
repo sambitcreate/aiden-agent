@@ -15,8 +15,15 @@ export type ImageOperationUsage = Parameters<NonNullable<PiModelToolsHost["onUsa
 export interface PiImagePortOptions {
   models: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">;
   providerLabel(providerId: string): string;
-  /** Offline catalog hydration before listing. Never a network refresh. */
-  beforeList?(): Promise<void>;
+  /**
+   * Offline registry hydration before any lookup (listing or a request), since
+   * model lookups are synchronous. Never a network refresh.
+   */
+  prepare?(): Promise<void>;
+  /** The Settings → Image Generation default, from the cached runtime snapshot. */
+  defaultModel?(): Promise<{ provider: string; id: string } | undefined>;
+  /** Maker slug for a model's logo. */
+  maker?(providerId: string, modelId: string): string | undefined;
   onUsage?(record: ImageOperationUsage): Promise<void>;
 }
 
@@ -38,22 +45,34 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
 
   return {
     async listModels(signal) {
-      await options.beforeList?.();
+      await options.prepare?.();
       const available = await options.models.getAvailableOfType("image", undefined, { signal });
+      // A missing default only loses the preselection; the list still loads.
+      const preferred = await options.defaultModel?.().catch(() => undefined);
       return available
         .filter((model) => !AUTO_ROUTER.test(model.id))
-        .map((model) => ({
-          provider: model.provider,
-          providerLabel: options.providerLabel(model.provider),
-          model: model.id,
-          label: model.name || model.id,
-          acceptsReferences: model.input.includes("image"),
-          textOutput: model.output.includes("text"),
-        }))
+        .map((model) => {
+          const maker = options.maker?.(model.provider, model.id);
+          return {
+            provider: model.provider,
+            providerLabel: options.providerLabel(model.provider),
+            model: model.id,
+            label: model.name || model.id,
+            acceptsReferences: model.input.includes("image"),
+            textOutput: model.output.includes("text"),
+            ...(preferred?.provider === model.provider && preferred.id === model.id ? { isDefault: true } : {}),
+            ...(maker ? { maker } : {}),
+          };
+        })
         .sort((left, right) => left.providerLabel.localeCompare(right.providerLabel) || left.label.localeCompare(right.label));
     },
 
     async generate(request) {
+      try {
+        await options.prepare?.();
+      } catch {
+        return failed("unknown-model", "Image models could not be loaded. Check Settings → Image Generation.");
+      }
       const model = options.models.getModelOfType("image", request.provider, request.model);
       if (!model || model.provider !== request.provider || model.id !== request.model || AUTO_ROUTER.test(model.id)) {
         return failed("unknown-model", "This image model is not available. Choose another model.");

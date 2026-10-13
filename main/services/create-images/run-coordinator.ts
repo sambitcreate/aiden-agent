@@ -101,7 +101,7 @@ export class ImageRunCoordinator {
         issues: missing.map((item) => ({
           code: "model_unavailable",
           nodeId: item.nodeId,
-          message: "This image model is not available. Choose another model, or add its provider in Settings → Providers.",
+          message: "This image model is not available. Choose another model, or add an image key in Settings → Image Generation.",
         })),
       };
     }

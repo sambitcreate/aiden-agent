@@ -93,6 +93,14 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("classify"), true);
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
   assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
+  assert.match(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "9:16" }),
+    /studio\/canvas at 9:16 \(may incur charges\)/,
+  );
+  assert.doesNotMatch(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
+    /ignore this/,
+  );
   assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
 });
 
