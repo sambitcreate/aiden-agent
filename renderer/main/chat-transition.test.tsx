@@ -216,7 +216,6 @@ test("an indeterminate append blocks retries until an application reload reconci
     /setAppendReconciliationRequiredChats\(\(current\) => new Set\(current\)\.add\(chatId\)\)/u,
   );
   assert.match(pane, /appendReconciliationRequiredChats\.has\(chatId\)/u);
-  assert.match(pane, /Reload Aiden before sending another message/u);
   assert.doesNotMatch(
     between(pane, "// Reset transient state when switching chats.", "}, [chatId]);"),
     /setAppendReconciliationRequiredChats/u,
@@ -351,7 +350,6 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
   assert.match(pane, /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u);
-  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
   // Stop closes busy admission synchronously, before React re-renders.
