@@ -390,3 +390,112 @@ test("a failed read of a phone's new turn is retried until its message lands", a
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Hi there");
   observation.close();
 });
+
+test("a text-only reply without timeline is recognized as the run's saved reply", async () => {
+  const chatId = "chat-text-only";
+  const main = fakeMain({
+    runId: "run-text-only",
+    chatId,
+    state: "streaming",
+    events: [
+      runEvent("run-text-only", 1, "run.started", { chatId, origin: "remote" }),
+      runEvent("run-text-only", 2, "text_delta", { text: "Answer" }),
+    ],
+  });
+  const reads = chatReads();
+  const observation = observeLocalRun({
+    adapter: main.adapter,
+    chatId,
+    workspaceId: WORKSPACE,
+    refetch: reads.refetch,
+    schedule: (publish) => publish(),
+  });
+  await tick();
+  await reads.finishAll();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Answer");
+
+  // Send the done event with messageId, which triggers a refetch.
+  main.send({ kind: "event", event: runEvent("run-text-only", 3, "done", { messageId: "msg-text-only" }) });
+  await tick();
+  // A refetch is requested, but the reply is not in the cache yet, so it will retry.
+  assert.equal(reads.count() > 0, true, "refetch is requested after done event");
+
+  // Add the text-only reply without timeline but with matching messageId to the saved transcript.
+  reads.saved.push({ role: "assistant", id: "msg-text-only" });
+  await reads.finishAll();
+  // The projection should be cleared because the text-only saved reply should be recognized as the run's reply via doneMessageId match.
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null, "text-only reply is recognized as the run's saved reply");
+  assert.equal(isDetachedLifecycleChatDraining(chatId, WORKSPACE), false);
+
+  main.send(
+    { kind: "event", event: runEvent("run-text-only", 4, "run.ended", { chatId, state: "done" }) },
+    { kind: "state", runId: "run-text-only", state: "ended" },
+  );
+  observation.close();
+});
+
+test("a retained observer survives an obsolete idle-release read", async () => {
+  const chatId = "chat-release-race";
+  const target = { chatId, workspaceId: WORKSPACE };
+  const main = fakeMain({
+    runId: "run-release-race",
+    chatId,
+    state: "streaming",
+    events: [runEvent("run-release-race", 1, "run.started", { chatId, origin: "remote" }), runEvent("run-release-race", 2, "text_delta", { text: "Initial" })],
+  });
+  const reads = chatReads();
+  const graceTimers: Array<() => void> = [];
+  const lifecycle = createObservedRunLifecycle((observed) =>
+    observeLocalRun({
+      adapter: main.adapter,
+      ...observed,
+      refetch: reads.refetch,
+      schedule: (publish) => publish(),
+      delay: async () => {},
+    }),
+  );
+
+  // Patch setTimeout for grace period detection
+  const originalSetTimeout = global.setTimeout;
+  global.setTimeout = ((callback: () => void, ms: number) => {
+    if (ms === 5000) graceTimers.push(callback);
+    return originalSetTimeout(callback, ms);
+  }) as typeof setTimeout;
+
+  try {
+    lifecycle.update({ target, active: true });
+    await tick();
+    await reads.finishAll();
+
+    // Report the chat idle. A grace-period read will be scheduled.
+    lifecycle.update({ target, active: false });
+    await tick();
+    assert.equal(graceTimers.length > 0, true, "grace-period timer is scheduled");
+
+    // Before the grace read fires, report the chat active again (retain).
+    lifecycle.update({ target, active: true });
+
+    // Start a new turn on the phone.
+    main.send(
+      { kind: "state", runId: "run-next", state: "streaming" },
+      { kind: "event", event: runEvent("run-next", 1, "run.started", { chatId, origin: "remote" }) },
+      { kind: "event", event: runEvent("run-next", 2, "text_delta", { text: "New answer" }) },
+    );
+    await tick();
+    await reads.finishAll();
+    assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "New answer", "new run is shown");
+    assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.streamId, "run-next");
+
+    // Now fire the grace read from the old run. Without the fix, it would close the observer,
+    // clearing the newer run's projection and blocking follow-up sends.
+    // After the fix, the observer stays open because the release authority was revoked.
+    for (const callback of graceTimers) callback();
+    await tick();
+    assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "New answer", "new run projection survives the obsolete grace read");
+    assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.streamId, "run-next");
+
+    lifecycle.dispose();
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+});

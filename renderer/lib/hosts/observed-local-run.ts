@@ -16,6 +16,7 @@ import {
 /** The persisted transcript fields that say which run wrote a reply. */
 export interface ObservedTranscriptMessage {
   readonly role: string;
+  readonly id?: string;
   readonly timeline?: { readonly generationId: string } | null;
 }
 
@@ -63,8 +64,16 @@ function settled(view: RemoteRunView): boolean {
   return view.status === "done" || view.status === "error" || view.status === "cancelled";
 }
 
-function hasReplyFrom(messages: readonly ObservedTranscriptMessage[], runId: string): boolean {
-  return messages.some((message) => message.role === "assistant" && message.timeline?.generationId === runId);
+function hasReplyFrom(
+  messages: readonly ObservedTranscriptMessage[],
+  runId: string,
+  doneMessageId: string | null = null,
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      (message.timeline?.generationId === runId || (doneMessageId !== null && message.id === doneMessageId)),
+  );
 }
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -147,13 +156,15 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
         const settledAtRead = settled(view);
         // With no reply text on screen, nothing can flash: any completed read will do.
         const mirroredReply = !view.incomplete && view.text.length > 0;
+        // Capture doneMessageId before the async read, as view may change.
+        const doneMessageIdAtRead = view.doneMessageId;
         const outcome = await read();
         if (closed) return;
         const waitingForReply = settledAtRead && runAtRead !== null && view.runId === runAtRead;
         const complete =
           outcome.kind === "gone" ||
           (outcome.kind === "read" &&
-            (!waitingForReply || !mirroredReply || hasReplyFrom(outcome.messages, runAtRead!)));
+            (!waitingForReply || !mirroredReply || hasReplyFrom(outcome.messages, runAtRead!, doneMessageIdAtRead)));
         if (complete) {
           readOwed = false;
           attempt = 0;
@@ -224,7 +235,10 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
       releaseTimer = setTimeout(() => {
         releaseTimer = null;
         if (closed || !releasing) return;
-        void read().then(() => close());
+        void read().then(() => {
+          // Recheck release authority: retain() might have revoked it while the read was pending.
+          if (releasing && !closed) close();
+        });
       }, OBSERVED_RELEASE_GRACE_MS);
     },
     retain: () => {
