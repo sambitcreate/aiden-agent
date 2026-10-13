@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -382,6 +383,40 @@ class AidenChatChromeUiTest {
         compose.onNodeWithTag("code").performTouchInput { up() }
         settleGesture()
         stream(4)
+        assertEquals(0 to 0, viewport())
+    }
+
+    @Test
+    fun accessibilityScrollsLeaveAndRejoinTheLiveEdgeWithoutAFling() {
+        setStreamingTranscript()
+        val transcriptNode = compose.onNodeWithTag("transcript")
+        // The list is reversed: a positive scroll moves up into history.
+        transcriptNode.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
+        settleGesture()
+        val readerPlace = viewport()
+        assertNotEquals(0 to 0, readerPlace)
+        stream(6)
+        assertEquals(readerPlace, viewport())
+        compose.runOnIdle { assertFalse(follow.isFollowing) }
+
+        transcriptNode.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -5_000f) }
+        settleGesture()
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        stream(6)
+        assertEquals(0 to 0, viewport())
+    }
+
+    @Test
+    fun anAccessibilityScrollBackAfterLoadingEarlierMessagesFollowsAgain() {
+        setStreamingTranscript()
+        compose.onNodeWithTag("transcript").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
+        settleGesture()
+        // Loading older history detaches without a gesture.
+        compose.runOnIdle { follow.detach() }
+        compose.onNodeWithTag("transcript").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -5_000f) }
+        settleGesture()
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        stream(6)
         assertEquals(0 to 0, viewport())
     }
 
