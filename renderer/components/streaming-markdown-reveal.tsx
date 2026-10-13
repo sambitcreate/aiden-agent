@@ -81,7 +81,7 @@ export function StreamingMarkdownReveal({
   parserRef.current ??= new StreamingRevealParser();
   const parser = parserRef.current;
   // Closed text that has fully joined has no unfinished tail to hold back.
-  const parsedComplete = complete || (closed && released === content);
+  const parsedComplete = complete || reducedMotion || (closed && released === content);
   const blocks = React.useMemo(
     () => parser.parse(released, parsedComplete),
     [parser, parsedComplete, released],
@@ -103,7 +103,7 @@ export function StreamingMarkdownReveal({
   // blocks. Blocks keep their elements as the text grows, so the finished
   // reply settles in place.
   // A tail the deadline released shows as written, even unfinished.
-  const source = complete
+  const source = complete || reducedMotion
     ? content
     : released.slice(
         0,
