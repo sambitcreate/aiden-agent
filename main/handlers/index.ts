@@ -33,6 +33,7 @@ import { registerSubagentHandlers } from "./subagents.js";
 import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
+import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
@@ -94,6 +95,7 @@ export function registerHandlers(): void {
   registerAssistantLiveHandlers();
   registerAidenRemoteHandlers();
   registerPeerHostHandlers();
+  registerLocalRunIpc();
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
   registerTtsHandlers();

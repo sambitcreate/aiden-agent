@@ -25,6 +25,7 @@ import {
 import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
 import type {
   HostRunEvent,
+  HostRunRead,
   HostRunRegistry,
   HostRunSummary,
 } from "./host-run-registry.js";
@@ -177,7 +178,7 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * observers keep the mobile summary projection; controllers get the details
  * they need to decide.
  */
-type RunProjection = "full" | "observer" | "phone";
+export type RunProjection = "full" | "observer" | "phone";
 
 function projectPayload(
   type: string,
@@ -194,6 +195,83 @@ function projectPayload(
     ...summary,
     canAllow,
     ...(canAllow && scopes !== undefined ? { scopes } : {}),
+  };
+}
+
+/**
+ * One journal event in the run-stream wire vocabulary: `run_started` becomes
+ * `run.started`, a provider restart becomes a `reset` snapshot, and approval
+ * payloads take the reader's projection. The Remote SSE stream and the local
+ * renderer mirror share it.
+ */
+export function hostRunWireEvent(
+  event: HostRunEvent,
+  chatId: string,
+  projection: RunProjection,
+): AidenRemoteRunEvent {
+  const type = event.type === "run_started" ? "run.started" : event.type;
+  const payload = event.type === "run_started"
+    ? { runId: event.runId, chatId, origin: event.payload.origin }
+    : event.type === "snapshot"
+      ? { runId: event.runId, chatId, reason: "reset", nextSequence: event.sequence + 1 }
+      : projectPayload(event.type, event.payload, projection);
+  return {
+    protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+    streamId: event.runId,
+    sequence: event.sequence,
+    timestamp: event.timestamp,
+    type,
+    terminal: event.terminal,
+    payload,
+  };
+}
+
+/**
+ * The `gap` snapshot a reader gets when its cursor fell behind retention: the
+ * run's state and every pending prompt, so it can rebuild attention and read
+ * the persisted transcript. It sits at the sequence before the oldest event.
+ */
+export function hostRunGapSnapshotEvent(
+  read: Extract<HostRunRead, { kind: "snapshot_required" }>,
+  projection: RunProjection,
+): AidenRemoteRunEvent {
+  const summary = read.summary;
+  return {
+    protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+    streamId: summary.runId,
+    sequence: read.nextSequence - 1,
+    timestamp: summary.updatedAt,
+    type: "snapshot",
+    terminal: false,
+    payload: {
+      runId: summary.runId,
+      chatId: summary.chatId,
+      reason: "gap",
+      epoch: read.epoch,
+      state: summary.state,
+      pendingApprovalIds: summary.pendingApprovalIds,
+      pendingQuestionIds: summary.pendingQuestionIds,
+      approvals: read.prompts
+        .filter((prompt) => prompt.type === "approval_required")
+        .map((prompt) => projectPayload(prompt.type, prompt.payload, projection)),
+      questions: read.prompts
+        .filter((prompt) => prompt.type === "question_required")
+        .map((prompt) => prompt.payload),
+      nextSequence: read.nextSequence,
+    },
+  };
+}
+
+/** The synthesized last event of a terminal run, repeating its final sequence. */
+export function hostRunEndedEvent(summary: HostRunSummary): AidenRemoteRunEvent {
+  return {
+    protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+    streamId: summary.runId,
+    sequence: summary.lastSequence,
+    timestamp: summary.updatedAt,
+    type: "run.ended",
+    terminal: true,
+    payload: { runId: summary.runId, chatId: summary.chatId, state: summary.state },
   };
 }
 
@@ -360,27 +438,14 @@ export class AidenRemoteHostRunService {
       const frames: string[] = [];
       if (read.kind === "snapshot_required") {
         const resume = read.nextSequence - 1;
-        frames.push(this.frame(read.summary, resume, "snapshot", {
-          runId,
-          chatId: read.summary.chatId,
-          reason: "gap",
-          epoch: read.epoch,
-          state: read.summary.state,
-          pendingApprovalIds: read.summary.pendingApprovalIds,
-          pendingQuestionIds: read.summary.pendingQuestionIds,
-          approvals: read.prompts
-            .filter((prompt) => prompt.type === "approval_required")
-            .map((prompt) => projectPayload(prompt.type, prompt.payload, projection)),
-          questions: read.prompts
-            .filter((prompt) => prompt.type === "question_required")
-            .map((prompt) => prompt.payload),
-          nextSequence: read.nextSequence,
-        }, read.summary.updatedAt));
+        const gap = hostRunGapSnapshotEvent(read, projection);
+        frames.push(sseFrame(String(gap.sequence), gap.type, gap));
         cursor = resume;
         return { frames };
       }
       for (const event of read.events) {
-        frames.push(this.eventFrame(event, read.summary.chatId, projection));
+        const wire = hostRunWireEvent(event, read.summary.chatId, projection);
+        frames.push(sseFrame(String(wire.sequence), wire.type, wire));
         cursor = event.sequence;
       }
       if (
@@ -388,11 +453,8 @@ export class AidenRemoteHostRunService {
         cursor === read.summary.lastSequence
       ) {
         endedSent = true;
-        frames.push(this.frame(read.summary, cursor, "run.ended", {
-          runId,
-          chatId: read.summary.chatId,
-          state: read.summary.state,
-        }, read.summary.updatedAt, true));
+        const ended = hostRunEndedEvent(read.summary);
+        frames.push(sseFrame(String(ended.sequence), ended.type, ended));
         return { frames, end: true };
       }
       return { frames };
@@ -699,44 +761,5 @@ export class AidenRemoteHostRunService {
       outcome.error.retryable,
       outcome.error.details,
     );
-  }
-
-  private eventFrame(event: HostRunEvent, chatId: string, projection: RunProjection): string {
-    const type = event.type === "run_started" ? "run.started" : event.type;
-    const payload = event.type === "run_started"
-      ? { runId: event.runId, chatId, origin: event.payload.origin }
-      : event.type === "snapshot"
-        ? { runId: event.runId, chatId, reason: "reset", nextSequence: event.sequence + 1 }
-        : projectPayload(event.type, event.payload, projection);
-    const wire: AidenRemoteRunEvent = {
-      protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
-      streamId: event.runId,
-      sequence: event.sequence,
-      timestamp: event.timestamp,
-      type,
-      terminal: event.terminal,
-      payload,
-    };
-    return sseFrame(String(event.sequence), type, wire);
-  }
-
-  private frame(
-    summary: HostRunSummary,
-    sequence: number,
-    type: string,
-    payload: Record<string, unknown>,
-    timestamp: string,
-    terminal = false,
-  ): string {
-    const wire: AidenRemoteRunEvent = {
-      protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
-      streamId: summary.runId,
-      sequence,
-      timestamp,
-      type,
-      terminal,
-      payload,
-    };
-    return sseFrame(String(sequence), type, wire);
   }
 }

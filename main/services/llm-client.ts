@@ -4678,6 +4678,11 @@ export const llmClient = {
     return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
   },
 
+  /** Whether this exact generation is still starting or running, whoever owns it. */
+  isGenerationLive(streamId: string): boolean {
+    return active.has(streamId) || initializing.has(streamId);
+  },
+
   /** Detect only orphaned renderer ownership; normal visible generations never delay reads. */
   isChatOwnedByInactiveRenderer(chatId: string): boolean {
     return (
