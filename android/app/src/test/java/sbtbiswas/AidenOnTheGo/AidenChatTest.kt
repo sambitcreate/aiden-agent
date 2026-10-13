@@ -3551,4 +3551,118 @@ class AidenChatTest {
             directory.deleteRecursively()
         }
     }
+
+    @Test
+    fun rosterTurnDiscoveredWhenOpeningLookupAlreadyCompletedWith404Attaches() {
+        // Finding 2: A Mac run can start after the opening lookup returned 404 but
+        // before the first roster snapshot arrives. The phone must still attach when
+        // the roster arrives with the new turn, not just on roster turn changes.
+        val wireJson = Json(json) { explicitNulls = false }
+        val attaches = java.util.concurrent.LinkedBlockingQueue<String>()
+        val agentsRoute = java.util.concurrent.LinkedBlockingQueue<String>()
+        var openingLookupComplete = false
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> {
+                    if (!openingLookupComplete) {
+                        openingLookupComplete = true
+                        attaches.add("opening")
+                        // Opening lookup returns 404: no current run yet.
+                        MockResponse().setResponseCode(404)
+                    } else {
+                        // After roster arrives, the phone retries and gets the run.
+                        attaches.add("retry")
+                        MockResponse().setBody(runFeed(
+                            runFrame(0, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(1, "text_delta", """{"text":"response"}""")
+                        ))
+                    }
+                }
+                "/agents" -> {
+                    agentsRoute.add(path)
+                    // Return roster with a new active turn. The opening lookup already
+                    // completed with 404, but this turn should still trigger attachment.
+                    MockResponse().setBody("""{"epoch":"e1","turnId":"turn-mac","revision":1}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.chat.first { it != null } }
+            model.startProgressObservation()
+            // Wait for opening lookup to complete with 404.
+            assertEquals("opening", withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) })
+            // Trigger roster fetch with a new turn.
+            withContext(Dispatchers.IO) { agentsRoute.poll(5, TimeUnit.SECONDS) }
+            // The phone should retry the lookup and attach to the run.
+            assertEquals(
+                "retry",
+                withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) },
+                "Phone must retry lookup when roster turn arrives after opening 404"
+            )
+            val response = withTimeout(2_500) { model.liveText.first { it.isNotEmpty() } }
+            assertEquals("response", response)
+        }
+    }
+
+    @Test
+    fun rosterTurnChangedWhileOpeningLookupInFlightAttachesAfterLookupCompletes() {
+        // Finding 3: If a roster turn change arrives while an earlier current-run
+        // lookup is in flight, the phone must retain the discovery signal and retry
+        // after the earlier lookup completes, instead of silently dropping the update.
+        val wireJson = Json(json) { explicitNulls = false }
+        val openingLookupGate = CountDownLatch(1)
+        val rosterGate = CountDownLatch(1)
+        val attaches = java.util.concurrent.LinkedBlockingQueue<String>()
+        var lookupCount = 0
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/runs/current/events" -> {
+                    lookupCount += 1
+                    if (lookupCount == 1) {
+                        // First lookup (opening): wait before responding to let roster change arrive.
+                        attaches.add("first-lookup-start")
+                        openingLookupGate.countDown()
+                        rosterGate.await(10, TimeUnit.SECONDS)
+                        // Return 404 after roster turn has changed.
+                        attaches.add("first-lookup-complete-404")
+                        MockResponse().setResponseCode(404)
+                    } else {
+                        // Retry lookup after pending discovery is honored.
+                        attaches.add("retry-lookup")
+                        MockResponse().setBody(runFeed(
+                            runFrame(0, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                            runFrame(1, "text_delta", """{"text":"response"}""")
+                        ))
+                    }
+                }
+                "/agents" -> {
+                    // First roster: no turn yet.
+                    if (lookupCount == 0) {
+                        openingLookupGate.await(10, TimeUnit.SECONDS)
+                        // Now post a roster change while opening lookup is in flight.
+                        attaches.add("roster-turn-change")
+                        rosterGate.countDown()
+                    }
+                    MockResponse().setBody("""{"epoch":"e1","turnId":"turn-mac","revision":1}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.chat.first { it != null } }
+            model.startProgressObservation()
+            // Wait for sequence: opening lookup starts, roster turn arrives, opening completes with 404, retry happens.
+            assertEquals("first-lookup-start", withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) })
+            assertEquals("roster-turn-change", withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) })
+            assertEquals("first-lookup-complete-404", withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) })
+            assertEquals(
+                "retry-lookup",
+                withContext(Dispatchers.IO) { attaches.poll(5, TimeUnit.SECONDS) },
+                "Phone must honor pending roster turn discovery after opening lookup completes"
+            )
+            val response = withTimeout(2_500) { model.liveText.first { it.isNotEmpty() } }
+            assertEquals("response", response)
+        }
+    }
 }
