@@ -463,6 +463,37 @@ test("a reply that settles gives way to the next run's reply", () => {
   assert.ok(follows(screen.getByText(next.content), streamed!), "below the prompt it answers");
 });
 
+test("a saved reply that differs from the live one never shares the live row's key", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const streamed = "The streamed answer, cut short.";
+  // The saved copy is not what streamed (a failure note, a trimmed partial), so
+  // it cannot take the live row's place: both rows show until the live one ends.
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: "The saved answer.", createdAt: 2 };
+  const errors = mock.method(console, "error", () => undefined);
+  const view = render(transcript({ messages: [prompt], streamingText: `${streamed}\n\n` }));
+  view.rerender(
+    transcript({
+      messages: [prompt, saved],
+      streamingText: streamed,
+      streamComplete: true,
+      persistedHandoffMessageId: null,
+    }),
+  );
+  assert.deepEqual(
+    [streamed, saved.content].map((text) => screen.queryAllByText(text).length),
+    [1, 1],
+    "the live reply and the saved reply each show once",
+  );
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  assert.equal(screen.queryAllByText(streamed).length, 0, "the live reply leaves");
+  assert.equal(screen.queryAllByText(saved.content).length, 1, "the saved reply stays");
+  assert.deepEqual(
+    errors.mock.calls.map((call) => String(call.arguments[0])).filter((message) => message.includes("same key")),
+    [],
+    "every row keeps its own key",
+  );
+});
+
 test("a generated image shows exactly once through handoff and settlement", () => {
   document.documentElement.dataset.reduceMotion = "true";
   const image = {
