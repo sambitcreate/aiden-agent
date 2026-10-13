@@ -540,3 +540,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
+
+## Hermex (iOS transcript follow)
+
+The iOS transcript's follow latch, UIKit scroll observer and streaming follow
+trigger are adapted from Hermex
+(`ios/AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift` and
+`ios/AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift`).
+
+Copyright (c) 2026 Uzair Ansar
+
+MIT License. The full license text ships in the iOS app as
+`ios/AidenOnTheGo/Resources/ThirdPartyNotices/Hermex-LICENSE.txt`.

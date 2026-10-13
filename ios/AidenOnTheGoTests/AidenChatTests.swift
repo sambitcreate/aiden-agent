@@ -11125,3 +11125,307 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
         return data
     }
 }
+
+// MARK: - Transcript follow latch (cases ported from Hermex ChatScrollPolicyTests)
+
+final class AidenChatScrollFollowTests: XCTestCase {
+    private typealias Policy = AidenChatScrollPolicy
+    private typealias Latch = AidenChatScrollPolicy.FollowLatch
+    private typealias Geometry = AidenChatScrollPolicy.ScrollGeometry
+
+    private func follow(_ current: Bool, _ event: Policy.FollowEvent) -> Bool {
+        Policy.resolveFollow(current: Latch(isFollowing: current), event: event).isFollowing
+    }
+
+    private func reduce(_ latch: Latch, _ events: Policy.FollowEvent...) -> Latch {
+        events.reduce(latch) { Policy.resolveFollow(current: $0, event: $1) }
+    }
+
+    func testSizeChangesStayBottomAnchoredOnlyWhileFollowing() {
+        XCTAssertEqual(Policy.sizeChangeAnchor(shouldFollowLatest: true), .bottom)
+        XCTAssertNil(Policy.sizeChangeAnchor(shouldFollowLatest: false))
+    }
+
+    func testIsNearBottomUsesIdleThresholdWhenNotStreaming() {
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 80, isStreaming: false))
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 81, isStreaming: false))
+    }
+
+    func testIsNearBottomUsesLooserThresholdWhileStreaming() {
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 120, isStreaming: false))
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 120, isStreaming: true))
+        XCTAssertTrue(Policy.isNearBottom(distanceFromBottom: 160, isStreaming: true))
+        XCTAssertFalse(Policy.isNearBottom(distanceFromBottom: 161, isStreaming: true))
+    }
+
+    func testJumpButtonHidesAtBottomEvenWhenFollowingIsPaused() {
+        for streaming in [false, true] {
+            let near = Policy.isNearBottom(distanceFromBottom: 0, isStreaming: streaming)
+            XCTAssertFalse(Policy.showsScrollToBottomButton(isNearBottom: near, isStreaming: streaming, isFollowing: false))
+        }
+    }
+
+    func testJumpButtonUsesIdleAndStreamingThresholds() {
+        for (distance, streaming, following, visible) in [
+            (80.0, false, false, false), (81, false, false, true), (81, false, true, true),
+            (120, true, false, false), (161, true, false, true), (161, true, true, false)
+        ] {
+            let near = Policy.isNearBottom(distanceFromBottom: distance, isStreaming: streaming)
+            XCTAssertEqual(
+                Policy.showsScrollToBottomButton(isNearBottom: near, isStreaming: streaming, isFollowing: following),
+                visible,
+                "distance \(distance) streaming \(streaming) following \(following)"
+            )
+        }
+    }
+
+    func testTouchDownTurnsFollowOff() {
+        XCTAssertFalse(follow(true, .userScrollBegin))
+        XCTAssertFalse(follow(false, .userScrollBegin))
+    }
+
+    func testDragEndingAboveBottomKeepsFollowOff() {
+        XCTAssertFalse(reduce(Latch(), .userScrollBegin, .userScrollEnd(isAtBottom: false)).isFollowing)
+    }
+
+    func testExplicitResetSurvivesLateDragSettlement() {
+        let latch = reduce(Latch(), .userScrollBegin, .reset, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(latch.isFollowing)
+        XCTAssertFalse(latch.ignoresCoastingGesture)
+    }
+
+    func testExplicitResetSurvivesCoastingMomentum() {
+        let coasting = reduce(Latch(), .userScrollBegin, .reset, .contentScrolled(isAtBottom: false, isUserScrolling: true))
+        XCTAssertTrue(coasting.isFollowing)
+        let settled = reduce(coasting, .userScrollEnd(isAtBottom: false))
+        XCTAssertTrue(settled.isFollowing)
+        XCTAssertFalse(settled.ignoresCoastingGesture)
+        XCTAssertFalse(reduce(settled, .contentScrolled(isAtBottom: false, isUserScrolling: true)).isFollowing)
+    }
+
+    func testExplicitResetSurvivesCoastingMomentumAwayFromBottom() {
+        let latch = reduce(
+            Latch(), .userScrollBegin, .reset,
+            .contentScrolled(isAtBottom: false, isUserScrolling: true, movedAwayFromBottom: true)
+        )
+        XCTAssertTrue(latch.isFollowing)
+    }
+
+    func testNewDragAfterResetTurnsFollowOff() {
+        let latch = reduce(Latch(), .reset, .userScrollBegin)
+        XCTAssertFalse(latch.isFollowing)
+        XCTAssertFalse(latch.ignoresCoastingGesture)
+    }
+
+    func testGestureSettlingAtBottomReArmsFollow() {
+        XCTAssertTrue(follow(false, .userScrollEnd(isAtBottom: true)))
+        XCTAssertFalse(follow(false, .userScrollEnd(isAtBottom: false)))
+    }
+
+    func testStreamingGrowthNeverTurnsFollowBackOn() {
+        var latch = Latch(isFollowing: false)
+        for distance in stride(from: 400.0, through: 2000, by: 200) {
+            latch = Policy.resolveFollow(current: latch, event: .contentScrolled(
+                isAtBottom: Policy.isAtBottom(distanceFromBottom: distance),
+                isUserScrolling: false,
+                wasNearBottom: false
+            ))
+        }
+        XCTAssertFalse(latch.isFollowing)
+    }
+
+    func testStreamingGrowthWhileFollowingStaysOn() {
+        XCTAssertTrue(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false)))
+    }
+
+    func testNonGestureScrollLandingAtBottomFromNearbyReArms() {
+        XCTAssertTrue(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: true)))
+    }
+
+    func testTransientBottomFromFarAboveDoesNotReArm() {
+        XCTAssertFalse(follow(false, .contentScrolled(isAtBottom: true, isUserScrolling: false, wasNearBottom: false)))
+    }
+
+    func testScrollAwayWithoutGestureTurnsFollowOff() {
+        XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: false, isUserScrolling: false, movedAwayFromBottom: true)))
+    }
+
+    func testLiveGestureWinsEvenAtBottom() {
+        XCTAssertFalse(follow(true, .contentScrolled(isAtBottom: true, isUserScrolling: true)))
+    }
+
+    func testExplicitActionsBypassTheLatch() {
+        XCTAssertTrue(follow(false, .reset))
+        XCTAssertTrue(follow(true, .reset))
+    }
+
+    func testReArmRequiresStrictBottom() {
+        XCTAssertTrue(Policy.isAtBottom(distanceFromBottom: 12))
+        XCTAssertFalse(Policy.isAtBottom(distanceFromBottom: 13))
+        XCTAssertLessThan(Policy.followReArmThreshold, Policy.bottomDetectionThreshold)
+        XCTAssertLessThan(Policy.momentumSettleDelay, Policy.dragSettleDelay)
+    }
+
+    func testDistanceGrowingPastStreamingThresholdIsAScrollAway() {
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        let carriedAway = Geometry(offsetY: 3200, contentHeight: 5200, visibleHeight: 700)
+        XCTAssertTrue(Policy.isScrollingAwayFromBottom(previous: atBottom, current: carriedAway))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: nil, current: carriedAway))
+    }
+
+    func testJitterViewportAndFollowScrollsAreNotScrollAways() {
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4300, contentHeight: 5150, visibleHeight: 700)))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 400)))
+        let farAway = Geometry(offsetY: 1000, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: farAway, current: Geometry(offsetY: 2000, contentHeight: 5000, visibleHeight: 700)))
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(
+            previous: atBottom, current: Geometry(offsetY: 4700, contentHeight: 5400, visibleHeight: 700)))
+    }
+}
+
+/// Releases `AidenTranscriptFollowController` pauses one at a time.
+@MainActor
+private final class AidenManualPauses {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    var pending: Int { waiters.count }
+
+    func pause() async {
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func releaseAll() {
+        let released = waiters
+        waiters = []
+        released.forEach { $0.resume() }
+    }
+
+    func waitForPending(_ count: Int) async {
+        for _ in 0..<1_000 where waiters.count < count { await Task.yield() }
+    }
+}
+
+@MainActor
+final class AidenTranscriptFollowControllerTests: XCTestCase {
+    private func metrics(_ distance: CGFloat, interacting: Bool = false) -> AidenChatScrollMetrics {
+        AidenChatScrollMetrics(distanceFromBottom: distance, isUserInteracting: interacting, movedAwayFromBottom: false)
+    }
+
+    func testANewerFollowScrollCancelsTheStaleSnap() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed: [String] = []
+        let first = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed.append("first") }
+        let second = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed.append("second") }
+        await pauses.waitForPending(2)
+        pauses.releaseAll()
+        await first?.value
+        await second?.value
+        XCTAssertEqual(performed, ["second"])
+    }
+
+    func testADragDuringThePauseCancelsAnAutomaticFollow() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed = 0
+        let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
+        await pauses.waitForPending(1)
+        controller.handle(.userScrollBegin)
+        pauses.releaseAll()
+        await task?.value
+        XCTAssertEqual(performed, 0)
+    }
+
+    func testAutomaticFollowDoesNothingWhileTheReaderIsAway() {
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertNil(controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in XCTFail() })
+    }
+
+    func testJumpReArmsFollowAndSnapsWhileStreaming() async {
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        controller.setStreaming(true)
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertFalse(controller.isFollowing)
+
+        var animatedValues: [Bool] = []
+        await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
+        XCTAssertTrue(controller.isFollowing)
+
+        controller.setStreaming(false)
+        await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
+        XCTAssertEqual(animatedValues, [false, true])
+    }
+
+    func testJumpButtonAppearsAfterTheDelayAndHidesImmediately() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: { await pauses.pause() })
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(400, interacting: true))
+        // Further away-reports must not restart the countdown.
+        controller.updateMetrics(metrics(500, interacting: true))
+        await pauses.waitForPending(1)
+        XCTAssertEqual(pauses.pending, 1)
+        XCTAssertFalse(controller.showsJumpButton)
+        pauses.releaseAll()
+        for _ in 0..<100 where !controller.showsJumpButton { await Task.yield() }
+        XCTAssertTrue(controller.showsJumpButton)
+
+        controller.updateMetrics(metrics(4))
+        XCTAssertFalse(controller.showsJumpButton)
+    }
+
+    func testReturningBeforeTheDelayNeverShowsTheButton() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: { await pauses.pause() })
+        controller.handle(.userScrollBegin)
+        controller.updateMetrics(metrics(400, interacting: true))
+        await pauses.waitForPending(1)
+        controller.updateMetrics(metrics(0, interacting: true))
+        pauses.releaseAll()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(controller.showsJumpButton)
+    }
+
+    func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
+        let probe = AidenFollowTriggerProbe()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: AidenFollowTriggerOwner(probe: probe))
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        for _ in 0..<3 {
+            probe.trigger += 1
+            window.rootViewController?.view.setNeedsLayout()
+            window.layoutIfNeeded()
+        }
+
+        XCTAssertEqual(probe.fires, 3)
+        XCTAssertEqual(probe.ownerPasses, 1)
+    }
+}
+
+@Observable
+private final class AidenFollowTriggerProbe {
+    var trigger = 0
+    @ObservationIgnored var ownerPasses = 0
+    @ObservationIgnored var fires = 0
+}
+
+/// Stands in for the chat screen: it hands the leaf a reader, never the value.
+private struct AidenFollowTriggerOwner: View {
+    let probe: AidenFollowTriggerProbe
+
+    var body: some View {
+        probe.ownerPasses += 1
+        return Color.clear.background {
+            AidenStreamingFollowTrigger(trigger: { probe.trigger }) { probe.fires += 1 }
+        }
+    }
+}
