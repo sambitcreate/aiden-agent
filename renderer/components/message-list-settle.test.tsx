@@ -286,7 +286,7 @@ function toolStep(contentOffset: number): AgentToolStep {
 
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-test("text closed by a tool step shows what it was still holding back at once", async () => {
+test("text closed by a tool step joins whole at the next release", async () => {
   const text = "Checked the config.\n\nNow reading the file that defines";
   const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
     version: 3,
@@ -299,8 +299,11 @@ test("text closed by a tool step shows what it was still holding back at once", 
   assert.ok(view.container.textContent?.includes("Checked the config."));
   assert.equal(view.container.textContent?.includes("Now reading"), false, "an unfinished sentence waits");
 
-  // A tool call starts: this text can no longer grow, so nothing is left to wait for.
+  // A tool call starts: this text can no longer grow, so its end is a boundary
+  // that joins at the next release instead of all at once.
   view.rerender(transcript({ messages: [prompt], streamingText: text, timeline: timeline([toolStep(text.length)]) }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval still holds");
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
 });
 

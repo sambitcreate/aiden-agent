@@ -13,7 +13,10 @@ import {
 
 interface StreamingMarkdownRevealProps {
   content: string;
+  /** The turn ended: show everything now and hand over to the saved reply. */
   complete?: boolean;
+  /** A tool step closed the text: it joins at the next release, still gated. */
+  closed?: boolean;
   onHandoffComplete?: () => void;
   richLinks?: boolean;
 }
@@ -37,14 +40,20 @@ function useReducedMotion(): boolean {
 export function StreamingMarkdownReveal({
   content,
   complete = false,
+  closed = false,
   onHandoffComplete,
   richLinks = false,
 }: StreamingMarkdownRevealProps) {
   const reducedMotion = useReducedMotion();
   const gateRef = React.useRef(INITIAL_STREAMING_REVEAL_GATE);
   const [gate, setGate] = React.useState(INITIAL_STREAMING_REVEAL_GATE);
-  const inputRef = React.useRef<StreamingRevealGateInput>({ content, complete, reducedMotion });
-  inputRef.current = { content, complete, reducedMotion };
+  const inputRef = React.useRef<StreamingRevealGateInput>({
+    content,
+    complete,
+    closed,
+    reducedMotion,
+  });
+  inputRef.current = { content, complete, closed, reducedMotion };
 
   // New text joins at whole-block boundaries, at most every few hundred ms;
   // the layout pass applies each release before paint so follow stays pinned.
@@ -63,17 +72,19 @@ export function StreamingMarkdownReveal({
     };
     release();
     return () => window.clearTimeout(timer);
-  }, [content, complete, reducedMotion]);
+  }, [content, complete, closed, reducedMotion]);
 
-  // The end of the text and reduced motion show everything in this render.
+  // The end of the turn and reduced motion show everything in this render.
   const released =
     complete || reducedMotion ? content : content.startsWith(gate.text) ? gate.text : "";
   const parserRef = React.useRef<StreamingRevealParser | null>(null);
   parserRef.current ??= new StreamingRevealParser();
   const parser = parserRef.current;
+  // Closed text that has fully joined has no unfinished tail to hold back.
+  const parsedComplete = complete || (closed && released === content);
   const blocks = React.useMemo(
-    () => parser.parse(released, complete),
-    [parser, complete, released],
+    () => parser.parse(released, parsedComplete),
+    [parser, parsedComplete, released],
   );
 
   // New blocks keep fading in until the last release has finished its fade.

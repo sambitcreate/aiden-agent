@@ -7,6 +7,8 @@ import {
   advanceStreamingRevealGate,
   INITIAL_STREAMING_REVEAL_GATE,
   lastStreamingRevealBoundary,
+  scanStreamingRevealBoundary,
+  INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN,
   STREAMING_REVEAL_FALLBACK_MS,
   STREAMING_REVEAL_HANDOFF_MS,
   STREAMING_REVEAL_MAX_WAIT_MS,
@@ -306,6 +308,39 @@ test("boundaries are whole paragraphs, list items, table rows, and code lines", 
   for (const [text, released] of cases) {
     assert.equal(text.slice(0, lastStreamingRevealBoundary(text)), released, JSON.stringify(text));
   }
+});
+
+test("a scan resumed chunk by chunk finds the same boundary as a full scan", () => {
+  const response = [
+    "Intro line.\n\n## Steps\n\n- one\n- two\n  continued\n- three\n\n",
+    "| h | k |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nAfter the table.\n\n",
+    "````md\n```ts\ninner\n```\n\nstill code\n````\n\n1. first\n2) second\n\nEnd.",
+  ].join("");
+  for (const size of [1, 2, 3, 5, 8, 13, 40]) {
+    let scan = INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN;
+    for (let end = size; end < response.length + size; end += size) {
+      const prefix = response.slice(0, end);
+      const result = scanStreamingRevealBoundary(scan, prefix);
+      assert.equal(result.boundary, lastStreamingRevealBoundary(prefix), `${size}: ${JSON.stringify(prefix)}`);
+      scan = result.scan;
+    }
+  }
+  // A replaced text starts the scan over rather than trusting the old lines.
+  const scanned = scanStreamingRevealBoundary(INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN, "```ts\na\n").scan;
+  assert.equal(scanStreamingRevealBoundary(scanned, "Plain.\n\nMore").boundary, "Plain.\n\n".length);
+});
+
+test("text a tool step closed joins whole at the next release, not at once", () => {
+  const content = "Checked the config.\n\nNow reading the file that defines";
+  const shown = advanceStreamingRevealGate(INITIAL_STREAMING_REVEAL_GATE, { content, ...streaming }, 0);
+  assert.equal(shown.gate.text, "Checked the config.\n\n");
+  const closed = { content, ...streaming, closed: true };
+  const waiting = advanceStreamingRevealGate(shown.gate, closed, 100);
+  assert.equal(waiting.gate.text, "Checked the config.\n\n", "the release interval still holds");
+  assert.equal(waiting.nextAt, STREAMING_REVEAL_RELEASE_MS);
+  const joined = advanceStreamingRevealGate(waiting.gate, closed, waiting.nextAt!);
+  assert.equal(joined.gate.text, content, "then the unfinished sentence joins without the longest wait");
+  assert.equal(joined.nextAt, null);
 });
 
 test("a tail with no boundary waits, then joins after the longest wait", () => {

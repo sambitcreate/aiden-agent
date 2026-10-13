@@ -466,19 +466,42 @@ function closesFence(line: string, marker: string): boolean {
 }
 
 /**
- * The end of the last place in `text` where a whole block has arrived: a
- * paragraph's closing blank line (a heading waits for its first paragraph),
- * the start of the next list item, the end of a table row, or a finished line
- * of code. Apart from a new item's first word, only whole lines decide.
+ * Where a boundary scan stopped: the finished lines of `text` it has read and
+ * the fence and table state at the end of them. Resuming from it reads only
+ * the lines that arrived since.
  */
-export function lastStreamingRevealBoundary(text: string): number {
-  let boundary = 0;
-  let fence: string | null = null;
-  let previous = "";
-  let previousTableRow = false;
-  let tableHeader = false;
-  let offset = 0;
-  for (let newline = text.indexOf("\n"); newline >= 0; newline = text.indexOf("\n", offset)) {
+export interface StreamingRevealBoundaryScan {
+  /** The scanned prefix of the text, ending after its last finished line. */
+  text: string;
+  boundary: number;
+  fence: string | null;
+  previous: string;
+  previousTableRow: boolean;
+  tableHeader: boolean;
+}
+
+export const INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN: StreamingRevealBoundaryScan = {
+  text: "",
+  boundary: 0,
+  fence: null,
+  previous: "",
+  previousTableRow: false,
+  tableHeader: false,
+};
+
+/**
+ * Continues `scan` over the lines of `text` that finished since it stopped, or
+ * starts over when `text` does not extend what it read. `boundary` is the
+ * same as `lastStreamingRevealBoundary(text)`.
+ */
+export function scanStreamingRevealBoundary(
+  scan: StreamingRevealBoundaryScan,
+  text: string,
+): { scan: StreamingRevealBoundaryScan; boundary: number } {
+  const start = text.startsWith(scan.text) ? scan : INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN;
+  let { boundary, fence, previous, previousTableRow, tableHeader } = start;
+  let offset = start.text.length;
+  for (let newline = text.indexOf("\n", offset); newline >= 0; newline = text.indexOf("\n", offset)) {
     const line = text.slice(offset, newline);
     const end = newline + 1;
     const trimmed = line.trim();
@@ -508,25 +531,48 @@ export function lastStreamingRevealBoundary(text: string): number {
     }
     offset = end;
   }
+  const next: StreamingRevealBoundaryScan =
+    offset === start.text.length
+      ? start
+      : { text: text.slice(0, offset), boundary, fence, previous, previousTableRow, tableHeader };
   // The next item's first word is enough to know the previous item ended.
   const partial = text.slice(offset);
   const nextItem = !fence && /^[\s]*(?:[-*+]|\d+[.)])\s+[^\s*_-]/u.test(partial);
-  if (nextItem && previous && !HEADING_LINE.test(previous)) boundary = offset;
-  return boundary;
+  return {
+    scan: next,
+    boundary: nextItem && previous && !HEADING_LINE.test(previous) ? offset : boundary,
+  };
+}
+
+/**
+ * The end of the last place in `text` where a whole block has arrived: a
+ * paragraph's closing blank line (a heading waits for its first paragraph),
+ * the start of the next list item, the end of a table row, or a finished line
+ * of code. Apart from a new item's first word, only whole lines decide.
+ */
+export function lastStreamingRevealBoundary(text: string): number {
+  return scanStreamingRevealBoundary(INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN, text).boundary;
 }
 
 export interface StreamingRevealGate {
   /** The released prefix; the parser sees only this. */
   text: string;
   releasedAt: number | null;
-  /** When the unreleased tail started waiting, if it has no boundary yet. */
+  /** When the oldest unreleased text arrived, or null when nothing waits. */
   waitingSince: number | null;
+  /** Where the boundary scan stopped, so the next release reads only new lines. */
+  scan: StreamingRevealBoundaryScan;
 }
 
 export interface StreamingRevealGateInput {
   content: string;
-  /** The text can no longer grow: the turn ended or a tool step closed it. */
+  /** The turn ended: everything shows now and the reply hands over. */
   complete: boolean;
+  /**
+   * The text can no longer grow because a tool step closed it. Its end counts
+   * as a boundary, so the rest joins at the next release rather than at once.
+   */
+  closed?: boolean;
   reducedMotion: boolean;
 }
 
@@ -534,47 +580,57 @@ export const INITIAL_STREAMING_REVEAL_GATE: StreamingRevealGate = {
   text: "",
   releasedAt: null,
   waitingSince: null,
+  scan: INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN,
 };
 
 /**
  * One step of the release gate. New text joins the transcript only at whole
  * block boundaries and at most once per `STREAMING_REVEAL_RELEASE_MS`; a tail
  * without a boundary is released after `STREAMING_REVEAL_MAX_WAIT_MS`. The end
- * of the text and reduced motion release everything at once. `nextAt` is when
- * calling again can release more, or null when nothing is waiting.
+ * of the turn and reduced motion release everything at once. `nextAt` is when
+ * calling again can release more, or null when nothing is waiting. Boundaries
+ * are only looked for once a release is allowed, and the scan resumes where
+ * the last one stopped.
  */
 export function advanceStreamingRevealGate(
   gate: StreamingRevealGate,
-  { content, complete, reducedMotion }: StreamingRevealGateInput,
+  { content, complete, closed = false, reducedMotion }: StreamingRevealGateInput,
   now: number,
 ): { gate: StreamingRevealGate; nextAt: number | null } {
-  const current = content.startsWith(gate.text) ? gate : INITIAL_STREAMING_REVEAL_GATE;
+  const current = content.startsWith(gate.text)
+    ? gate
+    : { ...INITIAL_STREAMING_REVEAL_GATE, scan: gate.scan };
   const released = current.text.length;
   if (released === content.length) {
     const settled = current.waitingSince === null ? current : { ...current, waitingSince: null };
     return { gate: settled, nextAt: null };
   }
   if (complete || reducedMotion) {
-    return { gate: { text: content, releasedAt: now, waitingSince: null }, nextAt: null };
-  }
-  const earliest =
-    current.releasedAt === null ? now : current.releasedAt + STREAMING_REVEAL_RELEASE_MS;
-  const boundary = lastStreamingRevealBoundary(content);
-  if (boundary > released) {
-    if (now < earliest) return { gate: current, nextAt: earliest };
-    const waitingSince = boundary < content.length ? now : null;
     return {
-      gate: { text: content.slice(0, boundary), releasedAt: now, waitingSince },
-      nextAt: waitingSince === null ? null : now + STREAMING_REVEAL_MAX_WAIT_MS,
+      gate: { ...current, text: content, releasedAt: now, waitingSince: null },
+      nextAt: null,
     };
   }
   const waitingSince = current.waitingSince ?? now;
-  const due = Math.max(earliest, waitingSince + STREAMING_REVEAL_MAX_WAIT_MS);
-  if (now < due) {
+  const earliest =
+    current.releasedAt === null ? now : current.releasedAt + STREAMING_REVEAL_RELEASE_MS;
+  if (now < earliest) {
     const waiting = waitingSince === current.waitingSince ? current : { ...current, waitingSince };
-    return { gate: waiting, nextAt: due };
+    return { gate: waiting, nextAt: earliest };
   }
-  return { gate: { text: content, releasedAt: now, waitingSince: null }, nextAt: null };
+  const { scan, boundary: found } = closed
+    ? { scan: current.scan, boundary: content.length }
+    : scanStreamingRevealBoundary(current.scan, content);
+  const due = waitingSince + STREAMING_REVEAL_MAX_WAIT_MS;
+  const boundary = found > released ? found : now >= due ? content.length : released;
+  if (boundary === released) {
+    return { gate: { ...current, waitingSince, scan }, nextAt: Math.max(earliest, due) };
+  }
+  const tail = boundary < content.length ? now : null;
+  return {
+    gate: { text: content.slice(0, boundary), releasedAt: now, waitingSince: tail, scan },
+    nextAt: tail === null ? null : now + STREAMING_REVEAL_MAX_WAIT_MS,
+  };
 }
 
 export function streamingRevealHandoffDelay(reduceMotion: boolean): number {

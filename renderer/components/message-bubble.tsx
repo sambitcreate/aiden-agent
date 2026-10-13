@@ -131,9 +131,10 @@ export function MessageBubble({
         {revealed ? (
           <StreamingMarkdownReveal
             content={content}
-            // Text that can no longer grow (the turn ended, a tool step closed
-            // it, or it settled) shows in full in the same tree.
-            complete={streaming ? Boolean(streamComplete || textClosed) : true}
+            // Text that settled or whose turn ended shows in full in the same
+            // tree; text a tool step closed still joins at the next release.
+            complete={streaming ? Boolean(streamComplete) : true}
+            closed={Boolean(streaming && textClosed)}
             onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
             richLinks
           />
