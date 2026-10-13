@@ -562,6 +562,11 @@ export interface StreamingRevealGate {
   waitingSince: number | null;
   /** Where the boundary scan stopped, so the next release reads only new lines. */
   scan: StreamingRevealBoundaryScan;
+  /**
+   * The end of the text the deadline released without a boundary. It shows as
+   * written, unfinished, rather than waiting on the parser for a block end.
+   */
+  flushed: number;
 }
 
 export interface StreamingRevealGateInput {
@@ -581,6 +586,7 @@ export const INITIAL_STREAMING_REVEAL_GATE: StreamingRevealGate = {
   releasedAt: null,
   waitingSince: null,
   scan: INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN,
+  flushed: 0,
 };
 
 /**
@@ -622,13 +628,20 @@ export function advanceStreamingRevealGate(
     ? { scan: current.scan, boundary: content.length }
     : scanStreamingRevealBoundary(current.scan, content);
   const due = waitingSince + STREAMING_REVEAL_MAX_WAIT_MS;
-  const boundary = found > released ? found : now >= due ? content.length : released;
+  const flush = found <= released && now >= due;
+  const boundary = found > released ? found : flush ? content.length : released;
   if (boundary === released) {
     return { gate: { ...current, waitingSince, scan }, nextAt: Math.max(earliest, due) };
   }
   const tail = boundary < content.length ? now : null;
   return {
-    gate: { text: content.slice(0, boundary), releasedAt: now, waitingSince: tail, scan },
+    gate: {
+      text: content.slice(0, boundary),
+      releasedAt: now,
+      waitingSince: tail,
+      scan,
+      flushed: flush ? boundary : current.flushed,
+    },
     nextAt: tail === null ? null : now + STREAMING_REVEAL_MAX_WAIT_MS,
   };
 }

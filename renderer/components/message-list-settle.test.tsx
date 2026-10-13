@@ -307,33 +307,31 @@ test("text closed by a tool step joins whole at the next release", async () => {
   assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
 });
 
-test("tool-closed text stays gated when follow-up prose starts before its release slot", async () => {
-  const first = "Checked the config.\n\nNow reading the file";
-  const second = "The follow-up text.\n\n";
-  const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
+test("tool-closed text keeps its release slot when follow-up prose starts", async () => {
+  const first = "Checked the config.\n\nNow reading the file that defines";
+  const timeline = (steps: AgentToolStep[], status: GenerationTimeline["status"] = "running"): GenerationTimeline => ({
     version: 3,
     generationId: "generation-1",
-    status: "running",
+    status,
     startedAt: 1,
     steps,
   });
-  // Start with first text, not yet closed
+  const closed = timeline([toolStep(first.length)]);
   const view = render(transcript({ messages: [prompt], streamingText: first, timeline: timeline([]) }));
-  assert.ok(view.container.textContent?.includes("Checked the config."));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "tail waits");
+  view.rerender(transcript({ messages: [prompt], streamingText: first, timeline: closed }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval holds");
 
-  // Close the first text with a tool step
-  view.rerender(transcript({ messages: [prompt], streamingText: first, timeline: timeline([toolStep(first.length)]) }));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "release interval holds");
+  // The next prose row starts before the closed row's slot comes round.
+  const both = `${first}\n\nThe follow-up`;
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "newer prose does not flush the closed tail");
 
-  // Add follow-up text before the first text's release slot completes (around 150ms)
-  await wait(150);
-  view.rerender(transcript({ messages: [prompt], streamingText: first + "\n\n" + second }));
-  assert.equal(view.container.textContent?.includes("Now reading"), false, "earlier tail still hidden after follow-up added");
-
-  // Wait for the original release slot to complete
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
-  assert.ok(view.container.textContent?.includes("Now reading the file"));
+  assert.ok(view.container.textContent?.includes("Now reading the file that defines"), "the tail joins at its slot");
+
+  // The end of the turn shows every row in full.
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed, streamComplete: true }));
+  assert.ok(view.container.textContent?.includes("The follow-up"));
 });
 
 test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
@@ -364,6 +362,10 @@ test("max-wait timeout shows unfinished prose sentence while turn still runs", a
   // Wait past the timeout
   await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
   assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "prose visible after timeout");
+
+  // More of the same sentence arriving never hides what the deadline showed.
+  view.rerender(transcript({ messages: [prompt], streamingText: `${contentWithProse} keeps going` }));
+  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "flushed prose stays visible");
 
   // Turn is still running
   const reveal = view.container.querySelector(".streaming-reveal");

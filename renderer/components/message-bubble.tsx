@@ -133,7 +133,7 @@ export function MessageBubble({
             content={content}
             // Text that settled or whose turn ended shows in full in the same
             // tree; text a tool step closed still joins at the next release.
-            complete={streaming ? Boolean(streamComplete) : !textClosed}
+            complete={streaming ? Boolean(streamComplete) : true}
             closed={Boolean(streaming && textClosed)}
             onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
             richLinks

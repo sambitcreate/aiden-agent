@@ -102,11 +102,13 @@ export function StreamingMarkdownReveal({
   // from history: reference links, footnotes, and loose lists resolve across
   // blocks. Blocks keep their elements as the text grows, so the finished
   // reply settles in place.
+  // A tail the deadline released shows as written, even unfinished.
   const source = complete
     ? content
-    : released === content
-    ? released  // Everything released by timeout, show it all
-    : released.slice(0, streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY));
+    : released.slice(
+        0,
+        Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
+      );
 
   const handoffNotified = React.useRef(false);
   const notifyHandoffComplete = React.useCallback(() => {
