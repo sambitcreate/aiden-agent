@@ -153,7 +153,10 @@ function McpLaunchApproval({
           <Text variant="small" color="secondary">Environment</Text>
           {/* Values are shown in full: they change what the command does (for example NODE_OPTIONS). */}
           <code aria-label={`${label} environment`} className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
-            {approval.env.map(({ name, value }) => `${name}=${value ?? "(saved value, not shown)"}`).join("\n")}
+            {approval.env
+              .map(({ name, value, unavailable }) =>
+                `${name}=${value ?? (unavailable ? "(not available — enter it again in Edit)" : "(saved value, not shown)")}`)
+              .join("\n")}
           </code>
         </div>
       ) : null}

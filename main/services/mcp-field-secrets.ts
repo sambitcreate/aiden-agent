@@ -8,8 +8,9 @@ import { app } from "../platform.js";
 import { secrets } from "./secrets.js";
 import {
   MCP_FIELD_SECRET_LIMITS,
-  mcpFieldSecretDestination,
+  mcpEnvForApproval,
   mcpFieldSecretId,
+  mcpFieldSecretValuesFor,
   mcpFieldSecretMarkers,
   nextMcpFieldSecretRecord,
   parseMcpFieldSecretRecord,
@@ -38,10 +39,14 @@ export function planMcpServerFieldSecrets(server: McpServer, options: McpFieldSe
   return planMcpFieldSecrets(server, () => randomBytes(16).toString("hex"), options);
 }
 
-/** The server's stored values (empty when none, or when bound to another destination). */
+/** The values the server's markers resolve to (only for its destination and each value's own field). */
 export async function storedMcpFieldSecretValues(server: McpServer): Promise<McpFieldSecretValues> {
-  const record = await readRecord(server.id);
-  return record?.destination === mcpFieldSecretDestination(server) ? record.values : {};
+  return mcpFieldSecretValuesFor(server, await readRecord(server.id));
+}
+
+/** A local server's env as its launch approval shows it. */
+export async function storedMcpEnvForApproval(server: McpServer): Promise<ReturnType<typeof mcpEnvForApproval>> {
+  return mcpEnvForApproval(server, await readRecord(server.id).catch(() => undefined));
 }
 
 async function readRecord(serverId: string): Promise<McpFieldSecretRecord | undefined> {
@@ -49,26 +54,19 @@ async function readRecord(serverId: string): Promise<McpFieldSecretRecord | unde
 }
 
 async function writeRecord(serverId: string, record: McpFieldSecretRecord | undefined, isCurrent: () => boolean): Promise<void> {
-  if (!record || Object.keys(record.values).length === 0) {
+  if (!record || Object.values(record.bindings).every((group) => Object.keys(group).length === 0)) {
     await secrets.deleteKey(mcpFieldSecretId(serverId), isCurrent);
     return;
   }
   await secrets.setInternalKey(mcpFieldSecretId(serverId), serializeMcpFieldSecretRecord(record), MAX_RECORD_CHARS, isCurrent);
 }
 
-/**
- * Store a plan's new values next to the server's existing ones, bound to the
- * plan's destination. Kept markers must already be stored for this server;
- * otherwise the value is gone (for example config.json was copied from another
- * device) and must be re-entered. Kept values follow a changed address or
- * command only when the person changed it in the editor
- * (`allowNewDestination`); otherwise they must be entered again.
- */
+/** Store a plan's values (see `nextMcpFieldSecretRecord`); other destinations' groups stay until cleanup. */
 export async function storeMcpFieldSecretPlan(
   serverId: string,
   plan: McpFieldSecretPlan,
   isCurrent: () => boolean,
-  options: { allowNewDestination?: boolean } = {},
+  options: { fromEditor?: boolean; current?: McpServer } = {},
 ): Promise<void> {
   const next = nextMcpFieldSecretRecord(await readRecord(serverId), plan, options);
   if (next) await writeRecord(serverId, next, isCurrent);
@@ -86,7 +84,7 @@ export async function pruneStoredMcpFieldSecrets(
   const record = await readRecord(serverId);
   if (!record) return;
   const pruned = pruneMcpFieldSecretRecord(record, current);
-  if (pruned && Object.keys(pruned.values).length === Object.keys(record.values).length) return;
+  if (pruned && serializeMcpFieldSecretRecord(pruned) === serializeMcpFieldSecretRecord(record)) return;
   await writeRecord(serverId, pruned, isCurrent);
 }
 

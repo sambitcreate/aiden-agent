@@ -5,11 +5,11 @@ import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import {
+  externalMcpCredentialCleanupKind,
   mcpCredentialCleanupAfterConfig,
   mcpCredentialConnectionSnapshot,
   mcpRuntimeConnectionSnapshot,
   parsePendingMcpCredentialCleanup,
-  sameMcpCredentialConnection,
   sameMcpRuntimeConnection,
   type McpRuntimeConnectionSnapshot,
   type PendingMcpCredentialCleanupV1,
@@ -256,7 +256,8 @@ export function reconcileExternalMcpCredentialChanges(
       if (sameMcpRuntimeConnection(previousRuntime, targetRuntime)) continue;
       const previousSnapshot = mcpCredentialConnectionSnapshot(before);
       const targetSnapshot = after ? mcpCredentialConnectionSnapshot(after) : null;
-      const credentialChanged = !sameMcpCredentialConnection(previousSnapshot, targetSnapshot);
+      // Aiden's own move of unchanged values into the keychain is no credential change.
+      const cleanupKind = externalMcpCredentialCleanupKind(before, after);
       // The DataStore cache-publication hook invalidates before the new
       // snapshot becomes visible. Repeat at reconciliation admission so a
       // lease acquired during the publication/reconciliation gap is fenced.
@@ -264,15 +265,10 @@ export function reconcileExternalMcpCredentialChanges(
       const release = suspendMcpOAuthOperations(before.id);
       try {
         await disconnect(before.id);
-        if (credentialChanged) {
-          const kind = !after
-            ? "remove"
-            : before.oauth && !after.oauth
-              ? "disable-oauth"
-              : "replace";
+        if (cleanupKind) {
           await writePending({
             version: 1,
-            kind,
+            kind: cleanupKind,
             serverId: before.id,
             previous: previousSnapshot,
             target: targetSnapshot,

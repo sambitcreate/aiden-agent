@@ -285,11 +285,16 @@ const markerServer: McpServer = {
   enabled: true,
 };
 const markerValues = { [markerAuthorization]: "Bearer real-bearer-secret", [markerApiKey]: "real-api-key-secret" };
+/** A stored record holding `values` for the marker server's headers, bound to `destination`. */
+function markerRecord(destination: string, values: Record<string, string>) {
+  const fields: Record<string, string> = { [markerAuthorization]: "headers:Authorization", [markerApiKey]: "headers:X-Api-Key" };
+  return { bindings: { [destination]: Object.fromEntries(Object.entries(values).map(([marker, value]) => [marker, { field: fields[marker]!, value }])) } };
+}
 
 function markerSources(destination = mcpFieldSecretDestination(markerServer)): SubagentMcpCredentialSources {
   return {
     revisionKey: Buffer.alloc(32, 3),
-    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, { destination, values: markerValues }),
+    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(destination, markerValues)),
     presetKey: async () => null,
     oauthSession: async () => ({}),
     oauthGeneration: () => 0,
@@ -303,7 +308,7 @@ test("a server echoing its marker-backed headers never shows the real values to 
   // Rotating a stored value is a new credential revision for the child's authority.
   const rotated = await resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, {
     ...markerSources(),
-    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, { destination: mcpFieldSecretDestination(markerServer), values: { ...markerValues, [markerApiKey]: "rotated" } }),
+    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(mcpFieldSecretDestination(markerServer), { ...markerValues, [markerApiKey]: "rotated" })),
   });
   assert.notEqual(rotated.revision, boundary.revision);
 });
