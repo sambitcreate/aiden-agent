@@ -306,6 +306,26 @@ test("the transcript reserves room for the overlaid toolbar, composer, and float
   }
 });
 
+test("growth deferred during a scrollbar hold snaps to the new bottom on release without movement", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  // Start with the scrollbar held at the bottom.
+  fireEvent.pointerDown(port.viewport);
+  const initialBottom = port.bottom();
+
+  // Content grows while the thumb is still pressed, deferring the snap.
+  port.grow(200);
+  view.rerender(<Transcript chunks={2} />);
+  // The viewport should still be at the old bottom, not snapped (held blocks snap).
+  assert.equal(port.top(), initialBottom, "held thumb deferred the growth snap");
+
+  // Release without moving the thumb.
+  fireEvent.pointerUp(window);
+  // Now the viewport should snap to the new bottom.
+  assert.equal(port.top(), port.bottom(), "release snaps to the new bottom after deferred growth");
+  assert.equal(port.following(), true, "follow is still active after the snap");
+});
+
 test("content growth between scrollbar press and first drag does not pin the viewport", () => {
   const view = render(<Transcript chunks={1} />);
   const port = scrollport();
@@ -329,8 +349,8 @@ test("content growth between scrollbar press and first drag does not pin the vie
 });
 
 test("reading keys in a focused nested scrollable element leave transcript follow alone", () => {
-  render(
-    <ScrollArea autoScrollToBottom>
+  const view = render(
+    <ScrollArea autoScrollToBottom autoScrollDeps={[1]}>
       <div data-testid="nested" style={{ overflowY: "auto" }} tabIndex={0}>
         nested content
       </div>
@@ -349,8 +369,8 @@ test("reading keys in a focused nested scrollable element leave transcript follo
 
   // Grow content and verify transcript follows.
   port.grow(80);
-  render(
-    <ScrollArea autoScrollToBottom>
+  view.rerender(
+    <ScrollArea autoScrollToBottom autoScrollDeps={[2]}>
       <div data-testid="nested" style={{ overflowY: "auto" }} tabIndex={0}>
         nested content
       </div>

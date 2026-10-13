@@ -1114,7 +1114,10 @@ export function ScrollArea({
     };
     const onPointerUp = () => {
       if (!followRef.current.scrollbarHeld) return;
-      dispatchFollow({ type: "scrollbarRelease", distance: measureDistance(element) });
+      const next = dispatchFollow({ type: "scrollbarRelease", distance: measureDistance(element) });
+      // If still following after release (unmoved hold, or released near the end),
+      // snap to the new bottom to settle any growth that was deferred while held.
+      if (followNeedsSnap(next)) snapIfFollowing(element);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
