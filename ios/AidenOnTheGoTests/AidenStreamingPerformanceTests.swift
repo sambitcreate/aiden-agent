@@ -289,7 +289,10 @@ final class AidenStreamingPerformanceTests: XCTestCase {
     @MainActor
     func testChunkGapsMatchTheSingleDocumentBlockMargins() {
         let cases: [(previous: String, next: String, gap: CGFloat)] = [
-            ("Paragraph.\n\n", "Next paragraph.", 8),
+            ("Paragraph.\n\n", "Next paragraph.", 16),
+            ("Paragraph.\n\n", "```\ncode\n```", 16),
+            ("1. one\n2. two\n\n", "```\ncode\n```", 16),
+            ("- one\n- two\n\n", "After the list.", 16),
             ("Paragraph.\n\n", "## Heading", 24),
             ("Paragraph.\n\n", "Setext heading\n---", 24),
             ("## Heading\n\n", "Paragraph.", 16),
@@ -298,7 +301,7 @@ final class AidenStreamingPerformanceTests: XCTestCase {
             ("Paragraph.\n\n", "---", 24),
             ("---\n\n", "Paragraph.", 24),
             ("- item\n\n  ```\n  code\n  ```\n\n", "After the list.", 16),
-            ("> quoted\n\n", "Paragraph.", 8),
+            ("> quoted\n\n", "Paragraph.", 16),
             ("Paragraph.\n\n", "> # Quoted heading", 24),
         ]
         for testCase in cases {
@@ -308,6 +311,40 @@ final class AidenStreamingPerformanceTests: XCTestCase {
                 "\(testCase.previous.debugDescription) -> \(testCase.next.debugDescription)"
             )
         }
+    }
+
+    // MARK: - Cumulative reply text
+
+    private func cumulativeUpdate(_ text: String, received: String) -> (AidenCumulativeReplyText.Update, [Int]) {
+        var requested: [Int] = []
+        let update = AidenCumulativeReplyText.update(to: text, receivedUTF8Count: received.utf8.count) { count in
+            requested.append(count)
+            return Array(received.utf8.suffix(count))
+        }
+        return (update, requested)
+    }
+
+    func testCumulativeReplyAppendsOnlyTheNewText() {
+        XCTAssertEqual(cumulativeUpdate("Hello world", received: "Hello ").0, .append("world"))
+        XCTAssertEqual(cumulativeUpdate("Hello ", received: "Hello ").0, .append(""))
+        XCTAssertEqual(cumulativeUpdate("café ☕️ olé", received: "café ☕️").0, .append(" olé"))
+    }
+
+    func testCumulativeReplyReadsABoundedTailOfALongReply() {
+        let received = String(repeating: "word ", count: 20_000)
+        let (update, requested) = cumulativeUpdate(received + "next", received: received)
+        XCTAssertEqual(update, .append("next"))
+        XCTAssertEqual(requested.count, 1)
+        XCTAssertLessThanOrEqual(requested[0], 64)
+    }
+
+    func testCumulativeReplyThatNoLongerExtendsTheReceivedTextIsReplaced() {
+        // A snapshot reset the run: shorter than what was received.
+        XCTAssertEqual(cumulativeUpdate("Hi", received: "Hello there").0, .replace)
+        // Rewritten before the join, then grown past it.
+        XCTAssertEqual(cumulativeUpdate("Hullo there, friend", received: "Hello there").0, .replace)
+        // The last received character was rewritten into a longer one.
+        XCTAssertEqual(cumulativeUpdate("café", received: "cafe").0, .replace)
     }
 
     // MARK: - Streaming reveal gate

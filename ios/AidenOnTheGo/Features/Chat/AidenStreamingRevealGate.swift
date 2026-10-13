@@ -27,3 +27,37 @@ enum AidenStreamingRevealGate {
         return (String(pending[..<boundary]), String(pending[boundary...]))
     }
 }
+
+/// Turns a cumulative reply (each update repeats everything so far) into the
+/// text to append, without re-reading what was already received.
+///
+/// The work per update is proportional to the new text: what was received is
+/// known by its UTF-8 length, and only the bytes just before the join are
+/// compared. A cumulative reply only appends while a run is live; a rewrite
+/// shows up as a shorter text, a changed tail, or a join inside a character,
+/// and each of those asks the caller to replace the reply instead.
+enum AidenCumulativeReplyText {
+    enum Update: Equatable {
+        case append(String)
+        case replace
+    }
+
+    /// Bytes compared at the join.
+    static let joinCheckBytes = 64
+
+    /// `receivedTail(n)` returns the last `n` UTF-8 bytes received.
+    static func update(
+        to text: String,
+        receivedUTF8Count: Int,
+        receivedTail: (Int) -> [UInt8]
+    ) -> Update {
+        let utf8 = text.utf8
+        guard utf8.count >= receivedUTF8Count else { return .replace }
+        let join = utf8.index(utf8.startIndex, offsetBy: receivedUTF8Count)
+        let checked = min(receivedUTF8Count, joinCheckBytes)
+        let incomingTail = utf8[utf8.index(join, offsetBy: -checked)..<join]
+        guard incomingTail.elementsEqual(receivedTail(checked)),
+              let suffix = String(utf8[join...]) else { return .replace }
+        return .append(suffix)
+    }
+}

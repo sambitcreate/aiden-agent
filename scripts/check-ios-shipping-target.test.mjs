@@ -753,10 +753,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     chat,
-    /case \.snapshot:[\s\S]*?if chat\.isBotChat \{[\s\S]*?(?:liveText = ""|replaceLiveText\(""\))[\s\S]*?reasoning = ""/u,
-  );
-  assert.match(
-    chat,
     /AidenActivityFeed\([\s\S]*?progressText: botReply\?\.progressText[\s\S]*?showsRunningRowsWhenCollapsed: presentationStyle != \.botMessages/u,
   );
   assert.match(

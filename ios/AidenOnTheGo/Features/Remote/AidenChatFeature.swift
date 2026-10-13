@@ -1284,6 +1284,10 @@ final class AidenChatViewModel {
     /// `liveText` through `AidenStreamingRevealGate`, so the transcript grows
     /// in whole words at most once per tick instead of once per token.
     @ObservationIgnored private var pendingLiveText = ""
+    /// UTF-8 length of everything received for the live reply, revealed or
+    /// not (`liveText` + `pendingLiveText`). Lets a cumulative update append
+    /// only its new suffix instead of re-reading the whole reply per event.
+    @ObservationIgnored private var receivedLiveTextUTF8Count = 0
     /// Whether the last reveal tick held a trailing fragment back; the next
     /// tick releases it even without new whitespace.
     @ObservationIgnored private var heldStreamingFragmentLastTick = false
@@ -1525,19 +1529,31 @@ final class AidenChatViewModel {
     private func receiveLiveText(_ text: String) {
         guard !text.isEmpty else { return }
         pendingLiveText += text
+        receivedLiveTextUTF8Count += text.utf8.count
         scheduleStreamingReveal()
     }
 
     /// Mirrors a cumulative reply (a foreign run's projection). Growth that
     /// extends what was already received goes through the reveal gate; any
-    /// other change replaces the visible text at once.
+    /// other change replaces the visible text at once. Each update costs the
+    /// length of its new text, not of the whole reply.
     private func receiveCumulativeLiveText(_ text: String) {
-        let received = liveText + pendingLiveText
-        if text.count >= received.count, text.hasPrefix(received) {
-            receiveLiveText(String(text.dropFirst(received.count)))
-        } else {
-            replaceLiveText(text)
+        switch AidenCumulativeReplyText.update(
+            to: text,
+            receivedUTF8Count: receivedLiveTextUTF8Count,
+            receivedTail: receivedLiveTextTail(byteCount:)
+        ) {
+        case .append(let suffix): receiveLiveText(suffix)
+        case .replace: replaceLiveText(text)
         }
+    }
+
+    /// The last `byteCount` UTF-8 bytes received, which may span the revealed
+    /// text and the buffer.
+    private func receivedLiveTextTail(byteCount: Int) -> [UInt8] {
+        let buffered = pendingLiveText.utf8.suffix(byteCount)
+        guard buffered.count < byteCount else { return Array(buffered) }
+        return Array(liveText.utf8.suffix(byteCount - buffered.count)) + Array(buffered)
     }
 
     /// Replaces the visible reply and drops anything still buffered.
@@ -1545,6 +1561,7 @@ final class AidenChatViewModel {
         cancelPendingStreamingReveal()
         pendingLiveText = ""
         heldStreamingFragmentLastTick = false
+        receivedLiveTextUTF8Count = text.utf8.count
         liveText = text
     }
 

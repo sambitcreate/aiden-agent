@@ -3286,10 +3286,12 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     private func makeRevealModel(
-        ticks: AidenManualRevealTicks
+        ticks: AidenManualRevealTicks,
+        initialChat: AidenChat? = nil
     ) async throws -> (AidenChatViewModel, AidenRevealStreamFixture) {
         let model = try await makeProgressLifecycleModel(
             mode: .denied,
+            initialChat: initialChat,
             streamingRevealTick: { await ticks.tick() }
         )
         let fixture = AidenRevealStreamFixture(chat: model.chat)
@@ -3374,6 +3376,49 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.streamState, state)
         XCTAssertEqual(model.liveText, "Hello world", "\(type) shows the whole reply without waiting for a tick")
         XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1)
+    }
+
+    @MainActor
+    func testABotChatSnapshotDropsRevealedBufferedAndReasoningText() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let botChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"managed-home","botId":"bot-1","title":"Bot","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8
+        ))
+        let (model, _) = try await makeRevealModel(ticks: ticks, initialChat: botChat)
+        XCTAssertTrue(model.chat.isBotChat)
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Old shown "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { model.liveText == "Old shown " }
+        // Reasoning, then reply text received but not yet revealed.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Thinking"}"#))
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"old buffered "}"#))
+        try await waitUntil { ticks.pending == 1 && model.reasoning == "Thinking" }
+        XCTAssertEqual(model.liveText, "Old shown ")
+
+        let held = expectation(description: "snapshot transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(
+            4, "snapshot", #"{"chatId":"chat-progress-lifecycle","turnId":"turn-reveal","nextSequence":5}"#
+        ))
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.liveText, "")
+        XCTAssertEqual(model.reasoning, "")
+        // The tick that was waiting when the snapshot landed reveals nothing.
+        ticks.releaseAll()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "the buffered text was dropped with the old copy")
+
+        // The cumulative replacement after the reset starts from empty.
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        XCTAssertEqual(model.liveText, "Fresh copy ")
     }
 
     @MainActor

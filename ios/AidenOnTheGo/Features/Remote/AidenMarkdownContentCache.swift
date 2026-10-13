@@ -303,9 +303,11 @@ enum AidenMarkdownChunkReveal {
 /// sequence would draw between the same blocks in one document: the larger of
 /// the previous block's bottom margin and the next block's top margin, where a
 /// block's margin is the largest of the blocks it contains. Values mirror the
-/// chat theme (MarkdownUI's GitHub theme with an 8pt paragraph bottom margin).
+/// chat theme, MarkdownUI's GitHub theme: every block but a thematic break
+/// ends with a 16pt margin. The chat view's paragraph style sits outside
+/// `.markdownTheme`, so the theme's 16pt paragraph margin is the one drawn.
 enum AidenMarkdownChunkSpacing {
-    static let paragraphBottom: CGFloat = 8
+    static let paragraphBottom: CGFloat = 16
     static let blockBottom: CGFloat = 16
     static let headingTop: CGFloat = 24
     static let thematicBreak: CGFloat = 24
@@ -342,18 +344,7 @@ enum AidenMarkdownChunkSpacing {
         }
         let block = lines[start...lastIndex].filter { !isBlank($0) }
         if block.count == 1, isThematicBreak(block[0]) { return thematicBreak }
-        if block.count > 1, isSetextUnderline(block[block.count - 1]) { return blockBottom }
-        for line in block {
-            let content = stripQuoteMarkers(line)
-            if content.hasPrefix("```") || content.hasPrefix("~~~")
-                || content.hasPrefix("|") || isATXHeading(content) {
-                return blockBottom
-            }
-            if line.hasPrefix("    "), block.first.map({ $0.hasPrefix("    ") }) == true {
-                return blockBottom // indented code
-            }
-        }
-        return paragraphBottom
+        return blockBottom
     }
 
     private static func nonBlankLeadingLines(of chunk: String) -> [Substring] {
