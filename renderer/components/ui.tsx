@@ -873,6 +873,12 @@ function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLE
   return false;
 }
 
+/**
+ * The follow-enabled scrollport the reader last pressed in. Reading keys typed
+ * with focus on the page body scroll that pane, so only it may stop following.
+ */
+let lastPressedFollowViewport: HTMLElement | null = null;
+
 export function ScrollArea({
   title,
   leading,
@@ -993,7 +999,7 @@ export function ScrollArea({
     if (autoScrollRef.current && state.following && !state.jumpPending) {
       element.scrollTop = element.scrollHeight;
     }
-    dispatchFollow({ type: "contentResize", distance: measureDistance(element) });
+    dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
   }, [dispatchFollow, measureDistance]);
 
   const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -1011,7 +1017,12 @@ export function ScrollArea({
       // engine dropped without one.
       jumpSettleTimerRef.current = window.setTimeout(() => {
         if (!followRef.current.jumpPending || !viewport.current) return;
-        dispatchFollow({ type: "settle", distance: measureDistance(viewport.current), ended: true });
+        dispatchFollow({
+          type: "settle",
+          distance: measureDistance(viewport.current),
+          scrollTop: viewport.current.scrollTop,
+          ended: true,
+        });
         snapIfFollowing(viewport.current);
       }, 1000);
     } else {
@@ -1031,11 +1042,18 @@ export function ScrollArea({
     const overflows = () => element.scrollHeight > element.clientHeight + 1;
     const onScrollEnd = () => {
       const wasPending = followRef.current.jumpPending;
-      const next = dispatchFollow({ type: "settle", distance: measureDistance(element), ended: true });
+      const next = dispatchFollow({
+        type: "settle",
+        distance: measureDistance(element),
+        scrollTop: element.scrollTop,
+        ended: true,
+      });
       if (wasPending && followNeedsSnap(next)) snapIfFollowing(element);
     };
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.deltaY >= 0) return;
+      // A sideways trackpad pan over a wide code block or table is not reading back.
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
       if (nestedScrollerConsumesWheel(event.target, element, event.deltaY)) return;
       const at = event.timeStamp;
       if (followIgnoresWheel(followRef.current, at)) {
@@ -1058,16 +1076,25 @@ export function ScrollArea({
       }
     };
     const onPointerDown = (event: PointerEvent) => {
-      // Only the viewport's own box (its scrollbar) starts a user scroll.
+      lastPressedFollowViewport = element;
+      // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
+      // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
-      dispatchFollow({ type: "userIntent", intent: "scrollbar", at: performance.now(), canScrollUp: overflows() });
+      dispatchFollow({ type: "scrollbarHold" });
+    };
+    const onPointerUp = () => {
+      if (!followRef.current.scrollbarHeld) return;
+      dispatchFollow({ type: "scrollbarRelease", distance: measureDistance(element) });
     };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       // Clicking transcript text can leave focus on body; its scrolling keys
-      // still move this viewport.
-      if (!element.contains(target) && target !== document.body) return;
+      // still move the pane that was pressed last, and only that one.
+      if (!element.contains(target)) {
+        if (target !== document.body) return;
+        if (lastPressedFollowViewport && lastPressedFollowViewport !== element) return;
+      }
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
       if (!isUserScrollKey(event.key)) return;
@@ -1083,6 +1110,8 @@ export function ScrollArea({
     element.addEventListener("touchstart", onTouchStart, { passive: true });
     element.addEventListener("touchmove", onTouchMove, { passive: true });
     element.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
     document.addEventListener("keydown", onKeyDown);
     return () => {
       element.removeEventListener("scrollend", onScrollEnd);
@@ -1090,7 +1119,10 @@ export function ScrollArea({
       element.removeEventListener("touchstart", onTouchStart);
       element.removeEventListener("touchmove", onTouchMove);
       element.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
       document.removeEventListener("keydown", onKeyDown);
+      if (lastPressedFollowViewport === element) lastPressedFollowViewport = null;
     };
   }, [autoScrollToBottom, dispatchFollow, measureDistance, snapIfFollowing]);
 
@@ -1204,12 +1236,18 @@ export function ScrollArea({
         style={{
           paddingTop: toolbarHeight,
           paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
-          // The follow latch owns the bottom edge. Browser scroll anchoring
-          // would otherwise fight it by holding a mid-transcript node still.
-          overflowAnchor: autoScrollToBottom ? "none" : undefined,
+          // While following, the latch owns the bottom edge; browser scroll
+          // anchoring would fight it by holding a mid-transcript node still.
+          // A reader who has scrolled away keeps anchoring, so content changing
+          // above their place does not shift what they are reading.
+          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
-          dispatchFollow({ type: "settle", distance: measureDistance(event.currentTarget) });
+          dispatchFollow({
+            type: "settle",
+            distance: measureDistance(event.currentTarget),
+            scrollTop: event.currentTarget.scrollTop,
+          });
         }}
       >
         <div ref={content} data-scroll-content className="min-h-full">

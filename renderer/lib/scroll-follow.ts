@@ -82,7 +82,7 @@ export const JUMP_BUTTON_SHOW_DELAY_MS = 150;
 export const WHEEL_GESTURE_QUIET_MS = 160;
 
 /** A user action that can move the viewport away from the live edge. */
-export type FollowIntent = "wheelUp" | "drag" | "scrollbar" | "key";
+export type FollowIntent = "wheelUp" | "drag" | "key";
 
 export interface FollowState {
   /** The latch: keep the viewport pinned to the bottom as content grows. */
@@ -94,6 +94,14 @@ export interface FollowState {
   readonly lastWheelAt: number | null;
   /** The last measured distance from the bottom. */
   readonly distance: number;
+  /** The reader is holding the scrollbar; where it settles is their choice. */
+  readonly scrollbarHeld: boolean;
+  /**
+   * The scroll offset follow last pinned the viewport at. Growth never lowers
+   * the offset, so a following viewport that turns up well above it was moved
+   * by something else: focus, scroll restoration, or a selection drag.
+   */
+  readonly pinnedTop: number | null;
 }
 
 export type FollowEvent =
@@ -104,9 +112,13 @@ export type FollowEvent =
    */
   | { type: "userIntent"; intent: FollowIntent; at: number; canScrollUp: boolean }
   /** A scroll position sample. `ended` marks `scrollend`. */
-  | { type: "settle"; distance: number; ended?: boolean }
+  | { type: "settle"; distance: number; scrollTop?: number; ended?: boolean }
   /** Content or viewport size changed; `distance` is measured after any snap. */
-  | { type: "contentResize"; distance: number }
+  | { type: "contentResize"; distance: number; scrollTop?: number }
+  /** The reader pressed the scrollbar. A press alone never ends follow. */
+  | { type: "scrollbarHold" }
+  /** The reader let go of the scrollbar; `distance` is where it settled. */
+  | { type: "scrollbarRelease"; distance: number }
   /** Jump to the bottom. Smooth jumps keep a pending latch until they land. */
   | { type: "jump"; smooth: boolean }
   /** A different conversation opened: follow from its bottom. */
@@ -118,7 +130,16 @@ export const INITIAL_FOLLOW_STATE: FollowState = {
   ignoringMomentum: false,
   lastWheelAt: null,
   distance: 0,
+  scrollbarHeld: false,
+  pinnedTop: null,
 };
+
+/** Records where a following viewport sits at the bottom, or forgets it. */
+function withPinnedTop(state: FollowState, scrollTop: number | undefined): FollowState {
+  if (!state.following) return state.pinnedTop === null ? state : { ...state, pinnedTop: null };
+  if (scrollTop === undefined || state.jumpPending || state.distance > FOLLOW_REARM_DISTANCE_PX) return state;
+  return { ...state, pinnedTop: scrollTop };
+}
 
 function isCoastingWheel(state: FollowState, at: number): boolean {
   return (
@@ -140,8 +161,11 @@ export function followIgnoresWheel(state: FollowState, at: number): boolean {
 /**
  * Stick-to-bottom as an intent latch. Only a user gesture that can move the
  * viewport up turns follow off; growth, keyboard insets, and layout settling
- * never do. Follow turns back on only when the viewport moves back toward the
- * bottom and lands within {@link FOLLOW_REARM_DISTANCE_PX}.
+ * never do. A viewport that something else carried well above where follow
+ * pinned it (focus moving to an earlier message, scroll restoration) has also
+ * left the bottom, so follow lets it stay there. Follow turns back on only when
+ * the viewport moves back toward the bottom and lands within
+ * {@link FOLLOW_REARM_DISTANCE_PX}; while the scrollbar is held, only on release.
  */
 export function followReducer(state: FollowState, event: FollowEvent): FollowState {
   switch (event.type) {
@@ -152,30 +176,58 @@ export function followReducer(state: FollowState, event: FollowEvent): FollowSta
         if (!event.canScrollUp) return next;
         return { ...next, following: false, jumpPending: false };
       }
-      // A deliberate drag, scrollbar press, or key always ends the momentum
-      // window and an in-flight smooth jump, even when it cannot move the view.
+      // A deliberate drag or key always ends the momentum window and an
+      // in-flight smooth jump, even when it cannot move the view.
       const released = { ...state, ignoringMomentum: false, jumpPending: false };
       return event.canScrollUp ? { ...released, following: false } : released;
     }
     case "settle": {
       const towardEnd = event.distance < state.distance;
-      const rearm = !state.following && towardEnd && event.distance <= FOLLOW_REARM_DISTANCE_PX;
-      const landed = event.distance <= FOLLOW_REARM_DISTANCE_PX && towardEnd;
-      return {
-        ...state,
-        distance: event.distance,
-        following: state.following || rearm,
-        jumpPending: state.jumpPending && !event.ended && !landed,
-      };
+      const nearEnd = event.distance <= FOLLOW_REARM_DISTANCE_PX;
+      const rearm = !state.following && !state.scrollbarHeld && towardEnd && nearEnd;
+      const landed = nearEnd && towardEnd;
+      const draggedAway = state.scrollbarHeld && !nearEnd;
+      const displaced =
+        state.following &&
+        !state.jumpPending &&
+        !nearEnd &&
+        event.scrollTop !== undefined &&
+        state.pinnedTop !== null &&
+        event.scrollTop < state.pinnedTop - FOLLOW_REARM_DISTANCE_PX;
+      return withPinnedTop(
+        {
+          ...state,
+          distance: event.distance,
+          following: (state.following || rearm) && !draggedAway && !displaced,
+          jumpPending: state.jumpPending && !event.ended && !landed,
+        },
+        event.scrollTop,
+      );
     }
     case "contentResize":
-      return { ...state, distance: event.distance };
+      return withPinnedTop({ ...state, distance: event.distance }, event.scrollTop);
+    case "scrollbarHold":
+      return { ...state, scrollbarHeld: true, ignoringMomentum: false, jumpPending: false };
+    case "scrollbarRelease": {
+      const nearEnd = event.distance <= FOLLOW_REARM_DISTANCE_PX;
+      return withPinnedTop(
+        {
+          ...state,
+          scrollbarHeld: false,
+          distance: event.distance,
+          following: state.following || nearEnd,
+        },
+        undefined,
+      );
+    }
     case "jump":
       return {
         ...state,
         following: true,
         jumpPending: event.smooth,
         ignoringMomentum: true,
+        scrollbarHeld: false,
+        pinnedTop: null,
       };
     case "reset":
       return { ...INITIAL_FOLLOW_STATE };

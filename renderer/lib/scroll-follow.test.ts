@@ -126,15 +126,73 @@ test("a gesture during a smooth jump releases it (PR #250)", () => {
     { following: aborted.following, jumpPending: aborted.jumpPending },
     { following: false, jumpPending: false },
   );
-  // A touch or a downward key releases the pending jump but keeps following.
-  for (const intent of ["drag", "key", "scrollbar"] as const) {
-    const released = run([{ type: "userIntent", intent, at: 3_000, canScrollUp: false }], jumping);
+  // A touch, a downward key, or a scrollbar press releases the pending jump but keeps following.
+  const releases: Record<string, FollowEvent> = {
+    drag: { type: "userIntent", intent: "drag", at: 3_000, canScrollUp: false },
+    key: { type: "userIntent", intent: "key", at: 3_000, canScrollUp: false },
+    scrollbar: { type: "scrollbarHold" },
+  };
+  for (const [intent, event] of Object.entries(releases)) {
+    const released = run([event], jumping);
     assert.deepEqual(
       { following: released.following, jumpPending: released.jumpPending },
       { following: true, jumpPending: false },
       intent,
     );
   }
+});
+
+test("pressing the scrollbar without moving it keeps follow", () => {
+  const state = run([
+    { type: "settle", distance: 0, scrollTop: 1_600 },
+    { type: "scrollbarHold" },
+    { type: "settle", distance: 0, scrollTop: 1_600 },
+    { type: "scrollbarRelease", distance: 0 },
+  ]);
+  assert.equal(state.following, true);
+  assert.equal(state.scrollbarHeld, false);
+});
+
+test("dragging the scrollbar away stops follow, and only letting go near the end re-arms it", () => {
+  const dragging = run([
+    { type: "settle", distance: 0, scrollTop: 1_600 },
+    { type: "scrollbarHold" },
+    { type: "settle", distance: 600, scrollTop: 1_000 },
+  ]);
+  assert.equal(dragging.following, false);
+  // Dragging back into the band does not re-arm while the thumb is still held.
+  const back = run([{ type: "settle", distance: 10, scrollTop: 1_590 }], dragging);
+  assert.equal(back.following, false);
+  assert.equal(run([{ type: "scrollbarRelease", distance: 10 }], back).following, true);
+  // Letting go far from the end leaves the reader where they are.
+  assert.equal(run([{ type: "scrollbarRelease", distance: 600 }], dragging).following, false);
+});
+
+test("a following viewport carried well above its pinned place has left the bottom", () => {
+  const pinned = run([{ type: "contentResize", distance: 0, scrollTop: 1_600 }]);
+  // Growth moves the bottom away without moving the viewport: still following.
+  const grown = run([{ type: "settle", distance: 500, scrollTop: 1_600 }], pinned);
+  assert.equal(grown.following, true);
+  // Focus or scroll restoration moves the viewport itself up: follow lets it stay.
+  const moved = run([{ type: "settle", distance: 900, scrollTop: 700 }], pinned);
+  assert.equal(moved.following, false);
+  assert.equal(followNeedsSnap(moved), false);
+  // A nudge inside the band is layout settling, not a move away.
+  assert.equal(run([{ type: "settle", distance: 30, scrollTop: 1_570 }], pinned).following, true);
+});
+
+test("a smooth jump's own animation is never mistaken for a move away", () => {
+  const jumping = run([
+    { type: "contentResize", distance: 0, scrollTop: 1_600 },
+    wheelUp(1_000),
+    { type: "settle", distance: 900, scrollTop: 700 },
+    { type: "jump", smooth: true },
+    { type: "settle", distance: 500, scrollTop: 1_100 },
+  ]);
+  assert.equal(jumping.following, true);
+  const landed = run([{ type: "settle", distance: 0, scrollTop: 1_600, ended: true }], jumping);
+  assert.equal(landed.following, true);
+  assert.equal(landed.pinnedTop, 1_600);
 });
 
 test("the jump button waits for a larger distance while streaming", () => {

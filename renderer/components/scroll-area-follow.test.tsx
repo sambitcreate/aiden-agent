@@ -14,8 +14,7 @@ const CLIENT_HEIGHT = 400;
  * `scrollTo` with smooth behaviour is recorded but does not move; the test
  * decides where the animation lands.
  */
-function scrollport() {
-  const viewport = document.querySelector<HTMLElement>("[data-scroll-top]");
+function scrollport(viewport = document.querySelector<HTMLElement>("[data-scroll-top]")) {
   assert.ok(viewport, "the transcript scrolls in its own scrollport");
   let height = 2_000;
   let top = height - CLIENT_HEIGHT;
@@ -62,6 +61,20 @@ function Transcript({ chunks, streaming = true }: { chunks: number; streaming?: 
 }
 
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+/**
+ * A wheel event stamped with an explicit gesture time, so momentum windows are
+ * decided by the timeline the test describes rather than by real waits.
+ */
+function wheel(target: Element, { deltaY, deltaX = 0, at }: { deltaY: number; deltaX?: number; at: number }) {
+  const { WheelEvent: DomWheelEvent } = window as unknown as typeof globalThis;
+  const event = new DomWheelEvent("wheel", { deltaY, deltaX, bubbles: true, cancelable: true });
+  Object.defineProperty(event, "timeStamp", { value: at });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
 
 test("a streaming reply keeps the transcript on its last line, before the next paint", () => {
   const view = render(<Transcript chunks={1} />);
@@ -127,26 +140,86 @@ test("a smooth jump that lands short of content added mid-animation is corrected
 test("wheel momentum from before a jump neither breaks follow nor drags the view", async () => {
   render(<Transcript chunks={1} />);
   const port = scrollport();
-  fireEvent.wheel(port.viewport, { deltaY: -120 });
+  wheel(port.viewport, { deltaY: -120, at: 1_000 });
   port.moveTo(300);
   // The trackpad keeps coasting while the reader reaches for the jump button.
-  for (let tick = 0; tick < 5; tick += 1) {
-    await wait(40);
-    fireEvent.wheel(port.viewport, { deltaY: -20 });
-  }
+  for (let tick = 1; tick <= 5; tick += 1) wheel(port.viewport, { deltaY: -20, at: 1_000 + tick * 40 });
   fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
   assert.equal(port.top(), port.bottom());
 
-  const { WheelEvent: DomWheelEvent } = window as unknown as typeof globalThis;
-  const coasting = new DomWheelEvent("wheel", { deltaY: -10, bubbles: true, cancelable: true });
-  port.viewport.dispatchEvent(coasting);
+  const coasting = wheel(port.viewport, { deltaY: -10, at: 1_240 });
   assert.equal(coasting.defaultPrevented, true, "a coasting tick is swallowed");
   assert.equal(port.following(), true);
 
   // A fresh gesture after the wheel goes quiet is the reader's intent again.
-  await wait(200);
-  fireEvent.wheel(port.viewport, { deltaY: -120 });
+  wheel(port.viewport, { deltaY: -120, at: 1_600 });
   assert.equal(port.following(), false);
+});
+
+test("a sideways pan over a wide table or code block leaves follow alone", () => {
+  render(<Transcript chunks={1} />);
+  const port = scrollport();
+  wheel(port.viewport, { deltaY: -6, deltaX: -140, at: 1_000 });
+  assert.equal(port.following(), true);
+  wheel(port.viewport, { deltaY: -120, deltaX: -20, at: 2_000 });
+  assert.equal(port.following(), false, "a mostly vertical gesture still reads back");
+});
+
+test("a scrollbar press keeps follow until the thumb is dragged away, and re-arms on release near the end", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  fireEvent.pointerDown(port.viewport);
+  fireEvent.pointerUp(window);
+  assert.equal(port.following(), true, "a click on the scrollbar is not a reason to stop following");
+  assert.equal(port.viewport.style.overflowAnchor, "none", "following owns the bottom edge");
+
+  fireEvent.pointerDown(port.viewport);
+  port.moveTo(port.bottom() - 500);
+  assert.equal(port.following(), false);
+  assert.equal(port.viewport.style.overflowAnchor, "", "a reader away from the end keeps scroll anchoring");
+  port.grow(80);
+  view.rerender(<Transcript chunks={2} />);
+  assert.equal(port.top(), port.bottom() - 580, "growth does not pull the held thumb down");
+
+  port.moveTo(port.bottom() - 10);
+  assert.equal(port.following(), false, "still held: no re-arm yet");
+  fireEvent.pointerUp(window);
+  assert.equal(port.following(), true, "let go near the end");
+});
+
+test("focus moving to an earlier message is not snapped back to the bottom", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<Transcript chunks={2} />);
+  assert.equal(port.top(), port.bottom());
+  // No wheel or key: the engine scrolls a focused earlier button into view.
+  port.moveTo(200);
+  assert.equal(port.following(), false);
+  port.grow(120);
+  view.rerender(<Transcript chunks={3} />);
+  assert.equal(port.top(), 200, "the focused message stays in view");
+});
+
+test("a reading key on the page body only stops following in the pane pressed last", () => {
+  render(
+    <>
+      <ScrollArea autoScrollToBottom>
+        <p>Left pane</p>
+      </ScrollArea>
+      <ScrollArea autoScrollToBottom>
+        <p>Right pane</p>
+      </ScrollArea>
+    </>,
+  );
+  const [left, right] = [...document.querySelectorAll<HTMLElement>("[data-scroll-top]")];
+  const leftPort = scrollport(left);
+  const rightPort = scrollport(right);
+  fireEvent.pointerDown(screen.getByText("Right pane"));
+  fireEvent.pointerUp(window);
+  fireEvent.keyDown(document.body, { key: "PageUp" });
+  assert.equal(rightPort.following(), false);
+  assert.equal(leftPort.following(), true);
 });
 
 test("scrolling inside a code block that can still scroll up leaves follow alone", () => {
