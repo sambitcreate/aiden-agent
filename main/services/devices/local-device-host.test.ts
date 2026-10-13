@@ -4,8 +4,10 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createDeviceService } from "./device-service.js";
 import { DeviceHostUnavailableError, DeviceToolsMissingError } from "./device-host.js";
 import {
+  DeviceNodeUnavailableError,
   AGENT_DEVICE,
   DEVICE_HUB,
   deviceToolPaths,
@@ -570,7 +572,7 @@ test("missing Node fails before install or spawn, and Retry discovers a newly in
     let resolutions = 0;
     harness.deps.resolveNodePath = async () => {
       resolutions++;
-      if (!available) throw new DeviceHostUnavailableError("Install Node.js 22 or newer, then retry.");
+      if (!available) throw new DeviceNodeUnavailableError();
       return "/opt/node/bin/node";
     };
     const host = createLocalDeviceHost(harness.deps);
@@ -578,7 +580,7 @@ test("missing Node fails before install or spawn, and Retry discovers a newly in
     await host.hubInstalled();
     await host.platformAvailability("ios");
     assert.equal(resolutions, 0, "read-only status must not discover or launch Node");
-    await assert.rejects(host.ensureReady(), /Install Node.js 22/u);
+    await assert.rejects(host.ensureReady(), /Node.js 22/u);
     assert.equal(harness.spawns.length, 0);
     available = true;
     const ready = await host.ensureReady();
@@ -638,4 +640,38 @@ test("a runtime removed after resolution reports a startup failure without crash
     assert.equal(host.current(), null);
     await host.stop();
   });
+});
+
+
+test("missing Node after relaunch cannot block revocation or removal of leftover agent credentials", async () => {
+  for (const action of ["agentAccess", "streaming", "remove"] as const) {
+    await withHost(async ({ deps, baseDir }) => {
+      await mkdir(path.join(baseDir, "agent-state"));
+      await writeFile(path.join(baseDir, "agent-state", "daemon.json"), JSON.stringify({ httpPort: 12345, token: "leftover" }));
+      await mkdir(path.join(baseDir, "hosts"));
+      await writeFile(path.join(baseDir, "hosts", "local.json"), JSON.stringify({ daemonAuthToken: "leftover" }));
+      await writeFile(path.join(baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true, agentAccess: true }));
+      deps.resolveNodePath = async () => { throw new DeviceNodeUnavailableError(); };
+      const host = createLocalDeviceHost(deps);
+      const service = createDeviceService({
+        baseDir, host,
+        startProxy: async () => { throw new Error("cleanup must not start a proxy"); },
+        fetch: async () => { throw new Error("cleanup must not contact the hub"); },
+      });
+      try {
+        const state = action === "remove" ? await service.removeTools() : await service.revokeConsent(action);
+        assert.equal(state.consent.agentAccess, false);
+        if (action !== "agentAccess") assert.equal(state.consent.streaming, false);
+        const saved = JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8"));
+        assert.equal(saved.agentAccess, false);
+        await assert.rejects(readFile(path.join(baseDir, "hosts", "local.json")), { code: "ENOENT" });
+        if (action === "remove") {
+          await assert.rejects(readFile(deviceToolPaths(baseDir, AGENT_DEVICE).sentinel), { code: "ENOENT" });
+          await assert.rejects(readFile(path.join(baseDir, "agent-state", "daemon.json")), { code: "ENOENT" });
+        }
+      } finally {
+        await service.stop();
+      }
+    });
+  }
 });

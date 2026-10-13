@@ -29,7 +29,7 @@ import {
 } from "./device-host.js";
 import {
   AGENT_DEVICE,
-  NODE_REQUIRED_REASON,
+  DeviceNodeUnavailableError,
   defaultDeviceNodeResolutionDeps,
   deviceNodeEnvironment,
   resolveDeviceNode,
@@ -512,14 +512,17 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
       entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
     }
-    const runtime = nodePath ?? await deps.resolveNodePath();
-    nodePath = runtime;
-    await deps
-      .runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
+    try {
+      const runtime = nodePath ?? await deps.resolveNodePath();
+      nodePath = runtime;
+      await deps.runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
         timeoutMs: DAEMON_STOP_TIMEOUT_MS,
         env: agentEnv(),
-      })
-      .catch(() => undefined);
+      });
+    } catch {
+      // Discovery and daemon stop are both best effort. Revocation/removal must
+      // still clear token configs, close the proxy and remove installed files.
+    }
   }
 
   return {
@@ -668,6 +671,6 @@ export function reservePort(): Promise<number> {
 /** Fresh discovery lets Retry recover after Node is installed without restarting Aiden. */
 export async function requireDeviceNode(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const nodePath = await resolveDeviceNode(defaultDeviceNodeResolutionDeps(env));
-  if (!nodePath) throw new DeviceHostUnavailableError(NODE_REQUIRED_REASON);
+  if (!nodePath) throw new DeviceNodeUnavailableError();
   return nodePath;
 }

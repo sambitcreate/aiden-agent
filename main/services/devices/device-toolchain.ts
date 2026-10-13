@@ -272,6 +272,14 @@ export function createNpmRunner(npmPath: string, env: NodeJS.ProcessEnv = proces
 export const NODE_REQUIRED_REASON =
   "Simulator helpers require Node.js 22 or newer. Install Node.js and make sure node is on PATH, then retry.";
 
+/** Recoverable setup failure: the device service keeps consent and exposes its existing Retry action. */
+export class DeviceNodeUnavailableError extends Error {
+  constructor() {
+    super(NODE_REQUIRED_REASON);
+    this.name = "DeviceNodeUnavailableError";
+  }
+}
+
 /** Like npm discovery, including login-shell version managers on Finder launches. No negative cache. */
 export function resolveDeviceNode(deps: NpmResolutionDeps): Promise<string | null> {
   return resolveExecutable("node", deps);
