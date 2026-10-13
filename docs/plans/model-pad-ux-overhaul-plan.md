@@ -313,3 +313,7 @@ Requirements:
 - Follow `packages/cli` conventions (own lockfile and tests; it bundles `main/services` sources directly).
 
 Tests: a CLI test with a cached insights fixture shows the scores in `/models info` output; without a cache the output is unchanged.
+
+## Settings redesign (2026-10-12)
+
+Owner-approved follow-up to the overhaul: Settings → Model Pad was split into `renderer/components/settings/model-pad/` and simplified with progressive disclosure. The Pad card has a header (count + ⓘ, Add search popover, Arrange menu, ⋯), the square and an "On your Pad" tray that stacks under it on narrow cards; a "Data" group holds two rows, Benchmark scores (status, coverage popover, Fetch latest, Replace key/Disconnect, inline key row on Connect) and Measured speed (Clear…). Long explanations moved behind the shared `InfoHint`. Every earlier capability is kept; `tests/e2e/model-pad-responsive.spec.ts` covers the new layout across window sizes and zoom.
