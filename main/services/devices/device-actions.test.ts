@@ -103,7 +103,6 @@ test("notification permission runs serve-sim's CLI as Node", () => {
     {
       command: "/node",
       args: [CLI, "permissions", "grant", "notifications", "com.a.b", "-d", "UDID-1"],
-      options: { env: { ELECTRON_RUN_AS_NODE: "1" } },
     },
   );
   assert.throws(
