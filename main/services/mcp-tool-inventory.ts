@@ -105,6 +105,7 @@ function declaresSchemaId(value: unknown): boolean {
  * ids per instance, so unrelated tools reusing an id would otherwise collide.
  */
 export function createMcpToolCallGuard(tools: readonly { name: string; outputSchema?: unknown; execution?: unknown }[]) {
+  const names = new Set(tools.map(({ name }) => name));
   const schemas = new Map<string, JsonSchemaType>();
   const validators = new Map<string, JsonSchemaValidator<unknown>>();
   const requiredTasks = new Set<string>();
@@ -130,6 +131,10 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
     return validator;
   };
   return {
+    /** Whether this inventory offers `name` at all. */
+    has(name: string): boolean {
+      return names.has(name);
+    },
     assertCallable(name: string): void {
       if (requiredTasks.has(name)) throw new Error("This MCP tool requires unsupported task-based execution.");
       // Compile before dispatch so an unusable schema cannot follow a side effect.
@@ -148,6 +153,39 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
   };
 }
 
+export type McpToolCallGuard = ReturnType<typeof createMcpToolCallGuard>;
+
+/** Guarded dispatch: the call must belong to the inventory of the client carrying it. */
+export async function guardedMcpToolCall(
+  guard: McpToolCallGuard,
+  client: Pick<Client, "request">,
+  params: CallToolRequest["params"],
+  options?: RequestOptions,
+) {
+  if (!guard.has(params.name)) throw new Error("This MCP tool is no longer offered by its server.");
+  guard.assertCallable(params.name);
+  const result = await callMcpTool(client, params, options);
+  guard.validateResult(params.name, result);
+  return result;
+}
+
+/**
+ * Call a tool on whichever client is live now. Tools are built from the
+ * inventory of the client they were discovered on; after an idle reconnect
+ * the server may offer different tools or schemas, so the call is checked
+ * against the live client's own inventory instead.
+ */
+export async function callMcpToolOnLiveClient<C extends Pick<Client, "request">>(
+  discovered: { client: C; guard: McpToolCallGuard },
+  live: C,
+  inventoryOf: (client: C) => Promise<{ guard: McpToolCallGuard }>,
+  params: CallToolRequest["params"],
+  options?: RequestOptions,
+) {
+  const guard = live === discovered.client ? discovered.guard : (await inventoryOf(live)).guard;
+  return guardedMcpToolCall(guard, live, params, options);
+}
+
 function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return pending;
   signal.throwIfAborted();
@@ -161,15 +199,22 @@ function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): 
   });
 }
 
+/** Re-list servers that cannot announce changes at most this often. */
+export const MCP_TOOL_INVENTORY_TTL_MS = 30_000;
+
 /**
- * Reuse one tool inventory per live client, but only when the server promised
- * notifications/tools/list_changed and the client was watched before connect.
- * A change notification drops the entry; failed reads are never retained.
- * Callers still check their own lease and generation after every load.
+ * Reuse one tool inventory per live client. A server that promised
+ * notifications/tools/list_changed (watched before connect) keeps its entry
+ * until it announces a change. With `ttlMs`, a server that cannot announce
+ * changes keeps its entry for that long after the read completed; without it
+ * such servers are re-listed on every load. Failed reads are never retained,
+ * and `forget` drops a closed client's entry. Callers still check their own
+ * lease and generation after every load.
  */
-export function createMcpToolInventoryCache<T>() {
+export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: () => number } = {}) {
+  const now = options.now ?? Date.now;
   const watched = new WeakSet<object>();
-  const entries = new WeakMap<object, Promise<T>>();
+  const entries = new WeakMap<object, { pending: Promise<T>; expiresAt: number }>();
   return {
     /** Register before connect so a change during initialization is not missed. */
     watch(client: Pick<Client, "setNotificationHandler">): void {
@@ -177,15 +222,29 @@ export function createMcpToolInventoryCache<T>() {
       client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { entries.delete(client); });
     },
     load(client: Pick<Client, "getServerCapabilities">, read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-      if (!watched.has(client) || client.getServerCapabilities()?.tools?.listChanged !== true) return untilAborted(read(), signal);
-      let pending = entries.get(client);
-      if (!pending) {
-        const loading = read();
-        pending = loading;
-        entries.set(client, loading);
-        loading.catch(() => { if (entries.get(client) === loading) entries.delete(client); });
+      if (!watched.has(client)) return untilAborted(read(), signal);
+      const announcesChanges = client.getServerCapabilities()?.tools?.listChanged === true;
+      if (!announcesChanges && options.ttlMs === undefined) return untilAborted(read(), signal);
+      let entry = entries.get(client);
+      if (entry && entry.expiresAt <= now()) {
+        entries.delete(client);
+        entry = undefined;
       }
-      return untilAborted(pending, signal);
+      if (!entry) {
+        const loading = read();
+        const created = { pending: loading, expiresAt: Number.POSITIVE_INFINITY };
+        entry = created;
+        entries.set(client, created);
+        loading.then(
+          () => { if (!announcesChanges) created.expiresAt = now() + options.ttlMs!; },
+          () => { if (entries.get(client) === created) entries.delete(client); },
+        );
+      }
+      return untilAborted(entry.pending, signal);
+    },
+    /** Drop a client's entry (it closed or is being replaced). */
+    forget(client: object): void {
+      entries.delete(client);
     },
   };
 }
