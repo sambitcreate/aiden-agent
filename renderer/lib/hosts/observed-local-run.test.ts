@@ -8,7 +8,9 @@ import {
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
   rememberDetachedLifecycleStream,
+  visibleDetachedLifecycleProjection,
 } from "../chat-terminal-sync";
+import type { ChatMessage } from "../types";
 import { LocalHostAdapter, type LocalChatApis } from "./local-host-adapter";
 import {
   createObservedRunLifecycle,
@@ -431,6 +433,44 @@ test("a text-only reply without timeline is recognized as the run's saved reply"
     { kind: "event", event: runEvent("run-text-only", 4, "run.ended", { chatId, state: "done" }) },
     { kind: "state", runId: "run-text-only", state: "ended" },
   );
+  observation.close();
+});
+
+test("a phone's text-only reply cached by another read replaces the mirror at once", async () => {
+  const chatId = "chat-text-only-cached";
+  const main = fakeMain({
+    runId: "run-text-cached",
+    chatId,
+    state: "streaming",
+    events: [
+      runEvent("run-text-cached", 1, "run.started", { chatId, origin: "remote" }),
+      runEvent("run-text-cached", 2, "text_delta", { text: "Answer" }),
+    ],
+  });
+  const reads = chatReads();
+  const observation = observeLocalRun({
+    adapter: main.adapter,
+    chatId,
+    workspaceId: WORKSPACE,
+    refetch: reads.refetch,
+    schedule: (publish) => publish(),
+  });
+  await tick();
+  await reads.finishAll();
+  const prompt: ChatMessage = { id: "prompt", role: "user", content: "Hi", createdAt: 1 };
+  const previous: ChatMessage = { id: "msg-previous", role: "assistant", content: "Earlier", createdAt: 0 };
+  const saved: ChatMessage = { id: "msg-text-cached", role: "assistant", content: "Answer", createdAt: 2 };
+  const shown = (cache: readonly ChatMessage[]) =>
+    visibleDetachedLifecycleProjection(detachedLifecycleChatProjection(chatId, WORKSPACE), cache);
+  assert.equal(shown([previous, prompt])?.content, "Answer", "the live reply shows under its prompt");
+
+  main.send({ kind: "event", event: runEvent("run-text-cached", 3, "done", { messageId: saved.id }) });
+  await tick();
+  // The chat's settle notice re-read the transcript before the observer's own read returned.
+  assert.equal(shown([previous, prompt, saved]), null, "the saved reply is not shown twice");
+  assert.equal(shown([prompt, previous])?.content, "Answer", "an earlier text-only reply does not hide it");
+
+  await reads.finishAll();
   observation.close();
 });
 

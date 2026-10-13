@@ -113,6 +113,7 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
         reasoning: view.incomplete ? "" : view.reasoning,
         timeline: view.timeline,
         textStreaming: view.textStreaming,
+        doneMessageId: view.doneMessageId,
       },
       now(),
     );

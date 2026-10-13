@@ -57,6 +57,11 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
    * Stop uses host authority; Steer is not offered because run input is owner-checked.
    */
   observed?: true;
+  /**
+   * The saved reply a mirrored run reported when it finished. A text-only
+   * reply carries no timeline, so this id is what marks it as the run's own.
+   */
+  doneMessageId?: string;
 }
 
 /** What a watching window knows about a run it mirrors. */
@@ -66,6 +71,8 @@ export interface ObservedRunSnapshot {
   timeline: GenerationTimeline | null;
   /** The newest content was a text delta. */
   textStreaming: boolean;
+  /** The assistant message the run saved, once it has finished. */
+  doneMessageId?: string | null;
 }
 
 export type DetachedLifecycleProjectionSeed = Omit<
@@ -373,7 +380,9 @@ export function detachedLifecycleChatProjection(
  * cleared; during that handoff the projection is hidden so nothing is offered
  * to stop or steer. A mirrored run (a phone's turn) can start while the cache
  * still ends with the previous turn's reply, so only its own saved reply hides
- * it; the observer clears it once a read holds that reply.
+ * it: one stamped with its timeline, or (a text-only reply has none) the
+ * message the run reported saving. The observer clears it once a read holds
+ * that reply.
  */
 export function visibleDetachedLifecycleProjection(
   projection: DetachedLifecycleProjection | null,
@@ -382,7 +391,11 @@ export function visibleDetachedLifecycleProjection(
   if (!projection) return null;
   const last = cachedMessages?.[cachedMessages.length - 1];
   if (last?.role !== "assistant") return projection;
-  if (projection.observed === true && last.timeline?.generationId !== projection.streamId) {
+  if (
+    projection.observed === true &&
+    last.timeline?.generationId !== projection.streamId &&
+    (projection.doneMessageId === undefined || last.id !== projection.doneMessageId)
+  ) {
     return projection;
   }
   return null;
@@ -448,13 +461,15 @@ export function publishObservedRunProjection(
     uiVisuals: [],
     subagents: [],
     observed: true,
+    ...(snapshot.doneMessageId ? { doneMessageId: snapshot.doneMessageId } : {}),
   };
   if (
     sameRun &&
     previous.content === next.content &&
     previous.reasoning === next.reasoning &&
     previous.timeline === next.timeline &&
-    previous.lastTextDeltaAt === next.lastTextDeltaAt
+    previous.lastTextDeltaAt === next.lastTextDeltaAt &&
+    previous.doneMessageId === next.doneMessageId
   ) {
     return false;
   }
