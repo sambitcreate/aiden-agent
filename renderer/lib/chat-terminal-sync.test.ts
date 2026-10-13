@@ -21,9 +21,11 @@ import {
   subscribeDetachedLifecycleStreams,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
+  visibleDetachedLifecycleProjection,
   waitForDetachedLifecycleSettlement,
 } from "./chat-terminal-sync.js";
-import type { Chat } from "./types.js";
+import type { DetachedLifecycleProjection } from "./chat-terminal-sync.js";
+import type { Chat, ChatMessage } from "./types.js";
 import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
 
 function chat(id: string, content: string): Chat {
@@ -750,4 +752,41 @@ test("a run this document started is never mirrored over its own detached projec
   assert.equal(projection?.content, "Mine");
   assert.equal(projection?.observed, undefined);
   assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);
+});
+
+test("a saved reply hides an own run, but a mirrored run only by its own reply", () => {
+  const projection = (streamId: string, observed: boolean): DetachedLifecycleProjection => ({
+    ...detached(streamId),
+    content: "Streaming",
+    lastTextDeltaAt: null,
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+    ...(observed ? { observed: true as const } : {}),
+  });
+  const reply = (generationId?: string): ChatMessage => ({
+    id: `reply-${generationId ?? "untimed"}`,
+    role: "assistant",
+    content: "Done",
+    createdAt: 2,
+    ...(generationId
+      ? { timeline: { version: 3, generationId, status: "completed", startedAt: 1, steps: [] } }
+      : {}),
+  });
+  const prompt: ChatMessage = { id: "prompt", role: "user", content: "Next", createdAt: 3 };
+
+  const own = projection("run-new", false);
+  assert.equal(visibleDetachedLifecycleProjection(own, undefined), own);
+  assert.equal(visibleDetachedLifecycleProjection(own, [reply("run-old"), prompt]), own);
+  // An own run's text is already in the cached reply at handoff, whatever its timeline.
+  assert.equal(visibleDetachedLifecycleProjection(own, [reply()]), null);
+
+  const mirrored = projection("run-new", true);
+  // A phone's turn starts while the cache still ends with the previous reply.
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old")]), mirrored);
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply()]), mirrored);
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old"), reply("run-new")]), null);
+
+  assert.equal(visibleDetachedLifecycleProjection(null, [reply("run-new")]), null);
 });

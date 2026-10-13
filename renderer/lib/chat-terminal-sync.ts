@@ -1,4 +1,4 @@
-import type { Chat, ChatReadResponse } from "./types";
+import type { Chat, ChatMessage, ChatReadResponse } from "./types";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
   isSafeSubagentIdentifier,
@@ -364,6 +364,26 @@ export function detachedLifecycleChatProjection(
     if (projection.chatId === chatId && projection.workspaceId === expectedWorkspaceId) {
       return projection;
     }
+  }
+  return null;
+}
+
+/**
+ * A durable terminal message can reach the cache before detached ownership is
+ * cleared; during that handoff the projection is hidden so nothing is offered
+ * to stop or steer. A mirrored run (a phone's turn) can start while the cache
+ * still ends with the previous turn's reply, so only its own saved reply hides
+ * it; the observer clears it once a read holds that reply.
+ */
+export function visibleDetachedLifecycleProjection(
+  projection: DetachedLifecycleProjection | null,
+  cachedMessages: readonly ChatMessage[] | undefined,
+): DetachedLifecycleProjection | null {
+  if (!projection) return null;
+  const last = cachedMessages?.[cachedMessages.length - 1];
+  if (last?.role !== "assistant") return projection;
+  if (projection.observed === true && last.timeline?.generationId !== projection.streamId) {
+    return projection;
   }
   return null;
 }
