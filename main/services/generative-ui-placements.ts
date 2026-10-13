@@ -1,4 +1,5 @@
 import type {
+  ChatImagePlacementV1,
   HtmlArtifactLayout,
   HtmlArtifactPlacementV1,
 } from "../../renderer/shared/chat-artifacts.js";
@@ -49,3 +50,15 @@ export function createArtifactPlacementLedger() {
 }
 
 export type ArtifactPlacementLedger = ReturnType<typeof createArtifactPlacementLedger>;
+
+/** Persisted generate_image placements for the attachments a reply keeps. */
+export function imageAttachmentPlacements(
+  ledger: ArtifactPlacementLedger,
+  attachments: readonly { id: string }[],
+): ChatImagePlacementV1[] | undefined {
+  const placements = attachments.flatMap((attachment): ChatImagePlacementV1[] => {
+    const toolCallId = ledger.publicIdFor(attachment.id);
+    return toolCallId ? [{ attachmentId: attachment.id, toolCallId }] : [];
+  });
+  return placements.length ? placements : undefined;
+}

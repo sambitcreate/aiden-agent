@@ -805,6 +805,7 @@
     <string name="chat_images_previous">Previous photo</string>
     <string name="chat_images_open_to_retry">Open to retry</string>
     <string name="chat_images_loading">Loading %1$s</string>
+    <string name="chat_image_generation_placeholder">Generating image, %1$s</string>
     <string name="chat_images_save_failed">Images couldn\'t be saved</string>
     <string name="chat_images_saved_one">Saved to Photos</string>
     <plurals name="chat_images_saved">

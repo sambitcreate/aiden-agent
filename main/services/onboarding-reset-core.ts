@@ -1,6 +1,9 @@
 export interface OnboardingResetOperations {
   disconnectArtificialAnalysis(): Promise<unknown>;
   clearModelInsights(): Promise<unknown>;
+  /** Image-generation keys and the device-local Image Generation settings. */
+  clearImageGeneration(): Promise<unknown>;
+  clearModelPace(): Promise<void>;
   resetConfiguration(): Promise<void>;
   clearLegacySecrets(): Promise<void>;
   clearPiCredentials(): Promise<void>;
@@ -31,6 +34,22 @@ export async function deleteEveryCredential(
   if (failures.length > 0) throw new Error("Provider credentials were not fully cleared.");
 }
 
+/**
+ * Delete every credential, then let in-memory readers forget what they
+ * remembered from the store, even when a deletion fails.
+ */
+export async function clearEveryCredential(
+  providerIds: readonly string[],
+  deleteCredential: (providerId: string) => Promise<void>,
+  forgetCredentials: () => Promise<void>,
+): Promise<void> {
+  try {
+    await deleteEveryCredential(providerIds, deleteCredential);
+  } finally {
+    await forgetCredentials();
+  }
+}
+
 async function captureFailure(
   failures: unknown[],
   operation: () => Promise<unknown>,
@@ -55,6 +74,8 @@ export async function performOnboardingReset(operations: OnboardingResetOperatio
   await Promise.all([
     captureFailure(failures, operations.disconnectArtificialAnalysis),
     captureFailure(failures, operations.clearModelInsights),
+    captureFailure(failures, operations.clearImageGeneration),
+    captureFailure(failures, operations.clearModelPace),
   ]);
 
   await Promise.all([
