@@ -81,6 +81,7 @@ import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
+import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
   aidenRemoteApi,
@@ -99,7 +100,6 @@ import {
   refreshCodexProviderState,
   useAllRegularChats,
   useChat,
-  useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
@@ -127,7 +127,8 @@ import {
   type Workspace,
   type WorkspacePermission,
 } from "../lib/types";
-import { computerUseReadinessReady } from "../lib/computer-use-control";
+import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
+import { userFacingErrorMessage } from "../lib/ipc-error";
 import {
   resolveAgentActivity,
   resolveVisibleAgentActivity,
@@ -245,7 +246,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const settings = useSettings();
   const computerUseGloballyEnabled =
     capabilities.computerUse && settings.data?.computerUseEnabled === true;
-  const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
     ReadonlySet<string>
@@ -345,20 +345,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     return undefined;
   }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
-  const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
-  const computerUseReady = computerUseReadinessReady(
-    computerUseStatus.data?.ready === true,
-    computerUseStatus.isError,
-  );
-  const computerUseStatusDetail = computerUseStatus.isError
-    ? "Computer Use readiness check failed. Open Settings → Computer Use and try again."
-    : (computerUseStatus.data?.detail ?? "Checking Computer Use readiness…");
-  const computerUseReadinessMessage =
-    computerUseGloballyEnabled && chatComputerUseEnabled && !computerUseReady
-      ? computerUseStatus.isLoading
-        ? "Checking Computer Use readiness…"
-        : computerUseStatusDetail
-      : undefined;
   const chatReadinessMessage = chat.isLoading
     ? "Loading chat…"
     : chat.isError
@@ -370,11 +356,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : detachedGenerationDraining && !visibleDetachedProjection
           ? "Response continues in the background…"
           : undefined;
-  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
-  const readinessMessage =
-    chatReadinessMessage ??
-    modelReadinessMessage ??
-    computerUseReadinessMessage;
+  const ready = modelReady && !chatReadinessMessage;
+  const readinessMessage = chatReadinessMessage ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -578,7 +561,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [lateAnswerSending, setLateAnswerSending] = React.useState(false);
   const [btwView, setBtwView] = React.useState<BtwLiveView | null>(null);
   const [todoSnapshot, setTodoSnapshot] = React.useState<TodoSnapshotViewV1 | null>(null);
-  const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const decidingApprovalRef = React.useRef<string | null>(null);
@@ -1660,9 +1642,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
           "A previous visual artifact could not be recovered. Delete this chat to discard it before sending another message.",
         );
       }
-      if (computerUseSaving) {
-        throw new Error("Wait for the Computer Use setting to finish saving before sending.");
-      }
       if (detachedGenerationDraining) {
         throw new Error("Wait for the previous response to finish saving before sending again.");
       }
@@ -1681,7 +1660,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaceId: firstDraft.chat.workspaceId!,
                 providerId,
                 model,
-                computerUseEnabled: firstDraft.chat.computerUseEnabled,
                 turnId: messageTurnId,
                 message: {
                   role: "user",
@@ -1746,7 +1724,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
-      computerUseSaving,
       detachedGenerationDraining,
       imageArtifactRecoveryPending,
       imageArtifactRecoveryUnavailable,
@@ -1819,7 +1796,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       !isStoppingGeneration &&
       !detachedGenerationDraining &&
       !thinkingSaving &&
-      !computerUseSaving &&
       !environmentPanel.gitOperationBusy &&
       !imageArtifactRecoveryPending &&
       !imageArtifactRecoveryUnavailable &&
@@ -2118,6 +2094,34 @@ export function ChatPane({ chatId }: { chatId: string }) {
     queueMessage,
   ]);
 
+  // A Computer Use request that stopped on missing macOS permissions leaves a
+  // marker on the chat; once ready, Continue resumes it as a normal turn.
+  const computerUsePendingContinue =
+    !draft && computerUseGloballyEnabled && chat.data?.computerUsePendingContinue === true;
+  const [computerUseContinueHiddenFor, setComputerUseContinueHiddenFor] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!computerUsePendingContinue) setComputerUseContinueHiddenFor(null);
+  }, [computerUsePendingContinue]);
+  const continueComputerUse = React.useCallback(async () => {
+    // Main clears the marker when the generation starts; hide the callout now.
+    setComputerUseContinueHiddenFor(chatId);
+    try {
+      await handleSend(COMPUTER_USE_CONTINUE_PROMPT, []);
+    } catch (sendError) {
+      if (chatIdRef.current !== chatId) return;
+      setComputerUseContinueHiddenFor(null);
+      toast.error(userFacingErrorMessage(sendError, "Couldn’t continue this chat."));
+    }
+  }, [chatId, handleSend]);
+  const dismissComputerUseContinue = React.useCallback(async () => {
+    try {
+      const updated = await chatsApi.dismissComputerUseContinue(chatId);
+      qc.setQueryData(queryKeys.chat(chatId), updated);
+    } catch (dismissError) {
+      toast.error(userFacingErrorMessage(dismissError, "Couldn’t dismiss this reminder."));
+    }
+  }, [chatId, qc]);
+
   const openFolder = React.useCallback(() => {
     if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
@@ -2156,30 +2160,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.gitOperationBusy,
       qc,
     ],
-  );
-
-  const changeComputerUse = React.useCallback(
-    async (enabled: boolean) => {
-      if (computerUseSaving || isStartingGeneration || isGenerating) return;
-      setComputerUseSaving(true);
-      try {
-        if (getChatDraft(chatId)) {
-          updateChatDraft(chatId, { computerUseEnabled: enabled });
-          return;
-        }
-        const updated = await chatsApi.setComputerUse(chatId, enabled);
-        qc.setQueryData(queryKeys.chat(chatId), updated);
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't change Computer Use for this chat.",
-        );
-      } finally {
-        setComputerUseSaving(false);
-      }
-    },
-    [chatId, computerUseSaving, isGenerating, isStartingGeneration, qc],
   );
 
   const changeGoogleThinking = React.useCallback(
@@ -2469,6 +2449,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
+  const showComputerUseContinue =
+    computerUsePendingContinue &&
+    computerUseContinueHiddenFor !== chatId &&
+    !pending &&
+    !questionnaire &&
+    !isGenerating &&
+    !isStartingGeneration &&
+    !detachedGenerationDraining &&
+    !visibleDetachedProjection;
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2706,6 +2695,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </EventPresence>
+            <EventPresence
+              present={showComputerUseContinue}
+              className="aiden-dock-inset chat-content-column pb-2"
+            >
+              {showComputerUseContinue ? (
+                <ComputerUseContinueCallout
+                  onContinue={continueComputerUse}
+                  onDismiss={dismissComputerUseContinue}
+                  continueDisabledReason={
+                    ready ? undefined : (readinessMessage ?? "This chat can’t send right now.")
+                  }
+                />
+              ) : null}
+            </EventPresence>
             <TodoPanel snapshot={todoSnapshot} />
             {btwView ? (
               <BtwCard
@@ -2761,15 +2764,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 // without a chatId reset of its own.
                 key={chatId}
                 ready={ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable}
-                readinessSettingsSection={
-                  !chatReadinessMessage
-                    ? modelReadinessMessage
-                      ? "providers"
-                      : computerUseReadinessMessage
-                        ? "computerUse"
-                        : undefined
-                    : undefined
-                }
+                readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
                     ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
@@ -2850,18 +2845,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     : "Creates a separate workspace and opens a new chat. This conversation stays here."
                 }
                 visionSupported={visionSupported}
-                computerUse={
-                  computerUseGloballyEnabled
-                    ? {
-                        enabled: chatComputerUseEnabled,
-                        ready: computerUseReady,
-                        checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
-                        saving: computerUseSaving,
-                        detail: computerUseStatusDetail,
-                      }
-                    : undefined
-                }
-                onChangeComputerUse={changeComputerUse}
                 currentChatTitle={chat.data?.title}
                 latestAssistantResponse={latestAssistantResponse}
                 slashNavigationBlockedReason={settingsBlockedReason}

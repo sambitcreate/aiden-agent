@@ -413,7 +413,7 @@ test("real cancel-and-settle timeout leaves verified model files on disk", async
   const root = makeTemp();
   writeTestTree(root);
   const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
-  const active = new Map([["cu", { computerUse: { closeAndSettle: () => new Promise<void>(() => {}) } }]]);
+  const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: () => new Promise<void>(() => {}) } }]]);
   try {
     await assert.rejects(store.remove(() => cancelComputerUseAndSettle({
       gate: new ComputerUseGenerationGate(), initializations: () => new Map(), active: () => active,

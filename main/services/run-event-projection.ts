@@ -8,6 +8,7 @@ import {
   isSubagentWorkspaceWriteApprovalDetails,
   type ToolApprovalDetails,
 } from "../../renderer/shared/assistant.js";
+import { isComputerUseAccessApprovalDetails } from "../../renderer/shared/computer-use-access.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { AidenRemoteStreamState } from "./aiden-remote-streams.js";
 
@@ -134,6 +135,8 @@ export function projectApprovalDetails(value: unknown): ToolApprovalDetails | un
     ) {
       return structuredClone(value);
     }
+    // The access card carries no facts beyond its kind.
+    if (isComputerUseAccessApprovalDetails(value)) return { kind: value.kind };
   } catch {
     // Getters or uncloneable values fail closed.
   }

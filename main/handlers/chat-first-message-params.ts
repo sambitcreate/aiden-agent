@@ -3,14 +3,13 @@ import { parseChatCreate } from "./chat-create-params.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 
 const KEYS = new Set([
-  "draftId", "workspaceId", "providerId", "model", "computerUseEnabled", "title",
+  "draftId", "workspaceId", "providerId", "model", "title",
   "turnId", "message", "skillInvocation",
 ]);
 
 export interface ParsedChatFirstMessage extends ParsedChatAppend {
   title?: string;
   workspaceId: string;
-  computerUseEnabled: boolean;
 }
 
 /** Project the complete untrusted envelope before retaining it across awaits. */
@@ -38,9 +37,6 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
   if (create.workspaceId === ASSISTANT_WORKSPACE_ID) {
     throw new Error("Assistant chats require the Assistant chat creation path.");
   }
-  if (record.computerUseEnabled !== undefined && typeof record.computerUseEnabled !== "boolean") {
-    throw new Error("Invalid Computer Use setting.");
-  }
   const append = parseChatAppend(record.draftId, record.message, {
     turnId: record.turnId,
     providerId: create.providerId,
@@ -55,7 +51,6 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     ...append,
     title: create.title,
     workspaceId: create.workspaceId,
-    computerUseEnabled: record.computerUseEnabled === true,
     retainedBytes: append.retainedBytes + Buffer.byteLength(create.workspaceId, "utf8") + Buffer.byteLength(create.title ?? "", "utf8") + 64,
   };
 }
