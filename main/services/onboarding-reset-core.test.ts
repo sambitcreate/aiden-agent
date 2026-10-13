@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildOpenRouterBenchmarkCache } from "./openrouter-benchmark-catalog-core.js";
+import { OpenRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime-core.js";
 import {
+  clearEveryCredential,
   deleteEveryCredential,
   OnboardingResetError,
   performOnboardingReset,
@@ -19,6 +22,62 @@ test("credential cleanup attempts every provider after an individual deletion fa
   assert.deepEqual(new Set(deleted), new Set(["alpha", "beta", "gamma"]));
 });
 
+test("clearing every credential stops serving benchmarks remembered under a deleted key", async () => {
+  const PAD_KEY = "aiden-internal:model-pad-openrouter-benchmarks-v1";
+  const store = new Map([
+    ["openai", "sk-openai"],
+    ["locked", "sk-locked"],
+    [PAD_KEY, "pad-key"],
+  ]);
+  const cache = buildOpenRouterBenchmarkCache({
+    data: [
+      {
+        source: "artificial-analysis",
+        model_permaslug: "openai/gpt-example",
+        display_name: "GPT Example",
+        coding_index: 80,
+      },
+    ],
+    meta: {
+      as_of: "2026-06-03T12:00:00.000Z",
+      version: "v1",
+      source: "artificial-analysis",
+      source_url: "https://artificialanalysis.ai",
+      citation: "Source: Artificial Analysis via OpenRouter.",
+      model_count: 1,
+    },
+  });
+  const benchmarks = new OpenRouterBenchmarkRuntime({
+    credentials: {
+      read: async () => store.get(PAD_KEY) ?? null,
+      write: async (key) => {
+        store.set(PAD_KEY, key);
+      },
+      deleteKey: async () => {
+        store.delete(PAD_KEY);
+      },
+    },
+    cache: { read: async () => cache, write: async () => undefined, clear: async () => undefined },
+    fetchCatalog: async () => cache,
+  });
+  assert.equal(await benchmarks.catalog(), cache);
+
+  // One provider's deletion fails; the pass still deletes the rest and forgets them.
+  await assert.rejects(
+    clearEveryCredential(
+      [...store.keys()],
+      async (providerId) => {
+        if (providerId === "locked") throw new Error("locked credential");
+        store.delete(providerId);
+      },
+      () => benchmarks.invalidate(),
+    ),
+    /not fully cleared/u,
+  );
+  assert.deepEqual([...store.keys()], ["locked"]);
+  assert.equal(await benchmarks.catalog(), null);
+});
+
 function operations(
   events: string[],
   failures: Partial<Record<keyof OnboardingResetOperations, Error>> = {},
@@ -32,6 +91,7 @@ function operations(
     disconnectArtificialAnalysis: () => run("disconnectArtificialAnalysis"),
     clearModelInsights: () => run("clearModelInsights"),
     clearImageGeneration: () => run("clearImageGeneration"),
+    clearModelPace: () => run("clearModelPace"),
     resetConfiguration: () => run("resetConfiguration"),
     clearLegacySecrets: () => run("clearLegacySecrets"),
     clearPiCredentials: () => run("clearPiCredentials"),
@@ -45,11 +105,11 @@ test("reset disconnects model data before clearing every setup-owned store", asy
   await performOnboardingReset(operations(events));
 
   assert.deepEqual(
-    new Set(events.slice(0, 3)),
-    new Set(["disconnectArtificialAnalysis", "clearModelInsights", "clearImageGeneration"]),
+    new Set(events.slice(0, 4)),
+    new Set(["disconnectArtificialAnalysis", "clearModelInsights", "clearImageGeneration", "clearModelPace"]),
   );
   assert.deepEqual(
-    new Set(events.slice(3)),
+    new Set(events.slice(4)),
     new Set(["resetConfiguration", "clearLegacySecrets", "clearPiCredentials", "clearMcpOAuth"]),
   );
 });
@@ -81,6 +141,7 @@ test("reset attempts every cleanup and returns a retryable aggregate failure", a
       "disconnectArtificialAnalysis",
       "clearModelInsights",
       "clearImageGeneration",
+      "clearModelPace",
       "resetConfiguration",
       "clearLegacySecrets",
       "clearPiCredentials",

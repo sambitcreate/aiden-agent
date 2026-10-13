@@ -1763,6 +1763,22 @@ export const CommandEmpty = ({
     {...props}
   />
 );
+/** A labelled run of command items; the heading names the group for assistive tech. */
+export const CommandGroup = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive.Group>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
+>(function CommandGroup({ className, ...props }, ref) {
+  return (
+    <CommandPrimitive.Group
+      ref={ref}
+      className={cn(
+        "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-small-strong [&_[cmdk-group-heading]]:text-tertiary",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 export const CommandItem = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>

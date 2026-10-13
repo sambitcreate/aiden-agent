@@ -2,6 +2,7 @@ import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { customModelThinkingLevels, parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -50,6 +51,7 @@ import {
 import { listConfiguredProviders } from "../services/provider-list-main.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
+import { providerModelInfo } from "../services/provider-model-info.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
@@ -394,6 +396,15 @@ export function registerProviderHandlers(): void {
 
   ipcMain.handle("providers:catalogStatus", () => modelsDevCacheStatus());
 
+  // Offline, display-only model metadata for one provider's models.
+  ipcMain.handle("models:info", async (_event, providerId: unknown, modelIds: unknown) => {
+    const pid = typeof providerId === "string" ? providerId : "";
+    const ids = Array.isArray(modelIds)
+      ? modelIds.filter((m): m is string => typeof m === "string")
+      : [];
+    return providerModelInfo.infoMany(pid, ids);
+  });
+
   ipcMain.handle("providers:updateCatalogs", async (event) => {
     providerAuthOwner(event);
     const inventory = await refreshProviderCatalogs();
@@ -581,6 +592,7 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
+    Object.assign(next, parseModelPadPreferencesPatch(p));
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);

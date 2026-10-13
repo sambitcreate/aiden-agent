@@ -1,6 +1,8 @@
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { createModelPaceMeasurement } from "./model-pace-core.js";
+import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -3155,7 +3157,18 @@ export const llmClient = {
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
-      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      const warmedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      // Device-local pace: Pi calls the stream function once per model
+      // response, right before the provider request, so the wrapper marks
+      // each response's request start (see ModelPaceTimer for what TTFT covers).
+      const pace = createModelPaceMeasurement({
+        providerId: runtime.provider.id,
+        agentHarness: harnessProvider,
+        record: (key, sample) => modelPaceRecorder.record(key, sample),
+        onError: (error) =>
+          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
+      });
+      const observedStream: typeof realStream = pace.wrap(warmedStream);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3754,6 +3767,7 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
+        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();

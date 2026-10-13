@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import type { ModelPaceSummary } from "../shared/model-pace";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -451,6 +452,12 @@ export const imageGenerationApi = {
   /** User-initiated only: the one network path on this page. */
   fetchModels: (provider: ImageGenerationProviderId) =>
     invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
+};
+
+/** Device-local measured pace; reads never touch the network. */
+export const modelPaceApi = {
+  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
+  clear: () => invoke<void>("modelPace:clear"),
 };
 
 export const computerUseApi = {

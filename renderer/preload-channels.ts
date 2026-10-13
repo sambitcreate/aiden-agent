@@ -26,6 +26,7 @@ export const INVOKE_PREFIXES = [
   "localModels:",
   "localVoice:",
   "modelInsights:",
+  "modelPace:",
   "mcp:",
   "models:",
   "providers:",
