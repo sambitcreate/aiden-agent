@@ -50,9 +50,11 @@ class AidenTranscriptFollowState internal constructor(
     private var isUserScrolling = false
     private var sawMomentum = false
     private var settleJob: Job? = null
+    private var scrollProgressJob: Job? = null
     private var jumpGeneration = 0
     private var leadingItemKey: Any? = null
     private var leadingItemSize = 0
+    private var lastKnownScrollInProgress = false
 
     val isFollowing: Boolean get() = latch.isFollowing
 
@@ -158,8 +160,28 @@ class AidenTranscriptFollowState internal constructor(
     /** Stops following without a gesture, e.g. while older messages load above. */
     fun detach() {
         settleJob?.cancel()
+        scrollProgressJob?.cancel()
         isUserScrolling = false
         latch = AidenChatScroll.resolveFollow(latch, AidenFollowEvent.UserScrollBegin)
+    }
+
+    /**
+     * Detects when non-fling scrolls (accessibility ScrollBy, PageUp/PageDown,
+     * mouse-wheel) finish by observing isScrollInProgress. These dispatch
+     * UserInput through onPreScroll but never invoke onPreFling/onPostFling,
+     * so they need independent completion handling.
+     */
+    internal fun monitorNonFlingScrollCompletion() {
+        scrollProgressJob?.cancel()
+        scrollProgressJob = scope.launch {
+            snapshotFlow { listState.isScrollInProgress }.collect { isInProgress ->
+                if (!isInProgress && isUserScrolling && lastKnownScrollInProgress) {
+                    // A non-fling scroll just settled (transitioned from true to false).
+                    finishUserScroll(isAtLiveEdge())
+                }
+                lastKnownScrollInProgress = isInProgress
+            }
+        }
     }
 
     private fun isExactlyAtLiveEdge(): Boolean =
@@ -171,6 +193,7 @@ class AidenTranscriptFollowState internal constructor(
         if (isUserScrolling) return
         isUserScrolling = true
         sawMomentum = false
+        lastKnownScrollInProgress = listState.isScrollInProgress
         latch = AidenChatScroll.resolveFollow(latch, AidenFollowEvent.UserScrollBegin)
     }
 
@@ -239,6 +262,9 @@ fun AidenTranscriptFollowEffects(state: AidenTranscriptFollowState, itemCount: I
     }
     LaunchedEffect(state) {
         snapshotFlow { state.listState.layoutInfo }.collect(state::holdReaderInsideLeadingItem)
+    }
+    LaunchedEffect(state) {
+        state.monitorNonFlingScrollCompletion()
     }
 }
 
