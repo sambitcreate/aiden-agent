@@ -16,11 +16,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
@@ -56,13 +58,14 @@ internal fun AidenQuestionnaireRecapStack(
     val stackDescription = stringResource(R.string.chat_questionnaire_recap_cd)
     val reduceMotion = aidenReduceMotion()
     val visibility = remember { MutableTransitionState(!animateEntrance).apply { targetState = true } }
+    val trailingEdge = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 0f else 1f
     Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
         AnimatedVisibility(
             visibleState = visibility,
             enter = fadeIn(AidenMotion.short(reduceMotion)) + scaleIn(
                 animationSpec = AidenMotion.spatial(reduceMotion),
                 initialScale = RECAP_ENTER_SCALE,
-                transformOrigin = TransformOrigin(1f, 0f)
+                transformOrigin = TransformOrigin(trailingEdge, 0f)
             ),
             modifier = Modifier.fillMaxWidth(RECAP_MAX_WIDTH_FRACTION)
         ) {
