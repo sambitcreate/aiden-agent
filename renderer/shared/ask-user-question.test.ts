@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ASK_USER_MAX_LABEL_LENGTH,
   ASK_USER_QUESTION_VERSION,
+  ASK_USER_RECAP_MAX_CUSTOM_LENGTH,
   askUserQuestionMsUntilExpiry,
+  buildAskUserQuestionRecap,
+  parseAskUserQuestionRecap,
   formatLateAskUserQuestionFollowUp,
   normalizeAskUserTimeoutSeconds,
   parseAskUserQuestionPrompt,
@@ -170,4 +174,89 @@ test("an answer summary reads as the person's reply", () => {
     "Colour: Skipped\nSizes: S, M",
   );
   assert.equal(summarizeAskUserQuestionResponse(two, { cancelled: true, answers: [] }), "Skipped");
+});
+
+const recapQuestions = [
+  { question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "Blue", description: "b" }, { label: "Red", description: "r" }] },
+  { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S", description: "s" }, { label: "M", description: "m" }] },
+  { question: "Anything else?", header: "Notes", multiSelect: false, options: [{ label: "No", description: "n" }, { label: "Yes", description: "y" }] },
+  { question: "Ship it?", header: "Ship", multiSelect: false, options: [{ label: "Now", description: "n" }, { label: "Later", description: "l" }] },
+];
+
+test("a recap keeps each question beside what the owner chose", () => {
+  const recap = buildAskUserQuestionRecap(recapQuestions, {
+    cancelled: false,
+    answers: [
+      { questionIndex: 0, kind: "option", answer: "Blue" },
+      { questionIndex: 1, kind: "multi", selected: ["M", "S"] },
+      { questionIndex: 2, kind: "custom", answer: "Use the\u0007 staging bucket" },
+    ],
+  });
+  assert.deepEqual(recap, {
+    version: ASK_USER_QUESTION_VERSION,
+    outcome: "answered",
+    items: [
+      { question: "Which colour?", header: "Colour", kind: "option", answers: ["Blue"] },
+      { question: "Which sizes?", header: "Sizes", kind: "multi", answers: ["M", "S"] },
+      // Terminal controls never reach the transcript.
+      { question: "Anything else?", header: "Notes", kind: "custom", answers: ["Use the  staging bucket"] },
+      { question: "Ship it?", header: "Ship", kind: "skipped", answers: [] },
+    ],
+  });
+  assert.deepEqual(parseAskUserQuestionRecap(recap), recap);
+
+  const long = buildAskUserQuestionRecap(recapQuestions.slice(2, 3), {
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "custom", answer: "x".repeat(ASK_USER_RECAP_MAX_CUSTOM_LENGTH + 50) }],
+  });
+  const clipped = long?.items[0]?.answers[0] ?? "";
+  assert.equal(Array.from(clipped).length, ASK_USER_RECAP_MAX_CUSTOM_LENGTH);
+  assert.ok(clipped.endsWith("…"));
+});
+
+test("a closed or expired questionnaire records no answers, even ones the owner had picked", () => {
+  const picked = [{ questionIndex: 0, kind: "option" as const, answer: "Blue" }];
+  const dismissed = buildAskUserQuestionRecap(recapQuestions.slice(0, 1), { cancelled: true, answers: picked });
+  assert.equal(dismissed?.outcome, "dismissed");
+  assert.deepEqual(dismissed?.items.map((item) => item.kind), ["skipped"]);
+
+  const expired = buildAskUserQuestionRecap(recapQuestions.slice(0, 1), {
+    cancelled: true,
+    timedOut: true,
+    answers: picked,
+  });
+  assert.equal(expired?.outcome, "expired");
+  assert.deepEqual(expired?.items.map((item) => item.kind), ["skipped"]);
+
+  // A custom answer with nothing printable cannot produce a recap replay would reject.
+  assert.equal(
+    buildAskUserQuestionRecap(recapQuestions.slice(0, 1), {
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "custom", answer: "\u0001\u0002" }],
+    }),
+    undefined,
+  );
+});
+
+test("stored recaps are rejected unless every item is well formed", () => {
+  const item = { question: "Which colour?", header: "Colour", kind: "option", answers: ["Blue"] };
+  const valid = { version: ASK_USER_QUESTION_VERSION, outcome: "answered", items: [item] };
+  assert.ok(parseAskUserQuestionRecap(valid));
+  for (const invalid of [
+    { ...valid, version: 2 },
+    { ...valid, outcome: "pending" },
+    { ...valid, items: [] },
+    { ...valid, items: [item, item, item, item, item] },
+    { ...valid, outcome: "dismissed" },
+    { ...valid, items: [{ ...item, answers: [] }] },
+    { ...valid, items: [{ ...item, answers: ["Blue", "Red"] }] },
+    { ...valid, items: [{ ...item, kind: "multi", answers: ["S", "S"] }] },
+    { ...valid, items: [{ ...item, kind: "skipped" }] },
+    { ...valid, items: [{ ...item, kind: "custom", answers: ["\u001b[2Jclear"] }] },
+    { ...valid, items: [{ ...item, answers: ["x".repeat(ASK_USER_MAX_LABEL_LENGTH + 1)] }] },
+    { ...valid, items: [{ ...item, header: " " }] },
+    { ...valid, items: [{ ...item, kind: "other" }] },
+  ]) {
+    assert.equal(parseAskUserQuestionRecap(invalid), undefined, JSON.stringify(invalid));
+  }
 });

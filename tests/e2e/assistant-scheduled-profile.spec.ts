@@ -138,6 +138,10 @@ test.describe("conversational scheduling", () => {
     await expect(approval).toContainText("Summarize important workspace changes without modifying files.");
     await approval.getByRole("button", { name: "Allow once" }).click();
     await expect(page.getByText("Your workspace brief has been saved.", { exact: true }).first()).toBeVisible();
+    const recap = page.getByRole("list", { name: "Your answers" });
+    await expect(recap.getByRole("listitem")).toHaveCount(1);
+    await expect(recap.getByRole("listitem")).toContainText("When should the workspace brief run?");
+    await expect(recap.getByRole("listitem")).toContainText("Weekdays");
     expect(scenario.error).toBeUndefined();
     const tasks = JSON.parse(await readFile(join(aiden.userDataDir, "schedules.json"), "utf8")) as Array<{ name: string; providerId?: string; model?: string; cron: string; permission: string }>;
     expect(tasks).toHaveLength(1);
@@ -187,6 +191,12 @@ test.describe("conversational scheduling", () => {
       const sidebar = await page.locator("[data-sidebar]").boundingBox();
       return bounds && sidebar ? bounds.x - sidebar.x - sidebar.width : -Infinity;
     }).toBeGreaterThanOrEqual(0);
+    // The card keeps the composer's bottom inset instead of touching the window edge.
+    await expect.poll(async () => {
+      const bounds = await shell.boundingBox();
+      const viewportHeight = await page.evaluate(() => window.innerHeight);
+      return bounds ? viewportHeight - (bounds.y + bounds.height) : -Infinity;
+    }).toBeGreaterThanOrEqual(16);
     await page.screenshot({ path: testInfo.outputPath("question-composer.png") });
     await page.getByRole("button", { name: "Submit", exact: true }).click();
     await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();

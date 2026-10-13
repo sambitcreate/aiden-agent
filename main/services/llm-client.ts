@@ -1,6 +1,8 @@
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
+import { createModelPaceMeasurement } from "./model-pace-core.js";
+import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpInstructionCollector, withMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -382,13 +384,27 @@ import {
 import { isPackagedRuntime } from "../runtime-mode.js";
 import type { MemoryProvenance, MemoryScope } from "./memory-store.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
-import { classifierApprovalFor, createPiModelTools, piModelOperationProviderLabel, piModelOperationUsage } from "./pi-model-tools.js";
+import {
+  classifierApprovalFor,
+  createPiModelTools,
+  piModelOperationProviderLabel,
+  piModelOperationsSystemPrompt,
+  IMAGE_GENERATION_UNAVAILABLE_PROMPT,
+  piModelOperationUsage,
+} from "./pi-model-tools.js";
 import {
   createDisplayImageExtensionRuntime,
   displayedAssistantImageUsage,
   DISPLAY_IMAGE_TOOL_NAME,
-  shouldEnableDisplayImageExtension,
+  shouldEnableImageGeneration,
+  planModelOperationsForChat,
 } from "./display-image-extension.js";
+import { imageGeneration } from "./image-generation/runtime-main.js";
+import {
+  IMAGE_GENERATION_PROVIDER_NAMES,
+  isImageGenerationProviderId,
+  type ImageGenerationSnapshot,
+} from "../../renderer/shared/image-generation/types.js";
 import {
   CHAT_ARTIFACT_EVENT_VERSION,
   type ChatHtmlArtifactV1,
@@ -411,7 +427,7 @@ import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
-import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
+import { createArtifactPlacementLedger, imageAttachmentPlacements } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -847,6 +863,8 @@ async function prepareGeneration(
   const displayedUiVisuals: ChatUiVisualV1[] = [];
   /** visual id → the render_ui call it renders after. */
   const uiVisualPlacements = createArtifactPlacementLedger();
+  /** generated image attachment id → the generate_image call it renders after. */
+  const imagePlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -858,7 +876,7 @@ async function prepareGeneration(
       const current = await chatStore.get(params.chatId);
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
-      if (!current || persistedChatWorkspaceId(current.workspaceId) !== params.workspaceId) throw new Error("The reference image chat is no longer available in this workspace.");
+      if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
       return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
@@ -906,6 +924,7 @@ async function prepareGeneration(
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      imagePlacements,
       displayedUiVisuals,
       uiVisualPlacements,
       supportsImages: runtimeSupportsImages(designModel),
@@ -1658,23 +1677,52 @@ async function prepareGeneration(
       return allowed ? [protectAdmittedBotTool(tool, botContext.admission)] : [];
     });
   }
-  if (
-    !botContext &&
-    shouldEnableDisplayImageExtension({
-      usageSource: options.usageSource,
-      interactionSurface: options.interactionSurface,
-      assistantMode,
-      workspaceRoot: folderPath,
-      permission,
-      excluded: false,
-    })
-  ) {
-    const artifactStoreAvailability = displayImageArtifactStore.availability();
-    if (!artifactStoreAvailability.available) {
-      throw new Error(
-        `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
-      );
-    }
+  // Image generation also runs in folderless conversations (image tools only);
+  // workspace chats need a file permission and also get classify and display_image.
+  const modelOperationsScope = {
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    assistantMode,
+    workspaceRoot: folderPath,
+    permission,
+    // Bots never get model operations.
+    excluded: Boolean(botContext),
+  };
+  const modelOperationsEnabled = shouldEnableImageGeneration(modelOperationsScope);
+  // Image generation has its own registry and keys (Settings → Image Generation);
+  // it never uses chat provider credentials. The snapshot is cached and offline.
+  const imageSnapshot: ImageGenerationSnapshot = modelOperationsEnabled
+    ? await imageGeneration.snapshot().catch((error: unknown) => {
+        logger.warn("image-generation", "Could not load image generation settings for this chat.", error);
+        return { available: false };
+      })
+    : { available: false };
+  const artifactStoreAvailability = modelOperationsEnabled
+    ? displayImageArtifactStore.availability()
+    : ({ available: true } as const);
+  const modelOperationsPlan = planModelOperationsForChat(modelOperationsScope, {
+    imageGenerationAvailable: imageSnapshot.available,
+    stagingAvailable: artifactStoreAvailability.available,
+  });
+  if (!artifactStoreAvailability.available && modelOperationsPlan.staging === "fail") {
+    throw new Error(
+      `${artifactStoreAvailability.reason} Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.`,
+    );
+  }
+  if (!artifactStoreAvailability.available && modelOperationsPlan.staging === "skip") {
+    logger.warn(
+      "image-generation",
+      `Image generation is off for this chat because image staging is unavailable: ${artifactStoreAvailability.reason}`,
+    );
+  }
+  if (modelOperationsPlan.setupHint) {
+    generationExtensions.push({
+      id: "aiden.model-operations",
+      systemPrompt: IMAGE_GENERATION_UNAVAILABLE_PROMPT,
+    });
+  }
+  if (modelOperationsPlan.imageTools) {
+    const displayImageWorkspaceRoot = modelOperationsPlan.displayImage ? folderPath : undefined;
     const existingUsage = displayedAssistantImageUsage(chat.messages);
     const pendingUsage = await displayImageArtifactStore.usageByChat(params.chatId);
     if (pendingUsage.count > 0) {
@@ -1683,12 +1731,12 @@ async function prepareGeneration(
       );
     }
     const displayImageRuntime = createDisplayImageExtensionRuntime({
-      workspaceRoot: folderPath!,
+      workspaceRoot: displayImageWorkspaceRoot,
       artifactNamespace: streamId,
       existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
       existingChatImageCount: existingUsage.count + pendingUsage.count,
       existingChatImagePixels: existingUsage.pixels + pendingUsage.pixels,
-      onArtifact: async (artifact, dimensions) => {
+      onArtifact: async (artifact, dimensions, source) => {
         const existing = responseImages();
         if (
           existing.some(
@@ -1715,18 +1763,22 @@ async function prepareGeneration(
         if (displayedImageIds.has(artifact.attachment.id)) return false;
         displayedImageIds.add(artifact.attachment.id);
         displayedImages.push(artifact.attachment);
+        // Only generated images claim their call's row (and its Lens placeholder).
+        if (source.tool === "generate_image") imagePlacements.record(artifact.attachment.id, source.toolCallId);
+        const placedToolCallId = imagePlacements.publicIdFor(artifact.attachment.id);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
+            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
           },
         });
         return true;
       },
     });
-    if (!options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
+    if (displayImageRuntime.extension && !options.excludeToolNames?.has(DISPLAY_IMAGE_TOOL_NAME)) {
       generationExtensions.push(displayImageRuntime.extension);
     }
     // Labels, local/remote accounting and classifier opt-in need provider shape only, not keychain presence.
@@ -1740,19 +1792,28 @@ async function prepareGeneration(
     const operationProviders = [runtime.provider, ...savedOperationProviders];
     generationExtensions.push({
       id: "aiden.model-operations",
-      systemPrompt: "Use list_operation_models to discover configured image-generation and classifier models. generate_image and classify send data to the selected provider and require explicit approval because they may incur charges. Generated images appear inline in this chat.",
+      systemPrompt: piModelOperationsSystemPrompt({
+        defaultImageModel: imageSnapshot.defaultModel,
+        classifiers: modelOperationsPlan.classify,
+      }),
       tools: createPiModelTools({
-        models: localClassifierModels.models,
-        providerLabel: (id) => piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
+        imageModels: imageGeneration.models,
+        ...(modelOperationsPlan.classify ? { classifierModels: localClassifierModels.models } : {}),
+        providerLabel: (id, type) =>
+          type === "image"
+            ? isImageGenerationProviderId(id) ? IMAGE_GENERATION_PROVIDER_NAMES[id] : id
+            : piModelOperationProviderLabel(id, operationProviders, providerRegistry.builtinProvider(id)?.label),
         listImages: modelImageReferences.listImages,
         resolveImage: modelImageReferences.resolveImage,
         resolveImages: modelImageReferences.resolveImages,
         onImage: displayImageRuntime.presentGeneratedImage,
         // Account at the provider-call boundary, not at nested/parent tool events.
         onUsage: async (record) => {
+          // Image providers are always hosted; chat provider deployments never apply to them.
+          const imageOperation = record.operation === "image";
           await usageStore.record(modelOperationUsageRecord(
-            record, operationProviders, options.usageSource ?? "chat",
-            localClassifierModels.isLocalProvider(record.provider),
+            record, imageOperation ? [] : operationProviders, options.usageSource ?? "chat",
+            !imageOperation && localClassifierModels.isLocalProvider(record.provider),
           ));
         },
       })
@@ -1896,6 +1957,7 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     htmlArtifactPlacements,
+    imagePlacements,
     displayedUiVisuals,
     uiVisualPlacements,
     supportsImages,
@@ -2258,6 +2320,7 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      imagePlacements,
       displayedUiVisuals,
       uiVisualPlacements,
       supportsImages,
@@ -2397,6 +2460,7 @@ export const llmClient = {
     // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    imagePlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     // Drafts only stream when render_artifact is really registered this turn
     // (not when visuals are Off, or for surfaces that never get the tool).
     const visualsRegistered = generationExtensions.some(
@@ -2489,6 +2553,7 @@ export const llmClient = {
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
             htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
+            imagePlacements: imageAttachmentPlacements(imagePlacements, assistantAttachments),
             uiVisuals: displayedUiVisuals.length
               ? displayedUiVisuals.map((visual) => {
                   const toolCallId = uiVisualPlacements.publicIdFor(visual.id);
@@ -3092,7 +3157,18 @@ export const llmClient = {
       }
       initialization.stopCacheWarming = () => cacheWarmer?.dispose();
       const realStream = agentRuntimeOptions.streamFn!;
-      const observedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      const warmedStream = cacheWarmer ? withPiCacheWarming(realStream, cacheWarmer) : realStream;
+      // Device-local pace: Pi calls the stream function once per model
+      // response, right before the provider request, so the wrapper marks
+      // each response's request start (see ModelPaceTimer for what TTFT covers).
+      const pace = createModelPaceMeasurement({
+        providerId: runtime.provider.id,
+        agentHarness: harnessProvider,
+        record: (key, sample) => modelPaceRecorder.record(key, sample),
+        onError: (error) =>
+          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
+      });
+      const observedStream: typeof realStream = pace.wrap(warmedStream);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
@@ -3691,6 +3767,7 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
+        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             cacheWarmer?.dispose();
@@ -4599,6 +4676,11 @@ export const llmClient = {
 
   isChatBusy(chatId: string): boolean {
     return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+  },
+
+  /** Whether this exact generation is still starting or running, whoever owns it. */
+  isGenerationLive(streamId: string): boolean {
+    return active.has(streamId) || initializing.has(streamId);
   },
 
   /** Detect only orphaned renderer ownership; normal visible generations never delay reads. */

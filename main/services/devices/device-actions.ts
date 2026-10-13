@@ -146,7 +146,6 @@ export function iosActionCommand(
         return {
           command: ready.nodePath,
           args: [cli, "permissions", input.decision, "notifications", input.appId, "-d", udid],
-          options: { env: { ELECTRON_RUN_AS_NODE: "1" } },
         };
       }
       return simctl(udid, "privacy", input.decision, IOS_PRIVACY_SERVICES[input.permission], input.appId);

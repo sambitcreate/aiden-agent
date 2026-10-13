@@ -30,6 +30,7 @@ import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
+import { ProviderSetupRow } from "./provider-setup-row";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
@@ -123,32 +124,25 @@ function BuiltinProviderRows({
   return providers.map((provider, index) => (
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
-      <div className="flex items-center gap-3 px-4 py-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+      <ProviderSetupRow
+        icon={
           <ProviderIcon
             providerId={provider.id}
             providerLabel={provider.label}
             artwork={provider.artwork}
             className="size-4.5"
           />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Text variant="strong" truncate>
-              {provider.label}
-            </Text>
-            {statusBadge(provider)}
-          </div>
-          <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-            {provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
-              ? "Transcription only · chat models hidden"
-              : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`}
-          </Text>
-        </div>
-        <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
-          {provider.hasKey ? "Manage" : "Set up"}
-        </Button>
-      </div>
+        }
+        name={provider.label}
+        badge={statusBadge(provider)}
+        subtitle={
+          provider.id === GOOGLE_PROVIDER_ID && geminiUsageScope === "transcription_only"
+            ? "Transcription only · chat models hidden"
+            : `${provider.models.length} available model${provider.models.length === 1 ? "" : "s"}`
+        }
+        actionLabel={provider.hasKey ? "Manage" : "Set up"}
+        onAction={() => onSetUp(provider)}
+      />
     </React.Fragment>
   ));
 }

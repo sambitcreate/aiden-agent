@@ -8143,6 +8143,9 @@
           },
           "producedFile": {
             "$ref": "#/components/schemas/ProducedFile"
+          },
+          "questionnaire": {
+            "$ref": "#/components/schemas/AskUserQuestionRecap"
           }
         },
         "allOf": [
@@ -8189,6 +8192,27 @@
                 }
               ]
             }
+          },
+          {
+            "if": {
+              "required": [
+                "questionnaire"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "ask_user_question"
+                }
+              }
+            }
           }
         ],
         "additionalProperties": false
@@ -8220,6 +8244,197 @@
             "maximum": 1000000000
           }
         },
+        "additionalProperties": false
+      },
+      "AskUserQuestionRecap": {
+        "type": "object",
+        "description": "Contract revision 29. Display-only recap of a settled ask_user_question card: each question and what the owner chose. Only on completed ask_user_question tool steps of a version 3 timeline. dismissed means the owner closed the card and expired means the agent stopped waiting; both leave every item skipped. Lengths count Unicode code points. Clients render it as text and never treat it as an answer to submit; older clients ignore it.",
+        "required": [
+          "version",
+          "outcome",
+          "items"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "outcome": {
+            "enum": [
+              "answered",
+              "dismissed",
+              "expired"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/AskUserQuestionRecapItem"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "outcome"
+              ],
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "dismissed",
+                    "expired"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "properties": {
+                      "kind": {
+                        "const": "skipped"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "AskUserQuestionRecapItem": {
+        "type": "object",
+        "description": "One question and its outcome. option carries the one chosen label, multi one to five distinct labels, custom the owner's own text (clipped to 1000 code points), and skipped no answers. Strings are non-blank and contain no C0 control characters other than tab and newline, and no DEL.",
+        "required": [
+          "question",
+          "header",
+          "kind",
+          "answers"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u0008\\u000B-\\u001F\\u007F]+$"
+          },
+          "header": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16,
+            "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u0008\\u000B-\\u001F\\u007F]+$"
+          },
+          "kind": {
+            "enum": [
+              "option",
+              "multi",
+              "custom",
+              "skipped"
+            ]
+          },
+          "answers": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u0008\\u000B-\\u001F\\u007F]+$"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "skipped"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "answers": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "option"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "answers": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "maxLength": 60
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "multi"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "answers": {
+                  "minItems": 1,
+                  "maxItems": 5,
+                  "uniqueItems": true,
+                  "items": {
+                    "maxLength": 60
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "custom"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "answers": {
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "GenerationThinkingStep": {
@@ -8361,6 +8576,36 @@
             "additionalProperties": false
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "version"
+              ],
+              "properties": {
+                "version": {
+                  "enum": [
+                    1,
+                    2
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "steps": {
+                  "items": {
+                    "not": {
+                      "required": [
+                        "questionnaire"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "Message": {

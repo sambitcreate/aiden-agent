@@ -1,5 +1,11 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -9,50 +15,34 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatTask
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
 
 class AidenChatScrollTest {
+    private fun replay(start: Boolean, vararg events: AidenFollowEvent): Boolean =
+        events.fold(AidenFollowLatch(start)) { latch, event -> AidenChatScroll.resolveFollow(latch, event) }.isFollowing
+
     @Test
-    fun reverseLayoutKeepsTheLatestMessageAtIndexZero() {
-        assertEquals(0, AidenChatScroll.latestItemIndex())
-        assertTrue(AidenChatScroll.isFollowingLatest(0, 0))
-        assertTrue(AidenChatScroll.isFollowingLatest(0, 80))
-        assertFalse(AidenChatScroll.isFollowingLatest(0, 81))
-        assertFalse(AidenChatScroll.isFollowingLatest(1, 0))
-        assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(true))
-        assertFalse(AidenChatScroll.shouldPinLatestAfterContentChange(false))
-        assertEquals(3, AidenChatScroll.reverseLayoutItemCount(3, false))
-        assertEquals(4, AidenChatScroll.reverseLayoutItemCount(3, true))
-        assertTrue(AidenChatScroll.shouldUpdateFollowLatchFromViewport(false))
-        assertFalse(AidenChatScroll.shouldUpdateFollowLatchFromViewport(true))
-        assertFalse(AidenChatScroll.shouldUpdateFollowLatchFromViewport(false, itemCount = 4, consumedItemCount = 3))
-        assertTrue(AidenChatScroll.shouldUpdateFollowLatchFromViewport(false, itemCount = 4, consumedItemCount = 4))
+    fun aDragStopsFollowingTheMomentItStarts() {
+        assertFalse(replay(true, AidenFollowEvent.UserScrollBegin))
     }
 
     @Test
-    fun insertionEpochStaysGatedUntilContentChangeConsumesLatch() {
-        var state = FollowLatchState(lastItemCount = 3, consumedItemCount = 3, followLatest = true)
-        state = AidenChatScroll.applyViewportFollowSample(
-            state,
-            ViewportFollowSample(itemCount = 4, index = 1, offset = 0, scrolling = true),
+    fun onlyAGestureThatSettlesAtTheLiveEdgeResumesFollowing() {
+        // Released 300px up: still detached, however close the content later grows to the edge.
+        assertFalse(replay(true, AidenFollowEvent.UserScrollBegin, AidenFollowEvent.UserScrollEnd(isAtLiveEdge = false)))
+        // Dragged back down and settled within the re-arm slop.
+        assertTrue(
+            replay(
+                true,
+                AidenFollowEvent.UserScrollBegin,
+                AidenFollowEvent.UserScrollEnd(isAtLiveEdge = false),
+                AidenFollowEvent.UserScrollBegin,
+                AidenFollowEvent.UserScrollEnd(isAtLiveEdge = true),
+            )
         )
-        assertTrue(state.followLatest)
-        state = AidenChatScroll.applyViewportFollowSample(
-            state,
-            ViewportFollowSample(itemCount = 4, index = 1, offset = 0, scrolling = true),
-        )
-        assertTrue(state.followLatest)
-        assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(state.followLatest))
-        state = AidenChatScroll.consumeInsertionEpoch(state, itemCount = 4)
-        assertTrue(state.followLatest)
-        state = AidenChatScroll.applyViewportFollowSample(
-            state,
-            ViewportFollowSample(itemCount = 4, index = 1, offset = 0, scrolling = true),
-        )
-        assertFalse(state.followLatest)
     }
 
     @Test
-    fun restoredFollowStaysOffWhenTheLiveEdgeIsNotVisible() {
-        assertFalse(AidenChatScroll.isFollowingLatest(2, 0))
-        assertFalse(AidenChatScroll.shouldPinLatestAfterContentChange(false))
+    fun jumpingToLatestFollowsAgainEvenIfACoastingGestureEndsAwayFromTheEdge() {
+        assertTrue(replay(false, AidenFollowEvent.Reset))
+        assertTrue(replay(false, AidenFollowEvent.Reset, AidenFollowEvent.UserScrollEnd(isAtLiveEdge = false)))
     }
 
     @Test
@@ -63,7 +53,6 @@ class AidenChatScrollTest {
         assertTrue(AidenChatScroll.shouldPinTaskList(false, 3))
         assertFalse(AidenChatScroll.shouldPinTaskList(true, 3))
         assertFalse(AidenChatScroll.shouldPinTaskList(false, 0))
-        assertFalse(AidenChatScroll.isFollowingLatest(2, 0))
         assertTrue(AidenChatScroll.shouldPinLatestAfterContentChange(true))
     }
 
@@ -123,5 +112,40 @@ class AidenChatScrollTest {
                 listOf(base[1].copy(activeForm = "a", subject = "b:c")),
             ),
         )
+    }
+
+    // Wheel, keyboard and accessibility scrolls reach the list as UserInput
+    // deltas but never fling, so the latch must settle without onPreFling.
+    private fun TestScope.scrollWithoutFling(listState: LazyListState): AidenTranscriptFollowState {
+        val follow = AidenTranscriptFollowState(listState, this, initiallyFollowing = true)
+        follow.reArmPx = 36
+        follow.nestedScrollConnection.onPreScroll(Offset(0f, -120f), NestedScrollSource.UserInput)
+        assertFalse(follow.isFollowing)
+        return follow
+    }
+
+    @Test
+    fun aScrollWithoutAFlingThatEndsAtTheLiveEdgeFollowsAgain() = runTest {
+        val follow = scrollWithoutFling(LazyListState())
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + 1)
+        assertTrue(follow.isFollowing)
+    }
+
+    @Test
+    fun aScrollWithoutAFlingThatEndsAwayFromTheEdgeStaysDetached() = runTest {
+        val follow = scrollWithoutFling(LazyListState(firstVisibleItemIndex = 4))
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + 1)
+        assertFalse(follow.isFollowing)
+    }
+
+    @Test
+    fun eachScrollDeltaPostponesTheSettle() = runTest {
+        val follow = scrollWithoutFling(LazyListState())
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS - 20)
+        follow.nestedScrollConnection.onPreScroll(Offset(0f, 60f), NestedScrollSource.UserInput)
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS - 20)
+        assertFalse(follow.isFollowing)
+        advanceTimeBy(21)
+        assertTrue(follow.isFollowing)
     }
 }

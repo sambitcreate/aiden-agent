@@ -11,6 +11,7 @@ import {
   Plug,
   Wand2,
   Globe,
+  Image as ImageIcon,
   Mic,
   Keyboard,
   ListFilter,
@@ -31,6 +32,7 @@ import { AppearanceSettings } from "../components/settings/appearance-settings";
 import { SkillsSettings } from "../components/settings/skills-settings";
 import { McpSettings } from "../components/settings/mcp-settings";
 import { WebSearchSettings } from "../components/settings/web-search-settings";
+import { ImageGenerationSettings } from "../components/settings/image-generation-settings";
 import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { TtsSettings } from "../components/settings/tts-settings";
@@ -72,6 +74,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   telegram: <Send className="size-5" />,
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
+  imageGeneration: <ImageIcon className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   geminiLive: <AudioWaveform className="size-5" />,
   approvals: <ShieldCheck className="size-5" />,
@@ -101,6 +104,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   remoteAccess: ConnectionsSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
+  imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
   computerUse: ComputerUseSettings,
   simulator: SimulatorSettingsPage,
@@ -122,6 +126,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: "Use Aiden from your phone or another computer, or control your other computers from here.",
   websearch: "Choose how Aiden searches and reads the web.",
+  imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",

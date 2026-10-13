@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
+  clearObservedRunProjection,
   detachedLifecycleChatProjection,
   detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
@@ -13,13 +14,18 @@ import {
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
   rememberChatReadReconciliation,
+  publishObservedRunProjection,
+  releaseSettledDetachedLifecycleStreams,
   rememberDetachedLifecycleStream,
   subscribeChatReadReconciliations,
+  subscribeDetachedLifecycleStreams,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
+  visibleDetachedLifecycleProjection,
   waitForDetachedLifecycleSettlement,
 } from "./chat-terminal-sync.js";
-import type { Chat } from "./types.js";
+import type { DetachedLifecycleProjection } from "./chat-terminal-sync.js";
+import type { Chat, ChatMessage } from "./types.js";
 import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
 
 function chat(id: string, content: string): Chat {
@@ -640,4 +646,181 @@ test("authoritative reconciliation stops without refetching after a deletion tom
   });
   assert.equal(result, "deleted");
   assert.equal(exactReads, 0);
+});
+
+test("a settled detached stream stops draining while the phone's newer turn keeps the chat busy", async () => {
+  const finished = detached("mac-finished", "chat-phone-follow-up", "workspace-1");
+  const stillRunning = detached("mac-still-running", "chat-phone-follow-up", "workspace-1");
+  rememberDetachedLifecycleStream(finished);
+  rememberDetachedLifecycleStream(stillRunning);
+  // The finished stream's terminal never reached this document.
+  assert.equal(fallbackDetachedLifecycleStream(finished.streamId), true);
+  const captured = captureDetachedLifecycleChat(finished);
+  assert.ok(captured);
+
+  // The phone's turn keeps the chat active, so the chat-level path cannot help:
+  // this is the stuck "Response continues in the background…" marker.
+  assert.equal(clearInactiveDetachedLifecycleChat(captured, new Set([finished.chatId])), false);
+  assert.equal(isDetachedLifecycleChatDraining(finished.chatId, finished.workspaceId), true);
+
+  const order: string[] = [];
+  const released = await releaseSettledDetachedLifecycleStreams(
+    { chatId: finished.chatId, workspaceId: finished.workspaceId },
+    {
+      settled: async (streamIds) => {
+        order.push(`settled:${[...streamIds].sort().join(",")}`);
+        return streamIds.filter((streamId) => streamId === finished.streamId);
+      },
+      refreshChat: async (chatId) => {
+        // The transcript is re-read before the marker goes, so nothing flashes away.
+        order.push(`refresh:${chatId}:draining=${isDetachedLifecycleChatDraining(chatId, "workspace-1")}`);
+      },
+    },
+  );
+  assert.equal(released, true);
+  assert.deepEqual(order, [
+    "settled:mac-finished,mac-still-running",
+    "refresh:chat-phone-follow-up:draining=true",
+  ]);
+  // Only the confirmed stream is released; the unsettled one still drains.
+  assert.deepEqual(captureDetachedLifecycleChat(finished)?.streamIds, [stillRunning.streamId]);
+
+  assert.equal(
+    await releaseSettledDetachedLifecycleStreams(finished, {
+      settled: async () => [],
+      refreshChat: async () => assert.fail("nothing settled, so nothing is re-read"),
+    }),
+    false,
+  );
+  assert.equal(isDetachedLifecycleChatDraining(finished.chatId, finished.workspaceId), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(stillRunning)!, new Set()), true);
+  assert.equal(
+    await releaseSettledDetachedLifecycleStreams(finished, {
+      settled: async () => assert.fail("a chat with no marker asks main nothing"),
+      refreshChat: async () => assert.fail("a chat with no marker is not re-read"),
+    }),
+    false,
+  );
+});
+
+test("a settled stream's release survives a competing read cancelling its refresh", async () => {
+  const finished = detached("mac-cancelled-read", "chat-cancelled-read", "workspace-1");
+  rememberDetachedLifecycleStream(finished);
+  assert.equal(fallbackDetachedLifecycleStream(finished.streamId), true);
+
+  let reads = 0;
+  const released = await releaseSettledDetachedLifecycleStreams(finished, {
+    settled: async (streamIds) => streamIds,
+    refreshChat: async () => {
+      reads += 1;
+      // The observer's own read of the chat cancels the first one.
+      if (reads === 1) throw new Error("CancelledError");
+    },
+  });
+  assert.equal(released, true);
+  assert.equal(reads, 2);
+  assert.equal(isDetachedLifecycleChatDraining(finished.chatId, finished.workspaceId), false);
+
+  // A chat whose reads keep failing is not released on faith.
+  const unreadable = detached("mac-unreadable", "chat-unreadable", "workspace-1");
+  rememberDetachedLifecycleStream(unreadable);
+  assert.equal(fallbackDetachedLifecycleStream(unreadable.streamId), true);
+  await assert.rejects(
+    releaseSettledDetachedLifecycleStreams(unreadable, {
+      settled: async (streamIds) => streamIds,
+      refreshChat: async () => {
+        throw new Error("offline");
+      },
+    }),
+  );
+  assert.equal(isDetachedLifecycleChatDraining(unreadable.chatId, unreadable.workspaceId), true);
+  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(unreadable)!, new Set()), true);
+});
+
+test("an observed run shows as the chat's live projection until it is cleared", () => {
+  const owner = detached("phone-run", "chat-observed", "workspace-1");
+  let notifications = 0;
+  const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
+  try {
+    assert.equal(
+      publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking", timeline: null, textStreaming: true }, 1_000),
+      true,
+    );
+    assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), true);
+    const projection = detachedLifecycleChatProjection(owner.chatId, owner.workspaceId);
+    assert.equal(projection?.content, "Hel");
+    assert.equal(projection?.reasoning, "Thinking");
+    assert.equal(projection?.lastTextDeltaAt, 1_000);
+    assert.equal(projection?.observed, true);
+
+    // Reasoning after text keeps the last prose time; an identical snapshot is not re-published.
+    publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false }, 2_000);
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.lastTextDeltaAt, 1_000);
+    const before = notifications;
+    assert.equal(
+      publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false }, 3_000),
+      false,
+    );
+    assert.equal(notifications, before);
+
+    // Another workspace's chat with the same id is a different chat.
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, "workspace-2"), null);
+    // Clearing a different run leaves this one; clearing this one ends the drain.
+    assert.equal(clearObservedRunProjection(owner.chatId, owner.workspaceId, "another-run"), false);
+    assert.equal(clearObservedRunProjection(owner.chatId, owner.workspaceId, owner.streamId), true);
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId), null);
+    assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test("a run this document started is never mirrored over its own detached projection", () => {
+  const own = detached("own-detached-run", "chat-own-run", "workspace-1");
+  rememberDetachedLifecycleStream(own, { content: "Mine", reasoning: "", timeline: null, artifacts: [], subagents: [] });
+  assert.equal(
+    publishObservedRunProjection(own, { text: "Mine plus mirror", reasoning: "", timeline: null, textStreaming: true }),
+    false,
+  );
+  const projection = detachedLifecycleChatProjection(own.chatId, own.workspaceId);
+  assert.equal(projection?.content, "Mine");
+  assert.equal(projection?.observed, undefined);
+  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);
+});
+
+test("a saved reply hides an own run, but a mirrored run only by its own reply", () => {
+  const projection = (streamId: string, observed: boolean): DetachedLifecycleProjection => ({
+    ...detached(streamId),
+    content: "Streaming",
+    lastTextDeltaAt: null,
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+    ...(observed ? { observed: true as const } : {}),
+  });
+  const reply = (generationId?: string): ChatMessage => ({
+    id: `reply-${generationId ?? "untimed"}`,
+    role: "assistant",
+    content: "Done",
+    createdAt: 2,
+    ...(generationId
+      ? { timeline: { version: 3, generationId, status: "completed", startedAt: 1, steps: [] } }
+      : {}),
+  });
+  const prompt: ChatMessage = { id: "prompt", role: "user", content: "Next", createdAt: 3 };
+
+  const own = projection("run-new", false);
+  assert.equal(visibleDetachedLifecycleProjection(own, undefined), own);
+  assert.equal(visibleDetachedLifecycleProjection(own, [reply("run-old"), prompt]), own);
+  // An own run's text is already in the cached reply at handoff, whatever its timeline.
+  assert.equal(visibleDetachedLifecycleProjection(own, [reply()]), null);
+
+  const mirrored = projection("run-new", true);
+  // A phone's turn starts while the cache still ends with the previous reply.
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old")]), mirrored);
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply()]), mirrored);
+  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old"), reply("run-new")]), null);
+
+  assert.equal(visibleDetachedLifecycleProjection(null, [reply("run-new")]), null);
 });

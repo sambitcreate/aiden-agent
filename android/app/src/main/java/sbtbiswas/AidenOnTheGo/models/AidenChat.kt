@@ -247,7 +247,10 @@ data class AidenAgentStep(
     val target: String? = null,
     val detail: String? = null,
     val lineChanges: AidenAgentLineChanges? = null,
-    val producedFile: AidenProducedFile? = null
+    val producedFile: AidenProducedFile? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step. */
+    @Serializable(with = AidenQuestionnaireRecapSerializer::class)
+    val questionnaire: AidenQuestionnaireRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -257,6 +260,17 @@ data class AidenAgentStep(
 
     val isActive: Boolean
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
+
+    /**
+     * The recap the transcript shows in place of this step's activity line:
+     * only a completed `ask_user_question` call carries one. A recap on any
+     * other step is ignored, and that step stays an ordinary activity line.
+     */
+    val questionnaireRecap: AidenQuestionnaireRecap?
+        get() = questionnaire?.takeIf {
+            kind == Kind.TOOL && toolName == AidenQuestionnaireRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
 @Immutable
@@ -265,10 +279,12 @@ data class AidenChronologicalRow(
     val kind: Kind,
     val text: String = "",
     val steps: List<AidenAgentStep> = emptyList(),
+    /** Set on a [Kind.QUESTIONNAIRE] row: the owner's answers, at the step's position. */
+    val questionnaire: AidenQuestionnaireRecap? = null,
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
     val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, VISUAL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, VISUAL }
 }
 
 object AidenChronologicalProjection {
@@ -322,10 +338,19 @@ object AidenChronologicalProjection {
                     "reasoning-${step.id}", AidenChronologicalRow.Kind.REASONING, slice, listOf(step)
                 )
                 index++
+            } else if (step.questionnaireRecap != null) {
+                // An answered questionnaire reads as its recap, not as an activity line.
+                result += AidenChronologicalRow(
+                    "questionnaire-${step.id}", AidenChronologicalRow.Kind.QUESTIONNAIRE,
+                    steps = listOf(step), questionnaire = step.questionnaireRecap
+                )
+                index++
             } else {
                 val group = mutableListOf<AidenAgentStep>()
                 var drawn: List<AidenChatVisual> = emptyList()
-                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL && steps[index].contentOffset == offset) {
+                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
+                    steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
+                ) {
                     val step = steps[index++]
                     group += step
                     val callId = step.toolCallId
@@ -522,6 +547,7 @@ object AidenAgentActivityPresentation {
         "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context"),
+        "generate_image" to Pair("Generating image", "Generated image"),
         // Activity an ACP agent (for example, Google Antigravity) ran itself.
         "delete_file" to Pair("Deleting", "Deleted"),
         "move_file" to Pair("Moving", "Moved"),
@@ -603,8 +629,39 @@ object AidenAgentActivityPresentation {
         return if (obj != null) "$verb $obj" else verb
     }
 
+    /**
+     * The timeline without answered questionnaires, which the transcript shows
+     * as their recap instead of as activity, so they leave the activity list
+     * and its tool-call tally.
+     */
+    fun activityTimeline(timeline: AidenGenerationTimeline): AidenGenerationTimeline {
+        if (timeline.steps.none { it.questionnaireRecap != null }) return timeline
+        return timeline.copy(steps = timeline.steps.filter { it.questionnaireRecap == null })
+    }
+
+    /**
+     * Tool steps a fallback live transcript lists. The stream's own tool rows
+     * carry `tool_N` ids that never match a step's `toolCallId`, so once the
+     * timeline knows the calls it is the one source. Questionnaires are left
+     * out: they render as their recap.
+     */
+    fun liveToolSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
+
+    /** Settled questionnaires, in timeline order, for a fallback transcript's recap cards. */
+    fun questionnaireSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
+
+    /**
+     * Whether a fallback live transcript lists the stream's own tool rows. Once
+     * the timeline has a tool step, its rows or a recap card already show each
+     * call, so the live rows would only repeat them.
+     */
+    fun showsLiveToolRows(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): Boolean =
+        tools.isNotEmpty() && timeline?.steps.orEmpty().none { it.kind == AidenAgentStep.Kind.TOOL }
+
     fun summary(timeline: AidenGenerationTimeline): String {
-        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL }
+        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
         if (tools.isEmpty()) {
             return if (timeline.status == AidenGenerationTimelineStatus.RUNNING) "Thinking"
             else "Thought ${duration(timeline.steps.mapNotNull { it.durationMs }.sum())}"

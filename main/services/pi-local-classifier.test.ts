@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createModels, createProvider, type ImageModel, type ClassifierContext } from "@earendil-works/pi-ai";
+import { createModels, type ClassifierContext } from "@earendil-works/pi-ai";
 import { classify } from "@earendil-works/pi-ai/api/llama-cpp-classify";
 import { createLocalClassifierModels, localClassifierBaseUrl } from "./pi-local-classifier.js";
 import { buildModel, type ResolvedModelRuntime } from "./model-runtime-core.js";
@@ -129,25 +129,4 @@ test("malformed endpoints, unsupported native APIs and cancellation fail without
   cancelled.afterResolve(() => abort.abort());
   assert.equal((await cancelled.models.classify(cancelled.model(), context, { signal: abort.signal })).stopReason, "aborted");
   assert.equal(cancelled.requests.length, 0);
-});
-
-test("global image providers keep their own endpoint and auth while the local facet is enabled", async () => {
-  const f = fixture();
-  const image: ImageModel<"openai-images"> = { type: "image", api: "openai-images", provider: "remote-image", id: "image",
-    name: "Image", baseUrl: "https://image.example/v1", input: ["text"], output: ["image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  let usedKey: string | undefined, usedUrl: string | undefined;
-  f.base.setProvider(createProvider({ id: "remote-image", models: [image],
-    auth: { apiKey: { name: "Image key", resolve: async () => ({ auth: { apiKey: "remote-key" }, source: "fixture" }) } },
-    images: { "openai-images": { generateImages: async (model, _context, options) => {
-      usedKey = options?.apiKey; usedUrl = model.baseUrl;
-      return { api: model.api, provider: model.provider, model: model.id, output: [], stopReason: "stop", timestamp: 1 };
-    } } },
-  }));
-  const available = await f.models.getAvailableOfType("image");
-  assert.equal(available.length, 1);
-  const result = await f.models.generateImages(available[0], { input: [{ type: "text", text: "A flower" }] });
-  assert.equal(result.stopReason, "stop", result.errorMessage);
-  assert.equal(usedKey, "remote-key"); assert.equal(usedUrl, "https://image.example/v1");
-  assert.equal(f.resolutions(), 0); assert.equal(f.requests.length, 0);
 });

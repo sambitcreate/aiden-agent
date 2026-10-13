@@ -41,6 +41,8 @@ class AidenWaitingForNetworkUiTest {
                     activityTimeline = timeline,
                     isBotChat = false,
                     palette = AidenTheme.palette,
+                    onCopyMessage = {},
+                    onOpenMessageUrl = {},
                     isWaitingForNetwork = true
                 )
             }
@@ -61,6 +63,8 @@ class AidenWaitingForNetworkUiTest {
                     activityTimeline = null,
                     isBotChat = true,
                     palette = AidenTheme.palette,
+                    onCopyMessage = {},
+                    onOpenMessageUrl = {},
                     isWaitingForNetwork = true
                 )
             }
