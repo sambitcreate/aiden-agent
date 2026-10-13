@@ -3010,6 +3010,15 @@ class AidenChatTest {
             AidenMessageOutcomeStatus.CANCELLED, refreshHoldsReply = false)
     }
 
+    @Test
+    fun aGapReconciliationPublishingTheReplyBeforeTerminalRetiresTheLiveCard() {
+        // A gap in sequences triggers reconcileChat, which publishes the run's reply
+        // before the terminal event arrives. Later, when the terminal event is processed
+        // and a subsequent read holds the reply, the live card must retire correctly
+        // using the boundary captured at stream start, not snapshotted at terminal time.
+        assertGapReconciliationRetiresLiveCard()
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun assertTitleRefreshAfterTerminal(
         terminalType: String, terminalPayload: String, outcome: AidenMessageOutcomeStatus?, refreshHoldsReply: Boolean
@@ -3101,6 +3110,116 @@ class AidenChatTest {
                     assertEquals(reply, vm.liveText.value)
                     assertTrue(vm.hasActiveStream.value)
                 }
+            }
+        } finally {
+            releaseEvents.countDown()
+            releaseRetries.countDown()
+            runBlocking(main) {
+                val job = model?.viewModelScope?.coroutineContext?.get(Job)
+                owners.clear()
+                job?.join()
+            }
+            Dispatchers.resetMain()
+            main.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun assertGapReconciliationRetiresLiveCard() {
+        val directory = kotlin.io.path.createTempDirectory("gap-reconcile-").toFile()
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val owners = ViewModelStore()
+        val releaseEvents = CountDownLatch(1)
+        val releaseRetries = CountDownLatch(1)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val earlier = listOf(
+            AidenChatMessage("earlier-prompt", AidenChatRole.USER, "Earlier", createdAt = Instant.EPOCH),
+            AidenChatMessage("earlier-reply", AidenChatRole.ASSISTANT, "Stopped early", createdAt = Instant.EPOCH,
+                outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED)))
+        val initial = AidenChat(id = "chat-gap", workspaceId = "workspace-gap", title = "Gap", messages = earlier,
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1", titlePending = null)
+        val reply = "The final reply"
+        val runReply = AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH,
+            outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED))
+        val final = initial.copy(revision = "r2",
+            messages = earlier + runReply)
+        val wire = Json { explicitNulls = false; encodeDefaults = true }
+        fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-gap\",\"sequence\":$sequence," +
+                "\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.requestUrl!!.encodedPath.endsWith("/streams/stream-gap/events") -> {
+                    releaseEvents.await(5, TimeUnit.SECONDS)
+                    // Gap in sequences: event 1 and event 4, skipping 2 and 3.
+                    // This will trigger reconcileChat() which publishes the reply before terminal.
+                    MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
+                            event(4, "text_delta", "{\"text\":\"$reply\"}") +
+                            event(5, "cancelled", "{\"source\":\"device\"}", terminal = true))
+                }
+                request.requestUrl!!.encodedPath.endsWith("/chats/chat-gap") -> when (reads.incrementAndGet()) {
+                    1 -> MockResponse().setBody(wire.encodeToString(initial))
+                    // First reconcile read (from the gap) includes the reply
+                    2 -> MockResponse().setBody(wire.encodeToString(final))
+                    // Terminal read fails
+                    3 -> MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Terminal failed","requestId":"r","retryable":true}}""")
+                    // Terminal reconciliation retry includes the reply
+                    4 -> {
+                        releaseRetries.await(10, TimeUnit.SECONDS)
+                        MockResponse().setBody(wire.encodeToString(final))
+                    }
+                    else -> MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(main)
+        var model: AidenChatViewModel? = null
+        try {
+            runBlocking(main) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "instance-gap", deviceId = "device-gap",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                    capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+                val cache = AidenChatCache(directory)
+                cache.saveChat(initial, "instance-gap")
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
+                    scope = CoroutineScope(main + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-gap", "stream-gap", "turn-gap", 0),
+                    "instance-gap", initial.id)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                model = vm
+                owners.put("chat", vm)
+                withTimeout(5_000) { vm.isLoading.first { !it } }
+                releaseEvents.countDown()
+                // Wait for the gap reconciliation to complete and publish the reply
+                withTimeout(5_000) { vm.chat.first { it?.revision == "r2" } }
+                // The terminal event arrives next, and it should use the boundary captured
+                // at stream start (when earlierIds was captured as just the earlier messages).
+                // Wait for terminal event processing and its failed read
+                withTimeout(5_000) { vm.presentedError.first { it == "Terminal failed" } }
+
+                assertEquals("the gap reconciliation publishes the reply", reply, vm.liveText.value)
+                assertEquals(final.messages.map { it.id }, vm.chat.value?.messages?.map { it.id })
+
+                // Resume and let terminal reconciliation retry
+                releaseRetries.countDown()
+                withTimeout(5_000) { vm.presentedError.first { it == null } }
+
+                // The screen should NOT show the live card because the reply is already in the chat
+                // AND the earliest boundary (captured at stream start) does not include the reply
+                val hasLiveOutput = vm.liveText.value.isNotEmpty() || vm.reasoning.value.isNotEmpty() || vm.tools.value.isNotEmpty()
+                val showsLiveCard = AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput)
+                assertFalse("the reply must not show twice even after gap reconciliation", showsLiveCard)
+                assertFalse(vm.hasActiveStream.value)
             }
         } finally {
             releaseEvents.countDown()
