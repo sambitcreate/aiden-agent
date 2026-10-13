@@ -202,8 +202,25 @@ class AidenChatViewModel(
             field = value
             _hasActiveStream.value = value != null
         }
-    /** The reply a finished stream's done event named, until that stream clears. */
-    private data class EndedReply(val streamId: String, val messageId: String)
+    /**
+     * The persisted reply of a finished stream, until that stream clears. A done
+     * event names it; cancelled and error events do not, so their reply is the
+     * newest message carrying that outcome that was not already in the chat.
+     */
+    private data class EndedReply(
+        val streamId: String,
+        val messageId: String? = null,
+        val outcome: AidenMessageOutcomeStatus? = null,
+        val earlierIds: Set<String> = emptySet()
+    ) {
+        fun isIn(messages: List<AidenChatMessage>): Boolean {
+            if (messageId != null) return messages.any { it.id == messageId }
+            val last = messages.lastOrNull() ?: return false
+            return last.role == AidenChatRole.ASSISTANT && last.outcome?.status == outcome && last.id !in earlierIds
+        }
+    }
+    private fun endedWith(streamId: String, outcome: AidenMessageOutcomeStatus) = EndedReply(
+        streamId, outcome = outcome, earlierIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id })
     private var endedReply: EndedReply? = null
     private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
@@ -1701,12 +1718,14 @@ class AidenChatViewModel(
                 _pendingQuestion.value = null
                 _presentedError.value = null
                 _streamState.value = AidenStreamState.ERROR
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.FAILED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.CANCELLED -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.CANCELLED
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.CANCELLED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.DONE -> {
@@ -2958,7 +2977,7 @@ class AidenChatViewModel(
         // Any accepted read that already holds the ended run's reply, such as
         // a title refresh, retires its live card in this same step.
         val ended = endedReply
-        if (ended != null && ended.streamId == activeStreamId && presented.messages.any { it.id == ended.messageId }) {
+        if (ended != null && ended.streamId == activeStreamId && ended.isIn(presented.messages)) {
             clearRecoveryWarning()
             clearFinishedStream(ended.streamId)
         }
