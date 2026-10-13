@@ -874,6 +874,36 @@ function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLE
 }
 
 /**
+ * Whether a reading key is consumed by a nested scroller in the direction the key specifies.
+ * If a nested element can scroll in that direction, the transcript follow latch is not affected.
+ */
+function nestedScrollerConsumesKey(
+  target: EventTarget | null,
+  viewport: HTMLElement,
+  key: string,
+  shiftKey: boolean,
+): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== viewport) {
+    if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        // Determine if the key scrolls up (negative direction) or down (positive direction).
+        // Shift+Space scrolls up; Space scrolls down. Other keys follow their semantic direction.
+        const scrollsUp =
+          key === "ArrowUp" || key === "PageUp" || key === "Home" || (key === " " && shiftKey);
+        const scrollsDown =
+          key === "ArrowDown" || key === "PageDown" || key === "End" || (key === " " && !shiftKey);
+        if (scrollsUp && node.scrollTop > 0) return true;
+        if (scrollsDown && node.scrollTop + node.clientHeight < node.scrollHeight - 1) return true;
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
  * The follow-enabled scrollport the reader last pressed in. Reading keys typed
  * with focus on the page body scroll that pane, so only it may stop following.
  */
@@ -996,7 +1026,7 @@ export function ScrollArea({
   /** Pins a following viewport to its true bottom and records where it landed. */
   const snapIfFollowing = React.useCallback((element: HTMLElement) => {
     const state = followRef.current;
-    if (autoScrollRef.current && state.following && !state.jumpPending) {
+    if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
       element.scrollTop = element.scrollHeight;
     }
     dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
@@ -1098,6 +1128,8 @@ export function ScrollArea({
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
       if (!isUserScrollKey(event.key)) return;
+      // A nested scrollable element in the direction this key moves leaves follow alone.
+      if (nestedScrollerConsumesKey(event.target, element, event.key, event.shiftKey)) return;
       dispatchFollow({
         type: "userIntent",
         intent: "key",
