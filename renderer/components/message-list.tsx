@@ -318,6 +318,7 @@ function AssistantResponse({
             content={row.content}
             streaming={streaming && isLastText}
             streamComplete={isLastText ? streamComplete : undefined}
+            textClosed={index < rows.length - 1}
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}

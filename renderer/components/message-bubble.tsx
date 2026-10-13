@@ -28,6 +28,8 @@ export interface MessageBubbleProps {
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
+  /** A later step has closed this text: it can no longer grow, though the turn runs on. */
+  textClosed?: boolean;
   onStreamHandoffComplete?: () => void;
   /** Split assistant prose renders one whole-response copy action on its tail. */
   showCopy?: boolean;
@@ -59,6 +61,7 @@ export function MessageBubble({
   skill,
   streaming,
   streamComplete,
+  textClosed,
   onStreamHandoffComplete,
   showCopy = true,
   copyText,
@@ -128,10 +131,10 @@ export function MessageBubble({
         {revealed ? (
           <StreamingMarkdownReveal
             content={content}
-            // A reply that stops streaming (it settled, or a tool step closed
-            // this text) finishes its reveal in the same tree.
-            complete={streaming ? streamComplete : true}
-            onHandoffComplete={onStreamHandoffComplete}
+            // Text that can no longer grow (the turn ended, a tool step closed
+            // it, or it settled) shows in full in the same tree.
+            complete={streaming ? Boolean(streamComplete || textClosed) : true}
+            onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
             richLinks
           />
         ) : (

@@ -7,6 +7,7 @@ import { MessageList } from "./message-list";
 import type { ChatMessage } from "../lib/types";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS } from "../lib/streaming-reveal";
 
 afterEach(() => {
   cleanup();
@@ -285,9 +286,8 @@ function toolStep(contentOffset: number): AgentToolStep {
 
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-test("text closed by a tool step finishes its reveal instead of appearing all at once", async () => {
-  const sentences = Array.from({ length: 24 }, (_, index) => `Sentence ${index + 1} ends here.`);
-  const text = `${sentences.join(" ")}\n\n`;
+test("text closed by a tool step shows what it was still holding back at once", async () => {
+  const text = "Checked the config.\n\nNow reading the file that defines";
   const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
     version: 3,
     generationId: "generation-1",
@@ -296,19 +296,46 @@ test("text closed by a tool step finishes its reveal instead of appearing all at
     steps,
   });
   const view = render(transcript({ messages: [prompt], streamingText: text, timeline: timeline([]) }));
-  await wait(30);
-  assert.equal(view.container.textContent?.includes("Sentence 24 ends here."), false, "still revealing");
+  assert.ok(view.container.textContent?.includes("Checked the config."));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "an unfinished sentence waits");
 
-  // A tool call starts: this text is no longer the live tail.
+  // A tool call starts: this text can no longer grow, so nothing is left to wait for.
   view.rerender(transcript({ messages: [prompt], streamingText: text, timeline: timeline([toolStep(text.length)]) }));
-  assert.ok(view.container.textContent?.includes("Sentence 1 ends here."), "what was shown stays");
-  assert.equal(
-    view.container.textContent?.includes("Sentence 24 ends here."),
-    false,
-    "the rest is not dumped in the same frame",
+  assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
+});
+
+test("a streaming reply joins a paragraph at a time and stops fading once settled", async () => {
+  const first = "The first paragraph is ready.";
+  const second = "The second paragraph follows.";
+  const view = render(transcript({ messages: [prompt], streamingText: `${first}\n\n${second.slice(0, 10)}` }));
+  assert.ok(view.container.textContent?.includes(first), "the first block shows at once");
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "new blocks fade while the reply streams");
+
+  const reply = `${first}\n\n${second}\n\n`;
+  view.rerender(transcript({ messages: [prompt], streamingText: reply }));
+  assert.equal(view.container.textContent?.includes(second), false, "the next block waits its turn");
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
+  assert.ok(view.container.textContent?.includes(second), "then joins whole");
+
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: reply, createdAt: 2 };
+  view.rerender(
+    transcript({ messages: [prompt, saved], streamingText: reply, streamComplete: true, persistedHandoffMessageId: saved.id }),
   );
-  await wait(1_000);
-  assert.ok(view.container.textContent?.includes("Sentence 24 ends here."), "and it finishes revealing");
+  await wait(STREAMING_REVEAL_FADE_MS + 50);
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  const settled = view.container.querySelector(".streaming-reveal");
+  assert.equal(settled, reveal, "the settled reply keeps its tree");
+  assert.equal(settled?.hasAttribute("data-streaming"), false, "and no longer fades anything in");
+});
+
+test("with reduced motion every streamed block shows as soon as it arrives", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const view = render(transcript({ messages: [prompt], streamingText: "One.\n\n" }));
+  view.rerender(transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }));
+  for (const text of ["One.", "Two.", "three", "four"]) {
+    assert.ok(view.container.textContent?.includes(text), text);
+  }
 });
 
 function liveRun(runId: string): SubagentRunSnapshotV1 {

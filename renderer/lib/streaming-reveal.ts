@@ -1,8 +1,7 @@
 export const STREAMING_REVEAL_HANDOFF_MS = 200;
 export const STREAMING_REVEAL_FALLBACK_MS = 2_000;
-export const STREAMING_REVEAL_BASE_DELAY_MS = 90;
-export const STREAMING_REVEAL_MIN_DELAY_MS = 18;
-export const STREAMING_REVEAL_COMPLETE_DELAY_MS = 32;
+/** How long newly released text takes to fade in (matches styles.css). */
+export const STREAMING_REVEAL_FADE_MS = 450;
 
 export type StreamingRevealBlockKind = "prose" | "markdown";
 
@@ -36,17 +35,6 @@ export interface StreamingRevealBlock {
   units: StreamingRevealUnit[];
 }
 
-export interface StreamingRevealScheduleState {
-  revealedCount: number;
-  dueAt: number | null;
-}
-
-export interface StreamingRevealScheduleInput {
-  unitCount: number;
-  complete: boolean;
-  reducedMotion: boolean;
-}
-
 interface SourceLine {
   start: number;
   text: string;
@@ -54,7 +42,6 @@ interface SourceLine {
   closed: boolean;
 }
 
-const COMPLETE_REVEAL_MAX_STEPS = 12;
 const PROSE_WORD_GROUP_MIN = 72;
 const SENTENCE_ENDERS = new Set([".", "!", "?", "…"]);
 const TRAILING_CLOSERS = new Set(['"', "'", ")", "]", "”", "’"]);
@@ -458,60 +445,136 @@ export function streamingRevealVisibleEnd(blocks: StreamingRevealBlock[], count:
   return end;
 }
 
-export function revealDelayMs(pendingUnits: number, isComplete: boolean): number {
-  if (isComplete) return STREAMING_REVEAL_COMPLETE_DELAY_MS;
-  const accelerated = STREAMING_REVEAL_BASE_DELAY_MS / (1 + Math.max(0, pendingUnits) / 5);
-  return Math.max(STREAMING_REVEAL_MIN_DELAY_MS, Math.round(accelerated));
+/** The shortest gap between two releases of new text into the transcript. */
+export const STREAMING_REVEAL_RELEASE_MS = 300;
+/**
+ * The longest a pending tail with no paragraph, item, row, or code-line
+ * boundary waits: a lone heading, the last list item, or the sentences of a
+ * paragraph still being written.
+ */
+export const STREAMING_REVEAL_MAX_WAIT_MS = 1_000;
+
+const FENCE_OPENER = /^ {0,3}(`{3,}|~{3,})/u;
+const HEADING_LINE = /^ {0,3}#{1,6}(?:\s|$)/u;
+
+function closesFence(line: string, marker: string): boolean {
+  const candidate = line.trim();
+  return (
+    candidate.length >= marker.length &&
+    [...candidate].every((character) => character === marker[0])
+  );
 }
 
 /**
- * Advances a completed response through a bounded number of visual waves instead
- * of exposing the full response in the same render that receives `done`.
+ * The end of the last place in `text` where a whole block has arrived: a
+ * paragraph's closing blank line (a heading waits for its first paragraph),
+ * the start of the next list item, the end of a table row, or a finished line
+ * of code. Apart from a new item's first word, only whole lines decide.
  */
-export function advanceStreamingRevealCount(
-  current: number,
-  unitCount: number,
-  isComplete: boolean,
-): number {
-  if (current >= unitCount) return unitCount;
-  const step = isComplete ? Math.max(1, Math.ceil(unitCount / COMPLETE_REVEAL_MAX_STEPS)) : 1;
-  return Math.min(current + step, unitCount);
+export function lastStreamingRevealBoundary(text: string): number {
+  let boundary = 0;
+  let fence: string | null = null;
+  let previous = "";
+  let previousTableRow = false;
+  let tableHeader = false;
+  let offset = 0;
+  for (let newline = text.indexOf("\n"); newline >= 0; newline = text.indexOf("\n", offset)) {
+    const line = text.slice(offset, newline);
+    const end = newline + 1;
+    const trimmed = line.trim();
+    if (fence) {
+      // Every finished code line grows the open block; the closing fence ends it.
+      if (closesFence(line, fence)) fence = null;
+      boundary = end;
+      previous = trimmed;
+    } else if (FENCE_OPENER.test(line)) {
+      // The opener waits for its first line of code.
+      fence = FENCE_OPENER.exec(line)![1]!;
+      previous = trimmed;
+    } else if (!trimmed) {
+      if (previous && !HEADING_LINE.test(previous)) boundary = end;
+      previousTableRow = false;
+      tableHeader = false;
+    } else {
+      // Each item joins once the next one starts.
+      if (LIST_LINE.test(line) && previous && !HEADING_LINE.test(previous)) boundary = offset;
+      const tableRow = trimmed.includes("|");
+      // A table joins with its first body row, then grows a row at a time.
+      if (tableRow && previousTableRow && tableHeader) boundary = end;
+      if (tableRow && previousTableRow && TABLE_SEPARATOR.test(line)) tableHeader = true;
+      if (!tableRow) tableHeader = false;
+      previousTableRow = tableRow;
+      previous = trimmed;
+    }
+    offset = end;
+  }
+  // The next item's first word is enough to know the previous item ended.
+  const partial = text.slice(offset);
+  const nextItem = !fence && /^[\s]*(?:[-*+]|\d+[.)])\s+[^\s*_-]/u.test(partial);
+  if (nextItem && previous && !HEADING_LINE.test(previous)) boundary = offset;
+  return boundary;
 }
 
+export interface StreamingRevealGate {
+  /** The released prefix; the parser sees only this. */
+  text: string;
+  releasedAt: number | null;
+  /** When the unreleased tail started waiting, if it has no boundary yet. */
+  waitingSince: number | null;
+}
+
+export interface StreamingRevealGateInput {
+  content: string;
+  /** The text can no longer grow: the turn ended or a tool step closed it. */
+  complete: boolean;
+  reducedMotion: boolean;
+}
+
+export const INITIAL_STREAMING_REVEAL_GATE: StreamingRevealGate = {
+  text: "",
+  releasedAt: null,
+  waitingSince: null,
+};
+
 /**
- * Pure scheduler step used by the renderer's persistent animation-frame loop.
- * Growing backlogs retain their original due time instead of starving the timer.
+ * One step of the release gate. New text joins the transcript only at whole
+ * block boundaries and at most once per `STREAMING_REVEAL_RELEASE_MS`; a tail
+ * without a boundary is released after `STREAMING_REVEAL_MAX_WAIT_MS`. The end
+ * of the text and reduced motion release everything at once. `nextAt` is when
+ * calling again can release more, or null when nothing is waiting.
  */
-export function advanceStreamingRevealSchedule(
-  state: StreamingRevealScheduleState,
-  input: StreamingRevealScheduleInput,
+export function advanceStreamingRevealGate(
+  gate: StreamingRevealGate,
+  { content, complete, reducedMotion }: StreamingRevealGateInput,
   now: number,
-): StreamingRevealScheduleState {
-  const unitCount = Math.max(0, input.unitCount);
-  const revealedCount = Math.min(state.revealedCount, unitCount);
-  if (input.reducedMotion) return { revealedCount: unitCount, dueAt: null };
-  if (revealedCount >= unitCount) return { revealedCount, dueAt: null };
-
-  const dueAt =
-    state.dueAt ??
-    (revealedCount === 0 ? now : now + revealDelayMs(unitCount - revealedCount, input.complete));
-  if (now < dueAt) return { revealedCount, dueAt };
-
-  const nextCount = advanceStreamingRevealCount(revealedCount, unitCount, input.complete);
-  return {
-    revealedCount: nextCount,
-    dueAt:
-      nextCount < unitCount ? now + revealDelayMs(unitCount - nextCount, input.complete) : null,
-  };
-}
-
-export function clampStreamingRevealSchedule(
-  state: StreamingRevealScheduleState,
-  unitCount: number,
-): StreamingRevealScheduleState {
-  return state.revealedCount > unitCount
-    ? { revealedCount: unitCount, dueAt: null }
-    : state;
+): { gate: StreamingRevealGate; nextAt: number | null } {
+  const current = content.startsWith(gate.text) ? gate : INITIAL_STREAMING_REVEAL_GATE;
+  const released = current.text.length;
+  if (released === content.length) {
+    const settled = current.waitingSince === null ? current : { ...current, waitingSince: null };
+    return { gate: settled, nextAt: null };
+  }
+  if (complete || reducedMotion) {
+    return { gate: { text: content, releasedAt: now, waitingSince: null }, nextAt: null };
+  }
+  const earliest =
+    current.releasedAt === null ? now : current.releasedAt + STREAMING_REVEAL_RELEASE_MS;
+  const boundary = lastStreamingRevealBoundary(content);
+  if (boundary > released) {
+    if (now < earliest) return { gate: current, nextAt: earliest };
+    const waitingSince = boundary < content.length ? now : null;
+    return {
+      gate: { text: content.slice(0, boundary), releasedAt: now, waitingSince },
+      nextAt: waitingSince === null ? null : now + STREAMING_REVEAL_MAX_WAIT_MS,
+    };
+  }
+  const waitingSince = current.waitingSince ?? now;
+  const due = Math.max(earliest, waitingSince + STREAMING_REVEAL_MAX_WAIT_MS);
+  if (now < due) {
+    const waiting = waitingSince === current.waitingSince ? current : { ...current, waitingSince };
+    return { gate: waiting, nextAt: due };
+  }
+  return { gate: { text: content, releasedAt: now, waitingSince: null }, nextAt: null };
 }
 
 export function streamingRevealHandoffDelay(reduceMotion: boolean): number {
