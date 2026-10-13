@@ -101,6 +101,7 @@ import {
   selectDeviceTab,
 } from "../lib/device-tabs";
 import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-store";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -1653,8 +1654,7 @@ function QuickViewCard({
       return;
     }
     if (!present) return;
-    const reducedMotion = document.documentElement.dataset.reduceMotion === "true";
-    if (reducedMotion) {
+    if (prefersReducedMotion()) {
       setPresent(false);
       return;
     }

@@ -10,6 +10,10 @@ export interface ImageModelOption {
   label: string;
   acceptsReferences: boolean;
   textOutput: boolean;
+  /** The default image model chosen in Settings → Image Generation. */
+  isDefault?: boolean;
+  /** Maker slug for the model's logo (e.g. "google"); absent when unknown. */
+  maker?: string;
 }
 
 export interface ImageGenerationRequest {
@@ -52,11 +56,18 @@ export interface ImageGenerationPort {
   generate(request: ImageGenerationRequest): Promise<ImageGenerationResult>;
 }
 
-/** Owner decision Q1: prefer Nano Banana 2, else the first configured model. */
+/**
+ * The model a new Generate Image node starts with: the Settings → Image
+ * Generation default, else Nano Banana 2 (owner decision Q1), else the first
+ * configured model.
+ */
 export function pickDefaultImageModel(
   models: readonly ImageModelOption[],
   preferred: ImageModelRef = DEFAULT_IMAGE_MODEL,
 ): ImageModelRef | undefined {
-  const match = models.find((option) => option.provider === preferred.provider && option.model === preferred.id) ?? models[0];
+  const match =
+    models.find((option) => option.isDefault) ??
+    models.find((option) => option.provider === preferred.provider && option.model === preferred.id) ??
+    models[0];
   return match ? { provider: match.provider, id: match.model } : undefined;
 }

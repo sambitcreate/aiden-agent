@@ -1,3 +1,4 @@
+import { imageGenerationModelName } from "./image-generation-slots";
 import {
   isToolStep,
   type AgentStep,
@@ -31,6 +32,7 @@ const VERBS: Record<string, VerbPair> = {
   edit_file: { active: "Editing", complete: "Edited" },
   run_command: { active: "Running", complete: "Ran" },
   web_search: { active: "Searching the web", complete: "Searched the web" },
+  generate_image: { active: "Generating image", complete: "Generated image" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using computer", complete: "Used computer" },
@@ -99,6 +101,14 @@ export function reasoningActivityLabel(
 
 /** The object a tool acted on: a pattern, a query, or a workspace-relative path. */
 function stepObject(step: AgentToolStep): string | undefined {
+  // While an image generates its placeholder already shows the requested
+  // ratio; the trail names it once the call settles.
+  if (step.toolName === "generate_image") {
+    if (step.status === "running") return undefined;
+    // `target` is `<provider>/<model id>`; the row names only the model.
+    const parts = [step.detail, imageGenerationModelName(step.target)].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
+  }
   if (step.toolName === "grep" && step.detail && step.target) {
     return `${step.detail} in ${step.target}`;
   }

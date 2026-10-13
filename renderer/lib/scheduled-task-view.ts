@@ -7,6 +7,7 @@ import {
 import type { Provider, ScheduledTask, ScheduledTaskMode } from "./types";
 import { formatScheduledTaskCadence } from "../shared/scheduled-task-presentation";
 import { isAcpHarnessProvider } from "../shared/acp-harness";
+import { formatRelativeTime } from "./relative-time";
 
 export type ScheduledTaskTab = "all" | "active" | "paused";
 
@@ -159,13 +160,7 @@ export function filterScheduledTasks(
 
 export function formatNextRun(timestamp: number | undefined, now = Date.now()): string {
   if (timestamp === undefined) return "No next run";
-  const delta = timestamp - now;
-  const absolute = Math.abs(delta);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (absolute < 90_000) return formatter.format(Math.round(delta / 1_000), "second");
-  if (absolute < 90 * 60_000) return formatter.format(Math.round(delta / 60_000), "minute");
-  if (absolute < 36 * 3_600_000) return formatter.format(Math.round(delta / 3_600_000), "hour");
-  return formatter.format(Math.round(delta / 86_400_000), "day");
+  return formatRelativeTime(timestamp, now);
 }
 
 export function scheduledTaskStatus(task: ScheduledTask): "active" | "paused" | "error" {

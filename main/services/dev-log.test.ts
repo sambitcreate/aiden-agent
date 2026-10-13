@@ -17,6 +17,9 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   try {
     await run(dir);
   } finally {
+    // initDevLog queues an async session-start write; removing the directory
+    // while it lands races rmdir (ENOTEMPTY under load).
+    await flushDevLog();
     await fs.rm(dir, { recursive: true, force: true });
   }
 }

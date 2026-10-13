@@ -35,7 +35,7 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
-import { parseChatHtmlArtifacts, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
@@ -848,6 +848,7 @@ export function createChatStore(
           assistant && message.htmlArtifacts
             ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
             : undefined,
+        imagePlacements: assistant ? parseChatImagePlacements(message.imagePlacements) : undefined,
         uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
         visualSnapshots: assistant ? parseVisualSnapshots(message.visualSnapshots) : undefined,
         reasoning:
@@ -1433,6 +1434,8 @@ export function createChatStore(
                     ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
                   }))
                 : undefined,
+            imagePlacements:
+              message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
             uiVisuals:
               message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
             visualSnapshots:
@@ -1807,6 +1810,8 @@ export function createChatStore(
             message.role === "assistant" && message.htmlArtifacts
               ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
               : undefined,
+          imagePlacements:
+            message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
           uiVisuals:
             message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
           visualSnapshots:

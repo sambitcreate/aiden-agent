@@ -44,7 +44,15 @@ function withProviderFallback(
   metadata: ProviderModelMetadata | undefined,
   providerId: string,
 ): ModelInfo {
-  const catalogInfo = catalog.matched ? catalog : (providerInfo(modelId, metadata) ?? catalog);
+  const substitute = catalog.matched ? undefined : providerInfo(modelId, metadata);
+  // Benchmark evidence can match by exact OpenRouter permaslug even when
+  // models.dev does not, so carry it onto the provider-owned description.
+  const catalogInfo = substitute
+    ? {
+        ...substitute,
+        ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
+      }
+    : catalog;
   // A model name in a public catalog is not evidence about a private server.
   // Keep descriptive enrichment, but show the same connection-bound image and
   // reasoning capabilities that resolveProviderRuntimeLimits sends to Pi.
@@ -87,12 +95,15 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.ranking && !catalog.benchmark) return pinned;
+  if (!catalog.benchmark && !catalog.cost && !catalog.canonicalModelId) {
+    return pinned;
+  }
   return {
     ...pinned,
-    ...(catalog.ranking ? { ranking: catalog.ranking } : {}),
     ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
-    metadataSource: catalog.ranking ? "artificial-analysis" : pinned.metadataSource,
+    // Display-only models.dev pricing and identity; Pi's capabilities stay authoritative.
+    ...(catalog.cost ? { cost: catalog.cost } : {}),
+    ...(catalog.canonicalModelId ? { canonicalModelId: catalog.canonicalModelId } : {}),
     matched: true,
   };
 }
