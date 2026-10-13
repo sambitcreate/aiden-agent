@@ -54,8 +54,11 @@ test("MCP previews retain recoverable normalized text with fresh authority check
     assert.equal(preview.type, "text");
     if (preview.type !== "text") return;
     assert.ok(preview.text.length <= MAX_MCP_RESULT_TEXT_CHARS);
-    assert.ok(!preview.text.includes("retained-tail"));
-    assert.ok(!preview.text.includes("/secret"));
+    // The preview keeps both ends; the omitted middle is recoverable from the retained copy.
+    assert.ok(preview.text.includes("retained-tail"));
+    assert.ok(preview.text.split("x").length - 1 < 50_000);
+    // Resource links are named as data, never dereferenced.
+    assert.match(preview.text, /no resource was fetched/u);
     const handle = /handle=([a-f0-9-]+)/u.exec(preview.text)?.[1];
     assert.ok(handle);
     const read = await tools[1]!.execute("read", { handle, offset: 50_000 });

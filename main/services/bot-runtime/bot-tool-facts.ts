@@ -8,7 +8,6 @@ import type { BotCatalogConnectionResource, BotCatalogSkillResource } from "../b
 import type { BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import type { BotRuntimeResolvedSkill } from "../bot-skill-inventory.js";
 import { exactBotMcpToolNames, exactBotSkillToolNames, filterBotSkillSnapshot } from "../bot-tool-authority.js";
-import { mcpAgentToolName } from "../mcp-tool-identity.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
 import type { BotAdmission } from "./bot-tool-assembly.js";
 import type { BotToolFacts } from "./bot-tool-policy.js";
@@ -27,8 +26,11 @@ export interface BotToolFactsInput {
     connections: readonly BotCatalogConnectionResource[];
     skills: readonly BotCatalogSkillResource[];
   }>;
-  /** Configured MCP servers, for model-facing tool names. */
-  mcpServers(): Promise<ReadonlyArray<{ id: string; name: string }>>;
+  /**
+   * The MCP tools last built for this Bot's connections. Grants are joined to
+   * them by MCP identity, so their real model-facing names are what is granted.
+   */
+  mcpTools(): Promise<readonly { readonly name: string }[]>;
   /** The skill registry snapshot for the Bot folder and the Bot's resolved skill bindings. */
   skills(): Promise<{ snapshot: SkillRegistrySnapshot; resolved: readonly BotRuntimeResolvedSkill[] }>;
 }
@@ -44,12 +46,8 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
   const catalog = once(input.catalog);
   const mcpTools = once(async (): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>> => {
     if (authority.connections.length === 0) return new Map();
-    const [current, servers] = await Promise.all([catalog(), input.mcpServers()]);
-    return exactBotMcpToolNames(authority, current.connections, (sourceId, toolName) => {
-      const server = servers.find(({ id }) => id === sourceId);
-      if (!server) throw new Error("A selected Bot connection is no longer configured.");
-      return mcpAgentToolName(server, toolName);
-    });
+    const [current, built] = await Promise.all([catalog(), input.mcpTools()]);
+    return exactBotMcpToolNames(authority, current.connections, built);
   });
   const skills = once(async () => {
     if (authority.skills.length === 0) return { names: new Set<string>() as ReadonlySet<string>, snapshot: undefined };

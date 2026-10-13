@@ -13,21 +13,38 @@ export function markToolOutputSource<T extends AgentTool>(tool: T): T {
   return Object.assign(tool, { [OUTPUT_SOURCE]: true });
 }
 
+/**
+ * Keep the start and the end of `text` within `limit` characters, with
+ * `marker(omitted)` in place of the cut middle, so trailing errors and
+ * summaries survive. Never splits a surrogate pair.
+ */
+export function truncateMiddle(text: string, limit: number, marker: (omitted: number) => string): string {
+  if (text.length <= limit) return text;
+  // The marker's own length depends on the omitted count; size it for the worst case.
+  const budget = Math.max(0, limit - marker(text.length).length);
+  let head = Math.ceil(budget / 2);
+  let tail = budget - head;
+  const surrogate = (index: number, low: number) => (text.charCodeAt(index) & 0xfc00) === low;
+  if (head > 0 && surrogate(head - 1, 0xd800)) head -= 1;
+  if (tail > 0 && surrogate(text.length - tail, 0xdc00)) tail -= 1;
+  return text.slice(0, head) + marker(text.length - head - tail) + (tail > 0 ? text.slice(text.length - tail) : "");
+}
+
 /** Called before a tool discards text; no raw output ever enters Activity metadata. */
 export async function boundedToolOutput(text: string, limit: number): Promise<string> {
   if (text.length <= limit) return text;
-  let marker = "\n[Output truncated; no retained output available.]";
+  let retained = "no retained output available";
   const sink = context.getStore();
   if (sink) {
     try {
-      const retained = text.slice(0, MAX_STORED_TOOL_OUTPUT_CHARS);
-      const handle = await sink.save(retained);
-      marker = `\n[Output preview. Read retained output with read_tool_output handle=${handle}; offsets are UTF-16 characters. Retained ${retained.length} of ${text.length} characters, for up to 7 days subject to storage limits.]`;
+      const kept = text.slice(0, MAX_STORED_TOOL_OUTPUT_CHARS);
+      const handle = await sink.save(kept);
+      retained = `read the full text with read_tool_output handle=${handle}; offsets are UTF-16 characters. Retained ${kept.length} of ${text.length} characters, for up to 7 days subject to storage limits`;
     } catch {
       // A storage failure must not turn a successful mutation into a retryable failure.
     }
   }
-  return text.slice(0, Math.max(0, limit - marker.length)) + marker;
+  return truncateMiddle(text, limit, (omitted) => `\n[Output truncated: ${omitted} of ${text.length} characters omitted from the middle; ${retained}.]\n`);
 }
 
 export function withDurableToolOutputs(options: {

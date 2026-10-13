@@ -4,8 +4,10 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import { mcpRuntimeConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
-import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "../mcp-tool-identity.js";
+import { assertUniqueMcpAgentToolNames, mcpScopedAgentToolName } from "../mcp-tool-identity.js";
 import type { McpServer } from "../types.js";
+import { textCarriesStructured } from "../mcp-structured-text.js";
+import { redactStructuredContent } from "./subagent-mcp-client-core.js";
 import {
   MAX_SUBAGENT_MCP_SCOPES,
   MAX_SUBAGENT_MCP_TOOLS_PER_SCOPE,
@@ -646,7 +648,9 @@ export function subagentMcpAgentToolNameForBinding(
   scope: Pick<SubagentMcpScopeV2, "serverId">,
   binding: Pick<SubagentMcpToolScopeV2, "toolName">,
 ): string {
-  return mcpAgentToolName({ id: scope.serverId, name: scope.serverId }, binding.toolName);
+  // A child sees only its approved scopes (server id, no display name or full
+  // inventory), so it names tools from those alone.
+  return mcpScopedAgentToolName({ id: scope.serverId, name: scope.serverId }, binding.toolName);
 }
 
 /** Deterministic child-name to exact host-authority mapping for the approval broker. */
@@ -856,6 +860,15 @@ function boundedResult(
   );
   const omittedParts = content.length - textParts.length;
   let body = textParts.map((part) => redactCredentialText(part.text)).join("\n\n");
+  // Structured-only tools answer in structuredContent; keep it (bounded and
+  // redacted) unless a text block already carries the same JSON.
+  if (result.structuredContent !== undefined && !textCarriesStructured(content, result.structuredContent)) {
+    const structured = redactStructuredContent(result.structuredContent, redactCredentialText);
+    const json = structured === undefined ? undefined : JSON.stringify(structured);
+    body += `${body ? "\n\n" : ""}${json === undefined
+      ? "[Structured MCP content omitted: too large or invalid.]"
+      : `Structured content:\n${redactCredentialText(json)}`}`;
+  }
   if (!body) body = "[The approved MCP read returned no textual result.]";
   if (omittedParts > 0) {
     body += `\n\n[${omittedParts} non-text MCP content ${omittedParts === 1 ? "part was" : "parts were"} omitted.]`;

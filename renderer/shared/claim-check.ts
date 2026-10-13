@@ -96,7 +96,18 @@ function successClaims(text: string): SuccessClaim[] {
   return claims;
 }
 
-function consequentialStepKind(step: AgentToolStep): ConsequentialStepKind | undefined {
+export interface ClaimCheckOptions {
+  /**
+   * Whether a tool name belongs to a connected MCP service. The host answers
+   * from the generation's real MCP tool identities, never from the name's shape.
+   */
+  isConnectorTool?: (toolName: string) => boolean;
+}
+
+function consequentialStepKind(
+  step: AgentToolStep,
+  isConnectorTool: (toolName: string) => boolean,
+): ConsequentialStepKind | undefined {
   if (step.status !== "failed" && step.status !== "blocked" && step.status !== "cancelled") {
     return undefined;
   }
@@ -117,7 +128,7 @@ function consequentialStepKind(step: AgentToolStep): ConsequentialStepKind | und
     case "edit_automation":
       return "schedule";
     default:
-      return step.toolName.includes("__") ? "connector" : undefined;
+      return isConnectorTool(step.toolName) ? "connector" : undefined;
   }
 }
 
@@ -139,14 +150,16 @@ function lastAcknowledgementIndex(text: string, kind: ConsequentialStepKind): nu
 export function detectUnverifiedSuccessClaim(
   assistantText: string,
   timeline: GenerationTimeline,
+  options: ClaimCheckOptions = {},
 ): GenerationClaimCheck | undefined {
+  const isConnectorTool = options.isConnectorTool ?? (() => false);
   if (timeline.status === "running") return undefined;
   const claims = successClaims(assistantText);
   const stepIds: string[] = [];
 
   for (const step of timeline.steps) {
     if (!isToolStep(step)) continue;
-    const kind = consequentialStepKind(step);
+    const kind = consequentialStepKind(step, isConnectorTool);
     if (!kind) continue;
     const latestRelevantClaim = claims.reduce(
       (latest, claim) =>
@@ -173,7 +186,8 @@ export function detectUnverifiedSuccessClaim(
 export function attachClaimCheck(
   timeline: GenerationTimeline,
   assistantText: string,
+  options: ClaimCheckOptions = {},
 ): GenerationTimeline {
-  const claimCheck = detectUnverifiedSuccessClaim(assistantText, timeline);
+  const claimCheck = detectUnverifiedSuccessClaim(assistantText, timeline, options);
   return claimCheck ? { ...timeline, claimCheck } : timeline;
 }

@@ -17,6 +17,7 @@ import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js"
 import type { BotRuntimeResolvedSkill } from "./bot-skill-inventory.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
 import { createHash } from "node:crypto";
+import { mcpAgentToolIdentity } from "./mcp-tool-identity.js";
 
 /** Both tools require the existing Computer Use grant; neither includes submission authority. */
 export function isComputerUseCapabilityTool(name: string): boolean {
@@ -273,12 +274,25 @@ function sameExactMcpTool(
   );
 }
 
-/** Positive main-agent MCP join against a fresh exact catalog snapshot. */
+/**
+ * Positive main-agent MCP join against a fresh exact catalog snapshot. Every
+ * grant must still match the catalog exactly; it is then joined to the built
+ * MCP tool whose host identity is that connection's server and raw tool name,
+ * keyed by the built tool's actual model-facing name. Names are never
+ * recomputed here: the catalog lists only part of a server's inventory, while
+ * built names (and their collision hashes) come from the whole of it. A grant
+ * with no built tool is simply not offered.
+ */
 export function exactBotMcpToolNames(
   authority: Pick<BotRuntimeEffectiveAuthority, "connections">,
   currentConnections: readonly BotCatalogConnectionResource[],
-  modelToolName: (connectionSourceId: string, toolName: string) => string,
+  builtTools: readonly { readonly name: string }[],
 ): ReadonlyMap<string, BotRuntimeMcpToolAuthority> {
+  const byIdentity = new Map<string, string>();
+  for (const tool of builtTools) {
+    const identity = mcpAgentToolIdentity(tool);
+    if (identity) byIdentity.set(JSON.stringify([identity.serverId, identity.toolName]), tool.name);
+  }
   const result = new Map<string, BotRuntimeMcpToolAuthority>();
   for (const connection of authority.connections) {
     const current = currentConnections.find(
@@ -295,7 +309,8 @@ export function exactBotMcpToolNames(
       const liveTool = current.tools.find((candidate) => sameExactMcpTool(grant, candidate));
       if (!liveTool)
         throw new Error("A selected Bot connection tool changed while this response was starting.");
-      const name = modelToolName(connection.sourceId, liveTool.name);
+      const name = byIdentity.get(JSON.stringify([connection.sourceId, liveTool.name]));
+      if (name === undefined) continue;
       if (result.has(name)) throw new Error("Selected Bot connection tool names overlap.");
       result.set(name, grant);
     }

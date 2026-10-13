@@ -4,7 +4,7 @@ import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
-import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
+import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
 // MCP connection manager. Connects to user-configured MCP servers (stdio / HTTP
 // / SSE) via the official MCP SDK, caches clients, and exposes their tools as
 // pi agent tools for the generation loop.
@@ -24,7 +24,7 @@ import {
 } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
-import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
 import {
@@ -39,7 +39,7 @@ import {
   GenerationBoundConnectionAttempts,
   GenerationBoundConnectionCache,
 } from "./generation-bound-connection-cache.js";
-import { mcpAgentToolName } from "./mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix, type McpToolNamingServer } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
   type IsolatedSubagentMcpSdkClient,
@@ -175,6 +175,7 @@ function makeTransport(
 
 interface McpToolInfo {
   name: string;
+  title?: string;
   description?: string;
   inputSchema?: unknown;
   outputSchema?: unknown;
@@ -320,13 +321,11 @@ type McpToolCallOptions = Parameters<typeof callMcpTool>[2];
 
 interface McpAgentContext {
   tools: readonly AgentTool[];
-  instructions?: McpServerInstructionSnapshot;
 }
 
 interface BuiltMcpTools {
   readonly tools: readonly AgentTool[];
   readonly discovery: object;
-  readonly instructions?: McpServerInstructionSnapshot;
 }
 
 function leaseIsCurrent(lease: ReturnType<typeof mcpConfigurationLeases.acquire>): boolean {
@@ -590,6 +589,7 @@ class McpManager {
     server: McpServer,
     generation: number,
     providerScope?: McpProviderExecutionScope,
+    configured: readonly McpToolNamingServer[] = [server],
   ): Promise<McpAgentContext> {
     if (this.closed) throw new Error("MCP connections are shut down.");
     const lease = mcpConfigurationLeases.acquire(server.id);
@@ -628,7 +628,9 @@ class McpManager {
     }));
     assertGeneration();
     lease.assertCurrent();
-    const key = JSON.stringify([server.id, server.name, server.description ?? null]);
+    // Tool names depend on the configured servers only through this prefix.
+    const toolPrefix = mcpServerToolPrefix(server, configured);
+    const key = JSON.stringify([server.id, server.name, server.description ?? null, toolPrefix]);
     const { tools, guard: callGuard } = metadata.inventory;
     const client: Parameters<typeof createMcpResourceTool>[1] & {
       callTool(params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions): ReturnType<typeof callMcpTool>;
@@ -654,10 +656,7 @@ class McpManager {
     const resourceTool = metadata.resources ? createMcpResourceTool(server, client, lease) : undefined;
     const withResources = (built: BuiltMcpTools): McpAgentContext => {
       if (resourceTool) Object.assign(resourceTool, { codemode: true, discovery: built.discovery });
-      return {
-        tools: resourceTool ? [...built.tools, resourceTool] : built.tools,
-        ...(built.instructions ? { instructions: built.instructions } : {}),
-      };
+      return { tools: resourceTool ? [...built.tools, resourceTool] : built.tools };
     };
     // Same client, same inventory, same server identity and a still-current
     // lease: reuse the very same tool objects, so per-tool work (name hashing,
@@ -665,10 +664,15 @@ class McpManager {
     const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool)];
     const reused = cachedClient ? this.built.get(server.id, dependencies) : undefined;
     if (reused) return withResources(reused);
-    const agentTools = tools.map((t): AgentTool => markToolOutputSource({
-      name: mcpAgentToolName(server, t.name),
-      label: t.name,
-      description: t.description ?? t.name,
+    const toolNames = mcpAgentToolNames(server, configured, tools.map(({ name }) => name));
+    const presentation = (t: McpToolInfo) => {
+      const { outputSchema, ...shown } = mcpAgentToolPresentation(server.name, t);
+      return { ...shown, ...(outputSchema ? { outputSchema: Type.Unsafe(outputSchema) } : {}) };
+    };
+    const agentTools = tools.map((t): AgentTool => markMcpAgentTool(markToolOutputSource({
+      name: toolNames.get(t.name)!,
+      // Bounded description (title fallback), `server/tool` label, structured-content schema.
+      ...presentation(t),
       // MCP inputSchema is raw JSON Schema; normalize provider-hostile numeric
       // formats (schemars `uint32`, `int8`, ...) and wrap it as a typebox schema.
       parameters: Type.Unsafe(
@@ -687,7 +691,7 @@ class McpManager {
           );
         });
       },
-    }));
+    }), { serverId: server.id, toolName: t.name }));
     const instructions = snapshotMcpServerInstructions(server, resourceTool ? [...agentTools, resourceTool] : agentTools, metadata.instructions);
     // One frozen namespace record per server: every tool references it, so the
     // server's guidance is held and validated once rather than per tool.
@@ -695,12 +699,22 @@ class McpManager {
       ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
       namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
       label: server.name.slice(0, 64) || "MCP service",
+      // The tool-name prefix doubles as a namespace alias (`describeNamespace("github")`).
+      alias: toolPrefix,
       ...(instructions ? { instructions: instructions.instructions } : {}),
     });
     for (const tool of agentTools) Object.assign(tool, { codemode: true, discovery });
-    const built: BuiltMcpTools = Object.freeze({ tools: Object.freeze(agentTools), discovery, ...(instructions ? { instructions } : {}) });
+    const built: BuiltMcpTools = Object.freeze({ tools: Object.freeze(agentTools), discovery });
     if (cachedClient) this.built.set(server.id, dependencies, () => leaseIsCurrent(lease), built);
     return withResources(built);
+  }
+
+  /**
+   * MCP tools already built for these servers in this process, for passive
+   * context estimates. Never connects, lists or builds anything.
+   */
+  peekBuiltTools(serverIds: readonly string[]): AgentTool[] {
+    return serverIds.flatMap((id) => [...(this.built.peek(id)?.tools ?? [])]);
   }
 
   connectionGeneration(id: string): number {
@@ -747,7 +761,7 @@ function writeMcpDegraded(error: unknown, failurePhase: "mcp-tool-discovery" | "
  */
 function discoverMcpServer(
   server: McpServer,
-  options: { strict?: boolean; providerScope?: McpProviderExecutionScope },
+  options: { strict?: boolean; providerScope?: McpProviderExecutionScope; configured?: readonly McpToolNamingServer[] },
   generations: Map<string, number>,
 ): Promise<McpAgentContext> {
   if (!options.strict) {
@@ -758,7 +772,7 @@ function discoverMcpServer(
   return withConfiguredMcp(
     server.id,
     mcpRuntimeConnectionSnapshot(server),
-    () => mcpManager.agentContextFor(server, generation, options.providerScope),
+    () => mcpManager.agentContextFor(server, generation, options.providerScope, options.configured),
     () => true,
     () => {
       generation = mcpManager.connectionGeneration(server.id);
@@ -774,6 +788,17 @@ function discoverMcpServer(
       throw error;
     },
   );
+}
+
+/**
+ * Every configured server (enabled or not) plus `extra`: tool names are
+ * disambiguated against the whole configuration, so enabling, disabling or
+ * selecting servers for one turn never renames another server's tools.
+ */
+async function configuredMcpToolNamingServers(extra: readonly McpServer[]): Promise<McpServer[]> {
+  const configured = await configStore.listMcpServers().catch(() => [] as McpServer[]);
+  const ids = new Set(configured.map(({ id }) => id));
+  return [...configured, ...extra.filter(({ id }) => !ids.has(id))];
 }
 
 /** Report a server that lost its tools for this turn, and remember why. */
@@ -801,14 +826,15 @@ function reportUnavailableMcpServer(server: McpServer, error: unknown, generatio
 export function prewarmMcpServers(servers?: readonly McpServer[]): void {
   if (mcpManager.isShutDown) return;
   void (async () => {
-    const candidates = (servers ?? await configStore.listMcpServers())
+    const configured = await configuredMcpToolNamingServers(servers ?? []);
+    const candidates = (servers ?? configured)
       .filter((server) => server.enabled && !server.authProvider);
     for (const server of candidates) {
       if (mcpManager.recentFailure(server.id)) continue;
       const generations = new Map<string, number>();
       mcpManager.prewarm(
         server.id,
-        () => raceDeadline(discoverMcpServer(server, {}, generations), mcpServerDiscoveryBudgetMs(), `MCP server "${server.name}"`),
+        () => raceDeadline(discoverMcpServer(server, { configured }, generations), mcpServerDiscoveryBudgetMs(), `MCP server "${server.name}"`),
         (error) => {
           // A missed deadline is remembered like any failure; a late success clears it.
           const generation = generations.get(server.id);
@@ -835,19 +861,18 @@ export async function collectMcpAgentTools(
     strict?: boolean;
     allowProviderAuth?: boolean;
     providerScope?: McpProviderExecutionScope;
-    onServerInstructions?: (snapshot: McpServerInstructionSnapshot) => void;
     deferral?: { windowMs?: number; onLate(late: McpLateDiscovery): void };
   } = {},
 ): Promise<AgentTool[]> {
   const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true).filter((server) => server.enabled);
   const generations = new Map<string, number>();
-  const discover = (server: McpServer) => discoverMcpServer(server, options, generations);
+  const configured = await configuredMcpToolNamingServers(servers);
+  const discover = (server: McpServer) => discoverMcpServer(server, { ...options, configured }, generations);
   const onUnavailable = (server: McpServer, error: unknown) => reportUnavailableMcpServer(server, error, generations);
   if (options.deferral && !options.strict) {
     const { tools, late } = await admitMcpServerDiscovery(enabled, discover, {
       budgetMs: mcpServerDiscoveryBudgetMs(),
       windowMs: options.deferral.windowMs ?? MCP_DEFERRED_ADMISSION_WINDOW_MS,
-      onServerInstructions: options.onServerInstructions,
       onUnavailable,
     });
     options.deferral.onLate(late);
@@ -856,7 +881,6 @@ export async function collectMcpAgentTools(
   const settled = await settleMcpServerDiscovery(enabled, discover, mcpServerDiscoveryBudgetMs());
   return mergeMcpServerDiscovery(enabled, settled, {
     strict: options.strict,
-    onServerInstructions: options.onServerInstructions,
     onUnavailable,
   });
 }

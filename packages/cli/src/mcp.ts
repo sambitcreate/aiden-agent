@@ -18,7 +18,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
 import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
-import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
@@ -295,7 +295,9 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   async function inspectTools(server: McpServer, signal?: AbortSignal) { return (await inventory(server, signal)).tools; }
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     const { tools } = await inventory(server, signal);
-    return tools.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    // Same names as the desktop: disambiguated against every configured server and this inventory.
+    const names = mcpAgentToolNames(server, await listServers(), tools.map(({ name }) => name));
+    return tools.map((tool) => markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -308,7 +310,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
           return result;
         });
       },
-    }));
+    }, { serverId: server.id, toolName: tool.name }));
   }
   return { listServers, inventory, inspectTools, agentTools, connection, async close() {
     closed = true;

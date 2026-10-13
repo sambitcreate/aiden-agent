@@ -30,10 +30,10 @@ import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { logger } from "../../platform.js";
-import { createMcpInstructionCollector } from "../mcp-server-instructions.js";
 import { mcpCredentialConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
 import { hasOAuthTokens } from "../mcp-oauth.js";
 import { presetSecretId } from "../mcp-presets.js";
+import { mcpAgentToolIdentity } from "../mcp-tool-identity.js";
 import { secrets } from "../secrets.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { skillRegistry } from "../skill-registry-main.js";
@@ -252,6 +252,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     };
   }
 
+  // The MCP tools each Bot's last candidate build produced; policy facts join
+  // grants to these by identity rather than recomputing tool names.
+  const builtMcpTools = new Map<string, readonly AgentTool[]>();
+
   const sources: BotToolSourcesMain = {
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
@@ -261,7 +265,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         supportsImages: await deps.imageInput(botId),
         fileLocations: (await botFileLocations(admission)).length,
         catalog: async () => (await catalog()).resources,
-        mcpServers: () => configStore.listMcpServers(),
+        mcpTools: async () => builtMcpTools.get(botId) ?? [],
         skills: async () => ({
           snapshot: await skillRegistry.snapshotResolved({
             id: authority.managedHome.workspaceId,
@@ -280,7 +284,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
-      const collector = createMcpInstructionCollector();
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
@@ -305,7 +308,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       });
 
       const built = await buildAgentTools({
-        onMcpServerInstructions: collector.capture,
         allowMcpProviderAuth: false,
         workspaceId: workspace.id,
         workspaceRoot: workspace.folderPath,
@@ -319,6 +321,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...(subagentsAllowed ? { createSubagentTool: () => subagentSchema } : {}),
         includeCodingTools: false,
       });
+      builtMcpTools.set(botId, built.filter((tool) => mcpAgentToolIdentity(tool) !== undefined));
       const mcpNames = await facts.mcpTools();
       const tools: BotToolCandidate[] = built.map((tool) =>
         tool.name === SUBAGENT_TOOL ? subagentCandidate(botId, admission, tool) : { tool, ...(mcpNames.has(tool.name) ? { mcp: true } : {}) },
@@ -375,7 +378,6 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(botQuestionCandidate(botId, botQuestions));
       return {
         tools,
-        guidance: collector.snapshot(),
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),
       };
     },
