@@ -704,7 +704,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await composer.fill("Create a chat before compaction queue testing.");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
 
   // Hold compaction open so the queue can be driven while it runs.
   await app.evaluate(({ ipcMain }) => {
@@ -796,7 +796,7 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await expect.poll(sentTexts).toEqual(["During compaction retry"]);
   await expect(queue).toBeHidden();
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(4);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(2);
 
   // A completed compaction releases every queued message in order.
   await startCompaction();

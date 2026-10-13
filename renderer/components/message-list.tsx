@@ -125,7 +125,6 @@ interface AssistantResponseProps {
   onStreamHandoffComplete?: () => void;
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
-  richLinks?: boolean;
   /** Settled turn facts; joins the tail action row, or stands alone without prose. */
   footer?: React.ReactNode;
   fork?: MessageForkAction;
@@ -170,7 +169,6 @@ function AssistantResponse({
   streamComplete,
   onStreamHandoffComplete,
   readAloud,
-  richLinks = true,
   footer,
   fork,
   visuals = EMPTY_VISUALS,
@@ -223,34 +221,41 @@ function AssistantResponse({
           timeline.steps.filter((step) => isToolStep(step) && !isQuestionnaireStep(step)),
         )
       : null;
+    // Same slots as the chronological layout below, with the prose keyed like
+    // its first text row, so the reply keeps its elements when the first tool
+    // step arrives and the layout switches.
     return (
       <>
-        <ActivityFeed timeline={activityTimeline} animate={streaming} />
-        {timeline?.steps.filter(isQuestionnaireStep).map((step) => (
-          <AskUserQuestionRecap key={step.id} recap={step.questionnaire} />
-        ))}
-        {subagentChips}
-        {showReasoning ? (
-          <ReasoningBlock
-            content={reasoning ?? ""}
-            streaming={streaming && !streamComplete}
-            active={active}
-            label={reasoningLabel}
-          />
-        ) : null}
-        {content ? (
-          <SafeMessageBubble
-            role="assistant"
-            content={content}
-            streaming={streaming}
-            streamComplete={streamComplete}
-            onStreamHandoffComplete={onStreamHandoffComplete}
-            readAloud={readAloud}
-            richLinks={richLinks}
-            footer={footer}
-            fork={fork}
-          />
-        ) : null}
+        {null /* the chronological layout's leading subagent slot */}
+        {[
+          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
+            <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
+          )) ?? []),
+          subagentChips ? <React.Fragment key="subagents">{subagentChips}</React.Fragment> : null,
+          showReasoning ? (
+            <ReasoningBlock
+              key="reasoning"
+              content={reasoning ?? ""}
+              streaming={streaming && !streamComplete}
+              active={active}
+              label={reasoningLabel}
+            />
+          ) : null,
+          content ? (
+            <SafeMessageBubble
+              key="text-0"
+              role="assistant"
+              content={content}
+              streaming={streaming}
+              streamComplete={streamComplete}
+              onStreamHandoffComplete={onStreamHandoffComplete}
+              readAloud={readAloud}
+              footer={footer}
+              fork={fork}
+            />
+          ) : null,
+        ]}
         {attachments?.length ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
@@ -317,7 +322,6 @@ function AssistantResponse({
             showCopy={isLastText}
             copyText={content}
             readAloud={isLastText ? readAloud : undefined}
-            richLinks={richLinks}
             footer={isLastText ? footer : undefined}
             fork={isLastText ? fork : undefined}
           />
@@ -350,9 +354,14 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
-  message: ChatMessage;
+  /** Absent only for the in-flight reply, which passes `live` instead. */
+  message?: ChatMessage;
+  /**
+   * The in-flight reply. It renders in the same row component, under the key
+   * its persisted message will take, so the finished reply settles in place.
+   */
+  live?: AssistantResponseProps;
   readAloud?: ReadAloudActionProps;
-  richLinks: boolean;
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Stable across renders so settled rows stay memoized. */
@@ -377,8 +386,8 @@ interface SettledMessageRowProps {
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
   message,
+  live,
   readAloud,
-  richLinks,
   subagentsEnabled,
   onOpenSubagent,
   onFork,
@@ -389,23 +398,23 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   uiVisuals,
   renderSettledUiVisual,
 }: SettledMessageRowProps) {
+  const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
-    () => new Map((message.htmlArtifactPlacements ?? []).map((p) => [p.mediaId, p.toolCallId])),
-    [message.htmlArtifactPlacements],
+    () => new Map((placements ?? []).map((p) => [p.mediaId, p.toolCallId])),
+    [placements],
   );
   const wideVisuals = React.useMemo(
-    () =>
-      new Set(
-        (message.htmlArtifactPlacements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : [])),
-      ),
-    [message.htmlArtifactPlacements],
+    () => new Set((placements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : []))),
+    [placements],
   );
   const renderUiVisual = React.useCallback<RenderUiVisual>(
-    (visual) => renderSettledUiVisual?.(visual, message),
+    (visual) => (message ? renderSettledUiVisual?.(visual, message) : null),
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!onFork || (message.role !== "user" && message.role !== "assistant")) return undefined;
+    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant")) {
+      return undefined;
+    }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
     return {
       onFork: () => onFork(message.id, position),
@@ -414,10 +423,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
         : {}),
       disabledReason: forkDisabledReason,
     };
-  }, [forkDisabledReason, message.id, message.role, onFork, onForkWithSummary]);
+  }, [forkDisabledReason, message, onFork, onForkWithSummary]);
+  const assistant = Boolean(live) || message?.role === "assistant";
   const row = (
     <div className="flex min-w-0 flex-col gap-3">
-      {message.role === "assistant" ? (
+      {live ? (
+        <AssistantResponse {...live} streaming />
+      ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
             content={message.content}
@@ -426,7 +438,6 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             // Snapshots exist for phones; this desktop draws the visual itself.
             attachments={attachmentsShownWithVisuals(message)}
             readAloud={readAloud}
-            richLinks={richLinks}
             footer={settledTurnFooter(message)}
             fork={fork}
             subagentChips={
@@ -456,9 +467,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       )}
     </div>
   );
-  if (!fork) return row;
+  // A reply keeps its wrapper before it can fork, so settling does not remount it.
+  if (!fork && !assistant) return row;
   return (
-    <MessageForkContextMenu action={fork} kind={message.role === "user" ? "edit" : "fork"}>
+    <MessageForkContextMenu action={fork} kind={assistant ? "fork" : "edit"}>
       {row}
     </MessageForkContextMenu>
   );
@@ -505,15 +517,16 @@ function scheduleUiVisualStateSave(chatId: string, messageId: string, visualId: 
   );
 }
 
-export function richLinkHandoffDuplicateMessageId(
-  messages: readonly ChatMessage[],
-  streamingText: string | null,
-  streamComplete: boolean,
-  persistedHandoffMessageId: string | null,
-): string | null {
-  if (!streamComplete || streamingText === null || persistedHandoffMessageId === null) return null;
-  const message = messages.find((candidate) => candidate.id === persistedHandoffMessageId);
-  return message?.role === "assistant" && message.content === streamingText ? message.id : null;
+/**
+ * A reply is keyed by the message it answers, which is known before the reply
+ * is persisted: the live row and its saved message share one React identity.
+ */
+function replyRowKey(previous: ChatMessage | undefined): string {
+  return `reply:${previous?.id ?? "start"}`;
+}
+
+function transcriptRowKey(message: ChatMessage, previous: ChatMessage | undefined): string {
+  return message.role === "assistant" ? replyRowKey(previous) : `message:${message.id}`;
 }
 
 export function MessageList({
@@ -598,12 +611,6 @@ export function MessageList({
       liveHtmlArtifacts.length > 0 ||
       streamingUiVisuals.length > 0 ||
       streamingUiDrafts.size > 0,
-  );
-  const richLinkHandoffDuplicateId = richLinkHandoffDuplicateMessageId(
-    messages,
-    streamingText,
-    Boolean(streamComplete),
-    persistedHandoffMessageId,
   );
   const htmlArtifactPlan = React.useMemo(
     () => htmlArtifactTranscriptPlan(messages, liveHtmlArtifacts, streamingRowVisible),
@@ -751,13 +758,19 @@ export function MessageList({
   const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
   const unforkablePromptId =
     forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
+  // The persisted copy of the reply still on screen waits until the live row
+  // hands over, then takes the live row's key: one reply, settled in place.
+  const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
+  let previous: ChatMessage | undefined;
   for (const message of messages) {
+    if (message.id === settlingMessageId) continue;
+    const key = transcriptRowKey(message, previous);
+    previous = message;
     transcriptRows.push(
       <SettledMessageRow
-        key={`message:${message.id}`}
+        key={key}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
-        richLinks={message.id !== richLinkHandoffDuplicateId}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
@@ -776,30 +789,31 @@ export function MessageList({
 
   if (streamingRowVisible) {
     transcriptRows.push(
-      <div key="streaming" className="flex min-w-0 flex-col gap-3">
-        <AssistantResponse
-          content={streamingText ?? ""}
-          timeline={timeline}
-          reasoning={streamingReasoning}
-          attachments={liveAttachments}
-          subagentChips={
+      <SettledMessageRow
+        key={replyRowKey(previous)}
+        live={{
+          content: streamingText ?? "",
+          timeline,
+          reasoning: streamingReasoning,
+          attachments: liveAttachments,
+          subagentChips:
             subagentsEnabled && liveSubagents.length > 0 ? (
               <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-            ) : undefined
-          }
-          streaming
-          streamComplete={streamComplete}
-          onStreamHandoffComplete={onStreamHandoffComplete}
-          visuals={htmlArtifactsByAnchor.get("streaming")}
-          visualPlacements={streamingArtifactPlacements}
-          wideVisuals={streamingWideVisuals}
-          visualDrafts={streamingVisualDrafts}
-          renderVisual={renderVisual}
-          uiVisuals={streamingUiVisuals}
-          uiDrafts={streamingUiDrafts}
-          renderUiVisual={renderLiveUiVisual}
-        />
-      </div>,
+            ) : undefined,
+          streamComplete,
+          onStreamHandoffComplete,
+          visuals: htmlArtifactsByAnchor.get("streaming"),
+          visualPlacements: streamingArtifactPlacements,
+          wideVisuals: streamingWideVisuals,
+          visualDrafts: streamingVisualDrafts,
+          renderVisual,
+          uiVisuals: streamingUiVisuals,
+          uiDrafts: streamingUiDrafts,
+          renderUiVisual: renderLiveUiVisual,
+        }}
+        subagentsEnabled={subagentsEnabled}
+        onOpenSubagent={onOpenSubagent}
+      />,
     );
   }
 

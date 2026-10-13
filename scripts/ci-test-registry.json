@@ -683,6 +683,7 @@
         "renderer/components/subagents-panel.test.tsx",
         "renderer/components/terminal-drawer.test.tsx",
         "renderer/components/scroll-area-follow.test.tsx",
+        "renderer/components/message-list-settle.test.tsx",
         "renderer/components/todo-panel.test.tsx",
         "renderer/components/usage/profile-share-card.test.tsx",
         "renderer/images/editor-core.test.ts",

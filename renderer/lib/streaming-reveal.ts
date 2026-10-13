@@ -15,6 +15,11 @@ export interface StreamingRevealUnit {
    * closing fence (or the end of the turn) settles it.
    */
   openCode?: { code: string; lang?: string };
+  /**
+   * Set once a top-level fence has closed. The block keeps rendering through
+   * the same code component, which gains highlighting in place.
+   */
+  fence?: { code: string; lang?: string };
 }
 
 export interface StreamingRevealUnitParts {
@@ -214,12 +219,12 @@ function proseUnits(
 function atomicMarkdownBlock(
   start: number,
   text: string,
-  openCode?: StreamingRevealUnit["openCode"],
+  code?: Pick<StreamingRevealUnit, "openCode" | "fence">,
 ): StreamingRevealBlock {
   return {
     id: `markdown-${start}`,
     kind: "markdown",
-    units: [{ id: `markdown-${start}`, text, ...(openCode ? { openCode } : {}) }],
+    units: [{ id: `markdown-${start}`, text, ...code }],
   };
 }
 
@@ -312,22 +317,23 @@ function parseStreamingRevealRange(
         .slice(index, closingFenceStable ? sourceEnd : closedFence ? end : sourceEnd)
         .map((entry) => entry.text)
         .join("");
-      let openCode: StreamingRevealUnit["openCode"];
+      let code: Pick<StreamingRevealUnit, "openCode" | "fence"> | undefined;
       if (!closingFenceStable) {
         if (!source.endsWith("\n")) source += "\n";
         source += `${marker}\n`;
-        const code = lines
+      }
+      // An indented fence strips its indent from the code lines; leave that
+      // rare shape to the Markdown renderer rather than re-implementing it.
+      if (line.body.startsWith(marker)) {
+        const body = lines
           .slice(index + 1, closedFence ? end : sourceEnd)
           .map((entry) => entry.text)
           .join("");
-        // An indented fence strips its indent from the code lines; leave that
-        // rare shape to the Markdown renderer rather than re-implementing it.
-        if (line.body.startsWith(marker)) {
-          const lang = fenceLanguage(trimmed.slice(marker.length));
-          openCode = lang ? { code, lang } : { code };
-        }
+        const lang = fenceLanguage(trimmed.slice(marker.length));
+        const fence = lang ? { code: body, lang } : { code: body };
+        code = closingFenceStable ? { fence } : { openCode: fence };
       }
-      blocks.push(atomicMarkdownBlock(line.start, source, openCode));
+      blocks.push(atomicMarkdownBlock(line.start, source, code));
       index = sourceEnd - 1;
       continue;
     }

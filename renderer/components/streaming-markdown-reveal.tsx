@@ -141,16 +141,20 @@ export function StreamingMarkdownReveal({
             </p>
           );
         }
-        return block.units.map((unit) => (
-          <div key={unit.id} className="streaming-reveal-block">
-            {unit.openCode ? (
-              // Highlight once the fence closes instead of on every streamed line.
-              <CodeBlock code={unit.openCode.code} lang={unit.openCode.lang} plain />
-            ) : (
-              <MarkdownContent content={unit.text} richLinks={richLinks} />
-            )}
-          </div>
-        ));
+        return block.units.map((unit) => {
+          const code = unit.openCode ?? unit.fence;
+          return (
+            <div key={unit.id} className="streaming-reveal-block">
+              {code ? (
+                // One code element from the first line to the settled reply:
+                // it stays plain while the fence grows and highlights once it closes.
+                <CodeBlock code={code.code} lang={code.lang} plain={Boolean(unit.openCode)} />
+              ) : (
+                <MarkdownContent content={unit.text} richLinks={richLinks} />
+              )}
+            </div>
+          );
+        });
       })}
     </div>
   );
