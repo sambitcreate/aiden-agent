@@ -7,18 +7,11 @@ import { configStore } from "./config-store.js";
 import { logger } from "../platform.js";
 import { mcpManager } from "./mcp.js";
 import { mutateMcpWithCredentialCleanup } from "./mcp-credential-cleanup.js";
-import {
-  mcpCredentialEquivalences,
-  pendingMcpCredentialCleanupForSave,
-  type McpCredentialConnectionSnapshot,
-} from "./mcp-credential-cleanup-core.js";
-import { getMcpPresetForServerId, presetSecretId } from "./mcp-presets.js";
-import { secrets } from "./secrets.js";
+import { pendingMcpCredentialCleanupForSave } from "./mcp-credential-cleanup-core.js";
 import { withMcpConfigurationPublication } from "./mcp-config-lease.js";
 import {
   hasPlaintextMcpFields,
   mcpFieldSecretCleanupBaseline,
-  mcpFieldSecretSealingTransition,
   mcpStdioLaunchFingerprint,
   type McpFieldSecretPlan,
 } from "./mcp-field-secrets-core.js";
@@ -26,8 +19,8 @@ import {
   mcpStdioApprovals,
   planMcpServerFieldSecrets,
   pruneStoredMcpFieldSecrets,
+  stageStoredMcpFieldSecrets,
   storedMcpFieldSecretValues,
-  storeMcpFieldSecretPlan,
 } from "./mcp-field-secrets.js";
 import type { McpServer } from "./types.js";
 
@@ -51,18 +44,6 @@ export async function saveConfiguredMcpServer(
   return saved!;
 }
 
-async function rebindPresetKey(
-  serverId: string,
-  from: McpCredentialConnectionSnapshot,
-  to: McpCredentialConnectionSnapshot,
-  isCurrent: () => boolean,
-): Promise<void> {
-  const preset = getMcpPresetForServerId(serverId);
-  if (preset?.auth.kind !== "apiKey") return;
-  const key = await secrets.getOrBindLegacyProviderKey(presetSecretId(serverId), JSON.stringify(from));
-  if (key) await secrets.setProviderKey(presetSecretId(serverId), key, JSON.stringify(to), isCurrent);
-}
-
 /** A local server's env stays readable in config.json until it was approved to run. */
 async function launchApproved(server: McpServer | undefined): Promise<boolean> {
   return !server || server.transport !== "stdio" || mcpStdioApprovals.isApproved(server);
@@ -81,44 +62,37 @@ async function saveWithFieldSecrets(
 ): Promise<McpServer | undefined> {
   // Planning runs synchronously inside the mutation, so the stored values it
   // compares against are read first. They only choose which markers to reuse;
-  // storing validates every kept marker again.
+  // staging validates every kept marker again.
   const before = (await configStore.listMcpServers()).find(({ id }) => id === serverId);
   const storedValues = before ? await storedMcpFieldSecretValues(before) : {};
   const sealEnv = options.approveLaunch === true || (await launchApproved(before));
   let plan: McpFieldSecretPlan | undefined;
-  let baseline: McpServer | undefined;
   return mutateMcpWithCredentialCleanup(
     serverId,
     (current) => {
       const next = target(current);
       if (!next) return null;
       plan = planMcpServerFieldSecrets(next, { reuse: { current, values: storedValues }, sealEnv });
-      baseline = mcpFieldSecretCleanupBaseline(current, plan);
-      // Moving unchanged values into the secrets store is not a credential change.
-      return pendingMcpCredentialCleanupForSave(baseline, plan.server);
+      // Stored credentials are bound to the connection, not to how env/header
+      // values are stored, so moving them into the keychain cleans nothing up.
+      return pendingMcpCredentialCleanupForSave(current, plan.server);
     },
     async (current) => {
       if (!plan) return current;
-      // Values left behind by an earlier save whose publication failed, or
-      // bound to an address the record no longer has, go first.
-      await pruneStoredMcpFieldSecrets(serverId, current, isCurrent);
-      await storeMcpFieldSecretPlan(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true, current });
-      // A pure move of unchanged values into the keychain keeps every credential:
-      // the preset key follows the record it is bound to, and the config
-      // listener is told this exact transition is no credential change.
-      const sealing = mcpFieldSecretSealingTransition(current, plan);
-      if (sealing) {
-        await rebindPresetKey(serverId, sealing.from, sealing.to, isCurrent);
-        mcpCredentialEquivalences.register(serverId, sealing.from, sealing.to);
-      }
+      // Additive only: nothing the configured record resolves changes until
+      // the new record is published.
+      const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true, current });
       // Approve before publishing, so the first connection after the save is already allowed.
+      const baseline = mcpFieldSecretCleanupBaseline(current, plan);
       const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
-        mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(plan.server) &&
+        mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
         (await mcpStdioApprovals.isApproved(current));
-      if (options.approveLaunch || launchUnchanged) await mcpStdioApprovals.approve(plan.server);
+      if (options.approveLaunch || launchUnchanged) await mcpStdioApprovals.approve(staged);
       await mcpManager.disconnect(serverId);
-      const sealed = plan.server;
-      return withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(sealed, isCurrent));
+      const saved = await withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(staged, isCurrent));
+      // Committed: values the published record no longer resolves can go.
+      await pruneStoredMcpFieldSecrets(serverId, saved).catch(() => undefined);
+      return saved;
     },
     isCurrent,
   );

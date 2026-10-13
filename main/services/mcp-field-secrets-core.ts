@@ -8,18 +8,13 @@
 
 import { createHash } from "node:crypto";
 import type { McpServer } from "./types.js";
-import {
-  mcpCredentialConnectionSnapshot,
-  sameMcpCredentialConnection,
-  type McpCredentialConnectionSnapshot,
-} from "./mcp-credential-cleanup-core.js";
 import { MCP_FIELD_SECRET_PREFIX, isMcpFieldSecretMarker } from "../../renderer/shared/mcp-field-secrets.js";
 
 export { MCP_FIELD_SECRET_PREFIX, isMcpFieldSecretMarker };
 
 export const MCP_FIELD_SECRET_LIMITS = Object.freeze({ entries: 64, valueChars: 16_384, nameChars: 256 });
 
-/** Marker → value (the values a record's current fields reference). */
+/** Field (`env:NAME` / `headers:NAME`) → the stored value its marker resolves to. */
 export type McpFieldSecretValues = Record<string, string>;
 
 /** One stored value and the field it was saved for (`env:NAME` or `headers:NAME`). */
@@ -103,6 +98,7 @@ export interface McpFieldSecretPlanOptions {
    * stale renderer copy never looks like a new credential.
    */
   reuse?: { current: McpServer | undefined; values: Readonly<McpFieldSecretValues> };
+
   /** False keeps env values as written (a local server not yet approved, whose env must stay reviewable). */
   sealEnv?: boolean;
 }
@@ -137,7 +133,7 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
         continue;
       }
       const existing = options.reuse?.current?.[kind]?.[name];
-      if (existing !== undefined && isMcpFieldSecretMarker(existing) && options.reuse!.values[existing] === value) {
+      if (existing !== undefined && isMcpFieldSecretMarker(existing) && own(options.reuse!.values, fieldKey(kind, name)) === value) {
         kept.push({ marker: existing, field: fieldKey(kind, name), label: fieldLabel(kind, name) });
         sealed[name] = existing;
         continue;
@@ -151,43 +147,79 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
   return { server, added, kept };
 }
 
+export interface McpFieldSecretStage {
+  /** The record to publish: the plan's, with a fresh marker for each value an editor rename moved. */
+  server: McpServer;
+  /** The secret record to write before publishing, or undefined when nothing needs writing. */
+  record?: McpFieldSecretRecord;
+}
+
 /**
- * The secret record after storing `plan`, or undefined when nothing needs
- * writing. The plan's values go into the group for its destination; every
- * other group is left in place until cleanup (so a failed publication keeps
- * the still-configured address usable). Kept markers must already be stored
- * for this server under the same field (otherwise the value is gone, e.g.
- * config.json was copied from another device, and must be re-entered). Kept
- * values follow a changed address, command or field name only when the
- * person made that change in the editor (`fromEditor`, with `current` the
- * configured record they edited).
+ * Stage a plan's values before its config is published. Writes are purely
+ * additive: new markers, and new destination groups, appear next to the
+ * existing ones; no entry the currently configured record can resolve is
+ * changed or removed. So a failed or cancelled publication leaves the old
+ * config fully usable, and cleanup after the commit (against the then
+ * authoritative config) drops whatever is no longer referenced.
+ *
+ * Every kept marker must resolve for its own field. A value moves to another
+ * address, command or field name only when the person did that in the
+ * editor (`fromEditor`, with `current` the configured record they edited):
+ * the value is copied (a renamed field gets a new marker), never rebound.
+ * A marker the configured record already uses under a different name than
+ * the one it was saved for (an outside edit) is never carried over.
  */
-export function nextMcpFieldSecretRecord(
+export function stageMcpFieldSecrets(
   record: McpFieldSecretRecord | undefined,
   plan: McpFieldSecretPlan,
-  options: { fromEditor?: boolean; current?: McpServer } = {},
-): McpFieldSecretRecord | undefined {
+  options: { fromEditor?: boolean; current?: McpServer; random: () => string },
+): McpFieldSecretStage {
   const destination = mcpFieldSecretDestination(plan.server);
-  const target = record?.bindings[destination];
-  const edited = options.fromEditor && options.current ? record?.bindings[mcpFieldSecretDestination(options.current)] : undefined;
-  const group: Record<string, McpFieldSecretEntry> = { ...(target ?? {}) };
-  let changed = Object.keys(plan.added).length > 0;
-  for (const { marker, field, label } of plan.kept) {
-    const entry = (target && own(target, marker)) ?? (edited && own(edited, marker));
-    if (!entry) {
-      if (record && !target && Object.keys(record.bindings).length > 0 && !options.fromEditor) {
-        throw new Error("This server’s address or command changed outside Aiden. Enter its header and environment values again.");
+  const target = record ? own(record.bindings, destination) : undefined;
+  const edited = options.fromEditor && options.current && record ? bindingFor(record, options.current) : undefined;
+  const additions: Record<string, McpFieldSecretEntry> = {};
+  const server: McpServer = { ...plan.server };
+  for (const kind of KINDS) {
+    const fields = plan.server[kind];
+    if (!fields) continue;
+    const staged: Record<string, string> = {};
+    for (const [name, marker] of Object.entries(fields)) {
+      staged[name] = marker;
+      if (!isMcpFieldSecretMarker(marker) || own(plan.added, marker)) continue;
+      const field = fieldKey(kind, name);
+      const stored = (target && own(target, marker)) ?? (edited && own(edited, marker));
+      if (!stored) {
+        if (record && !target && Object.keys(record.bindings).length > 0 && !options.fromEditor) {
+          throw new Error("This server’s address or command changed outside Aiden. Enter its header and environment values again.");
+        }
+        throw new Error(`The saved value for ${fieldLabel(kind, name)} is missing on this device. Enter it again.`);
       }
-      throw new Error(`The saved value for ${label} is missing on this device. Enter it again.`);
+      if (stored.field === field) {
+        // Same field: present in this destination already, or copied to the new one.
+        if (!target || !own(target, marker)) additions[marker] = stored;
+        continue;
+      }
+      // A field rename in the editor: the configured record must still hold the
+      // marker under its own field, and the new record must not keep it there too.
+      if (!options.fromEditor || !referencesUnder(options.current, marker, stored.field) || referencesUnder(plan.server, marker, stored.field)) {
+        throw new Error(`The saved value for ${fieldLabel(kind, name)} was saved for another field. Enter it again.`);
+      }
+      const copy = newMcpFieldSecretMarker(options.random);
+      additions[copy] = { field, value: stored.value };
+      staged[name] = copy;
     }
-    if (entry.field !== field && !options.fromEditor) {
-      throw new Error(`The saved value for ${label} was saved for another field. Enter it again.`);
-    }
-    if (!target || own(target, marker) !== entry || entry.field !== field) changed = true;
-    group[marker] = { field, value: entry.value };
+    server[kind] = staged;
   }
-  if (!changed) return undefined;
-  return { bindings: { ...(record?.bindings ?? {}), [destination]: { ...group, ...plan.added } } };
+  Object.assign(additions, plan.added);
+  if (Object.keys(additions).length === 0) return { server };
+  return { server, record: { bindings: { ...(record?.bindings ?? {}), [destination]: { ...(target ?? {}), ...additions } } } };
+}
+
+/** Whether `server` uses `marker` under `field` (`env:NAME` / `headers:NAME`). */
+function referencesUnder(server: McpServer | undefined, marker: string, field: string): boolean {
+  const separator = field.indexOf(":");
+  const kind = field.slice(0, separator) as FieldKind;
+  return server?.[kind]?.[field.slice(separator + 1)] === marker;
 }
 
 function own<T>(map: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -231,15 +263,24 @@ function bindingFor(record: Readonly<McpFieldSecretRecord> | undefined, server: 
   return record ? own(record.bindings, mcpFieldSecretDestination(server)) : undefined;
 }
 
-/** Marker → value for every marker the server references under the field it was saved for. */
-export function mcpFieldSecretValuesFor(server: McpServer, record: Readonly<McpFieldSecretRecord> | undefined): McpFieldSecretValues {
+/** The stored value of one occurrence, only when its marker was saved for exactly this field. */
+function occurrenceValue(binding: Readonly<Record<string, McpFieldSecretEntry>> | undefined, kind: FieldKind, name: string, marker: string): string | undefined {
+  const entry = binding ? own(binding, marker) : undefined;
+  return entry && entry.field === fieldKey(kind, name) ? entry.value : undefined;
+}
+
+/**
+ * Field → stored value for each of the server's fields whose marker resolves
+ * for that field. Every occurrence is checked on its own: a marker copied
+ * under a second name resolves only where it was saved.
+ */
+export function mcpFieldSecretFieldValues(server: McpServer, record: Readonly<McpFieldSecretRecord> | undefined): McpFieldSecretValues {
   const binding = bindingFor(record, server);
   const values: McpFieldSecretValues = {};
-  if (!binding) return values;
   for (const kind of KINDS) {
-    for (const [name, value] of Object.entries(server[kind] ?? {})) {
-      const entry = isMcpFieldSecretMarker(value) ? own(binding, value) : undefined;
-      if (entry && entry.field === fieldKey(kind, name)) values[value] = entry.value;
+    for (const [name, marker] of Object.entries(server[kind] ?? {})) {
+      const value = isMcpFieldSecretMarker(marker) ? occurrenceValue(binding, kind, name, marker) : undefined;
+      if (value !== undefined) values[fieldKey(kind, name)] = value;
     }
   }
   return values;
@@ -257,14 +298,14 @@ export function resolveMcpFieldSecrets(server: McpServer, record: Readonly<McpFi
   if (!binding && record && Object.keys(record.bindings).length > 0) {
     throw new McpFieldSecretDestinationError(server.name || server.id);
   }
-  const values = mcpFieldSecretValuesFor(server, record);
+  const values = mcpFieldSecretFieldValues(server, record);
   const resolved: McpServer = { ...server };
   for (const kind of KINDS) {
     const fields = server[kind];
     if (!fields) continue;
     resolved[kind] = Object.fromEntries(Object.entries(fields).map(([name, value]) => {
       if (!isMcpFieldSecretMarker(value)) return [name, value];
-      const stored = own(values, value);
+      const stored = own(values, fieldKey(kind, name));
       if (stored === undefined) throw new McpFieldSecretMissingError(server.name || server.id, fieldLabel(kind, name));
       return [name, stored];
     }));
@@ -274,9 +315,9 @@ export function resolveMcpFieldSecrets(server: McpServer, record: Readonly<McpFi
 
 /** Each env variable as a launch approval shows it: its value as written, saved (masked), or unusable. */
 export function mcpEnvForApproval(server: McpServer, record: Readonly<McpFieldSecretRecord> | undefined): { name: string; value?: string; unavailable?: true }[] {
-  const values = mcpFieldSecretValuesFor(server, record);
+  const values = mcpFieldSecretFieldValues(server, record);
   return Object.entries(server.env ?? {}).map(([name, value]) =>
-    !isMcpFieldSecretMarker(value) ? { name, value } : own(values, value) !== undefined ? { name } : { name, unavailable: true as const });
+    !isMcpFieldSecretMarker(value) ? { name, value } : own(values, fieldKey("env", name)) !== undefined ? { name } : { name, unavailable: true as const });
 }
 
 /**
@@ -294,8 +335,14 @@ export function pruneMcpFieldSecretRecord(
   const destination = mcpFieldSecretDestination(server);
   const binding = own(record.bindings, destination);
   if (!binding) return undefined;
-  const values = mcpFieldSecretValuesFor(server, record);
-  const kept = Object.fromEntries(Object.entries(binding).filter(([marker]) => own(values, marker) !== undefined));
+  // Keep each entry some occurrence still resolves for its own field.
+  const used = new Set<string>();
+  for (const kind of KINDS) {
+    for (const [name, marker] of Object.entries(server[kind] ?? {})) {
+      if (isMcpFieldSecretMarker(marker) && occurrenceValue(binding, kind, name, marker) !== undefined) used.add(marker);
+    }
+  }
+  const kept = Object.fromEntries(Object.entries(binding).filter(([marker]) => used.has(marker)));
   return Object.keys(kept).length ? { bindings: { [destination]: kept } } : undefined;
 }
 
@@ -335,21 +382,4 @@ export function mcpStdioLaunchFingerprint(server: McpServer): string {
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([name, value]) => [name, sha256(value)]);
   return sha256(JSON.stringify({ v: 1, id: server.id, command: server.command ?? "", args: server.args ?? [], env }));
-}
-
-/**
- * When `plan` only moves `current`'s unchanged plain-text values into the
- * keychain, the credential snapshots before and after (they differ only in
- * marker hashes). Undefined for a real credential change or no change.
- */
-export function mcpFieldSecretSealingTransition(
-  current: McpServer | undefined,
-  plan: McpFieldSecretPlan,
-): { from: McpCredentialConnectionSnapshot; to: McpCredentialConnectionSnapshot } | undefined {
-  const baseline = mcpFieldSecretCleanupBaseline(current, plan);
-  if (!current || !baseline) return undefined;
-  const from = mcpCredentialConnectionSnapshot(current);
-  const to = mcpCredentialConnectionSnapshot(plan.server);
-  if (sameMcpCredentialConnection(from, to) || !sameMcpCredentialConnection(mcpCredentialConnectionSnapshot(baseline), to)) return undefined;
-  return { from, to };
 }

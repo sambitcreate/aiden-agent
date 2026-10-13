@@ -7,7 +7,7 @@ import { configStore } from "./config-store.js";
 import {
   externalMcpCredentialCleanupKind,
   mcpCredentialCleanupAfterConfig,
-  mcpCredentialConnectionSnapshot,
+  mcpCredentialCleanupSnapshot,
   mcpRuntimeConnectionSnapshot,
   parsePendingMcpCredentialCleanup,
   sameMcpRuntimeConnection,
@@ -254,8 +254,8 @@ export function reconcileExternalMcpCredentialChanges(
       const previousRuntime = mcpRuntimeConnectionSnapshot(before);
       const targetRuntime = after ? mcpRuntimeConnectionSnapshot(after) : null;
       if (sameMcpRuntimeConnection(previousRuntime, targetRuntime)) continue;
-      const previousSnapshot = mcpCredentialConnectionSnapshot(before);
-      const targetSnapshot = after ? mcpCredentialConnectionSnapshot(after) : null;
+      const previousSnapshot = mcpCredentialCleanupSnapshot(before);
+      const targetSnapshot = after ? mcpCredentialCleanupSnapshot(after) : null;
       // Aiden's own move of unchanged values into the keychain is no credential change.
       const cleanupKind = externalMcpCredentialCleanupKind(before, after);
       // The DataStore cache-publication hook invalidates before the new

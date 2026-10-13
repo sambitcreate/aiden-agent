@@ -10,9 +10,9 @@ import {
   MCP_FIELD_SECRET_LIMITS,
   mcpEnvForApproval,
   mcpFieldSecretId,
-  mcpFieldSecretValuesFor,
+  mcpFieldSecretFieldValues,
   mcpFieldSecretMarkers,
-  nextMcpFieldSecretRecord,
+  stageMcpFieldSecrets,
   parseMcpFieldSecretRecord,
   planMcpFieldSecrets,
   pruneMcpFieldSecretRecord,
@@ -39,9 +39,9 @@ export function planMcpServerFieldSecrets(server: McpServer, options: McpFieldSe
   return planMcpFieldSecrets(server, () => randomBytes(16).toString("hex"), options);
 }
 
-/** The values the server's markers resolve to (only for its destination and each value's own field). */
+/** Field → value for each of the server's fields that resolves (its destination, its own field). */
 export async function storedMcpFieldSecretValues(server: McpServer): Promise<McpFieldSecretValues> {
-  return mcpFieldSecretValuesFor(server, await readRecord(server.id));
+  return mcpFieldSecretFieldValues(server, await readRecord(server.id));
 }
 
 /** A local server's env as its launch approval shows it. */
@@ -61,20 +61,25 @@ async function writeRecord(serverId: string, record: McpFieldSecretRecord | unde
   await secrets.setInternalKey(mcpFieldSecretId(serverId), serializeMcpFieldSecretRecord(record), MAX_RECORD_CHARS, isCurrent);
 }
 
-/** Store a plan's values (see `nextMcpFieldSecretRecord`); other destinations' groups stay until cleanup. */
-export async function storeMcpFieldSecretPlan(
+/**
+ * Stage a plan's values before its config is published (additive only; see
+ * `stageMcpFieldSecrets`). Returns the record to publish.
+ */
+export async function stageStoredMcpFieldSecrets(
   serverId: string,
   plan: McpFieldSecretPlan,
   isCurrent: () => boolean,
   options: { fromEditor?: boolean; current?: McpServer } = {},
-): Promise<void> {
-  const next = nextMcpFieldSecretRecord(await readRecord(serverId), plan, options);
-  if (next) await writeRecord(serverId, next, isCurrent);
+): Promise<McpServer> {
+  const staged = stageMcpFieldSecrets(await readRecord(serverId), plan, { ...options, random: () => randomBytes(16).toString("hex") });
+  if (staged.record) await writeRecord(serverId, staged.record, isCurrent);
+  return staged.server;
 }
 
 /**
- * Drop stored values `current` no longer references, and every value once the
- * server is gone or its address or command changed.
+ * Drop stored values the authoritative config no longer resolves: call only
+ * with a record that committed (after publication, or a disk-reloaded config in
+ * recovery), never with one about to be replaced.
  */
 export async function pruneStoredMcpFieldSecrets(
   serverId: string,

@@ -32,7 +32,7 @@ import {
   withConfiguredMcp,
 } from "../services/mcp-credential-cleanup.js";
 import {
-  mcpCredentialConnectionSnapshot,
+  mcpPresetKeyBinding,
   mcpRuntimeConnectionSnapshot,
   sameMcpRuntimeConnection,
   pendingMcpCredentialCleanupForRemove,
@@ -364,7 +364,7 @@ export function registerPhase2Handlers(): void {
               existing &&
               (await secrets.getOrBindLegacyProviderKey(
                 presetSecretId(serverId),
-                JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
+                mcpPresetKeyBinding(existing),
               )),
             )
           : !mcpLiveStatus.needsSignIn(serverId) &&
@@ -396,7 +396,7 @@ export function registerPhase2Handlers(): void {
                 await secrets.setProviderKey(
                   presetSecretId(id),
                   value,
-                  JSON.stringify(mcpCredentialConnectionSnapshot(configured)),
+                  mcpPresetKeyBinding(configured),
                   isCurrent,
                 );
               else await secrets.deleteKey(presetSecretId(id), isCurrent);
