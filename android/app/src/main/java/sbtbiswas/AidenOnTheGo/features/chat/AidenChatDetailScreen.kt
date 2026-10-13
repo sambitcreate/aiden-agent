@@ -219,15 +219,7 @@ fun AidenChatDetailScreen(
     }
 
     val listState = rememberSaveable(chatId, saver = LazyListState.Saver) { LazyListState() }
-    var followLatest by remember(listState) {
-        mutableStateOf(
-            AidenChatScroll.isFollowingLatest(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset
-            )
-        )
-    }
-    var consumedItemCount by remember(listState) { mutableIntStateOf(-1) }
+    val follow = rememberAidenTranscriptFollowState(listState)
 
     val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
     val readAloud = remember(readAloudClient, chatId) {
@@ -243,8 +235,6 @@ fun AidenChatDetailScreen(
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
-    val currentChat by rememberUpdatedState(chat)
-    val currentlyStreaming by rememberUpdatedState(isStreaming)
 
     LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
         if (isStreaming || (readAloud.activeMessageId != null && readAloud.activeMessageId != chat?.messages?.lastOrNull()?.id)) readAloud.stop()
@@ -413,53 +403,15 @@ fun AidenChatDetailScreen(
         onResult = preparePickedUris
     )
 
-    LaunchedEffect(listState) {
-        var lastItemCount = -1
-        var wasScrolling = false
-        snapshotFlow {
-            val itemCount = AidenChatScroll.reverseLayoutItemCount(
-                currentChat?.messages?.size ?: 0,
-                currentlyStreaming
-            )
-            Triple(
-                listState.isScrollInProgress,
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset
-            ) to itemCount
-        }.collect { (viewport, itemCount) ->
-            val (scrolling, index, offset) = viewport
-            val contentChanged = lastItemCount >= 0 && itemCount != lastItemCount
-            lastItemCount = itemCount
-            if (!AidenChatScroll.shouldUpdateFollowLatchFromViewport(
-                    contentChanged,
-                    itemCount,
-                    consumedItemCount
-                )
-            ) {
-                return@collect
-            }
-            if (scrolling) {
-                wasScrolling = true
-                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
-            } else if (wasScrolling) {
-                wasScrolling = false
-                followLatest = AidenChatScroll.isFollowingLatest(index, offset)
-            }
-        }
-    }
-
-    // Keyed by listState too: a chat switch with an equal item count must still
-    // consume the new list's insertion epoch.
-    LaunchedEffect(listState, chat?.messages?.size, isStreaming) {
-        val itemCount = AidenChatScroll.reverseLayoutItemCount(
-            chat?.messages?.size ?: 0,
-            isStreaming
-        )
-        if (AidenChatScroll.shouldPinLatestAfterContentChange(followLatest)) {
-            listState.scrollToItem(AidenChatScroll.latestItemIndex())
-            followLatest = true
-        }
-        consumedItemCount = itemCount
+    AidenTranscriptFollowEffects(
+        state = follow,
+        itemCount = AidenChatScroll.reverseLayoutItemCount(chat?.messages?.size ?: 0, isStreaming),
+    )
+    // Passed as a lambda so a latch flip recomposes only the rows that read it.
+    val isTranscriptFollowing = remember(follow) { { follow.isFollowing } }
+    val streamingForJump by rememberUpdatedState(isStreaming)
+    val showsJumpToLatest by remember(follow) {
+        derivedStateOf { follow.showsJumpToLatest(streamingForJump) }
     }
 
     val botIdentity = chat?.botId?.let { rememberAidenBotChatIdentity(coordinator, it, chat?.title.orEmpty()) }
@@ -809,6 +761,8 @@ fun AidenChatDetailScreen(
                     onDraftChange = { viewModel.updateDraft(it) },
                     onSend = {
                         voiceInput.stopBeforeSubmittingDraft()
+                        // Sending is an explicit request to watch the reply.
+                        follow.jumpToLatest()
                         viewModel.send()
                     },
                     onStop = { viewModel.cancelTurn() },
@@ -972,6 +926,7 @@ fun AidenChatDetailScreen(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
+                    .aidenTranscriptFollow(follow)
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
@@ -1007,6 +962,7 @@ fun AidenChatDetailScreen(
                             isWaitingForNetwork = isWaitingForNetwork,
                             pendingApprovalToolName = livePendingApproval?.toolName
                         )
+                        AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
                     }
                 }
 
@@ -1071,7 +1027,8 @@ fun AidenChatDetailScreen(
                             onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl,
-                            forkActions = forkActions
+                            forkActions = forkActions,
+                            isTranscriptFollowing = isTranscriptFollowing,
                         )
                     }
                     // The summary stands where the copied conversation ends.
@@ -1103,7 +1060,7 @@ fun AidenChatDetailScreen(
                         AidenLoadEarlierMessages(
                             isLoading = isLoadingEarlierMessages,
                             onClick = {
-                                followLatest = false
+                                follow.detach()
                                 viewModel.loadEarlierMessages()
                             }
                         )
@@ -1137,14 +1094,8 @@ fun AidenChatDetailScreen(
 
             // Jump to Bottom Floating Capsule Button
             AidenJumpToBottom(
-                visible = !followLatest,
-                onClick = {
-                    followLatest = true
-                    scope.launch {
-                        listState.scrollToItem(AidenChatScroll.latestItemIndex())
-                        followLatest = true
-                    }
-                },
+                visible = showsJumpToLatest,
+                onClick = follow::jumpToLatest,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = padding.calculateBottomPadding() + 8.dp)
@@ -1346,7 +1297,8 @@ private fun AssistantMessageRow(
     onReadAloud: (() -> Unit)? = null,
     readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit,
-    forkActions: AidenMessageForkActions? = null
+    forkActions: AidenMessageForkActions? = null,
+    isTranscriptFollowing: () -> Boolean = { false },
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1405,7 +1357,7 @@ private fun AssistantMessageRow(
         message.timeline?.let { timeline ->
             val activity = AidenAgentActivityPresentation.activityTimeline(timeline)
             if (activity.steps.isNotEmpty()) {
-                AidenTimelineCollapsibleCard(timeline = activity, palette = palette)
+                AidenTimelineCollapsibleCard(timeline = activity, palette = palette, isTranscriptFollowing = isTranscriptFollowing)
                 Spacer(modifier = Modifier.height(4.dp))
             }
             timeline.steps.forEach { step ->
@@ -2031,7 +1983,8 @@ private fun AidenActivityShimmerLabel(
 @Composable
 private fun AidenTimelineCollapsibleCard(
     timeline: AidenGenerationTimeline,
-    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette
+    palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    isTranscriptFollowing: () -> Boolean,
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
@@ -2048,7 +2001,12 @@ private fun AidenTimelineCollapsibleCard(
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier
             .fillMaxWidth()
-            .animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
+            .then(
+                // A height animation under the pinned live edge would drag the
+                // transcript with it, so the card resizes at once while followed.
+                if (isTranscriptFollowing()) Modifier
+                else Modifier.animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
+            )
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(

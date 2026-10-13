@@ -8,6 +8,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -208,5 +228,115 @@ class AidenChatChromeUiTest {
         compose.onNodeWithText("Bubble").performTouchInput { longClick() }
         compose.onNodeWithText("Select Text").assertIsDisplayed()
         compose.onNodeWithText("Ask about this").assertDoesNotExist()
+    }
+
+    private val liveTokens = mutableIntStateOf(3)
+    private lateinit var transcript: LazyListState
+    private lateinit var follow: AidenTranscriptFollowState
+
+    private fun liveText(tokens: Int) = (1..tokens).joinToString(" ") { "token$it" }
+
+    /** The chat screen's follow wiring around a streaming reply and older history. */
+    private fun setStreamingTranscript() {
+        val composerHeight = 72.dp
+        compose.setContent {
+            AidenTheme {
+                transcript = rememberLazyListState()
+                follow = rememberAidenTranscriptFollowState(transcript)
+                AidenTranscriptFollowEffects(follow, itemCount = HISTORY + 1)
+                val showsJump by remember(follow) { derivedStateOf { follow.showsJumpToLatest(isStreaming = true) } }
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        reverseLayout = true,
+                        state = transcript,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(top = 16.dp, bottom = composerHeight + 16.dp),
+                        modifier = Modifier.fillMaxSize().aidenTranscriptFollow(follow).testTag("transcript"),
+                    ) {
+                        item(key = "live_stream") {
+                            val text = liveText(liveTokens.intValue)
+                            Text(text, Modifier.testTag("live"))
+                            AidenStreamingFollowTrigger(follow, text.length)
+                        }
+                        items(HISTORY, key = { "message_$it" }) { index ->
+                            Text("Earlier message $index", Modifier.height(96.dp))
+                        }
+                    }
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight).testTag("composer"))
+                    AidenJumpToBottom(
+                        visible = showsJump,
+                        onClick = follow::jumpToLatest,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+    }
+
+    private fun stream(ticks: Int) {
+        repeat(ticks) {
+            liveTokens.intValue += 7
+            compose.waitForIdle()
+        }
+    }
+
+    private fun viewport() = compose.runOnIdle { transcript.firstVisibleItemIndex to transcript.firstVisibleItemScrollOffset }
+
+    @Test
+    fun scrollingUpDuringAStreamKeepsTheReadersPlaceAndOffersTheJump() {
+        setStreamingTranscript()
+        stream(3)
+        assertEquals(0 to 0, viewport())
+        compose.onNodeWithContentDescription("Jump to latest").assertDoesNotExist()
+
+        compose.onNodeWithTag("transcript").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        val readerPlace = viewport()
+        assertNotEquals(0 to 0, readerPlace)
+
+        stream(12)
+        assertEquals(readerPlace, viewport())
+        compose.runOnIdle { assertFalse(follow.isFollowing) }
+        compose.onNodeWithContentDescription("Jump to latest").assertIsDisplayed()
+    }
+
+    @Test
+    fun jumpingToLatestDuringAStreamPinsTheNewestTextAboveTheComposer() {
+        setStreamingTranscript()
+        compose.onNodeWithTag("transcript").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Jump to latest").performClick()
+        compose.waitForIdle()
+
+        stream(12)
+        assertEquals(0 to 0, viewport())
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        compose.onNodeWithText("token${liveTokens.intValue}", substring = true).assertIsDisplayed()
+        val liveBottom = compose.onNodeWithTag("live").getBoundsInRoot().bottom
+        val composerTop = compose.onNodeWithTag("composer").getBoundsInRoot().top
+        assertTrue("live text ends at $liveBottom, composer starts at $composerTop", liveBottom <= composerTop)
+        compose.onNodeWithContentDescription("Jump to latest").assertDoesNotExist()
+    }
+
+    @Test
+    fun aGestureThatSettlesBackAtTheLiveEdgeResumesFollowing() {
+        setStreamingTranscript()
+        compose.onNodeWithTag("transcript").performTouchInput {
+            // A slow drag up through history, then back to the edge before lifting.
+            down(center)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 300f), delayMillis = 100)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, -600f), delayMillis = 100)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 0f), delayMillis = 200)
+            up()
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        stream(4)
+        assertEquals(0 to 0, viewport())
+    }
+
+    private companion object {
+        const val HISTORY = 40
     }
 }
