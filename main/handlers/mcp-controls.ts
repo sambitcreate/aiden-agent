@@ -51,6 +51,8 @@ export interface McpControlDependencies<Event> {
   pendingLaunchApprovals(): Promise<McpPendingLaunchApproval[]>;
   /** Approve `server` to run if it still has the launch fingerprint the user saw. */
   approveLaunch(server: McpServer, fingerprint: string): Promise<boolean>;
+  /** Whether a saved local server may run (Settings tests of the saved command are gated like any launch). */
+  launchApproved(server: McpServer): Promise<boolean>;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -120,6 +122,11 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
       return notConnected("Authorize this server to test the connection.");
     }
     const savedDestination = Boolean(saved && sameDestination(saved, draft));
+    // Testing the saved command of a local server runs it: that needs the same
+    // approval as any launch. A command the person typed themselves may run.
+    if (draft.transport === "stdio" && savedDestination && !(await deps.launchApproved(saved!))) {
+      return notConnected("Approve this server to run before testing it.");
+    }
     const test = () => deps.testDraft(draft, { matchesSaved, savedDestination, ...(apiKey ? { apiKey } : {}) }, isCurrent);
     if (!matchesSaved) {
       const status = await test();

@@ -1815,11 +1815,14 @@ if (!ownsSingleInstanceLock) {
     reloadAndReconcilePortableConfig,
     () => {
       skillRegistry.invalidate();
-      ipcMain.broadcast("app:config-externally-changed", {});
-      // Values typed into config.json by hand move into the keychain.
-      void sealPlaintextMcpServerFields().catch((error: unknown) =>
-        logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
-      );
+      // Values typed into config.json by hand move into the keychain before
+      // Settings re-reads it, so the renderer never holds (and later re-saves)
+      // the plain-text copy.
+      void sealPlaintextMcpServerFields()
+        .catch((error: unknown) =>
+          logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
+        )
+        .finally(() => ipcMain.broadcast("app:config-externally-changed", {}));
     },
     (error: unknown) =>
       logger.warn(

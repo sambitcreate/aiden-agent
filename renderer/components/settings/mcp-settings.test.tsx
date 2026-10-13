@@ -538,7 +538,7 @@ test("replacing a saved value and adding a header send the typed values once", a
 });
 
 test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
-  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, envNames: ["TOKEN"] };
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }] };
   let approvals = [pending];
   const calls = mount({
     "mcp:launchApprovals": () => approvals,
@@ -548,7 +548,10 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   const group = await screen.findByRole("group", { name: "Files needs approval" });
   assert.match(group.textContent ?? "", /Added outside Aiden — Approve to run/u);
   assert.match(group.textContent ?? "", /npx\s*-y\s*@modelcontextprotocol\/server-filesystem\s*\/Users\/me\/My Docs/u);
-  assert.match(group.textContent ?? "", /TOKEN/u);
+  // The environment is shown with its values: they change what the command does.
+  const env = within(group).getByLabelText("Files environment");
+  assert.match(env.textContent ?? "", /NODE_OPTIONS=--require \/tmp\/p\.js/u);
+  assert.match(env.textContent ?? "", /TOKEN=\(saved value, not shown\)/u);
   // No tool list or model-access control while it may not run.
   assert.equal(screen.queryByRole("radiogroup", { name: "Model access for Files" }), null);
   // Switching it on is not an approval.
@@ -559,4 +562,18 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   fireEvent.click(within(group).getByRole("button", { name: "Approve Files to run" }));
   await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:approveLaunch").map((call) => call.args), [["mcp-files", "d".repeat(64)]]));
   assert.ok(await screen.findByRole("radiogroup", { name: "Model access for Files" }));
+});
+
+test("the editor shows env values still written in config.json, so saving it is an informed approval", async () => {
+  mount({
+    "mcp:list": () => [{ ...localServer, env: { NODE_OPTIONS: "--require /tmp/p.js", TOKEN: savedMarker } }],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
+  const dialog = await screen.findByRole("dialog");
+  const visible = within(dialog).getByLabelText("Value of NODE_OPTIONS") as HTMLInputElement;
+  assert.equal(visible.value, "--require /tmp/p.js");
+  assert.equal(visible.type, "text");
+  // A keychain value stays masked.
+  assert.ok(within(dialog).getByText("Saved value of TOKEN"));
+  assert.equal(within(dialog).queryByDisplayValue(savedMarker), null);
 });

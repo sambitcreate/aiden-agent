@@ -55,11 +55,12 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
       const pending = [];
       for (const server of saved) {
         if (server.transport !== "stdio" || (await approvals.isApproved(server))) continue;
-        pending.push({ serverId: server.id, fingerprint: mcpStdioLaunchFingerprint(server), command: server.command ?? "", args: server.args ?? [], envNames: Object.keys(server.env ?? {}) });
+        pending.push({ serverId: server.id, fingerprint: mcpStdioLaunchFingerprint(server), command: server.command ?? "", args: server.args ?? [], env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })) });
       }
       return pending;
     },
     approveLaunch: (server, fingerprint) => approvals.approveShown(server, fingerprint),
+    launchApproved: (server) => approvals.isApproved(server),
   };
   registerMcpControlHandlers(deps);
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
@@ -194,9 +195,19 @@ test("local servers added outside Aiden are listed with what they run and approv
   const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["-y", "server"], env: { TOKEN: `aiden-secret:v1:${"b".repeat(32)}` }, enabled: true };
   const saved: McpServer[] = [linear, local];
   const ipc = setup(saved, undefined, approvals);
-  const [pending, ...others] = (await ipc.invoke("mcp:launchApprovals", "settings")) as { serverId: string; fingerprint: string; command: string; args: string[]; envNames: string[] }[];
+  const [pending, ...others] = (await ipc.invoke("mcp:launchApprovals", "settings")) as { serverId: string; fingerprint: string; command: string; args: string[]; env: { name: string; value?: string }[] }[];
   assert.deepEqual(others, []);
-  assert.deepEqual({ ...pending, fingerprint: undefined }, { serverId: "files", fingerprint: undefined, command: "npx", args: ["-y", "server"], envNames: ["TOKEN"] });
+  assert.equal(pending?.serverId, "files");
+  assert.equal(pending?.command, "npx");
+  assert.deepEqual(pending?.args, ["-y", "server"]);
+
+  // Testing the saved command is a launch too: refused until approved, while a command the person typed may run.
+  const blocked = (await ipc.invoke("mcp:testDraft", "settings", local)) as McpStatus;
+  assert.equal(blocked.connected, false);
+  assert.match(blocked.error ?? "", /Approve this server/u);
+  assert.equal(ipc.drafts.length, 0);
+  await ipc.invoke("mcp:testDraft", "settings", { ...local, command: "node" });
+  assert.equal(ipc.drafts.length, 1);
 
   // config.json changed after Settings showed the command: nothing is approved.
   saved[1] = { ...local, args: ["-y", "other"] };
@@ -207,6 +218,8 @@ test("local servers added outside Aiden are listed with what they run and approv
   assert.deepEqual(await ipc.invoke("mcp:approveLaunch", "settings", "files", pending!.fingerprint), { approved: true });
   assert.equal(await approvals.isApproved(local), true);
   assert.deepEqual(await ipc.invoke("mcp:launchApprovals", "settings"), []);
+  await ipc.invoke("mcp:testDraft", "settings", local);
+  assert.equal(ipc.drafts.length, 2, "an approved saved command can be tested");
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", linear.id, pending!.fingerprint), /Only local/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", "files", "nope"), /Invalid launch fingerprint/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "foreign", "files", pending!.fingerprint), /Untrusted/u);

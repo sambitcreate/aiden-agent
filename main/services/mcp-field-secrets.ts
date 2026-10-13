@@ -8,14 +8,19 @@ import { app } from "../platform.js";
 import { secrets } from "./secrets.js";
 import {
   MCP_FIELD_SECRET_LIMITS,
+  mcpFieldSecretDestination,
   mcpFieldSecretId,
   mcpFieldSecretMarkers,
+  nextMcpFieldSecretRecord,
   parseMcpFieldSecretRecord,
   planMcpFieldSecrets,
   pruneMcpFieldSecretRecord,
   resolveMcpFieldSecrets,
+  serializeMcpFieldSecretRecord,
   type McpFieldSecretPlan,
+  type McpFieldSecretPlanOptions,
   type McpFieldSecretRecord,
+  type McpFieldSecretValues,
 } from "./mcp-field-secrets-core.js";
 import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
@@ -29,50 +34,59 @@ export const mcpStdioApprovals = createMcpStdioApprovalStore(async () => {
   return path.join(root, "mcp-stdio-approvals.json");
 });
 
-export function planMcpServerFieldSecrets(server: McpServer): McpFieldSecretPlan {
-  return planMcpFieldSecrets(server, () => randomBytes(16).toString("hex"));
+export function planMcpServerFieldSecrets(server: McpServer, options: McpFieldSecretPlanOptions = {}): McpFieldSecretPlan {
+  return planMcpFieldSecrets(server, () => randomBytes(16).toString("hex"), options);
 }
 
-async function readRecord(serverId: string): Promise<McpFieldSecretRecord> {
+/** The server's stored values (empty when none, or when bound to another destination). */
+export async function storedMcpFieldSecretValues(server: McpServer): Promise<McpFieldSecretValues> {
+  const record = await readRecord(server.id);
+  return record?.destination === mcpFieldSecretDestination(server) ? record.values : {};
+}
+
+async function readRecord(serverId: string): Promise<McpFieldSecretRecord | undefined> {
   return parseMcpFieldSecretRecord(await secrets.getKeyStrict(mcpFieldSecretId(serverId)));
 }
 
 async function writeRecord(serverId: string, record: McpFieldSecretRecord | undefined, isCurrent: () => boolean): Promise<void> {
-  if (!record || Object.keys(record).length === 0) {
+  if (!record || Object.keys(record.values).length === 0) {
     await secrets.deleteKey(mcpFieldSecretId(serverId), isCurrent);
     return;
   }
-  await secrets.setInternalKey(mcpFieldSecretId(serverId), JSON.stringify(record), MAX_RECORD_CHARS, isCurrent);
+  await secrets.setInternalKey(mcpFieldSecretId(serverId), serializeMcpFieldSecretRecord(record), MAX_RECORD_CHARS, isCurrent);
 }
 
 /**
- * Store a plan's new values next to the server's existing ones. Kept markers
- * must already be stored for this server; otherwise the value is gone (for
- * example config.json was copied from another device) and must be re-entered.
+ * Store a plan's new values next to the server's existing ones, bound to the
+ * plan's destination. Kept markers must already be stored for this server;
+ * otherwise the value is gone (for example config.json was copied from another
+ * device) and must be re-entered. Kept values follow a changed address or
+ * command only when the person changed it in the editor
+ * (`allowNewDestination`); otherwise they must be entered again.
  */
 export async function storeMcpFieldSecretPlan(
   serverId: string,
   plan: McpFieldSecretPlan,
   isCurrent: () => boolean,
+  options: { allowNewDestination?: boolean } = {},
 ): Promise<void> {
-  if (plan.kept.length === 0 && Object.keys(plan.added).length === 0) return;
-  const record = await readRecord(serverId);
-  const missing = plan.kept.find(({ marker }) => !Object.prototype.hasOwnProperty.call(record, marker));
-  if (missing) throw new Error(`The saved value for ${missing.field} is missing on this device. Enter it again.`);
-  if (Object.keys(plan.added).length === 0) return;
-  await writeRecord(serverId, { ...record, ...plan.added }, isCurrent);
+  const next = nextMcpFieldSecretRecord(await readRecord(serverId), plan, options);
+  if (next) await writeRecord(serverId, next, isCurrent);
 }
 
-/** Drop stored values `current` no longer references (all of them once it is removed). */
+/**
+ * Drop stored values `current` no longer references, and every value once the
+ * server is gone or its address or command changed.
+ */
 export async function pruneStoredMcpFieldSecrets(
   serverId: string,
   current: McpServer | undefined,
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const record = await readRecord(serverId);
-  if (Object.keys(record).length === 0) return;
+  if (!record) return;
   const pruned = pruneMcpFieldSecretRecord(record, current);
-  if (pruned && Object.keys(pruned).length === Object.keys(record).length) return;
+  if (pruned && Object.keys(pruned.values).length === Object.keys(record.values).length) return;
   await writeRecord(serverId, pruned, isCurrent);
 }
 

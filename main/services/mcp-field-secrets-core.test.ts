@@ -6,8 +6,12 @@ import {
   MCP_FIELD_SECRET_LIMITS,
   McpFieldSecretMissingError,
   mcpFieldSecretCleanupBaseline,
+  mcpFieldSecretDestination,
   mcpStdioLaunchFingerprint,
+  nextMcpFieldSecretRecord,
   parseMcpFieldSecretRecord,
+  serializeMcpFieldSecretRecord,
+  type McpFieldSecretPlan,
   planMcpFieldSecrets,
   pruneMcpFieldSecretRecord,
   resolveMcpFieldSecrets,
@@ -17,6 +21,9 @@ import {
   pendingMcpCredentialCleanupForSave,
 } from "./mcp-credential-cleanup-core.js";
 import type { McpServer } from "./types.js";
+
+/** The record storing `plan` creates for a server with nothing stored yet. */
+const stored = (plan: McpFieldSecretPlan) => nextMcpFieldSecretRecord(undefined, plan)!;
 
 function counter() {
   let next = 0;
@@ -35,14 +42,14 @@ const remote: McpServer = {
 
 test("saving moves every env and header value out of the stored record and back on connect", () => {
   const plan = planMcpFieldSecrets(remote, counter());
-  const stored = JSON.stringify(plan.server);
-  assert.doesNotMatch(stored, /secret-token|blue/u);
+  const configJson = JSON.stringify(plan.server);
+  assert.doesNotMatch(configJson, /secret-token|blue/u);
   assert.deepEqual(Object.keys(plan.server.headers!), ["Authorization", "X-Team"]);
   assert.ok(Object.values(plan.server.headers!).every(isMcpFieldSecretMarker));
   assert.equal(hasPlaintextMcpFields(plan.server), false);
   assert.equal(hasPlaintextMcpFields(remote), true);
   // The connection sees the original values.
-  assert.deepEqual(resolveMcpFieldSecrets(plan.server, plan.added).headers, remote.headers);
+  assert.deepEqual(resolveMcpFieldSecrets(plan.server, stored(plan)).headers, remote.headers);
 });
 
 test("a value the editor did not replace keeps its marker; a replaced one gets a new marker", () => {
@@ -74,7 +81,7 @@ test("moving unchanged values into the keychain is not a credential change, but 
 test("a marker without a stored value fails closed and names the field", () => {
   const plan = planMcpFieldSecrets({ ...remote, transport: "stdio", url: undefined, headers: undefined, command: "mcp", env: { API_KEY: "k" } }, counter());
   assert.throws(
-    () => resolveMcpFieldSecrets(plan.server, {}),
+    () => resolveMcpFieldSecrets(plan.server, { destination: mcpFieldSecretDestination(plan.server), values: {} }),
     (error: unknown) => error instanceof McpFieldSecretMissingError && /environment variable “API_KEY”/u.test(error.message),
   );
 });
@@ -83,16 +90,60 @@ test("pruning keeps only the values the configured record still references", () 
   const plan = planMcpFieldSecrets(remote, counter());
   const [authorization, team] = [plan.server.headers!.Authorization!, plan.server.headers!["X-Team"]!];
   const withoutTeam = { ...plan.server, headers: { Authorization: authorization } };
-  assert.deepEqual(pruneMcpFieldSecretRecord(plan.added, withoutTeam), { [authorization]: "Bearer secret-token" });
-  assert.equal(pruneMcpFieldSecretRecord(plan.added, undefined), undefined);
+  assert.deepEqual(pruneMcpFieldSecretRecord(stored(plan), withoutTeam)?.values, { [authorization]: "Bearer secret-token" });
+  assert.equal(pruneMcpFieldSecretRecord(stored(plan), undefined), undefined);
   assert.ok(team);
 });
 
-test("stored records ignore entries that are not marker → text", () => {
+test("stored records round-trip, and anything else reads as nothing stored", () => {
   const marker = `aiden-secret:v1:${"a".repeat(32)}`;
-  assert.deepEqual(parseMcpFieldSecretRecord(JSON.stringify({ [marker]: "v", other: "x", [`aiden-secret:v1:${"b".repeat(32)}`]: 3 })), { [marker]: "v" });
-  assert.deepEqual(parseMcpFieldSecretRecord(null), {});
+  const record = { destination: "d".repeat(64), values: { [marker]: "v" } };
+  assert.deepEqual(parseMcpFieldSecretRecord(serializeMcpFieldSecretRecord(record)), record);
+  assert.deepEqual(parseMcpFieldSecretRecord(JSON.stringify({ v: 1, destination: "d".repeat(64), values: { [marker]: "v", other: "x" } }))?.values, { [marker]: "v" });
+  assert.equal(parseMcpFieldSecretRecord(JSON.stringify({ [marker]: "v" })), undefined);
+  assert.equal(parseMcpFieldSecretRecord(null), undefined);
   assert.throws(() => parseMcpFieldSecretRecord("[]"));
+});
+
+test("stored values never follow a server to a new address or command", () => {
+  const plan = planMcpFieldSecrets(remote, counter());
+  const record = stored(plan);
+  // A hand edit points the record somewhere else but keeps its markers.
+  const moved = { ...plan.server, url: "https://attacker.example/mcp" };
+  assert.throws(() => resolveMcpFieldSecrets(moved, record), /changed outside Aiden/u);
+  // Cleanup after that edit drops the values instead of keeping the referenced ones.
+  assert.equal(pruneMcpFieldSecretRecord(record, moved), undefined);
+  // A save that did not come from the editor cannot carry them over either.
+  assert.throws(() => nextMcpFieldSecretRecord(record, planMcpFieldSecrets(moved, counter())), /changed outside Aiden/u);
+  // Changing the URL in the editor (which keeps the header) rebinds them.
+  const rebound = nextMcpFieldSecretRecord(record, planMcpFieldSecrets(moved, counter()), { allowNewDestination: true })!;
+  assert.deepEqual(resolveMcpFieldSecrets(moved, rebound).headers, remote.headers);
+
+  const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["server"], env: { TOKEN: "t" }, enabled: true };
+  const localPlan = planMcpFieldSecrets(local, counter());
+  assert.throws(() => resolveMcpFieldSecrets({ ...localPlan.server, args: ["other"] }, stored(localPlan)), /changed outside Aiden/u);
+});
+
+test("re-saving a stale plain-text copy of a stored value keeps its marker (no sign-out)", () => {
+  const first = planMcpFieldSecrets(remote, counter());
+  const record = stored(first);
+  // The renderer still holds the plain text from before the move and saves a toggle.
+  const again = planMcpFieldSecrets({ ...remote, enabled: false }, () => "f".repeat(32), { reuse: { current: first.server, values: record.values } });
+  assert.deepEqual(again.server.headers, first.server.headers);
+  assert.deepEqual(again.added, {});
+  assert.equal(pendingMcpCredentialCleanupForSave(first.server, again.server), null);
+  assert.equal(nextMcpFieldSecretRecord(record, again), undefined);
+  // A different value still gets a new marker.
+  const rotated = planMcpFieldSecrets({ ...remote, headers: { ...remote.headers!, Authorization: "Bearer new" } }, () => "f".repeat(32), { reuse: { current: first.server, values: record.values } });
+  assert.notEqual(rotated.server.headers!.Authorization, first.server.headers!.Authorization);
+});
+
+test("an unapproved local server's env stays reviewable in config.json", () => {
+  const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "node", args: ["server.js"], env: { NODE_OPTIONS: "--require /tmp/p.js" }, enabled: true };
+  const plan = planMcpFieldSecrets(local, counter(), { sealEnv: false });
+  assert.deepEqual(plan.server.env, local.env);
+  assert.deepEqual(plan.added, {});
+  assert.equal(hasPlaintextMcpFields(plan.server), true);
 });
 
 test("oversized or unnamed fields are refused when saving", () => {
@@ -113,4 +164,38 @@ test("the launch fingerprint covers what runs, not how the server is labelled", 
     { ...local, env: { TOKEN: "a", EXTRA: "1" } },
     { ...local, id: "files-2" },
   ]) assert.notEqual(mcpStdioLaunchFingerprint(changed), base);
+});
+
+test("connection credentials: approval first, stored values filled in, preset key bound to the stored (marker) record", async () => {
+  const { resolveMcpConnectionCredentials } = await import("./mcp-connection-credentials.js");
+  const { MCP_PRESETS, serverFromPreset } = await import("./mcp-presets.js");
+  const { mcpCredentialConnectionSnapshot } = await import("./mcp-credential-cleanup-core.js");
+  const preset = MCP_PRESETS.find((candidate) => candidate.auth.kind === "apiKey")!;
+  const plan = planMcpFieldSecrets({ ...serverFromPreset(preset), headers: { "X-Workspace": "team-1" } }, counter());
+  const record = stored(plan);
+  const bindings: string[] = [];
+  const resolved = await resolveMcpConnectionCredentials(plan.server, {
+    resolveFieldSecrets: async (server) => resolveMcpFieldSecrets(server, record),
+    presetKey: async (_server, binding) => { bindings.push(binding); return "sk-preset"; },
+    isCurrent: () => true,
+    missingKey: (name) => `${name} needs a key`,
+  });
+  // The key was saved against the record as stored, so it is looked up the same way.
+  assert.deepEqual(bindings, [JSON.stringify(mcpCredentialConnectionSnapshot(plan.server))]);
+  assert.equal(resolved.headers!["X-Workspace"], "team-1");
+  assert.equal(Object.keys(resolved.headers!).length, 2);
+
+  const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true };
+  let filled = false;
+  await assert.rejects(
+    resolveMcpConnectionCredentials(local, {
+      isLaunchApproved: async () => false,
+      resolveFieldSecrets: async (server) => { filled = true; return server; },
+      presetKey: async () => null,
+      isCurrent: () => true,
+      missingKey: () => "",
+    }),
+    /added outside Aiden/u,
+  );
+  assert.equal(filled, false, "nothing is resolved for a launch that may not run");
 });

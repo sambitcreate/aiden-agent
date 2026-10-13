@@ -19,11 +19,11 @@ import {
 import { registerMcpControlHandlers, type McpDraftCredentials } from "./mcp-controls.js";
 import { mcpLiveStatus } from "../services/mcp-status-events.js";
 import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services/mcp-dependents.js";
-import { mcpApiKeyHeaderValue } from "../services/mcp-oauth-client-metadata.js";
 import type { McpServer } from "../services/types.js";
-import { mcpFieldSecretMarkers, mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { isMcpFieldSecretMarker, mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { resolveMcpConnectionCredentials } from "../services/mcp-connection-credentials.js";
 import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "../services/mcp-field-secrets.js";
-import { saveConfiguredMcpServer } from "../services/mcp-server-save.js";
+import { saveConfiguredMcpServer, sealPlaintextMcpServerFields } from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
 import {
   mutateCredentialForConfiguredMcp,
@@ -90,39 +90,26 @@ import {
 
 /** Credentials for a Settings draft test: never bound, saved, or borrowed across endpoints. */
 function draftCredentialResolver(credentials: McpDraftCredentials) {
-  return async (draft: McpServer, isCurrent: () => boolean): Promise<McpServer> => {
-    let server = draft;
-    // Stored env/header values only go where the saved server already connects.
-    if (mcpFieldSecretMarkers(server).length > 0) {
-      if (!credentials.savedDestination) {
-        throw new Error("Enter the header and environment values again to test a changed connection.");
-      }
-      await reconcilePendingMcpCredentialCleanup();
-      server = await resolveStoredMcpFieldSecrets(server);
-      if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-    }
-    const preset = assertMcpPresetServer(server);
-    if (!preset || preset.auth.kind !== "apiKey") return server;
-    // A pending credential cleanup must finish before a saved key is read.
-    if (!credentials.apiKey && credentials.matchesSaved) await reconcilePendingMcpCredentialCleanup();
-    const key =
-      credentials.apiKey ??
-      (credentials.matchesSaved
-        ? await secrets.getProviderKey(
-            presetSecretId(server.id),
-            JSON.stringify(mcpCredentialConnectionSnapshot(server)),
-          )
-        : null);
-    if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-    if (!key) throw new Error(`${preset.name} needs an API key — paste one to test the connection.`);
-    return {
-      ...server,
-      headers: {
-        ...server.headers,
-        [preset.auth.headerName]: mcpApiKeyHeaderValue(key, preset.auth.headerValuePrefix),
+  return (draft: McpServer, isCurrent: () => boolean): Promise<McpServer> =>
+    resolveMcpConnectionCredentials(draft, {
+      // Stored env/header values only go where the saved server already connects.
+      resolveFieldSecrets: async (server) => {
+        if (!credentials.savedDestination) {
+          throw new Error("Enter the header and environment values again to test a changed connection.");
+        }
+        await reconcilePendingMcpCredentialCleanup();
+        return resolveStoredMcpFieldSecrets(server);
       },
-    };
-  };
+      presetKey: async (server, binding) => {
+        if (credentials.apiKey) return credentials.apiKey;
+        if (!credentials.matchesSaved) return null;
+        // A pending credential cleanup must finish before a saved key is read.
+        await reconcilePendingMcpCredentialCleanup();
+        return secrets.getProviderKey(presetSecretId(server.id), binding);
+      },
+      isCurrent,
+      missingKey: (name) => `${name} needs an API key — paste one to test the connection.`,
+    });
 }
 
 async function mcpServerDependents(serverId: string) {
@@ -590,17 +577,22 @@ export function registerPhase2Handlers(): void {
           fingerprint: mcpStdioLaunchFingerprint(server),
           command: server.command ?? "",
           args: server.args ?? [],
-          envNames: Object.keys(server.env ?? {}),
+          // Unapproved servers keep env in config.json, so the person sees exactly what would run.
+          env: Object.entries(server.env ?? {}).map(([name, value]) =>
+            isMcpFieldSecretMarker(value) ? { name } : { name, value }),
         });
       }
       return pending;
     },
     approveLaunch: async (server, fingerprint) => {
       if (!(await mcpStdioApprovals.approveShown(server, fingerprint))) return false;
+      // Approved: its env values can now move into the keychain (the approval follows them).
+      await sealPlaintextMcpServerFields([server.id]);
       mcpManager.clearFailure(server.id);
-      prewarmMcpServers([server]);
+      prewarmMcpServers();
       return true;
     },
+    launchApproved: (server) => mcpStdioApprovals.isApproved(server),
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.

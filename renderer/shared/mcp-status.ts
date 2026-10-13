@@ -41,7 +41,8 @@ export interface McpPendingLaunchApproval {
   fingerprint: string;
   command: string;
   args: string[];
-  envNames: string[];
+  /** Each variable's value as written in config.json; omitted for one already moved to the keychain. */
+  env: { name: string; value?: string }[];
 }
 
 export interface McpDependent {

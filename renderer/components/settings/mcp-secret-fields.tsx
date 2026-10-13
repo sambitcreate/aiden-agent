@@ -4,6 +4,7 @@
 
 import { Plus, X } from "lucide-react";
 import { Button, Input, Text } from "../ui";
+import { isMcpFieldSecretMarker } from "../../shared/mcp-field-secrets";
 
 export interface McpSecretFieldDraft {
   /** Stable React key; not saved. */
@@ -12,14 +13,23 @@ export interface McpSecretFieldDraft {
   /** A saved marker while `saved`, otherwise the value being typed. */
   value: string;
   saved: boolean;
+  /** Written in config.json as plain text (not yet in the keychain): shown, so it can be reviewed. */
+  visible?: boolean;
 }
 
 let nextKey = 0;
 const freshKey = () => `field-${++nextKey}`;
 
-/** Every configured value is saved: what Settings receives is a marker (or not-yet-moved text) to send back as is. */
+/**
+ * A keychain value arrives as its marker and stays masked. A value still
+ * written in config.json (a local server added outside Aiden and not yet
+ * approved) is shown as written, because saving from the editor approves it.
+ */
 export function mcpSecretFieldDrafts(record: Record<string, string> | undefined): McpSecretFieldDraft[] {
-  return Object.entries(record ?? {}).map(([name, value]) => ({ key: freshKey(), name, value, saved: true }));
+  return Object.entries(record ?? {}).map(([name, value]) =>
+    isMcpFieldSecretMarker(value)
+      ? { key: freshKey(), name, value, saved: true }
+      : { key: freshKey(), name, value, saved: false, visible: true });
 }
 
 /** Rows without a name are dropped; a later duplicate name wins, as it did for KEY=VALUE lines. */
@@ -27,7 +37,7 @@ export function mcpSecretFieldRecord(fields: readonly McpSecretFieldDraft[]): Re
   const record: Record<string, string> = {};
   for (const field of fields) {
     const name = field.name.trim();
-    if (name) record[name] = field.saved ? field.value : field.value.trim();
+    if (name) record[name] = field.saved || field.visible ? field.value : field.value.trim();
   }
   return record;
 }
@@ -81,7 +91,7 @@ export function McpSecretFields({
               <Input
                 aria-label={`Value of ${label}`}
                 className="min-w-0 flex-1 font-mono"
-                type="password"
+                type={field.visible ? "text" : "password"}
                 autoComplete="off"
                 spellCheck={false}
                 value={field.value}
