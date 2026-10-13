@@ -580,7 +580,7 @@ export function MessageList({
   const settledReplyKeysRef = React.useRef<ReadonlySet<string>>(new Set());
   const liveKeyRef = React.useRef<{ base: string; key: string } | null>(null);
   const handedOffKeysRef = React.useRef(new Map<string, string>());
-  const streamingPromptMessageRef = React.useRef<string | null>(null);
+  const liveRunRef = React.useRef<{ promptId: string; handoffId: string | null } | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
   const persistedAttachmentIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -789,26 +789,24 @@ export function MessageList({
     ? messages.findIndex((message) => message.id === settlingMessageId)
     : -1;
   // The live row stands where its saved message will be, keyed by the message
-  // it answers, even if a queued prompt is saved after it before the handoff.
-  // When streaming, use the message that was the prompt when streaming started,
-  // not the current last message (which might have steering guidance appended).
-  let promptMessageForLiveRow: ChatMessage | undefined;
-  if (settlingIndex >= 0) {
-    promptMessageForLiveRow = messages[settlingIndex - 1];
-  } else if (streamingRowVisible && streamingPromptMessageRef.current) {
-    // Use the stored prompt message ID to find the actual message object
-    const storedPromptMessage = messages.find((m) => m.id === streamingPromptMessageRef.current);
-    promptMessageForLiveRow = storedPromptMessage ?? messages[messages.length - 1];
-  } else {
-    promptMessageForLiveRow = messages[messages.length - 1];
+  // it answers: the prompt it started from stays its key while steering
+  // guidance or a queued prompt is saved before the handoff. A run whose
+  // handoff has finished gives way to the next one.
+  if (!streamingRowVisible || (liveRunRef.current?.handoffId && liveRunRef.current.handoffId !== settlingMessageId)) {
+    liveRunRef.current = null;
   }
-  const liveBaseKey = promptMessageForLiveRow ? replyRowKey(promptMessageForLiveRow) : "root";
+  const startedFrom = liveRunRef.current
+    ? messages.find((message) => message.id === liveRunRef.current?.promptId)
+    : undefined;
+  const promptMessageForLiveRow =
+    startedFrom ?? (settlingIndex >= 0 ? messages[settlingIndex - 1] : messages[messages.length - 1]);
+  const liveBaseKey = replyRowKey(promptMessageForLiveRow);
   let liveKey = liveBaseKey;
   if (streamingRowVisible) {
-    // Remember the prompt message when streaming first becomes visible
-    if (!streamingPromptMessageRef.current && promptMessageForLiveRow) {
-      streamingPromptMessageRef.current = promptMessageForLiveRow.id;
+    if (!liveRunRef.current && promptMessageForLiveRow) {
+      liveRunRef.current = { promptId: promptMessageForLiveRow.id, handoffId: null };
     }
+    if (liveRunRef.current && settlingMessageId) liveRunRef.current.handoffId = settlingMessageId;
     const held = liveKeyRef.current;
     if (held?.base === liveBaseKey) {
       liveKey = held.key;
@@ -823,7 +821,6 @@ export function MessageList({
     if (settlingMessageId) handedOffKeysRef.current.set(settlingMessageId, liveKey);
   } else {
     liveKeyRef.current = null;
-    streamingPromptMessageRef.current = null;
   }
   const liveRow = streamingRowVisible ? (
     <SettledMessageRow

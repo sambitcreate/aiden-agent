@@ -1,15 +1,17 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import { withCommittedRunInput } from "../lib/chat-message-queue";
 import type { ChatMessage } from "../lib/types";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 
 afterEach(() => {
+  mock.restoreAll();
   cleanup();
   delete document.documentElement.dataset.reduceMotion;
 });
@@ -36,7 +38,7 @@ interface Frame {
   liveSubagents?: SubagentRunSnapshotV1[];
   subagentsEnabled?: boolean;
   reasoning?: string | null;
-  streamingArtifacts?: any[];
+  streamingArtifacts?: readonly ChatArtifactV1[];
 }
 
 function transcript({
@@ -378,51 +380,92 @@ test("subagent chips show on live and saved replies only while subagents are ena
   assert.deepEqual(chipRunIds(view.container), [], "a disabled capability hides every chip");
 });
 
-test("committed steering guidance keeps the active response key stable", () => {
+test("a reply steered mid-run stays the same reply through guidance, handoff and settlement", () => {
   document.documentElement.dataset.reduceMotion = "true";
-  const text = "The reply with reasoning.\n\n";
+  const text = "The reply with reasoning.";
   const reasoning = "Let me think about this.";
-  const view = render(
-    transcript({ messages: [prompt], streamingText: text, reasoning }),
-  );
-  const paragraph = screen.getByText("The reply with reasoning.").closest("p");
-  assert.ok(paragraph, "the live reply is rendered");
+  const view = render(transcript({ messages: [prompt], streamingText: `${text}\n\n`, reasoning }));
+  const paragraph = screen.getByText(text).closest("p");
+  const header = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
+  assert.ok(paragraph && header, "the live reply shows its prose and reasoning");
+  act(() => header.click());
+  const collapsed = header.getAttribute("aria-expanded");
 
-  // Find the reasoning disclosure and collapse it
-  const reasoning_section = view.container.querySelector("section");
-  const disclosure_button = reasoning_section?.querySelector("button[aria-expanded]") as HTMLButtonElement;
-  assert.ok(disclosure_button, "the reasoning disclosure exists");
-  act(() => disclosure_button.click());
-  assert.equal(disclosure_button.getAttribute("aria-expanded"), "false", "reasoning is now collapsed");
-
-  // Append steering guidance to the messages via withCommittedRunInput
-  const steerMessage = { messageId: "user-steer-1", text: "Use examples", createdAt: 2 };
-  const steered = withCommittedRunInput({ messages: [prompt] }, steerMessage);
-  view.rerender(
-    transcript({ messages: steered.messages, streamingText: text, reasoning }),
-  );
-
-  // The paragraph should be the same DOM node (not remounted)
-  assert.equal(
-    screen.getByText("The reply with reasoning.").closest("p"),
-    paragraph,
-    "the paragraph is the same element after steering guidance is committed",
-  );
-
-  // The reasoning should still be collapsed
-  const disclosure_button_after = view.container.querySelector("button[aria-expanded]") as HTMLButtonElement;
-  assert.equal(
-    disclosure_button_after.getAttribute("aria-expanded"),
-    "false",
-    "the collapsed reasoning state is preserved when steering is committed",
-  );
+  const steered = withCommittedRunInput(
+    { messages: [prompt] },
+    { messageId: "user-steer-1", text: "Use examples", createdAt: 2 },
+  ).messages;
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: text, reasoning, createdAt: 3 };
+  const frames: Frame[] = [
+    { messages: steered, streamingText: `${text}\n\n`, reasoning },
+    {
+      messages: [...steered, saved],
+      streamingText: text,
+      reasoning,
+      streamComplete: true,
+      persistedHandoffMessageId: saved.id,
+    },
+    { messages: [...steered, saved], streamingText: null },
+  ];
+  for (const frame of frames) {
+    view.rerender(transcript(frame));
+    assert.ok(screen.getByText(text).closest("p") === paragraph, "the reply is not remounted");
+    assert.equal(
+      view.container.querySelector("section > button[aria-expanded]")?.getAttribute("aria-expanded"),
+      collapsed,
+      "the reader's choice on its reasoning holds",
+    );
+  }
 });
 
-test("generated images persist exactly once through handoff and settlement", () => {
+test("a reply that settles gives way to the next run's reply", () => {
   document.documentElement.dataset.reduceMotion = "true";
-  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  const first: ChatMessage = { id: "assistant-1", role: "assistant", content: "The first answer.", createdAt: 2 };
+  const next: ChatMessage = { id: "user-2", role: "user", content: "And then?", createdAt: 3 };
+  const second: ChatMessage = { id: "assistant-2", role: "assistant", content: "The second answer.", createdAt: 4 };
+  // Two rows under one key leave React free to drop or swap either reply.
+  const errors = mock.method(console, "error", () => undefined);
+  const view = render(transcript({ messages: [prompt], streamingText: "The first answer.\n\n" }));
+  view.rerender(
+    transcript({
+      messages: [prompt, first],
+      streamingText: first.content,
+      streamComplete: true,
+      persistedHandoffMessageId: first.id,
+    }),
+  );
+  const settled = screen.getByText(first.content).closest("p");
+  // The queued prompt starts its run as the first one settles, with no idle frame between.
+  view.rerender(transcript({ messages: [prompt, first, next], streamingText: "The second answer.\n\n" }));
+  const streamed = screen.getByText(second.content).closest("p");
+  view.rerender(
+    transcript({
+      messages: [prompt, first, next, second],
+      streamingText: second.content,
+      streamComplete: true,
+      persistedHandoffMessageId: second.id,
+    }),
+  );
+  view.rerender(transcript({ messages: [prompt, first, next, second], streamingText: null }));
+  assert.deepEqual(
+    [first.content, next.content, second.content].map((text) => screen.getAllByText(text).length),
+    [1, 1, 1],
+    "each message shows once",
+  );
+  assert.deepEqual(
+    errors.mock.calls.map((call) => String(call.arguments[0])).filter((message) => message.includes("same key")),
+    [],
+    "every row keeps its own key",
+  );
+  assert.ok(screen.getByText(first.content).closest("p") === settled, "the first reply stays put");
+  assert.ok(screen.getByText(second.content).closest("p") === streamed, "the second settles in place");
+  const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(follows(screen.getByText(next.content), streamed!), "below the prompt it answers");
+});
 
-  const imageArtifact = {
+test("a generated image shows exactly once through handoff and settlement", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const image = {
     version: 1 as const,
     kind: "image" as const,
     id: "image-live",
@@ -435,136 +478,62 @@ test("generated images persist exactly once through handoff and settlement", () 
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
     },
   };
-
-  const prose = "Here is the generated image above.\n\n";
+  const prose = "Here is the generated image.";
   const saved: ChatMessage = {
     id: "assistant-1",
     role: "assistant",
     content: prose,
     createdAt: 2,
-    attachments: [imageArtifact.attachment],
+    attachments: [image.attachment],
   };
-
-  // Render live image with prose
-  const view = render(
-    transcript({
-      messages: [prompt],
-      streamingText: prose,
-      live: true,
-      streamingArtifacts: [imageArtifact as any],
-    }),
-  );
-
-  const previewElement1 = view.container.querySelector(
-    `[data-attachment-preview-id="${imageArtifact.attachment.id}"]`,
-  );
-  assert.ok(previewElement1, "the live image preview is rendered");
-
-  // Handoff: the saved message joins with the live state still active
+  const shown = () => [...view.container.querySelectorAll(`[data-attachment-preview-id="${image.attachment.id}"]`)];
+  const onlyPreview = () => shown().length === 1 && shown()[0] === preview;
+  const view = render(transcript({ messages: [prompt], streamingText: `${prose}\n\n`, streamingArtifacts: [image] }));
+  const [preview] = shown();
+  assert.ok(preview, "the live reply shows its image");
   view.rerender(
     transcript({
       messages: [prompt, saved],
       streamingText: prose,
       streamComplete: true,
       persistedHandoffMessageId: saved.id,
-      live: true,
-      streamingArtifacts: [imageArtifact as any],
+      streamingArtifacts: [image],
     }),
   );
-
-  const previewDuringHandoff = view.container.querySelector(
-    `[data-attachment-preview-id="${imageArtifact.attachment.id}"]`,
-  );
-  assert.ok(previewDuringHandoff, "the image preview exists during handoff");
-  assert.equal(
-    previewDuringHandoff,
-    previewElement1,
-    "the preview element is the same node during handoff",
-  );
-
-  // Settlement: clear the live state
+  assert.ok(onlyPreview(), "one image, the same one, while the reply hands over");
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
-
-  const previewAfterSettlement = view.container.querySelector(
-    `[data-attachment-preview-id="${imageArtifact.attachment.id}"]`,
-  );
-  assert.ok(previewAfterSettlement, "the image preview exists after settlement");
-  assert.equal(
-    previewAfterSettlement,
-    previewElement1,
-    "the preview element is the same node after settlement, not remounted",
-  );
-
-  // Verify only one image is shown throughout
-  const imageCount = view.container.querySelectorAll(
-    `[data-attachment-preview-id="${imageArtifact.attachment.id}"]`,
-  ).length;
-  assert.equal(imageCount, 1, "exactly one image preview element throughout persistence");
+  assert.ok(onlyPreview(), "and once the saved reply settles");
 });
 
-test("rich link preview count stays stable when list structure changes from tight to loose", () => {
+test("links a reparsed reply replaces keep their previews, as the saved reply shows them", () => {
   document.documentElement.dataset.reduceMotion = "true";
-
-  // Create a list of GitHub links in tight form (no blank lines between items)
-  const tightLinks = Array.from({ length: 50 }, (_, i) =>
-    `- [Link ${i + 1}](https://github.com/org/repo/pull/${1000 + i})`,
+  const tight = Array.from(
+    { length: 50 },
+    (_, i) => `- [Link ${i + 1}](https://github.com/org/repo/pull/${1000 + i})`,
   ).join("\n");
+  // An indented paragraph after a blank line turns the tight list loose: every
+  // link moves from the list item into a new paragraph.
+  const loose = `${tight}\n\n  More details.\n`;
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: loose, createdAt: 2 };
+  const history = render(transcript({ messages: [prompt, saved], streamingText: null }));
+  const fromHistory = previews(history.container);
+  assert.equal(fromHistory, 50, "the saved reply previews all its links");
+  history.unmount();
 
-  const saved: ChatMessage = {
-    id: "assistant-1",
-    role: "assistant",
-    content: tightLinks,
-    createdAt: 2,
-  };
-
-  // Render the settled tight list from history
-  const historyView = render(transcript({ messages: [prompt, saved], streamingText: null }));
-  const historyCount = historyView.container.querySelectorAll(
-    '[data-rich-link-provider="github"]',
-  ).length;
-  assert.equal(historyCount, 50, "history render of tight list shows 50 previews");
-  historyView.unmount();
-
-  // Now stream the tight list
-  const view = render(transcript({ messages: [prompt], streamingText: tightLinks.slice(0, 100) }));
-
-  // Progressively stream the full tight list
-  for (const end of [200, 400, tightLinks.length]) {
-    view.rerender(transcript({ messages: [prompt], streamingText: tightLinks.slice(0, end) }));
-  }
-
-  // Verify tight list has all 50 previews
-  let previewCount = view.container.querySelectorAll('[data-rich-link-provider="github"]').length;
-  assert.equal(previewCount, 50, "streamed tight list shows 50 previews");
-
-  // Now make the list loose by appending text with indentation
-  const looseText = tightLinks + "\n  More details.\n";
-  view.rerender(transcript({ messages: [prompt], streamingText: looseText }));
-
-  // The list is now loose and the links should still show previews
-  previewCount = view.container.querySelectorAll('[data-rich-link-provider="github"]').length;
-  assert.equal(previewCount, 50, "streamed loose list still shows 50 previews (not 0)");
-
-  // Persist and handoff
+  const view = render(transcript({ messages: [prompt], streamingText: `${tight}\n` }));
+  assert.equal(previews(view.container), 50, "the tight list previews its links while streaming");
+  view.rerender(transcript({ messages: [prompt], streamingText: loose }));
+  assert.ok(view.container.querySelector("li > p"), "the list is loose now");
+  assert.equal(previews(view.container), 50, "the replaced links keep their previews");
   view.rerender(
     transcript({
       messages: [prompt, saved],
-      streamingText: looseText,
+      streamingText: loose,
       streamComplete: true,
       persistedHandoffMessageId: saved.id,
     }),
   );
-
-  previewCount = view.container.querySelectorAll('[data-rich-link-provider="github"]').length;
-  assert.equal(previewCount, 50, "during handoff shows 50 previews");
-
-  // Settlement
+  assert.equal(previews(view.container), 50);
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
-
-  previewCount = view.container.querySelectorAll('[data-rich-link-provider="github"]').length;
-  assert.equal(
-    previewCount,
-    historyCount,
-    "settled list has same preview count as fresh history render",
-  );
+  assert.equal(previews(view.container), fromHistory, "the settled reply shows what history shows");
 });
