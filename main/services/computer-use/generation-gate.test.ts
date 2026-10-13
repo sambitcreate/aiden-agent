@@ -1,17 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  activateComputerUseStream,
   activatedComputerUseStreamIds,
   cancelComputerUseAndSettle,
-  ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./generation-gate.js";
 import {
-  composerSubmissionAllowed,
   computerUseReadinessReady,
-  computerUseControlState,
   reduceComputerUseRefreshState,
-} from "../../../renderer/lib/computer-use-control.js";
+} from "../../../renderer/lib/computer-use-readiness.js";
 
 test("closing the global gate invalidates old activation snapshots", () => {
   const gate = new ComputerUseGenerationGate();
@@ -22,49 +20,63 @@ test("closing the global gate invalidates old activation snapshots", () => {
   assert.equal(gate.isCurrent(gate.snapshot()), true);
 });
 
-test("global close selects only streams with an activated Computer Use controller", () => {
+test("global close selects only streams that used Computer Use, not every stream offered it", () => {
+  const gate = new ComputerUseGenerationGate();
+  const snapshot = gate.snapshot();
+  const offered: { computerUse: unknown; computerUseActivated?: boolean } = { computerUse: { close: () => {} } };
+  const used: { computerUse: unknown; computerUseActivated?: boolean } = { computerUse: { close: () => {} } };
+  assert.equal(activateComputerUseStream(gate, snapshot, used), true);
   const ids = activatedComputerUseStreamIds(
-    new Map([
+    new Map<string, { computerUse?: unknown; computerUseActivated?: boolean }>([
       ["ordinary", {}],
-      ["computer", { computerUse: { close: () => {} } }],
+      ["offered", offered],
+      ["used", used],
     ]),
   );
-  assert.deepEqual(ids, ["computer"]);
+  assert.deepEqual(ids, ["used"]);
 });
 
-test("a per-chat setting lease excludes generation start until released", () => {
-  const gate = new ChatComputerUseMutationGate();
-  const release = gate.tryBegin("chat-1", false);
-  assert.ok(release);
-  assert.equal(gate.isChanging("chat-1"), true);
-  assert.equal(gate.tryBegin("chat-1", false), null);
-  assert.equal(gate.tryBegin("busy", true), null);
-  release();
-  assert.equal(gate.isChanging("chat-1"), false);
+test("a stream cannot start using Computer Use after a disable closed the gate", () => {
+  const gate = new ComputerUseGenerationGate();
+  const snapshot = gate.snapshot();
+  gate.close();
+  const entry: { computerUseActivated?: boolean } = {};
+  assert.equal(activateComputerUseStream(gate, snapshot, entry), false);
+  assert.equal(entry.computerUseActivated, undefined);
+  assert.equal(activateComputerUseStream(gate, gate.snapshot(), undefined), false);
 });
 
-test("an unavailable per-chat control remains keyboard reachable and reports aria-disabled", () => {
-  assert.deepEqual(computerUseControlState({ enabled: false, ready: false, busy: false }), {
-    disabled: false,
-    ariaDisabled: true,
+test("the disable path cancels a stream that called computer_use and spares one that never did", async () => {
+  const gate = new ComputerUseGenerationGate();
+  const closed: string[] = [];
+  const entry = (id: string) => ({
+    computerUse: { closeAndSettle: async () => { closed.push(id); } },
+    completion: Promise.resolve(),
   });
-  assert.deepEqual(computerUseControlState({ enabled: false, ready: true, busy: true }), {
-    disabled: true,
-    ariaDisabled: false,
-  });
-});
+  const active = new Map<string, ReturnType<typeof entry> & { computerUseActivated?: boolean }>([
+    ["chatting", entry("chatting")],
+    ["computing", entry("computing")],
+  ]);
+  const initializations = new Map([["starting", entry("starting")]]);
+  assert.equal(activateComputerUseStream(gate, gate.snapshot(), active.get("computing")), true);
+  const cancelled: string[] = [];
 
-test("Enter-key submission and the Send button share the Computer Use save gate", () => {
-  const base = {
-    ready: true,
-    isGenerating: false,
-    sending: false,
-    permissionSaving: false,
-    gitOperationBusy: false,
-    attaching: false,
-  };
-  assert.equal(composerSubmissionAllowed({ ...base, computerUseSaving: false }), true);
-  assert.equal(composerSubmissionAllowed({ ...base, computerUseSaving: true }), false);
+  await cancelComputerUseAndSettle({
+    gate,
+    initializations: () => initializations,
+    active: () => active,
+    cancel: (id) => {
+      cancelled.push(id);
+      active.delete(id);
+    },
+    timeoutMs: 1000,
+  });
+
+  assert.deepEqual(cancelled, ["computing"]);
+  assert.deepEqual(closed, ["computing"]);
+  assert.equal(active.has("chatting"), true);
+  // The spared stream can no longer start Computer Use under the closed gate.
+  assert.equal(activateComputerUseStream(gate, 0, active.get("chatting")), false);
 });
 
 test("a fresh direct or background-query status clears a stale manual-retry error", () => {
@@ -93,7 +105,7 @@ function deferred() {
 test("cancel-and-settle waits for driver closure, generation completion and owner-map removal", async () => {
   const driver = deferred();
   const generation = deferred();
-  const active = new Map([["cu", { computerUse: { closeAndSettle: () => driver.promise }, completion: generation.promise }]]);
+  const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: () => driver.promise }, completion: generation.promise }]]);
   const gate = new ComputerUseGenerationGate();
   const snapshot = gate.snapshot();
   const cancellations: string[] = [];
@@ -114,7 +126,7 @@ test("cancel-and-settle waits for driver closure, generation completion and owne
 
 test("cancel-and-settle rejects timeout and teardown errors rather than authorizing deletion", async () => {
   for (const close of [() => new Promise<void>(() => {}), () => Promise.reject(new Error("driver failed"))]) {
-    const active = new Map([["cu", { computerUse: { closeAndSettle: close } }]]);
+    const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: close } }]]);
     await assert.rejects(cancelComputerUseAndSettle({ gate: new ComputerUseGenerationGate(),
       initializations: () => new Map(), active: () => active, cancel: () => { active.clear(); }, timeoutMs: 10,
     }), /model was not removed/);

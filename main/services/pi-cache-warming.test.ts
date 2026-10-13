@@ -341,7 +341,7 @@ async function cancellationHost() {
   class UnusedService {}
   const mocks: Record<string, unknown> = {
     "../platform.js": { logger: { info() {} } },
-    "./computer-use/generation-gate.js": { ComputerUseGenerationGate: UnusedService, ChatComputerUseMutationGate: UnusedService },
+    "./computer-use/generation-gate.js": { ComputerUseGenerationGate: UnusedService },
     "./chat-deletion-gate.js": { ChatDeletionGate: UnusedService },
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },

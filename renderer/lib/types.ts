@@ -652,7 +652,10 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
-  computerUseEnabled?: boolean;
+  /** The user granted Computer Use for this chat. */
+  computerUseAllowed?: boolean;
+  /** A Computer Use access request is waiting for macOS setup; offer Continue. */
+  computerUsePendingContinue?: boolean;
   /** Main-owned crash stage exists and must be recovered before another chat mutation. */
   imageArtifactRecoveryPending?: boolean;
   /** Main-owned image staging could not be opened or quarantined automatically. */
@@ -930,6 +933,8 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Skip the per-chat Computer Use access card in every chat. */
+  computerUseAlwaysAllow?: boolean;
   /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button. Omitted means shown; active sessions always show it. */

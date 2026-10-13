@@ -465,8 +465,16 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
   firstMessageCommit?: { turnId: string; fingerprint: string };
-  /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
-  computerUseEnabled?: boolean;
+  /**
+   * The user granted Computer Use for this chat ("Allow for this chat" on the
+   * access card). The global Computer Use beta setting remains authoritative.
+   */
+  computerUseAllowed?: boolean;
+  /**
+   * Set while a Computer Use access request waits on missing macOS
+   * permissions, so the chat can offer Continue after the user restarts Aiden.
+   */
+  computerUsePendingContinue?: boolean;
   messages: ChatMessage[];
 }
 
@@ -764,6 +772,8 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** "Always allow" Computer Use in every chat without the per-chat access card. */
+  computerUseAlwaysAllow?: boolean;
   /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
   aidenLiveEnabled?: boolean;
   /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */

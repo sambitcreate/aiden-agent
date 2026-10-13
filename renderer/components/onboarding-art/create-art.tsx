@@ -21,7 +21,6 @@ import {
   RotateCw,
   Save,
   Search,
-  ShieldQuestion,
   SquareTerminal,
   Upload,
   X,
@@ -288,19 +287,19 @@ export function ComputerUseArt() {
       </span>
       <ArtWindow raised className="oa-cu-approval" style={{ left: 8, top: 112, width: 176 }}>
         <div className="oa-row" style={{ gap: 5, alignItems: "flex-start" }}>
-          <span className="oa-cu-shield">
-            <ArtIcon icon={ShieldQuestion} />
+          <span className="oa-cu-badge">
+            <ArtIcon icon={MousePointer2} />
           </span>
           <span className="oa-stack" style={{ gap: 3, flex: 1, paddingTop: 1 }}>
-            <span className="oa-strong">Computer Use needs approval</span>
-            <Bar width="80%" tone="soft" />
+            <span className="oa-strong">Aiden wants to use your computer</span>
+            <Bar width="86%" tone="soft" />
+            <Bar width="58%" tone="soft" />
           </span>
         </div>
-        <div className="oa-cu-summary oa-mono">click element “Export”</div>
         <div className="oa-row" style={{ justifyContent: "flex-end", gap: 5 }}>
           <ArtButton variant="ghost">Deny</ArtButton>
           <ArtButton variant="primary" className="oa-anim-press" style={{ animationDelay: "0.6s" }}>
-            Allow once
+            Allow for this chat
           </ArtButton>
         </div>
       </ArtWindow>

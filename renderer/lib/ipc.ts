@@ -457,6 +457,8 @@ export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
   requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  /** Clear every chat's Computer Use grant and turn off Always allow. */
+  resetChatGrants: () => invoke<{ cleared: number }>("computerUse:resetChatGrants"),
 };
 
 export const formFillApi = {
@@ -1199,7 +1201,6 @@ export const chatsApi = {
     workspaceId?: string;
     providerId?: string;
     model?: string;
-    computerUseEnabled?: boolean;
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
@@ -1236,8 +1237,9 @@ export const chatsApi = {
   showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
-  setComputerUse: (id: string, enabled: boolean) =>
-    invoke<Chat>("chats:setComputerUse", id, enabled),
+  /** Clear the post-restart "continue Computer Use" callout without resuming. */
+  dismissComputerUseContinue: (chatId: string) =>
+    invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   htmlArtifactSrcdoc: (
