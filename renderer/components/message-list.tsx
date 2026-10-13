@@ -853,19 +853,22 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     <div
       role="status"
       aria-live="polite"
-      className="agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2 py-0.5"
+      // One fixed-height line: the label swaps on presentation timers, and a
+      // wrapping label would move the bottom edge the transcript follows.
+      className="agent-activity-layer agent-event-in flex h-6 w-fit max-w-full items-center gap-2"
       data-agent-activity={current.phase}
     >
       <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
       <Text
         variant="small"
         color="secondary"
+        title={current.label}
         className={
           current.phase === "thinking" ||
           current.phase === "loading" ||
           current.phase === "visualizing"
-            ? "agent-thinking-shimmer min-w-0 break-words"
-            : "min-w-0 break-words"
+            ? "agent-thinking-shimmer min-w-0 truncate"
+            : "min-w-0 truncate"
         }
       >
         {current.label}

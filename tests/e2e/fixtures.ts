@@ -138,6 +138,18 @@ export type LmStudioEndpoint = {
   releaseCompletions?: () => void;
   /** Exact prompt-matched scripts, available only on the disposable deterministic model. */
   enqueueToolScenario?: (scenario: DeterministicToolScenario) => DeterministicToolScenarioState;
+  /**
+   * Answers the agent completion whose prompt contains `prompt` with a reply
+   * the test streams one delta at a time, available only on the deterministic model.
+   */
+  enqueueStreamedReply?: (prompt: string) => StreamedReplyController;
+};
+
+export type StreamedReplyController = {
+  /** Sends one content delta, or buffers it until the completion request arrives. */
+  push: (text: string) => void;
+  /** Ends the reply with a stop reason. */
+  finish: () => void;
 };
 
 export type DeterministicToolScenario = {
@@ -269,8 +281,53 @@ function writeCompletion(
   else finish();
 }
 
+type StreamedReply = {
+  prompt: string;
+  pending: string[];
+  finished: boolean;
+  response?: import("node:http").ServerResponse;
+};
+
+function streamedChunk(delta: Record<string, unknown>, finishReason: string | null): string {
+  return `data: ${JSON.stringify({
+    id: "chatcmpl-aiden-e2e-stream",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: E2E_MODEL_ID,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  })}\n\n`;
+}
+
+function flushStreamedReply(reply: StreamedReply): void {
+  const response = reply.response;
+  if (!response || response.writableEnded) return;
+  for (const text of reply.pending.splice(0)) response.write(streamedChunk({ content: text }, null));
+  if (reply.finished) {
+    response.write(streamedChunk({}, "stop"));
+    response.end("data: [DONE]\n\n");
+  }
+}
+
 async function startMockLmStudio(): Promise<MockLmStudio> {
   const requests: CapturedLmStudioRequest[] = [];
+  const streamedReplies: StreamedReply[] = [];
+  const enqueueStreamedReply = (prompt: string): StreamedReplyController => {
+    if (!prompt.trim() || streamedReplies.some((reply) => reply.prompt === prompt)) {
+      throw new Error("A streamed reply needs a unique, non-empty prompt.");
+    }
+    const reply: StreamedReply = { prompt, pending: [], finished: false };
+    streamedReplies.push(reply);
+    return {
+      push: (text) => {
+        reply.pending.push(text);
+        flushStreamedReply(reply);
+      },
+      finish: () => {
+        reply.finished = true;
+        flushStreamedReply(reply);
+      },
+    };
+  };
   let holding = false;
   const held = new Set<() => void>();
   const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
@@ -341,6 +398,17 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
+        if (streamed && completion?.tools?.length) {
+          streamed.response = response;
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-type": "text/event-stream; charset=utf-8",
+          });
+          response.write(streamedChunk({ role: "assistant", content: "" }, null));
+          flushStreamedReply(streamed);
+          return;
+        }
         const scenario = scenarios.find(({ script }) => userText.includes(script.prompt));
         // A title request can quote the prompt but has no tool definitions. Only
         // the agent completion with its actual available schema consumes a script.
@@ -405,6 +473,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
       held.clear();
     },
     enqueueToolScenario,
+    enqueueStreamedReply,
     server,
   };
 }
