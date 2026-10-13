@@ -12,7 +12,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenAgentStep
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStepStatus
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
-import sbtbiswas.AidenOnTheGo.models.AidenLiveTool
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionnaireRecap
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
@@ -102,48 +101,5 @@ class AidenQuestionnaireRecapUiTest {
         compose.onNodeWithText("Postgres").assertExists()
         compose.onNodeWithText("After", substring = true).assertExists()
         compose.onNodeWithText("Ask questions").assertDoesNotExist()
-    }
-
-    @Test
-    fun liveStreamingFallbackShowsRecapWhenProjectionFails() {
-        // Timeline with a completed questionnaire step but no thinking spans for the reasoning.
-        // This causes AidenChronologicalProjection.rows() to return null, triggering the live
-        // fallback. The fallback should still render the questionnaire recap.
-        val timeline = AidenGenerationTimeline(
-            version = 3, generationId = "stream-with-reasoning", status = AidenGenerationTimelineStatus.RUNNING,
-            startedAt = 1000.0,
-            steps = listOf(
-                AidenAgentStep(
-                    "tool-1", 0, AidenAgentStep.Kind.TOOL, toolCallId = "call-1", toolName = "ask_user_question",
-                    label = "Ask questions", status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0,
-                    updatedAt = 1100.0, finishedAt = 1100.0, contentOffset = 5, questionnaire = answered
-                )
-            )
-        )
-        compose.setContent {
-            AidenTheme {
-                ActiveStreamingCard(
-                    liveText = "Hello",
-                    reasoning = "Thinking about the answers",
-                    tools = listOf(
-                        // tool_started carries the agent's call id, which matches the step's.
-                        AidenLiveTool(id = "tool_1", name = "ask_user_question", status = "succeeded", callId = "call-1"),
-                        AidenLiveTool(id = "tool_2", name = "read_file", status = null)
-                    ),
-                    activityTimeline = timeline,
-                    isBotChat = false,
-                    palette = AidenTheme.palette
-                )
-            }
-        }
-
-        compose.onNodeWithContentDescription("Your answers").assertExists()
-        compose.onNodeWithText("Which database?").assertIsDisplayed()
-        compose.onNodeWithText("Postgres").assertIsDisplayed()
-        compose.onNodeWithText("Thinking about the answers").assertIsDisplayed()
-        // The recap replaces its tool's live row; other live tools still show.
-        compose.onNodeWithText("ask_user_question").assertDoesNotExist()
-        compose.onNodeWithText("Ask questions").assertDoesNotExist()
-        compose.onNodeWithText("read_file").assertIsDisplayed()
     }
 }

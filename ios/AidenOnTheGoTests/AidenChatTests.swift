@@ -384,6 +384,17 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertTrue(AidenAgentActivityPresentation.questionnaireSteps(stopped).isEmpty)
         XCTAssertEqual(AidenAgentActivityPresentation.summary(stopped), "1 tool call")
+
+        // Live tool rows show only until the timeline accounts for a call; a
+        // recap card stands in for its question, so the row is not repeated.
+        let liveTools = [AidenLiveTool(id: "tool_1", name: "ask_user_question", status: "succeeded")]
+        let recapOnly = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-3","status":"running","startedAt":1000,"steps":[\#(questionnaireStepJSON(id: 1, contentOffset: 7, questionnaire: recap))]}"#.utf8
+        ))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: recapOnly, reasoningVisible: true))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: stopped, reasoningVisible: false))
+        XCTAssertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: nil, reasoningVisible: true))
+        XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
     }
 
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {

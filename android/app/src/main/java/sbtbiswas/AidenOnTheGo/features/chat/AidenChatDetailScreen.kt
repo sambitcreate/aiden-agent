@@ -1607,20 +1607,10 @@ internal fun ActiveStreamingCard(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // Questionnaire recaps replace their tool's live row.
-            val recapSteps = activityTimeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
-            val liveTools = AidenAgentActivityPresentation.liveToolsWithoutRecaps(tools, activityTimeline)
-            recapSteps.forEach { step ->
-                key(step.id) {
-                    AidenQuestionnaireRecapStack(recap = step.questionnaireRecap!!, palette = palette)
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            }
-
             // Live Tools
-            if (liveTools.isNotEmpty()) {
+            if (tools.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (tool in liveTools) {
+                    for (tool in tools) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             AidenActivityMark(
                                 mark = aidenActivityMarkForTool(

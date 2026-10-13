@@ -1622,9 +1622,8 @@ class AidenChatViewModel(
             AidenRemoteEventType.TOOL_STARTED -> {
                 val id = event.payload?.toolId
                 val name = event.payload?.name
-                val callId = event.payload?.callId
                 if (id != null && name != null) {
-                    _tools.value = _tools.value + AidenLiveTool(id = id, name = name, status = null, callId = callId)
+                    _tools.value = _tools.value + AidenLiveTool(id = id, name = name, status = null)
                 }
             }
             AidenRemoteEventType.TOOL_FINISHED -> {

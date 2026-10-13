@@ -55,7 +55,6 @@ interface ChatTool {
   streamId: string;
   phase: ToolPhase;
   toolName: string;
-  toolCallId?: string;
 }
 interface ChatApproval extends ApprovalPrompt {
   streamId: string;

@@ -11159,10 +11159,6 @@
                     "name": {
                       "type": "string",
                       "maxLength": 120
-                    },
-                    "callId": {
-                      "type": "string",
-                      "maxLength": 128
                     }
                   },
                   "additionalProperties": false

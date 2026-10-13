@@ -3652,7 +3652,6 @@ export const llmClient = {
               streamId,
               phase: "call",
               toolName: event.toolName,
-              toolCallId: event.toolCallId,
             });
             break;
           case "tool_execution_update":
@@ -3696,7 +3695,6 @@ export const llmClient = {
               streamId,
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
-              toolCallId: event.toolCallId,
             });
             break;
           }

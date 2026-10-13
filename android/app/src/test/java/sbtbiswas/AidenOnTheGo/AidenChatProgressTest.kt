@@ -504,27 +504,4 @@ class AidenChatProgressTest {
             AidenSSEParser.decodeStreamEvent(unknownWithoutTerminal.toByteArray())
         }
     }
-
-    @Test
-    fun toolStartedCarriesAnOptionalBoundedCallId() {
-        fun toolStarted(payload: String) = """
-            {"protocolVersion":1,"streamId":"stream_test","sequence":1,"timestamp":"2026-08-24T00:00:00Z","type":"tool_started","terminal":false,"payload":$payload}
-        """.trimIndent().toByteArray()
-
-        val withCallId = AidenSSEParser.decodeStreamEvent(toolStarted("""{"toolId":"tool_1","name":"ask_user_question","callId":"call-1"}"""))
-        assertEquals("call-1", withCallId.payload?.callId)
-        assertEquals("tool_1", withCallId.payload?.toolId)
-        assertNull(AidenSSEParser.decodeStreamEvent(toolStarted("""{"toolId":"tool_1","name":"read"}""")).payload?.callId)
-
-        for (invalid in listOf(
-            """{"toolId":"tool_1","name":"read","callId":null}""",
-            """{"toolId":"tool_1","name":"read","callId":"${"c".repeat(129)}"}""",
-            """{"name":"read","callId":"call-1"}""",
-            """{"toolId":"tool_1","name":"read","args":"{}"}"""
-        )) {
-            assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
-                AidenSSEParser.decodeStreamEvent(toolStarted(invalid))
-            }
-        }
-    }
 }

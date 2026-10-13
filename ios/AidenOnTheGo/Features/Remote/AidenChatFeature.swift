@@ -7003,7 +7003,11 @@ private struct AidenLiveResponseView: View {
                     steps: visibleActivitySteps
                 )
                     .transition(.opacity)
-            } else if chronologicalRows == nil && !model.tools.isEmpty {
+            } else if chronologicalRows == nil && AidenAgentActivityPresentation.showsLiveToolRows(
+                model.tools,
+                timeline: model.activityTimeline,
+                reasoningVisible: !model.reasoning.isEmpty
+            ) {
                 AidenToolActivityCard(tools: model.tools)
             }
 

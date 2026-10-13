@@ -241,11 +241,7 @@ export function projectRunContentNotification(
       const queue = state.activeTools.get(name) ?? [];
       queue.push(toolId);
       state.activeTools.set(name, queue);
-      // The agent's call id lets clients match the row to its timeline step. A
-      // truncated id would match nothing, so an oversized one is left out.
-      const callId = payload.toolCallId;
-      const matchable = typeof callId === "string" && callId.length > 0 && callId.length <= 128;
-      return event("tool_started", matchable ? { toolId, name, callId } : { toolId, name }, false, "running");
+      return event("tool_started", { toolId, name }, false, "running");
     }
     const queue = state.activeTools.get(name) ?? [];
     const toolId = queue.shift() ?? `tool_${++state.toolCounter}`;

@@ -1617,13 +1617,6 @@ test("pairing, typed SSE payloads, and error details fail closed", async () => {
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, protocolVersion: 2 }), /unsupported protocolVersion/);
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, streamId: "" }), /non-empty string/);
   assert.throws(() => parseAidenRemoteStreamEvent({ ...event, sequence: 0 }), /positive/);
-  const toolStarted = record((source.events as unknown[]).find((item) => record(item, "event").type === "tool_started"), "event");
-  const toolPayload = { toolId: "tool_1", name: "read" };
-  assert.equal(record(parseAidenRemoteStreamEvent({ ...toolStarted, payload: toolPayload })?.payload, "payload").callId, undefined);
-  assert.equal(record(parseAidenRemoteStreamEvent({ ...toolStarted, payload: { ...toolPayload, callId: "call-1" } })?.payload, "payload").callId, "call-1");
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...toolStarted, payload: { ...toolPayload, callId: null } }));
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...toolStarted, payload: { ...toolPayload, callId: "c".repeat(129) } }));
-  assert.throws(() => parseAidenRemoteStreamEvent({ ...toolStarted, payload: { ...toolPayload, args: "{}" } }), /unsupported field args/);
   assert.throws(
     () => parseAidenRemoteStreamEvent({ ...event, timestamp: "August 18, 2026 19:01:01 GMT" }),
     /strict RFC 3339/,

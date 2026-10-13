@@ -23,7 +23,11 @@ Native clients:
 - Both drop an invalid recap and keep the step, while the desktop rejects the whole timeline.
 - Both get a `questionnaire` chronological row kind and leave questionnaire steps out of the activity tally.
 
-**Live question fallback pairing**: Android's `ActiveStreamingCard` fallback hides a live `ask_user_question` row whose call the timeline shows as a recap. Live rows' `tool_N` ids are the stream's own counter, so `chat:tool` now carries `toolCallId` and `tool_started` forwards it as optional `callId` (revision 28, omitted when over 128 characters). `liveToolsWithoutRecaps` matches `callId` against recapped steps' `toolCallId`. Pairing by count or order was wrong: after snapshot recovery the phone misses earlier tool events, and a question can succeed without a recap.
+Live fallback (no chronological rows):
+- Live Remote tool rows carry the stream's own `tool_N` ids, which never match a timeline step's public `call-N` `toolCallId`. Pairing by order breaks after snapshot recovery.
+- Adding a correlation field to `tool_started` was tried and reverted. Installed revision-27 iOS and Android codecs reject unknown `tool_started` keys and would loop on the event. Any new field there needs negotiation or a new event type that older clients ignore.
+- iOS (`AidenAgentActivityPresentation.showsLiveToolRows`) hides the live tool card once the timeline has any tool step, recaps included. That is the pre-recap behavior, since questionnaire steps used to count as visible steps.
+- Android's fallback lists every live tool rather than the timeline. It keeps showing the plain question row and shows no recap mid-turn; the settled transcript shows the recap. A proper fix renders that fallback from timeline steps.
 
 Bot quick-reply questionnaires do not produce a recap yet.
 

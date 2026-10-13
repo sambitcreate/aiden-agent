@@ -805,6 +805,20 @@ enum AidenAgentActivityPresentation {
         timeline?.steps.filter(\.isQuestionnaire) ?? []
     }
 
+    /// Whether a fallback transcript lists the stream's live tool rows. Once
+    /// the timeline has a tool step, the activity feed or a recap card already
+    /// shows each call, so the live rows would only repeat them.
+    static func showsLiveToolRows(
+        _ tools: [AidenLiveTool],
+        timeline: AidenGenerationTimeline?,
+        reasoningVisible: Bool
+    ) -> Bool {
+        guard !tools.isEmpty else { return false }
+        guard let timeline else { return true }
+        return activitySteps(timeline, reasoningVisible: reasoningVisible).isEmpty
+            && questionnaireSteps(timeline).isEmpty
+    }
+
     static func line(for step: AidenAgentStep) -> String {
         if step.kind == .thinking {
             return step.isActive ? "Thinking" : "Thought \(duration(step.durationMs))"
