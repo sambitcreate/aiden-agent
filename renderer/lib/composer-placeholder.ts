@@ -22,6 +22,12 @@ export const BACKGROUND_RESPONSE_COMPOSER_PLACEHOLDER = "Waiting for the respons
  * must not repeat it.
  */
 export const READINESS_COMPOSER_PLACEHOLDER = "Can’t send yet";
+/**
+ * Placeholder while the blocking state is still settling on its own, such as
+ * "Loading chat…". Readiness copy ending in an ellipsis marks work in progress,
+ * which should read as a short wait rather than as an error.
+ */
+export const PENDING_COMPOSER_PLACEHOLDER = "One moment…";
 
 interface ComposerPlaceholderInput {
   ready: boolean;
@@ -52,8 +58,11 @@ export function composerPlaceholder({
 }: ComposerPlaceholderInput): string {
   if (!ready) {
     if (!readinessMessage) return UNAVAILABLE_COMPOSER_PLACEHOLDER;
-    return readinessMessage === BACKGROUND_RESPONSE_READINESS_MESSAGE
-      ? BACKGROUND_RESPONSE_COMPOSER_PLACEHOLDER
+    if (readinessMessage === BACKGROUND_RESPONSE_READINESS_MESSAGE) {
+      return BACKGROUND_RESPONSE_COMPOSER_PLACEHOLDER;
+    }
+    return readinessMessage.trimEnd().endsWith("…")
+      ? PENDING_COMPOSER_PLACEHOLDER
       : READINESS_COMPOSER_PLACEHOLDER;
   }
   if (hasMessages) return FOLLOW_UP_COMPOSER_PLACEHOLDER;

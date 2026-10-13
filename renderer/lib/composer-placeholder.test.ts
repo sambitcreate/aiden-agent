@@ -4,6 +4,7 @@ import {
   BACKGROUND_RESPONSE_COMPOSER_PLACEHOLDER,
   BACKGROUND_RESPONSE_READINESS_MESSAGE,
   FOLLOW_UP_COMPOSER_PLACEHOLDER,
+  PENDING_COMPOSER_PLACEHOLDER,
   READINESS_COMPOSER_PLACEHOLDER,
   NEW_CHAT_COMPOSER_PLACEHOLDERS,
   UNAVAILABLE_COMPOSER_PLACEHOLDER,
@@ -90,6 +91,16 @@ test("a response running in the background reads as waiting, not as a second not
     }),
     READINESS_COMPOSER_PLACEHOLDER,
   );
+});
+
+test("a state that is still loading reads as a short wait, not as an error", () => {
+  for (const readinessMessage of ["Loading chat…", "Loading chat models…"]) {
+    assert.equal(
+      composerPlaceholder({ ready: false, readinessMessage, hasMessages: false, chatId: "chat-6ea3b" }),
+      PENDING_COMPOSER_PLACEHOLDER,
+    );
+  }
+  assert.notEqual(PENDING_COMPOSER_PLACEHOLDER, READINESS_COMPOSER_PLACEHOLDER);
 });
 
 test("chat readiness reports the first blocking reason in priority order", () => {
