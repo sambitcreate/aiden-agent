@@ -49,6 +49,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatScroll
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
@@ -377,6 +378,8 @@ class AidenChatTest {
     private fun withForeignRunChat(
         initial: AidenChat?,
         route: (String, RecordedRequest) -> MockResponse,
+        agentsRead: Boolean = false,
+        attach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy(),
         features: List<String> = listOf("phone-run-control-v1"),
         body: suspend CoroutineScope.(AidenChatViewModel) -> Unit
     ) {
@@ -388,10 +391,11 @@ class AidenChatTest {
         val grants = listOf(
             AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
             AidenRemoteCapability.APPROVAL_RESPOND, AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL
-        )
+        ) + if (agentsRead) listOf(AidenRemoteCapability.AGENTS_READ) else emptyList()
+        val serverFeatures = features + if (agentsRead) listOf("chat-agents-v1") else emptyList()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (val path = request.requestUrl!!.encodedPath) {
-                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(features)},"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-run","name":"Run Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":${json.encodeToString(serverFeatures)},"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}""")
                 else -> route(path.removePrefix("/api/aiden/v1"), request)
             }
         }
@@ -409,7 +413,7 @@ class AidenChatTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial, foreignRunAttach = attach)
                 viewModels.put("foreign", model)
                 try {
                     body(model)
@@ -531,6 +535,204 @@ class AidenChatTest {
             // Recovery re-reads the chat on its own; the answer moves into the transcript.
             withTimeout(10_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "reply-mac" } == true } }
             withTimeout(5_000) { model.liveText.first { it.isEmpty() } }
+        }
+    }
+
+    private fun rosterFrame(turnId: String, revision: Int): String {
+        val roster = """{"version":1,"chatId":"chat-mac","turnId":"$turnId","previousTurns":[],"availability":"ready",""" +
+            """"epoch":"epoch-run","revision":$revision,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+        return "id: $revision\nevent: agents_update\ndata: {\"protocolVersion\":1,\"streamId\":\"chat-mac\",\"sequence\":$revision," +
+            "\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"agents_update\",\"terminal\":false,\"payload\":$roster}\n\n"
+    }
+
+    /** A run the Mac started: its opening replay, then a connection that stays open. */
+    private fun macRunRoute(path: String): MockResponse? = when (path) {
+        "/chats/chat-mac" -> MockResponse().setBody(Json(json) { explicitNulls = false }.encodeToString(foreignRunChat()))
+        "/runs/run-mac/events" -> runFeed("").setHeadersDelay(5, TimeUnit.SECONDS)
+        else -> null
+    }
+
+    private val macRunFeed: MockResponse
+        get() = runFeed(
+            runFrame(1, "run.started", """{"runId":"run-mac","chatId":"chat-mac","origin":"renderer"}""") +
+                runFrame(2, "text_delta", """{"text":"Live from the Mac"}""")
+        )
+
+    @Test
+    fun rosterAnnouncingANewTurnAttachesToItsRunAndRetriesOnceUntilTheRunIsRegistered() =
+        assertRosterTurnAttach(runRegisters = true)
+
+    @Test
+    fun rosterTurnWhoseRunNeverAppearsIsLookedUpOnceMoreAndThenLeftAlone() =
+        assertRosterTurnAttach(runRegisters = false)
+
+    private fun assertRosterTurnAttach(runRegisters: Boolean) {
+        // Lookups and the policy's waits, in the order they happened.
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val rosterRequests = java.util.concurrent.atomic.AtomicInteger(0)
+        val macTurnStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val runRegistered = java.util.concurrent.atomic.AtomicBoolean(false)
+        val attach = AidenForeignRunAttachPolicy(pause = { log.add("wait $it") })
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> {
+                    rosterRequests.incrementAndGet()
+                    runFeed(if (macTurnStarted.get()) rosterFrame("turn-2", 2) else rosterFrame("turn-1", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    log.add("lookup")
+                    if (runRegistered.get()) {
+                        macRunFeed
+                    } else {
+                        // The roster can announce a turn just before its run is registered.
+                        if (runRegisters && macTurnStarted.get()) runRegistered.set(true)
+                        MockResponse().setResponseCode(404)
+                    }
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-1" } }
+            // The lookup made on opening found nothing; the first roster's turn is
+            // checked once more, and not again when the feed repeats it.
+            withTimeout(5_000) { while (log.size < 2) kotlinx.coroutines.delay(10) }
+            awaitRosterReconnects(rosterRequests, 2)
+            assertEquals(listOf("lookup", "lookup"), log.toList())
+
+            macTurnStarted.set(true)
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-2" } }
+            if (runRegisters) {
+                withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+                assertTrue("A live foreign run offers Stop", model.canStopCurrentRun)
+            } else {
+                withTimeout(5_000) { while (log.count { it == "lookup" } < 4) kotlinx.coroutines.delay(10) }
+                awaitRosterReconnects(rosterRequests, 2)
+                assertEquals("", model.liveText.value)
+            }
+            assertEquals(
+                "Opening, the first roster, the announced turn, then one retry after waiting for the run to register",
+                listOf("lookup", "lookup", "lookup", "wait 400", "lookup"),
+                log.toList()
+            )
+        }
+    }
+
+    /** Waits until the roster feed has been reopened [count] more times, so each earlier frame was handled. */
+    private suspend fun awaitRosterReconnects(requests: java.util.concurrent.atomic.AtomicInteger, count: Int) {
+        val target = requests.get() + count
+        withTimeout(5_000) { while (requests.get() < target) kotlinx.coroutines.delay(10) }
+    }
+
+    @Test
+    fun rosterAnnouncingThisPhonesOwnFinishedTurnDoesNotLookForARun() {
+        val wireJson = Json(json) { explicitNulls = false }
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val rosterRequests = java.util.concurrent.atomic.AtomicInteger(0)
+        val announceOwnTurn = java.util.concurrent.atomic.AtomicBoolean(false)
+        val question = AidenChatMessage(
+            id = "question-1", role = AidenChatRole.USER, text = "Compare plans", createdAt = Instant.EPOCH
+        )
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            when (path) {
+                "/chats/chat-mac" -> MockResponse().setBody(wireJson.encodeToString(foreignRunChat()))
+                "/chats/chat-mac/turns" -> MockResponse().setResponseCode(202).setBody(
+                    """{"turnId":"turn-phone","streamId":"stream-phone","status":"queued","message":${wireJson.encodeToString(question)}}"""
+                )
+                "/streams/stream-phone/events" -> runFeed(
+                    "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-phone\",\"sequence\":1," +
+                        "\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                )
+                "/streams/stream-phone" -> MockResponse().setBody(
+                    """{"streamId":"stream-phone","chatId":"chat-mac","turnId":"turn-phone","state":"done","lastSequence":1,"updatedAt":"2026-10-05T10:00:00Z"}"""
+                )
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> {
+                    rosterRequests.incrementAndGet()
+                    runFeed(if (announceOwnTurn.get()) rosterFrame("turn-phone", 2) else rosterFrame("turn-1", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> {
+                    lookups.incrementAndGet()
+                    MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-1" } }
+            withTimeout(5_000) { while (lookups.get() < 2) kotlinx.coroutines.delay(10) }
+
+            model.updateDraft("Compare plans")
+            model.send()
+            withTimeout(5_000) { model.isStarting.first { it } }
+            withTimeout(5_000) {
+                while (model.isStarting.value || model.hasActiveStream.value) kotlinx.coroutines.delay(10)
+            }
+            // The roster reports the phone's own turn only after its stream has ended.
+            announceOwnTurn.set(true)
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-phone" } }
+            awaitRosterReconnects(rosterRequests, 2)
+            assertEquals("Only the lookups made on opening and for the first roster", 2, lookups.get())
+        }
+    }
+
+    @Test
+    fun withoutRosterAccessAnOpenChatProbesForARunWithBackoffAndStopsInTheBackground() {
+        // Lookups and the policy's waits, in the order they happened. Each wait
+        // holds until the test releases it, standing in for the clock.
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val release = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val registerAfterLookup = java.util.concurrent.atomic.AtomicInteger(Int.MAX_VALUE)
+        val attach = AidenForeignRunAttachPolicy(
+            probeDelaysMillis = listOf(5_000L, 10_000L, 20_000L),
+            pause = { log.add("wait $it"); release.receive() }
+        )
+        fun lookups() = log.count { it == "lookup" }
+        suspend fun awaitLog(size: Int) = withTimeout(5_000) { while (log.size < size) kotlinx.coroutines.delay(10) }
+        withForeignRunChat(initial = foreignRunChat(), attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/runs/current/events" -> {
+                    log.add("lookup")
+                    if (lookups() > registerAfterLookup.get()) macRunFeed else MockResponse().setResponseCode(404)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            // The first wait starts only once the lookup made on opening has answered.
+            awaitLog(2)
+            assertEquals(listOf("lookup", "wait 5000"), log.toList())
+            // Each probe answers before the next, longer wait; the last wait repeats.
+            repeat(3) { release.send(Unit) }
+            awaitLog(8)
+            assertEquals(
+                listOf("lookup", "wait 5000", "lookup", "wait 10000", "lookup", "wait 20000", "lookup", "wait 20000"),
+                log.toList()
+            )
+
+            // In the background the pending probe is dropped.
+            model.stopProgressObservation()
+            val backgrounded = log.size
+            kotlinx.coroutines.delay(200)
+            assertEquals(backgrounded, log.size)
+
+            // Back on screen the probe starts over and finds a run the Mac
+            // started after the lookup made on reopening.
+            registerAfterLookup.set(lookups() + 1)
+            model.startProgressObservation()
+            awaitLog(backgrounded + 2)
+            assertEquals(listOf("lookup", "wait 5000"), log.drop(backgrounded))
+            release.send(Unit)
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+            assertEquals(listOf("lookup", "wait 5000", "lookup"), log.drop(backgrounded))
         }
     }
 
@@ -3685,6 +3887,70 @@ class AidenChatTest {
             dispatcher.close()
             server.shutdown()
             directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun runRegisteredBetweenTheOpeningLookupAndTheFirstRosterIsShownLive() {
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val openingAnswered = CountDownLatch(1)
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                // The Mac registers its run after answering the opening lookup and
+                // before this phone's first roster arrives.
+                "/chats/chat-mac/agents" -> {
+                    openingAnswered.await(10, TimeUnit.SECONDS)
+                    MockResponse().setBody(
+                        """{"version":1,"chatId":"chat-mac","turnId":"turn-mac","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                    )
+                }
+                "/chats/chat-mac/progress/events" -> {
+                    openingAnswered.await(10, TimeUnit.SECONDS)
+                    runFeed(rosterFrame("turn-mac", 1))
+                }
+                "/chats/chat-mac/runs/current/events" -> if (lookups.incrementAndGet() == 1) {
+                    openingAnswered.countDown()
+                    MockResponse().setResponseCode(404)
+                } else {
+                    macRunFeed
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
+            assertTrue("A live foreign run offers Stop", model.canStopCurrentRun)
+        }
+    }
+
+    @Test
+    fun turnAnnouncedWhileAnOlderLookupIsOutIsLookedUpWhenItAnswers() {
+        val lookups = java.util.concurrent.atomic.AtomicInteger(0)
+        val releaseOpening = CountDownLatch(1)
+        val attach = AidenForeignRunAttachPolicy(pause = {})
+        withForeignRunChat(initial = foreignRunChat(), agentsRead = true, attach = attach, route = { path, _ ->
+            macRunRoute(path) ?: when (path) {
+                "/chats/chat-mac/agents" -> MockResponse().setBody(
+                    """{"version":1,"chatId":"chat-mac","turnId":"turn-1","previousTurns":[],"availability":"ready","epoch":"epoch-run","revision":1,"updatedAt":"2026-10-05T10:00:00Z","agents":[]}"""
+                )
+                "/chats/chat-mac/progress/events" -> runFeed(rosterFrame("turn-2", 2))
+                "/chats/chat-mac/runs/current/events" -> if (lookups.incrementAndGet() == 1) {
+                    // The opening lookup was answered before the Mac registered turn-2's run.
+                    releaseOpening.await(10, TimeUnit.SECONDS)
+                    MockResponse().setResponseCode(404)
+                } else {
+                    macRunFeed
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }) { model ->
+            withTimeout(5_000) { model.isLoading.first { !it } }
+            model.startProgressObservation()
+            withTimeout(5_000) { model.agentRoster.first { it?.turnId == "turn-2" } }
+            assertEquals("The opening lookup is still out", 1, lookups.get())
+            releaseOpening.countDown()
+            withTimeout(5_000) { model.liveText.first { it == "Live from the Mac" } }
         }
     }
 }
