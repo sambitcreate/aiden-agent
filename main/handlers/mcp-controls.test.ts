@@ -4,10 +4,11 @@ import { registerMcpControlHandlers, type McpControlDependencies, type McpDraftC
 import type { McpServer } from "../services/types.js";
 import { MCP_PRESETS, serverFromPreset } from "../services/mcp-presets.js";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
+import { McpLiveStatusRegistry } from "../services/mcp-status-events.js";
 
 const linear = { id: "custom-linear", name: "Linear", transport: "http", url: "https://mcp.test/sse", oauth: true, enabled: true } as const;
 
-function setup(saved: McpServer[] = [linear]) {
+function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegistry()) {
   const handlers = new Map<string, (event: string, ...args: unknown[]) => unknown>();
   const log: string[] = [];
   const drafts: Array<{ server: McpServer; credentials: McpDraftCredentials }> = [];
@@ -36,6 +37,7 @@ function setup(saved: McpServer[] = [linear]) {
     signInState: async () => signIn,
     dependents: async (id) => ({ schedules: [{ id: "t1", name: `uses ${id}` }], bots: [] }),
     liveStatus: () => [{ serverId: linear.id, state: "connected", toolCount: 3 }],
+    toolList: (id) => registry.tools(id),
   };
   registerMcpControlHandlers(deps);
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
@@ -125,4 +127,30 @@ test("an API-key preset draft is tested with the pasted key, unsaved", async () 
   await ipc.invoke("mcp:testDraft", "settings", draft, "  sk-draft  ");
   assert.deepEqual(ipc.drafts[ipc.drafts.length - 1]?.credentials, { matchesSaved: false, apiKey: "sk-draft" });
   assert.equal(ipc.drafts[ipc.drafts.length - 1]?.server.headers, undefined);
+});
+
+test("the tool list comes from the last discovery, bounded, and is null before any discovery", async () => {
+  const registry = new McpLiveStatusRegistry();
+  const pushed: unknown[] = [];
+  registry.subscribe((status) => pushed.push(status));
+  const ipc = setup([linear], registry);
+  assert.equal(await ipc.invoke("mcp:toolList", "settings", linear.id), null);
+  registry.inventory(linear.id, {
+    toolCount: 3,
+    resources: false,
+    tools: [
+      { name: "create_issue", title: "  Create\n issue  " },
+      { name: "search" },
+      { name: "x".repeat(300), title: "Too long a name" },
+    ],
+  });
+  assert.deepEqual(await ipc.invoke("mcp:toolList", "settings", linear.id), [
+    { name: "create_issue", title: "Create issue" },
+    { name: "search" },
+  ]);
+  // Pushes stay small: tool names never ride on live status.
+  assert.ok(pushed.every((status) => !("tools" in (status as object))));
+  registry.forget(linear.id);
+  assert.equal(await ipc.invoke("mcp:toolList", "settings", linear.id), null);
+  await assert.rejects(ipc.invoke("mcp:toolList", "foreign", linear.id), /Untrusted/u);
 });

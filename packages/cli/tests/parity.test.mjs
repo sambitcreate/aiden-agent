@@ -705,6 +705,20 @@ test("MCP reuses a live inventory until tools/list_changed, fails closed on drif
   await assert.rejects(fresh[0].execute("e", { value: "edited" }), /changed or was disabled/);
 });
 
+test("MCP withholds servers switched off for the model and hidden tools, without renaming the rest", async (t) => {
+  const dir = temporary(t), shown = fixtureServer(dir, "shown"), partly = { ...fixtureServer(dir, "partly"), hiddenTools: ["first"] }, off = { ...fixtureServer(dir, "off"), exposure: "hidden" };
+  assert.throws(() => api.validateMcpServer({ ...shown, exposure: "sometimes" }), /MCP exposure/);
+  assert.throws(() => api.validateMcpServer({ ...shown, hiddenTools: ["first", "first"] }), /Hidden MCP tools/);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [shown, partly, off]);
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const all = (await pool.agentTools(shown)).map((tool) => tool.name);
+  const visible = (await pool.agentTools(partly)).map((tool) => tool.name);
+  assert.deepEqual(all, ["shown__first", "shown__second"]);
+  assert.deepEqual(visible, ["partly__second"]);
+  assert.deepEqual(await pool.agentTools(off), []);
+  assert.equal(listRequests(dir, "off"), 0, "a server switched off for the model is never contacted");
+});
+
 test("MCP connections survive token refreshes, rebuild on sign-out, and connect once under concurrency", async (t) => {
   const dir = temporary(t); let initializes = 0;
   const http = createServer(async (request, response) => {

@@ -3,9 +3,20 @@
 // sign-in health. Main pushes each change to the renderer (`mcp:statusChanged`);
 // nothing polls. Payloads stay small: no tool names, no raw errors past a cap.
 
-import type { McpLiveStatus } from "../../renderer/shared/mcp-status.js";
+import type { McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 
-export type { McpLiveState, McpLiveStatus } from "../../renderer/shared/mcp-status.js";
+export type { McpLiveState, McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
+
+/** Bounds of the per-server tool list kept for Settings (never pushed). */
+export const MCP_TOOL_SUMMARY_LIMITS = Object.freeze({ count: 512, nameChars: 256, titleChars: 128 });
+
+function toolSummaries(tools: readonly { name: string; title?: string }[]): McpToolSummary[] {
+  return tools.slice(0, MCP_TOOL_SUMMARY_LIMITS.count).flatMap(({ name, title }) => {
+    if (typeof name !== "string" || !name || name.length > MCP_TOOL_SUMMARY_LIMITS.nameChars) return [];
+    const shown = typeof title === "string" ? title.replace(/\s+/gu, " ").trim().slice(0, MCP_TOOL_SUMMARY_LIMITS.titleChars) : "";
+    return [{ name, ...(shown ? { title: shown } : {}) }];
+  });
+}
 
 /** Why stored OAuth tokens can no longer be used without a fresh sign-in. */
 export type McpAuthFailure = "needs-sign-in" | "invalid-grant";
@@ -32,6 +43,7 @@ function same(left: McpLiveStatus | undefined, right: McpLiveStatus): boolean {
 export class McpLiveStatusRegistry {
   private readonly statuses = new Map<string, McpLiveStatus>();
   private readonly authFailures = new Map<string, McpAuthFailure>();
+  private readonly toolLists = new Map<string, McpToolSummary[]>();
   private readonly listeners = new Set<(status: McpLiveStatus) => void>();
 
   subscribe(listener: (status: McpLiveStatus) => void): () => void {
@@ -71,7 +83,8 @@ export class McpLiveStatusRegistry {
     });
   }
 
-  inventory(serverId: string, inventory: { toolCount: number; resources: boolean }): void {
+  inventory(serverId: string, inventory: { toolCount: number; resources: boolean; tools?: readonly { name: string; title?: string }[] }): void {
+    if (inventory.tools) this.toolLists.set(serverId, toolSummaries(inventory.tools));
     this.publish({
       serverId,
       state: "connected",
@@ -98,6 +111,7 @@ export class McpLiveStatusRegistry {
 
   /** The server was removed: drop everything and tell the renderer once. */
   forget(serverId: string): void {
+    this.toolLists.delete(serverId);
     const had = this.statuses.delete(serverId);
     const hadAuth = this.authFailures.delete(serverId);
     if (had || hadAuth) this.emit({ serverId, state: "closed", removed: true });
@@ -121,6 +135,11 @@ export class McpLiveStatusRegistry {
   clearAuthFailure(serverId: string): void {
     if (!this.authFailures.delete(serverId)) return;
     this.republish(serverId);
+  }
+
+  /** The full remote tool list from the last discovery (hidden tools included), for Settings. */
+  tools(serverId: string): McpToolSummary[] | undefined {
+    return this.toolLists.get(serverId)?.map((tool) => ({ ...tool }));
   }
 
   needsSignIn(serverId: string): boolean {

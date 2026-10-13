@@ -1,4 +1,5 @@
 import { mcpOAuthMetadataUrlForServer, validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
+import { normalizeMcpExposureFields } from "../../renderer/shared/mcp-exposure.js";
 // Pure parsing helpers for the phase-2 IPC handlers (Skills, MCP servers),
 // extracted so they can be unit-tested without importing Electron.
 // See handlers/phase2.ts.
@@ -73,5 +74,9 @@ export function parseMcpServer(value: unknown): McpServer {
     authProvider: typeof s.authProvider === "string" ? s.authProvider : undefined,
     presetId: typeof s.presetId === "string" && s.presetId ? s.presetId : undefined,
     enabled: typeof s.enabled === "boolean" ? s.enabled : true,
+    // Defaults (`auto`, nothing hidden) are stored as absent fields.
+    exposure: undefined,
+    hiddenTools: undefined,
+    ...normalizeMcpExposureFields(s),
   };
 }

@@ -29,6 +29,12 @@ export interface McpLiveStatus {
   removed?: boolean;
 }
 
+/** One remote tool as Settings lists it (raw name plus optional display title). */
+export interface McpToolSummary {
+  name: string;
+  title?: string;
+}
+
 export interface McpDependent {
   id: string;
   name: string;

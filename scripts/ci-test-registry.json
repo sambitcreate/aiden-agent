@@ -333,6 +333,7 @@
         "main/handlers/mcp-preset-states.test.ts",
         "main/handlers/mcp-controls.test.ts",
         "main/services/mcp-dependents.test.ts",
+        "main/services/mcp-exposure.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
         "main/services/mcp-status-events.test.ts",
         "main/handlers/peer-host-live.test.ts",

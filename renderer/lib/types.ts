@@ -1,3 +1,4 @@
+import type { McpExposure } from "../shared/mcp-exposure";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -790,6 +791,10 @@ export interface McpServer {
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 export type McpPresetAuth =
@@ -1149,6 +1154,7 @@ export type {
   McpLiveStatus,
   McpServerDependents,
   McpStatus,
+  McpToolSummary,
 } from "../shared/mcp-status";
 
 export interface ChatStartParams {

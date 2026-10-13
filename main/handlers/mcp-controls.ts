@@ -12,7 +12,7 @@ import {
 } from "../services/mcp-credential-cleanup-core.js";
 import type { McpServerDependents } from "../services/mcp-dependents.js";
 import type { McpLiveStatus } from "../services/mcp-status-events.js";
-import type { McpStatus } from "../../renderer/shared/mcp-status.js";
+import type { McpStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 import type { McpServer } from "../services/types.js";
 
 /** Longest API key a draft test accepts; matches what a pasted key can be. */
@@ -42,6 +42,8 @@ export interface McpControlDependencies<Event> {
   signInState(server: McpServer): Promise<{ authorized: boolean; needsSignIn: boolean }>;
   dependents(serverId: string): Promise<McpServerDependents>;
   liveStatus(): McpLiveStatus[];
+  /** The server's full tool list from its last discovery in this process, if any. */
+  toolList(serverId: string): McpToolSummary[] | undefined;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -129,5 +131,11 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
   deps.handle("mcp:liveStatus", (event) => {
     live(event);
     return deps.liveStatus();
+  });
+
+  // Never connects: null until a discovery listed the server's tools.
+  deps.handle("mcp:toolList", (event, id: unknown) => {
+    live(event);
+    return deps.toolList(asString(id, "id")) ?? null;
   });
 }

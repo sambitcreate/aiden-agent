@@ -3,6 +3,7 @@ import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js"
 import type { BotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { mcpAuthorityConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import type { McpServer } from "./types.js";
+import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../renderer/shared/mcp-exposure.js";
 import {
   normalizeSubagentMcpInventoryV2,
   type SubagentMcpRemoteTool,
@@ -307,7 +308,8 @@ export async function resolveBotMcpInventory(
         incarnations: dependencies.incarnations,
       });
       identityById = new Map(identities.map((value) => [value.serverId, value] as const));
-      enabledServers = servers.filter(({ enabled }) => enabled);
+      // A server switched off for the model has no Bot scope at all.
+      enabledServers = servers.filter((server) => server.enabled && mcpServerOffersTools(server));
       await Promise.all(
         enabledServers.map(async (server) => {
           const identity = identityById!.get(server.id);
@@ -357,6 +359,8 @@ export async function resolveBotMcpInventory(
           });
         }
       }
+      // Hidden tools never reach a Bot's catalog, grants or children.
+      tools = tools && mcpToolsOfferedToModel(server, tools, (tool) => tool.toolName);
       if (!tools || tools.length === 0) continue;
       scopes.push({
         serverId: server.id,

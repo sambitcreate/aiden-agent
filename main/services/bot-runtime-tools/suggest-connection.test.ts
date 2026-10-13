@@ -149,6 +149,11 @@ test("a plugin counts as connected only when its preset is enabled and signed in
   assert.equal(await isBotConnectionReady("notion", deps), true);
   servers = [{ ...notion, enabled: false }, composio];
   assert.equal(await isBotConnectionReady("notion", deps), false);
+  // Switched off for the model: the Bot can't use it, so it is not "connected".
+  servers = [{ ...notion, exposure: "hidden" }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), false);
+  servers = [{ ...notion, exposure: "direct", hiddenTools: ["search"] }, composio];
+  assert.equal(await isBotConnectionReady("notion", deps), true);
   servers = [notion, composio];
 
   // An API-key preset is connected only once its key is saved.

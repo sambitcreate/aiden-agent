@@ -324,3 +324,38 @@ test("Bot MCP grant identity ignores display fields but not connection settings"
   assert.notEqual(await identity({ ...base, args: ["--write"] }), original);
   assert.notEqual(await identity({ ...base, env: { TOKEN: "two" } }), original);
 });
+
+test("servers switched off for the model and hidden tools never reach Bot scopes", async () => {
+  const base = { transport: "stdio" as const, command: "mcp-safe", enabled: true };
+  let servers: McpServer[] = [
+    { ...base, id: "off", name: "Off", exposure: "hidden" },
+    { ...base, id: "partly", name: "Partly", hiddenTools: ["delete"] },
+    { ...base, id: "all-hidden", name: "All hidden", hiddenTools: ["read", "delete"] },
+  ];
+  const inspected: string[] = [];
+  const cache = createBotMcpScopeCache({ ttlMs: 60_000 });
+  const dependencies = {
+    listServers: async () => servers,
+    credentialSignature: async (server: McpServer) => hash(`credential:${server.id}`),
+    inspectTools: async (server: McpServer) => {
+      inspected.push(server.id);
+      return [
+        { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+        { name: "delete", inputSchema: { type: "object" }, annotations: { destructiveHint: true } },
+      ];
+    },
+    incarnations: {
+      reconcileNamespace: async (_namespace: string, resources: readonly { sourceId: string }[]) =>
+        resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
+    },
+    scopeCache: cache,
+  };
+  const scopes = await resolveBotMcpInventory(new AbortController().signal, dependencies);
+  assert.deepEqual(scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]), [["partly", ["read"]]]);
+  // A server switched off for the model is never even inspected.
+  assert.ok(!inspected.includes("off"));
+  // Showing a tool again needs no reconnect: the cached inspection still has it.
+  servers = servers.map((server) => server.id === "partly" ? { ...server, hiddenTools: undefined } : server);
+  const shown = await resolveBotMcpInventory(new AbortController().signal, dependencies);
+  assert.deepEqual(shown.find(({ serverId }) => serverId === "partly")?.tools.map(({ toolName }) => toolName).sort(), ["delete", "read"]);
+});

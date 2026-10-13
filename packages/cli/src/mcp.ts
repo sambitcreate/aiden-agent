@@ -1,5 +1,6 @@
 import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js";
 import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
+import { mcpServerOffersTools, mcpToolsOfferedToModel, validateMcpExposureFields } from "../../../renderer/shared/mcp-exposure.js";
 import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
 import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
 import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
@@ -59,6 +60,7 @@ export function validateMcpServer(value: unknown): McpServer {
     if (url.username || url.password || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw new Error("Remote MCP needs HTTPS (HTTP is permitted on loopback only).");
   } else throw new Error("Unknown MCP transport.");
   for (const fields of [server.env, server.headers]) if (fields !== undefined && (!fields || typeof fields !== "object" || Array.isArray(fields) || Object.values(fields).some((value) => typeof value !== "string"))) throw new Error("MCP env and headers must be string maps.");
+  validateMcpExposureFields(server);
   assertMcpPresetServer(server);
   return server;
 }
@@ -294,10 +296,12 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   }
   async function inspectTools(server: McpServer, signal?: AbortSignal) { return (await inventory(server, signal)).tools; }
   async function agentTools(server: McpServer, signal?: AbortSignal) {
+    // A server switched off for the model offers nothing; hidden tools are withheld.
+    if (!mcpServerOffersTools(server)) return [];
     const { tools } = await inventory(server, signal);
-    // Same names as the desktop: disambiguated against every configured server and this inventory.
+    // Same names as the desktop: disambiguated against every configured server and the full inventory.
     const names = mcpAgentToolNames(server, await listServers(), tools.map(({ name }) => name));
-    return tools.map((tool) => markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    return mcpToolsOfferedToModel(server, tools).map((tool) => markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -329,7 +333,7 @@ export function createMcpExtension(agentDir: string, options: { startupBudgetMs?
       ctx.ui.notify(JSON.stringify(await mcpCommand(agentDir, parsed), null, 2), "info");
     } });
     let servers: McpServer[];
-    try { servers = (await pool.listServers()).filter(({ enabled }) => enabled); }
+    try { servers = (await pool.listServers()).filter((server) => server.enabled && mcpServerOffersTools(server)); }
     catch (error) { process.stderr.write(`aiden: MCP servers unavailable (${errorText(error)}).\n`); return; }
     // Connect concurrently under one startup budget; a slow server cannot hold the others.
     const budget = AbortSignal.timeout(options.startupBudgetMs ?? 15_000);

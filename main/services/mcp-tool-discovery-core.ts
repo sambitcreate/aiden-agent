@@ -224,6 +224,8 @@ export async function admitMcpServerDiscovery<S extends { readonly name: string 
     windowMs: number;
     signal?: AbortSignal;
     onUnavailable?: (server: S, error: unknown) => void;
+    /** Servers admitted only once they finish (within their own budget), never late. */
+    awaitServer?: (server: S) => boolean;
   },
 ): Promise<{ tools: AgentTool[]; late: McpLateDiscovery }> {
   const results: (PromiseSettledResult<McpServerDiscoveryResult> | undefined)[] = servers.map(() => undefined);
@@ -258,8 +260,10 @@ export async function admitMcpServerDiscovery<S extends { readonly name: string 
     }),
   );
   const all = Promise.all(racing);
+  const awaited = Promise.all(racing.filter((_, index) => options.awaitServer?.(servers[index]!) === true));
   let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([all, new Promise<void>((resolve) => { timer = setTimeout(resolve, options.windowMs); })]);
+  const window = new Promise<void>((resolve) => { timer = setTimeout(resolve, options.windowMs); });
+  await Promise.race([all, Promise.all([window, awaited])]);
   clearTimeout(timer);
   admitted = true;
   const readyIndexes = results.flatMap((result, index) => (result ? [index] : []));

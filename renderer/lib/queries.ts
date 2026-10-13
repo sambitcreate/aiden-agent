@@ -86,6 +86,7 @@ export const queryKeys = {
   mcpPresets: ["mcpPresets"] as const,
   mcpLiveStatus: ["mcpLiveStatus"] as const,
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
+  mcpToolList: (serverId: string, toolCount: number | undefined) => ["mcpToolList", serverId, toolCount ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
@@ -781,6 +782,18 @@ export function useMcpLiveStatus() {
     () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
     [query.data],
   );
+}
+
+/**
+ * A server's tools from its last discovery (never connects). Keyed by the live
+ * tool count, so a rediscovery that changes the inventory refetches.
+ */
+export function useMcpToolList(serverId: string, toolCount: number | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpToolList(serverId, toolCount),
+    queryFn: () => mcpApi.toolList(serverId),
+    staleTime: Infinity,
+  });
 }
 
 /** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
