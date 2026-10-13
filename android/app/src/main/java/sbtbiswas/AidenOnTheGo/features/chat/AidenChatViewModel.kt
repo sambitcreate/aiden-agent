@@ -66,7 +66,8 @@ class AidenChatViewModel(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
-    private val clock: () -> Instant = Instant::now
+    private val clock: () -> Instant = Instant::now,
+    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy()
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -648,6 +649,7 @@ class AidenChatViewModel(
         // Contract revision 24: follow a run started elsewhere. It outlives the
         // foreground so the live notification keeps updating until it ends.
         startForeignRunObservation()
+        startForeignRunProbe()
         if (progressObservationJob?.isActive == true) return
         progressObservationToken += 1
         if (coordinator.serverInfo.value != null && !canReadTaskProgress && !canReadAgentRoster) {
@@ -666,6 +668,8 @@ class AidenChatViewModel(
         progressObservationToken += 1
         progressObservationJob?.cancel()
         progressObservationJob = null
+        foreignRunProbeJob?.cancel()
+        foreignRunProbeJob = null
         _progressConnectionState.value = when {
             _taskProgress.value != null || _agentRoster.value != null -> ProgressConnectionState.LAST_KNOWN
             canReadTaskProgress || canReadAgentRoster -> ProgressConnectionState.IDLE
@@ -857,6 +861,8 @@ class AidenChatViewModel(
         agentCapabilityDeniedObservationToken = null
         // Run observation depends on the negotiated run grants, not progress.
         retryForeignRunObservation()
+        // Losing roster access leaves no turn signal, so probe instead.
+        startForeignRunProbe()
         val keepTasks = canReadTaskProgress
         val keepAgents = canReadAgentRoster
         if (!keepTasks && !keepAgents) {
@@ -902,6 +908,8 @@ class AidenChatViewModel(
         val key = AidenProgressFencing.rosterKey(snapshot.epoch, snapshot.turnId)
         if (!historical) {
             if (!AidenProgressFencing.accepts(agentEpoch, agentRevision, snapshot.epoch, snapshot.revision)) return false
+            // The first snapshot is the baseline; the attach made on opening covers it.
+            val hadRoster = agentEpoch != null
             if (agentEpoch != null && agentEpoch != snapshot.epoch) {
                 agentRosterSelectionTicket += 1
                 _agentRosterHistory.value = emptyList()
@@ -914,6 +922,10 @@ class AidenChatViewModel(
             val previousTurnId = currentRosterTurnId
             currentRosterTurnId = snapshot.turnId
             _agentRoster.value = snapshot
+            if (hadRoster && snapshot.turnId != null && snapshot.turnId != previousTurnId) {
+                // A turn started, perhaps on the Mac: follow it if nothing is attached.
+                if (progressForeground) startForeignRunObservation(retryNotFound = true)
+            }
             if (selectedRosterTurnId == null || selectedRosterTurnId == previousTurnId || selectedRosterTurnId == snapshot.turnId) {
                 selectedRosterTurnId = snapshot.turnId
                 _selectedAgentRoster.value = snapshot
@@ -1009,6 +1021,7 @@ class AidenChatViewModel(
         progressForeground = false
         progressObservationToken += 1
         progressObservationJob?.cancel()
+        foreignRunProbeJob?.cancel()
         foreignRunJob?.cancel()
         streamJob?.cancel()
         titleRefreshJob?.cancel()
@@ -2186,6 +2199,9 @@ class AidenChatViewModel(
     private var foreignRunId: String? = null
     private var foreignProjection: AidenForeignRunProjection? = null
     private var foreignRunJob: Job? = null
+    private var foreignRunProbeJob: Job? = null
+    /** Counts runs shown live, so the probe can tell that one was found. */
+    private var foreignRunsPresented = 0
     private var foreignSettleJob: Job? = null
     /** When the attach replay of [foreignSettleRunId] is presented even if it never goes quiet. */
     private var foreignSettleDeadlineNanos: Long? = null
@@ -2217,12 +2233,38 @@ class AidenChatViewModel(
         get() = canControlCurrentRun || canControlForeignRun
 
     /** Attaches to the chat's current run when this phone is not running its own. */
-    private fun startForeignRunObservation() {
+    private fun startForeignRunObservation(retryNotFound: Boolean = false) {
         if (foreignRunJob?.isActive == true || activeStreamId != null || _isStarting.value) return
         if (!foreignRunAccess(AidenRemoteCapability.RUNS_OBSERVE)) return
         val client = activeClient() ?: return
         foreignSettleDeadlineNanos = null
-        foreignRunJob = viewModelScope.launch { observeForeignRun(client) }
+        foreignRunJob = viewModelScope.launch { observeForeignRun(client, retryNotFound) }
+    }
+
+    /**
+     * Without roster access nothing announces a new turn, so while the chat is
+     * on screen look for a current run on a backoff. Following a run (this
+     * phone's or another's) restarts the backoff once it ends.
+     */
+    private fun startForeignRunProbe() {
+        if (!progressForeground || canReadAgentRoster || foreignRunProbeJob?.isActive == true) return
+        foreignRunProbeJob = viewModelScope.launch {
+            var attempt = 0
+            while (progressForeground && !canReadAgentRoster) {
+                delay(foreignRunAttach.probeDelayMillis(attempt))
+                if (!progressForeground || canReadAgentRoster) break
+                if (activeStreamId != null || _isStarting.value || foreignRunId != null ||
+                    foreignRunJob?.isActive == true
+                ) {
+                    attempt = 0
+                    continue
+                }
+                val presentedBefore = foreignRunsPresented
+                startForeignRunObservation()
+                foreignRunJob?.join()
+                attempt = if (foreignRunsPresented != presentedBefore) 0 else attempt + 1
+            }
+        }
     }
 
     /** The detail is open and run access or the chat just became known: attach if a run is live. */
@@ -2230,9 +2272,10 @@ class AidenChatViewModel(
         if (progressForeground) startForeignRunObservation()
     }
 
-    private suspend fun observeForeignRun(client: AidenRemoteClient) {
+    private suspend fun observeForeignRun(client: AidenRemoteClient, retryNotFound: Boolean) {
         var projection: AidenForeignRunProjection? = null
         var reconnects = 0
+        var notFoundRetries = if (retryNotFound) 1 else 0
         try {
             while (coroutineContext.isActive) {
                 val attached = projection
@@ -2264,6 +2307,12 @@ class AidenChatViewModel(
                         return
                     }
                     val server = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server
+                    if (server?.statusCode == 404 && projection == null && notFoundRetries > 0) {
+                        // The turn was announced before its run was registered.
+                        notFoundRetries -= 1
+                        delay(foreignRunAttach.notFoundRetryMillis)
+                        continue
+                    }
                     if (server != null && server.statusCode in setOf(403, 404, 410)) {
                         // No current run, the run is gone, or access was withdrawn.
                         finishForeignRun()
@@ -2315,6 +2364,7 @@ class AidenChatViewModel(
                 foreignReconcileJob?.cancel()
                 foreignReconcileJob = null
                 foreignRunId = projection.runId
+                foreignRunsPresented += 1
                 foreignProjection = projection
                 presentForeignRun(projection)
             }
