@@ -1632,10 +1632,13 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    private func makeAnnouncedRunModel(_ fixture: AidenAnnouncedRunFixture) async throws -> AidenChatViewModel {
+    private func makeAnnouncedRunModel(
+        _ fixture: AidenAnnouncedRunFixture,
+        responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil
+    ) async throws -> AidenChatViewModel {
         let model = try await makeProgressLifecycleModel(
             mode: .denied,
-            responseOverride: { fixture.response($0) },
+            responseOverride: responseOverride ?? { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
         model.announcedRunRetrySleep = { _ in try await Task.sleep(for: .milliseconds(10)) }
@@ -1882,6 +1885,65 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(fixture.currentRunRequests, lookups)
         XCTAssertEqual(fixture.chatReads, reads, "The phone's own run is not read from the transcript again.")
         XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testThisPhonesOwnTurnAnnouncedWhileItsStreamIsRestoredIsShownOnce() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        // On a cold launch this phone's own run is still going on the Mac, and
+        // the first roster names its turn.
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, firstRosterTurnId: "turn-own")
+        fixture.startRun()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.restoredOwnRunResponse($0) ?? fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        try await testCache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "run-mac", turnId: "turn-own", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache.reserveChatWrite()
+        )
+        // The status read that restores the stream is held while progress
+        // observation, started alongside the load, delivers that roster.
+        let statusHeld = expectation(description: "stream status read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/streams/run-mac") { statusHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [statusHeld], timeout: 3)
+        model.startProgressObservation()
+        try await waitForCondition("own turn announced") { model.currentAgentTurnId == "turn-own" }
+        // A lookup started for that turn would find the run and show it live.
+        try await waitForCondition("announcement handled") { !model.isLookingForForeignRun || model.isObservingForeignRun }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        try await waitForCondition("own replay applied") { model.tools.count == 1 }
+        XCTAssertEqual(model.liveText, "Hello from the Mac", "The restored reply is shown once.")
+        XCTAssertFalse(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 0, "The phone's own run is not looked up as another device's.")
+    }
+
+    @MainActor
+    func testAnOwnStreamTakingOverALiveForeignRunShowsItsReplayOnce() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeAnnouncedRunModel(
+            fixture,
+            responseOverride: { fixture.restoredOwnRunResponse($0) ?? fixture.response($0) }
+        )
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-own", revision: 2))
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+
+        // A reload restores this phone's stream for the run shown live.
+        try await testCache.saveActiveStream(
+            .init(deviceId: "device-progress-lifecycle", streamId: "run-mac", turnId: "turn-own", lastSequence: 0),
+            instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: testCache.reserveChatWrite()
+        )
+        await model.load(observeProgress: true)
+
+        try await waitForCondition("own replay applied") { model.tools.count == 1 }
+        XCTAssertEqual(model.liveText, "Hello from the Mac", "The replay replaces the live run's copy.")
         XCTAssertFalse(model.isObservingForeignRun)
     }
 
@@ -12418,6 +12480,7 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
     private let lock = NSLock()
     private let scenario: Scenario
     private let rosterReadable: Bool
+    private let firstRosterTurnId: String
     private var started = false
     private var runRequestsSinceStart = 0
     private var runRequests = 0
@@ -12425,9 +12488,10 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
     var currentRunRequests: Int { lock.withLock { runRequests } }
     var chatReads: Int { lock.withLock { reads } }
 
-    init(scenario: Scenario, rosterReadable: Bool = true) {
+    init(scenario: Scenario, rosterReadable: Bool = true, firstRosterTurnId: String = "turn-old") {
         self.scenario = scenario
         self.rosterReadable = rosterReadable
+        self.firstRosterTurnId = firstRosterTurnId
     }
 
     func startRun() { lock.withLock { started = true } }
@@ -12471,7 +12535,7 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
             case "/api/aiden/v1/streams/run-mac/events":
                 return (200, "text/event-stream", Data(finishedRun.utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
-                return (200, "application/json", Data(Self.roster(turnId: "turn-old", revision: 1).utf8))
+                return (200, "application/json", Data(Self.roster(turnId: firstRosterTurnId, revision: 1).utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
                 return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(": keepalive\n\n".utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
@@ -12495,6 +12559,23 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
             default:
                 return nil
             }
+        }
+    }
+
+    /// `run-mac` as this phone's own stream, restored from the stream cache:
+    /// it is still running, and its replay holds the reply, then a tool.
+    func restoredOwnRunResponse(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/streams/run-mac":
+            return (200, "application/json", Data(
+                #"{"streamId":"run-mac","chatId":"chat-progress-lifecycle","turnId":"turn-own","state":"running","lastSequence":2,"updatedAt":"2026-10-13T10:00:02Z"}"#.utf8
+            ))
+        case "/api/aiden/v1/streams/run-mac/events":
+            let replay = event(1, "text_delta", #"{"text":"Hello from the Mac"}"#)
+                + event(2, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+            return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(replay.utf8))
+        default:
+            return nil
         }
     }
 

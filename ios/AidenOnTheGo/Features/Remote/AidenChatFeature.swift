@@ -1204,9 +1204,16 @@ final class AidenChatViewModel {
             // This device's own run is accounted for, so the roster announcing
             // its turn later never re-reads the transcript for it.
             foreignRunAccountedRunId = activeStreamID
-            // An owned stream supersedes observation of a foreign run.
+            // An owned stream supersedes observation of a foreign run. Its
+            // replay rebuilds the reply, so a live run's copy is dropped.
             if foreignRunTask != nil || foreignRun != nil {
+                let replacesLiveRun = foreignRunIsLive
                 stopForeignRunObservation()
+                if replacesLiveRun {
+                    replaceLiveText("")
+                    reasoning = ""
+                    tools = []
+                }
             }
         }
     }
@@ -1224,9 +1231,10 @@ final class AidenChatViewModel {
     @ObservationIgnored private var foreignRunsShownLive = 0
     /// The newest turn the agent roster has reported for this chat.
     @ObservationIgnored private var lastRosterTurnId: String?
-    /// A turn the roster announced while another lookup was in flight. That
-    /// lookup may have been answered before the turn's run registered, so the
-    /// turn is looked up once it ends.
+    /// A turn the roster announced while another lookup was in flight, or
+    /// while this phone restored its own stream. That lookup may have been
+    /// answered before the turn's run registered, so the turn is looked up
+    /// once it, or the restoration, ends.
     @ObservationIgnored private var turnAwaitingLookup: ForeignRunAttachReason?
     /// The turn this phone last streamed itself. The roster announcing it,
     /// even after its stream finished, is not another device's run.
@@ -1241,7 +1249,13 @@ final class AidenChatViewModel {
     @ObservationIgnored var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void = {
         try await Task.sleep(for: $0)
     }
-    private var isRestoringStream = false
+    private var isRestoringStream = false {
+        didSet {
+            // A turn announced while this phone restored its own stream is
+            // looked up now; restoration may have shown it is this phone's.
+            if oldValue, !isRestoringStream { attachToTurnAnnouncedDuringObservation() }
+        }
+    }
     @ObservationIgnored private var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private let networkPath: AidenNetworkPathSource?
@@ -9139,10 +9153,12 @@ extension AidenChatViewModel {
     /// before this turn's run registered, so the turn waits for it to end and
     /// is looked up then. A run that lookup already showed or read is
     /// recognised by `foreignRunAccountedRunId` and not replayed or read again.
+    /// The turn also waits while this phone restores its own stream, which
+    /// may be the announced turn's run.
     private func attachToAnnouncedTurn(reason: ForeignRunAttachReason) {
         guard !isReadOnlyFixture, !isRemoved, activeStreamID == nil, !isStarting,
               let context = try? coordinator.requestContext(for: instanceId) else { return }
-        if foreignRunTask != nil {
+        if foreignRunTask != nil || isRestoringStream {
             // A newer announced turn keeps the not-found retry.
             if turnAwaitingLookup != .announcedTurn { turnAwaitingLookup = reason }
             return
@@ -9190,7 +9206,7 @@ extension AidenChatViewModel {
             guard generation == foreignRunProbeGeneration, !Task.isCancelled,
                   !isRemoved, !canReadAgentRoster,
                   let context = try? coordinator.requestContext(for: instanceId) else { return }
-            if activeStreamID != nil || isStarting || foreignRunTask != nil {
+            if activeStreamID != nil || isStarting || isRestoringStream || foreignRunTask != nil {
                 // A reply is already live here; check again soon after it ends.
                 idleProbes = 0
                 continue
