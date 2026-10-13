@@ -732,29 +732,6 @@ test("benchmark coverage reports Pad and visible coverage and why Pad models are
   );
 });
 
-test("a single skipped benchmark row is counted in the singular", async () => {
-  editorServer({
-    insightsReady: true,
-    skippedAmbiguousCount: 1,
-    placements: { "test::m0": userPlacement },
-  });
-  mountEditor();
-  await waitFor(() => assert.equal(markerCount(), 1));
-  const popover = await openCoverage();
-  within(popover).getByText("1 ambiguous benchmark row skipped");
-});
-
-test("benchmark coverage omits the unmatched list and skipped rows when there are none", async () => {
-  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
-  mountEditor();
-  await waitFor(() => assert.equal(markerCount(), 1));
-  const popover = await openCoverage();
-  within(popover).getByText("1 of 1 Pad model matched");
-  assert.ok(!within(popover).queryByRole("region", { name: "Pad models without a score" }));
-  assert.ok(!within(popover).queryByText(/ambiguous benchmark rows? skipped/u));
-  assert.ok(!within(popover).queryByText(/ha(?:s|ve) no .+ score/u));
-});
-
 test("benchmark coverage stays hidden until insights are ready", async () => {
   editorServer({ scored: true });
   mountEditor();
@@ -778,16 +755,6 @@ test("benchmark coverage stays hidden when model details can't be read", async (
   assert.ok(!coverageButton());
 });
 
-test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
-  editorServer({ insightsReady: true });
-  mountEditor();
-  await modelsLoaded();
-  await waitFor(() => assert.equal(coverageButton()?.textContent, "10 of 10 models"));
-  const popover = await openCoverage();
-  within(popover).getByText("No models on the Pad yet");
-  assert.ok(!within(popover).queryByText(/Pad models? matched/u));
-});
-
 test("benchmark coverage counts matched visible models without a score for the chosen metric", async () => {
   editorServer({
     insightsReady: true,
@@ -809,24 +776,6 @@ test("benchmark coverage counts matched visible models without a score for the c
   await waitFor(() => assert.ok(!screen.queryByRole("menu")));
   const after = await openCoverage();
   assert.ok(!within(after).queryByText(/matched visible models? ha(?:s|ve) no/u));
-});
-
-test("an over-60-day-old benchmark snapshot is marked out of date", async () => {
-  editorServer({
-    insightsReady: true,
-    fetchedAt: new Date(Date.now() - 61 * 24 * 60 * 60 * 1_000).toISOString(),
-  });
-  mountEditor();
-  const row = await screen.findByRole("group", { name: "Benchmark scores" });
-  await within(row).findByText("Out of date");
-});
-
-test("a recent benchmark snapshot is not marked out of date", async () => {
-  editorServer({ insightsReady: true, fetchedAt: new Date(Date.now() - 3_600_000).toISOString() });
-  mountEditor();
-  const row = await screen.findByRole("group", { name: "Benchmark scores" });
-  await within(row).findByText(/^Artificial Analysis via OpenRouter · /u);
-  assert.ok(!within(row).queryByText("Out of date"));
 });
 
 test("switching the chip to a score with no suggestions hides the chip and focuses Arrange", async () => {

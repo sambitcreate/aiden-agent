@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../../main/bots/test-providers";
+import type { BenchmarkCoverage } from "../../../lib/model-picker-data";
 import type { ModelInsightsActionResult, ModelInsightsStatus } from "../../../lib/types";
 import { Toaster, toast } from "../../ui";
 import { ModelPadDataRows } from "./model-pad-data-rows";
@@ -354,3 +355,62 @@ for (const [name, action, settle] of [
     within(benchmarkRow()).getByRole("button", { name: "Fetch latest" });
   });
 }
+
+/** Coverage with every Pad and visible model matched. */
+function fullCoverage(pad: number, visible = pad): BenchmarkCoverage {
+  return {
+    pad: { matched: pad, total: pad },
+    visible: { matched: visible, total: visible },
+    unmatchedPad: [],
+  };
+}
+
+/** Open the coverage popover from its "<n> of <m> models" button. */
+async function openCoverage(): Promise<HTMLElement> {
+  fireEvent.click(await within(benchmarkRow()).findByRole("button", { name: /^Benchmark coverage: / }));
+  return screen.findByRole("dialog", { name: "Benchmark coverage" });
+}
+
+test("a single skipped benchmark row is counted in the singular", async () => {
+  insightsServer({ status: { ...ready, skippedAmbiguousCount: 1 } });
+  mount({ coverage: fullCoverage(1) });
+  const popover = await openCoverage();
+  await within(popover).findByText("1 ambiguous benchmark row skipped");
+});
+
+test("benchmark coverage omits the unmatched list and skipped rows when there are none", async () => {
+  insightsServer({ status: ready });
+  mount({ coverage: fullCoverage(1) });
+  const popover = await openCoverage();
+  within(popover).getByText("1 of 1 Pad model matched");
+  assert.ok(!within(popover).queryByRole("region", { name: "Pad models without a score" }));
+  assert.ok(!within(popover).queryByText(/ambiguous benchmark rows? skipped/u));
+  assert.ok(!within(popover).queryByText(/ha(?:s|ve) no .+ score/u));
+});
+
+test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
+  insightsServer({ status: ready });
+  mount({ coverage: fullCoverage(0, 10) });
+  assert.equal(
+    (await within(benchmarkRow()).findByRole("button", { name: /^Benchmark coverage: / })).textContent,
+    "10 of 10 models",
+  );
+  const popover = await openCoverage();
+  within(popover).getByText("No models on the Pad yet");
+  assert.ok(!within(popover).queryByText(/Pad models? matched/u));
+});
+
+test("an over-60-day-old benchmark snapshot is marked out of date", async () => {
+  insightsServer({
+    status: { ...ready, fetchedAt: new Date(Date.now() - 61 * 24 * 60 * 60 * 1_000).toISOString() },
+  });
+  mount();
+  await within(benchmarkRow()).findByText("Out of date");
+});
+
+test("a recent benchmark snapshot is not marked out of date", async () => {
+  insightsServer({ status: ready });
+  mount();
+  await within(benchmarkRow()).findByText(/^Artificial Analysis via OpenRouter · /u);
+  assert.ok(!within(benchmarkRow()).queryByText("Out of date"));
+});

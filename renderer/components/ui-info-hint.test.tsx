@@ -1,10 +1,13 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { InfoHint } from "./ui-info-hint";
 
-afterEach(cleanup);
+afterEach(() => {
+  mock.timers.reset();
+  cleanup();
+});
 
 function renderHint() {
   render(
@@ -58,22 +61,27 @@ test("keyboard focus shows the hint without moving focus, and blur hides it", as
   await waitFor(() => assert.ok(!hintText()));
 });
 
-test("hovering opens the hint after a short delay and leaving closes an unpinned hint", async () => {
+test("hovering opens the hint after a short delay and leaving closes an unpinned hint", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
   const button = renderHint();
   fireEvent.pointerEnter(button, { pointerType: "mouse" });
+  act(() => mock.timers.tick(200));
   assert.ok(!hintText(), "no hint before the delay");
-  await screen.findByRole("tooltip");
+  act(() => mock.timers.tick(100));
+  assert.ok(screen.getByRole("tooltip"));
 
   fireEvent.pointerLeave(button, { pointerType: "mouse" });
-  await waitFor(() => assert.ok(!hintText()));
+  act(() => mock.timers.tick(200));
+  assert.ok(!hintText());
 });
 
-test("a clicked hint stays open when the pointer leaves", async () => {
+test("a clicked hint stays open when the pointer leaves", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
   const button = renderHint();
   fireEvent.pointerEnter(button, { pointerType: "mouse" });
   fireEvent.click(button);
-  await screen.findByRole("tooltip");
+  assert.ok(screen.getByRole("tooltip"));
   fireEvent.pointerLeave(button, { pointerType: "mouse" });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  act(() => mock.timers.tick(1_000));
   assert.ok(hintText());
 });
