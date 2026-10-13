@@ -1228,7 +1228,9 @@ final class AidenChatViewModel {
     /// lookup may have been answered before the turn's run registered, so the
     /// turn is looked up once it ends.
     @ObservationIgnored private var turnAwaitingLookup: ForeignRunAttachReason?
-    @ObservationIgnored private var localStreamTurnId: String?
+    /// The turn this phone last streamed itself. The roster announcing it,
+    /// even after its stream finished, is not another device's run.
+    @ObservationIgnored private var lastLocalTurnId: String?
     @ObservationIgnored private var foreignRunProbeTask: Task<Void, Never>?
     @ObservationIgnored private var foreignRunProbeGeneration: UInt64 = 0
     /// Waits between foreground probes for a foreign run; tests shorten it.
@@ -2584,7 +2586,7 @@ final class AidenChatViewModel {
             // to it now rather than when the chat is reopened. The first turn
             // this chat sees is looked up too, because its run may have
             // registered after the opening lookup was answered.
-            if turnId != previousTurnId, turnId != localStreamTurnId {
+            if turnId != previousTurnId, turnId != lastLocalTurnId {
                 attachToAnnouncedTurn(reason: previousTurnId == nil ? .firstRosterTurn : .announcedTurn)
             }
         }
@@ -3843,7 +3845,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask = nil
         streamTask?.cancel()
         activeStreamID = stream.streamId
-        localStreamTurnId = stream.turnId
+        lastLocalTurnId = stream.turnId
         if streamState == nil { streamState = .reconciling }
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context, feedbackPolicy: feedbackPolicy)
@@ -4775,7 +4777,6 @@ final class AidenChatViewModel {
         pendingApproval = nil
         pendingQuestion = nil
         activeStreamID = nil
-        localStreamTurnId = nil
     }
 }
 
@@ -9203,15 +9204,22 @@ extension AidenChatViewModel {
         }
     }
 
-    /// `preservingRecovery` keeps a finished run's response, still awaiting its
-    /// transcript, on screen while a later attach finds nothing live.
-    func stopForeignRunObservation(preservingRecovery: Bool = false) {
-        foreignRunGeneration &+= 1
+    /// Stops observing, and drops a turn announced during the stopped lookup.
+    func stopForeignRunObservation() {
+        turnAwaitingLookup = nil
         foreignRunTask?.cancel()
+        endForeignRunObservation(preservingRecovery: false)
+    }
+
+    /// Ends observation from within the lookup itself, so a turn announced
+    /// while it ran is still looked up once it returns. `preservingRecovery`
+    /// keeps a finished run's response, still awaiting its transcript, on
+    /// screen while a later attach finds nothing live.
+    private func endForeignRunObservation(preservingRecovery: Bool) {
+        foreignRunGeneration &+= 1
         foreignRunTask = nil
         foreignRunSettleTask?.cancel()
         foreignRunSettleTask = nil
-        turnAwaitingLookup = nil
         // An ended run still awaiting its transcript is presented too.
         var wasLive = foreignRunIsLive
         if !preservingRecovery, let recovery = foreignRunReconcileTask {
@@ -9281,15 +9289,14 @@ extension AidenChatViewModel {
                         foreignRunAccountedRunId = runId
                         // The run finished before it could be shown live, so
                         // its reply is only in the transcript. A load has just
-                        // read it, a first roster arrived during load, and a run
-                        // already accounted for was read or shown before; a newly
-                        // found run reads it once.
-                        if reason != .load && reason != .firstRosterTurn, isNewRun,
+                        // read it, and a run already accounted for was read or
+                        // shown before; a newly found run reads it once.
+                        if reason != .load, isNewRun,
                            isCurrentForeignRun(generation, context: context) {
                             await reconcileChat(context: context)
                         }
                         guard generation == foreignRunGeneration else { return }
-                        stopForeignRunObservation(preservingRecovery: true)
+                        endForeignRunObservation(preservingRecovery: true)
                         return
                     }
                 }
@@ -9327,7 +9334,7 @@ extension AidenChatViewModel {
             await liveActivities.markStale(instanceID: instanceId, streamID: runId)
             await endForeignRunQuietly(context: context, reconcile: true)
         } else {
-            stopForeignRunObservation(preservingRecovery: true)
+            endForeignRunObservation(preservingRecovery: true)
         }
     }
 
