@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,6 +17,7 @@ import {
   NPM_REQUIRED_REASON,
   androidUnavailableReason,
   createLocalDeviceHost,
+  defaultLocalDeviceHostDeps,
   findAndroidSdk,
   findAndroidStudioJava,
   findDeviceHostHelpers,
@@ -88,7 +89,7 @@ async function withHost(
   harness.deps = {
     baseDir,
     platform: "darwin",
-    nodePath: "/Applications/Aiden Agent.app/Contents/MacOS/Aiden Agent",
+    resolveNodePath: async () => "/opt/node/bin/node",
     env: { PATH: "/usr/bin", HOME: "/Users/me" },
     pathExists: async () => false,
     realPath: async () => null,
@@ -142,7 +143,7 @@ async function waitFor(predicate: () => boolean) {
   assert.ok(predicate(), "condition never held");
 }
 
-test("the hub starts under Electron-as-Node on a reserved loopback port", async () => {
+test("the hub starts under standalone Node on a reserved loopback port", async () => {
   await withHost(async (harness) => {
     const host = createLocalDeviceHost(harness.deps);
     const phases: string[] = [];
@@ -151,7 +152,7 @@ test("the hub starts under Electron-as-Node on a reserved loopback port", async 
     assert.equal(ready.hub.origin, "http://127.0.0.1:52000");
     assert.equal(harness.spawns.length, 1);
     const [spawned] = harness.spawns;
-    assert.equal(spawned.command, harness.deps.nodePath);
+    assert.equal(spawned.command, "/opt/node/bin/node");
     assert.deepEqual(spawned.args, [
       deviceToolPaths(harness.baseDir, DEVICE_HUB).entryPath,
       "--port",
@@ -161,7 +162,7 @@ test("the hub starts under Electron-as-Node on a reserved loopback port", async 
       "--hide-sidebar",
       "--hide-boot-device",
     ]);
-    assert.equal(spawned.env.ELECTRON_RUN_AS_NODE, "1");
+    assert.equal(spawned.env.ELECTRON_RUN_AS_NODE, undefined);
     assert.equal(spawned.env.NO_COLOR, "1");
     assert.equal(spawned.env.HOME, "/Users/me");
     const state = JSON.parse(await readFile(path.join(harness.baseDir, "hub.json"), "utf8"));
@@ -397,8 +398,8 @@ test("agent-device starts in HTTP mode only when agent access is requested", asy
       entryPath: deviceToolPaths(harness.baseDir, AGENT_DEVICE).entryPath,
     });
     const launch = harness.commands.find((entry) => entry.args.includes("devices"))!;
-    assert.equal(launch.command, harness.deps.nodePath);
-    assert.equal(launch.env.ELECTRON_RUN_AS_NODE, "1");
+    assert.equal(launch.command, "/opt/node/bin/node");
+    assert.equal(launch.env.ELECTRON_RUN_AS_NODE, undefined);
     assert.equal(launch.env.AGENT_DEVICE_STATE_DIR, path.join(harness.baseDir, "agent-state"));
     assert.equal(launch.env.AGENT_DEVICE_DAEMON_SERVER_MODE, "http");
     assert.equal(launch.env.AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS, "0");
@@ -551,13 +552,90 @@ test("a Mac with the Android SDK but no Xcode starts the hub with the SDK on its
       const ready = await host.ensureReady();
       const [spawned] = harness.spawns;
       assert.equal(spawned?.env.ANDROID_HOME, SDK);
-      assert.equal(spawned?.env.PATH, `${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+      assert.equal(spawned?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
       // Host commands (adb, emulator) resolve against the same PATH.
       await ready.run("adb", ["devices"]);
       const adb = harness.commands.find((command) => command.command === "adb");
-      assert.equal(adb?.env.PATH, `${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
+      assert.equal(adb?.env.PATH, `/opt/node/bin:${SDK}/platform-tools:${SDK}/emulator:/usr/bin`);
       await host.stop();
     },
     fakeFs(COMPLETE_SDK),
   );
+});
+
+
+test("missing Node fails before install or spawn, and Retry discovers a newly installed runtime", async () => {
+  await withHost(async (harness) => {
+    let available = false;
+    let resolutions = 0;
+    harness.deps.resolveNodePath = async () => {
+      resolutions++;
+      if (!available) throw new DeviceHostUnavailableError("Install Node.js 22 or newer, then retry.");
+      return "/opt/node/bin/node";
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    assert.equal(resolutions, 0);
+    await host.hubInstalled();
+    await host.platformAvailability("ios");
+    assert.equal(resolutions, 0, "read-only status must not discover or launch Node");
+    await assert.rejects(host.ensureReady(), /Install Node.js 22/u);
+    assert.equal(harness.spawns.length, 0);
+    available = true;
+    const ready = await host.ensureReady();
+    assert.equal(ready.nodePath, "/opt/node/bin/node");
+    assert.equal(resolutions, 2);
+    await host.stop();
+  });
+});
+
+test("production defaults launch a real hub with standalone Node when the host executable cannot run scripts", async () => {
+  await withHost(async ({ baseDir }) => {
+    const realNode = process.execPath;
+    const app = path.join(baseDir, "Aiden Agent");
+    const marker = path.join(baseDir, "app-was-launched");
+    await writeFile(app, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`);
+    await chmod(app, 0o755);
+    const entry = deviceToolPaths(baseDir, DEVICE_HUB).entryPath;
+    await writeFile(entry, `import { createServer } from 'node:http';
+createServer((req, res) => { res.end(JSON.stringify({node:process.execPath,electron:!!process.versions.electron,mode:process.env.ELECTRON_RUN_AS_NODE ?? null})); })
+.listen(Number(process.argv[process.argv.indexOf('--port')+1]), '127.0.0.1');
+`);
+    let host: ReturnType<typeof createLocalDeviceHost> | undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
+    try {
+      Object.defineProperty(process, "execPath", { ...descriptor, value: app });
+      const deps = defaultLocalDeviceHostDeps({
+        baseDir, platform: "darwin", resolveNpmRunner: async () => null,
+        env: { PATH: path.dirname(realNode), HOME: baseDir, ELECTRON_RUN_AS_NODE: "1" },
+      });
+      // Only platform discovery is stubbed; runtime resolution, spawn, HTTP readiness and cleanup are real.
+      deps.runCommand = async () => ({ code: 0, stdout: "usage: simctl", stderr: "" });
+      deps.pathExists = async () => false;
+      deps.realPath = async () => null;
+      host = createLocalDeviceHost(deps);
+      const ready = await host.ensureReady();
+      const response = await fetch(`${ready.hub.origin}/readyz`).then((r) => r.json());
+      assert.deepEqual(response, { node: realNode, electron: false, mode: null });
+      await assert.rejects(readFile(marker), { code: "ENOENT" });
+    } finally {
+      Object.defineProperty(process, "execPath", descriptor);
+      await host?.stop();
+    }
+  });
+});
+
+test("a runtime removed after resolution reports a startup failure without crashing the parent", async () => {
+  await withHost(async ({ baseDir }) => {
+    const deps = defaultLocalDeviceHostDeps({
+      baseDir, platform: "darwin", resolveNpmRunner: async () => null,
+      resolveNodePath: async () => path.join(baseDir, "removed-node"), env: { HOME: baseDir },
+    });
+    deps.runCommand = async () => ({ code: 0, stdout: "usage: simctl", stderr: "" });
+    deps.pathExists = async () => false;
+    deps.realPath = async () => null;
+    const host = createLocalDeviceHost(deps);
+    await assert.rejects(host.ensureReady(), /starting the device hub/u);
+    assert.equal(host.current(), null);
+    await host.stop();
+  });
 });

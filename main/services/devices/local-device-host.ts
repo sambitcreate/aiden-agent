@@ -2,7 +2,7 @@
  * Adapted from t3code apps/server/src/device/LocalDeviceHost.ts @ 1c127066 (MIT)
  *
  * The device host that is this Mac. It runs expo-device-hub as a supervised
- * Electron-as-Node child on a loopback port and starts the agent-device
+ * standalone Node.js child on a loopback port and starts the agent-device
  * daemon in HTTP mode under an Aiden-owned state directory. Both are lazy:
  * the device service asks for explicit consent before calling `ensureReady`.
  */
@@ -29,6 +29,10 @@ import {
 } from "./device-host.js";
 import {
   AGENT_DEVICE,
+  NODE_REQUIRED_REASON,
+  defaultDeviceNodeResolutionDeps,
+  deviceNodeEnvironment,
+  resolveDeviceNode,
   DEVICE_HUB,
   deviceToolPaths,
   ensureTool,
@@ -48,11 +52,12 @@ const DAEMON_HEALTH_TIMEOUT_MS = 2_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
 
 export const NPM_REQUIRED_REASON =
-  "Node.js and npm are needed once to install the simulator helpers. Install Node.js, then try again.";
+  "Node.js 22 or newer and npm are needed to install the simulator helpers. Install Node.js, then try again.";
 
 /** The subset of `ChildProcess` the host relies on, so tests can pass a fake. */
 export interface HostChildProcess {
   pid?: number;
+  startupError?: Error;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -63,8 +68,8 @@ export interface LocalDeviceHostDeps {
   /** `userData/devices`: tool installs, `hub.json`, and agent-device state. */
   baseDir: string;
   platform: NodeJS.Platform;
-  /** Electron's own binary, run with `ELECTRON_RUN_AS_NODE=1`. */
-  nodePath: string;
+  /** Resolved only when a device action needs a standalone Node runtime. */
+  resolveNodePath(): Promise<string>;
   env: NodeJS.ProcessEnv;
   spawn(command: string, args: readonly string[], env: NodeJS.ProcessEnv): HostChildProcess;
   runCommand(
@@ -271,9 +276,9 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   // Rediscovered on every check, so installing the SDK or Xcode needs no relaunch.
   let sdkEnv: NodeJS.ProcessEnv = deps.env;
   let iosAvailable = false;
+  let nodePath: string | null = null;
   const nodeEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
-    ...sdkEnv,
-    ELECTRON_RUN_AS_NODE: "1",
+    ...deviceNodeEnvironment(sdkEnv, nodePath!),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     ...extra,
@@ -306,11 +311,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     deps.runCommand(command, args, {
       timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
       ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
-      env: options.env ? { ...sdkEnv, ...options.env } : sdkEnv,
+      env: nodePath
+        ? deviceNodeEnvironment({ ...sdkEnv, ...options.env }, nodePath)
+        : { ...sdkEnv, ...options.env },
     });
 
   const ready = (): DeviceHostReady | null =>
-    hub ? { nodePath: deps.nodePath, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run, env: sdkEnv } : null;
+    hub ? { nodePath: nodePath!, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run, env: deviceNodeEnvironment(sdkEnv, nodePath!) } : null;
 
   async function install(
     spec: ToolSpec,
@@ -345,6 +352,9 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   async function waitForHub(child: HostChildProcess, origin: string): Promise<void> {
     const deadline = deps.now() + HUB_READY_TIMEOUT_MS;
     while (deps.now() < deadline) {
+      if (child.startupError) {
+        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", { cause: child.startupError });
+      }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub");
       }
@@ -360,7 +370,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     const port = await deps.reservePort();
     const origin = `http://127.0.0.1:${port}`;
     const child = deps.spawn(
-      deps.nodePath,
+      nodePath!,
       [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
       nodeEnv(),
     );
@@ -424,7 +434,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     await mkdir(agentStateDir, { recursive: true });
     // Any agent-device command starts the daemon; `devices` is the cheapest one.
     const launch = deps
-      .runCommand(deps.nodePath, [entryPath, "devices", "--json"], {
+      .runCommand(nodePath!, [entryPath, "devices", "--json"], {
         timeoutMs: DAEMON_READY_TIMEOUT_MS,
         env: agentEnv(),
       })
@@ -457,6 +467,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
           deps.platform === "darwin" ? [ios.reason, android.reason].filter(Boolean).join(" ") : (ios.reason ?? ""),
         );
       }
+      nodePath = await deps.resolveNodePath();
       const entryPath = await install(DEVICE_HUB, onPhase, options.allowInstall === true);
       onPhase?.("starting");
       stopped = false;
@@ -501,8 +512,10 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
       entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
     }
+    const runtime = nodePath ?? await deps.resolveNodePath();
+    nodePath = runtime;
     await deps
-      .runCommand(deps.nodePath, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
+      .runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
         timeoutMs: DAEMON_STOP_TIMEOUT_MS,
         env: agentEnv(),
       })
@@ -562,16 +575,20 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
 /** Production dependencies: real processes, the loopback network, and the wall clock. */
 export function defaultLocalDeviceHostDeps(
   options: Pick<LocalDeviceHostDeps, "baseDir" | "resolveNpmRunner"> &
-    Partial<Pick<LocalDeviceHostDeps, "nodePath" | "env" | "platform">>,
+    Partial<Pick<LocalDeviceHostDeps, "resolveNodePath" | "env" | "platform">>,
 ): LocalDeviceHostDeps {
   return {
     baseDir: options.baseDir,
     resolveNpmRunner: options.resolveNpmRunner,
     platform: options.platform ?? process.platform,
-    nodePath: options.nodePath ?? process.execPath,
+    resolveNodePath: options.resolveNodePath ?? (() => requireDeviceNode(options.env)),
     env: options.env ?? process.env,
-    spawn: (command, args, env) =>
-      nodeSpawn(command, [...args], { env, stdio: "ignore", detached: false }),
+    spawn: (command, args, env) => {
+      const child: HostChildProcess = nodeSpawn(command, [...args], { env, stdio: "ignore", detached: false });
+      // Spawn errors do not emit exit. Record them so readiness fails without an unhandled event.
+      (child as ReturnType<typeof nodeSpawn>).once("error", (error) => { child.startupError = error; });
+      return child;
+    },
     runCommand: runChildCommand,
     reservePort,
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
@@ -646,4 +663,11 @@ export function reservePort(): Promise<number> {
       server.close(() => (port ? resolve(port) : reject(new Error("No loopback port was available."))));
     });
   });
+}
+
+/** Fresh discovery lets Retry recover after Node is installed without restarting Aiden. */
+export async function requireDeviceNode(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const nodePath = await resolveDeviceNode(defaultDeviceNodeResolutionDeps(env));
+  if (!nodePath) throw new DeviceHostUnavailableError(NODE_REQUIRED_REASON);
+  return nodePath;
 }
