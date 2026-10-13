@@ -1,6 +1,6 @@
 // A stand-in for expo-device-hub in the Simulator stream E2E. The spec seeds
 // it as the "installed" hub entry, so Aiden's real local host spawns it with
-// `--port <n>` under ELECTRON_RUN_AS_NODE and reaches it only through the real
+// `--port <n>` under standalone Node and reaches it only through the real
 // token proxy. It never touches Xcode.
 //
 // - AVCC answers with an H.264 description no decoder supports, so the client

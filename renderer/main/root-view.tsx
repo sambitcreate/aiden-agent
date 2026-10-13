@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { appApi, chatsApi, onNotification } from "../lib/ipc";
+import { appApi, chatsApi, localRunsApi, onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -29,6 +29,7 @@ import {
   pendingDetachedLifecycleChats,
   preferLatestTerminalChat,
   reconcileChatReadUntilAuthoritative,
+  releaseSettledDetachedLifecycleStreams,
   subscribeChatReadReconciliations,
   subscribeChatSettlements,
   subscribeDetachedTerminalChats,
@@ -344,8 +345,24 @@ function RootContent() {
     () =>
       subscribeChatSettlements(onNotification, (settlement) => {
         void reconcileDetachedLifecycleChat(settlement);
+        // Main settles each stream on its own. One that ended while the chat
+        // stays busy (a phone's turn right after it) is released now instead
+        // of draining until the whole chat goes idle.
+        void releaseSettledDetachedLifecycleStreams(settlement, {
+          settled: (streamIds) => localRunsApi.settled(streamIds),
+          refreshChat: async (chatId) => {
+            const chatKey = queryKeys.chat(chatId);
+            if (isChatCacheDeleted(chatId)) return;
+            await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+            if (isChatCacheDeleted(chatId)) return;
+            await queryClient.fetchQuery({ queryKey: chatKey, queryFn: () => chatsApi.get(chatId), staleTime: 0 });
+            await queryClient.refetchQueries({ queryKey: queryKeys.chats, type: "all" });
+          },
+        }).catch(() => {
+          // Not proof of settlement; the chat-level idle path still releases it.
+        });
       }),
-    [reconcileDetachedLifecycleChat],
+    [queryClient, reconcileDetachedLifecycleChat],
   );
 
   React.useEffect(() => {

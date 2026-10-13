@@ -13,6 +13,14 @@ live edge only while the reader is there.
 - Android transcript (reverse layout): the latch ignores viewport samples while an
   insertion epoch is pending; the content effect is keyed by `listState` as well
   as item count so a chat switch with equal counts still consumes the epoch.
+- Android hold-reader (`AidenTranscriptFollow.kt`): a detached reader inside the
+  live item (index 0, offset > 0) is held still by growing the offset with the
+  item. The correction runs in a `LayoutModifierNode` on the LazyColumn, right
+  after the list measures, and calls `invalidateMeasurement()` from the
+  placement block so the list re-measures in the same pass. A `snapshotFlow`
+  collector (or a request made mid-measure, which is dropped) lands a frame late
+  and draws the text one line off before snapping back.
+  `AidenChatChromeUiTest` steps the clock frame by frame to guard this.
 - Android task sheet (forward layout): "at end" is computed from live
   `listState.layoutInfo` (last visible row == last task and its bottom within
   80px of `viewportEndOffset - afterContentPadding`), never from a captured

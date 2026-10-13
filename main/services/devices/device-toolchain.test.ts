@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, link, symlink, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,9 @@ import {
   installedToolVersions,
   isToolInstalled,
   resolveNpm,
+  resolveDeviceNode,
+  isDeviceNodeExecutable,
+  deviceNodeEnvironment,
   type NpmRunner,
   type ToolSpec,
 } from "./device-toolchain.js";
@@ -233,4 +236,66 @@ test("npm resolves from PATH, then the login shell, then Homebrew locations", as
     await resolveNpm({ env: {}, isExecutable: executable([]), loginShellLookup }),
     null,
   );
+});
+
+
+test("Node discovery handles Finder PATH, version managers, fallback, and a missing runtime", async () => {
+  const env = { PATH: "relative:/usr/bin", SHELL: "/bin/zsh" };
+  assert.equal(await resolveDeviceNode({
+    env, isExecutable: async (p) => p === "/Users/me/.nvm/versions/node/v22/bin/node",
+    loginShellLookup: async () => "Welcome\n/Users/me/.nvm/versions/node/v22/bin/node\n",
+  }), "/Users/me/.nvm/versions/node/v22/bin/node");
+  assert.equal(await resolveDeviceNode({
+    env, isExecutable: async (p) => p === "/opt/homebrew/bin/node",
+    loginShellLookup: async () => { throw new Error("unavailable shell"); },
+  }), "/opt/homebrew/bin/node");
+  assert.equal(await resolveDeviceNode({
+    env, isExecutable: async () => false, loginShellLookup: async () => "node is a shell function",
+  }), null);
+});
+
+test("Node validation rejects the application and its aliases without launching it", async () => {
+  await withBaseDir(async (root) => {
+    const app = path.join(root, "Aiden Agent");
+    const marker = path.join(root, "launched");
+    await writeFile(app, `#!/bin/sh\ntouch '${marker}'\n`);
+    await chmod(app, 0o755);
+    const symbolic = path.join(root, "node");
+    const hard = path.join(root, "hard-node");
+    await symlink(app, symbolic);
+    await link(app, hard);
+    for (const candidate of [app, symbolic, hard]) {
+      assert.equal(await isDeviceNodeExecutable(candidate, process.env, app, true), false);
+    }
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(await isDeviceNodeExecutable(process.execPath, process.env, app, true), true);
+  });
+});
+
+test("Node validation rejects old runtimes, Electron, malformed output, and failed probes", async () => {
+  await withBaseDir(async (root) => {
+    const candidate = path.join(root, "node");
+    for (const output of [
+      JSON.stringify({ node: "20.19.0", electron: false }),
+      JSON.stringify({ node: "24.18.0", electron: true }),
+      JSON.stringify({ node: "not-a-version", electron: false }),
+      "not json",
+    ]) {
+      await writeFile(candidate, `#!/bin/sh\nprintf '%s\n' '${output}'\n`);
+      await chmod(candidate, 0o755);
+      assert.equal(await isDeviceNodeExecutable(candidate, process.env), false);
+    }
+    await writeFile(candidate, "#!/bin/sh\nexit 1\n");
+    assert.equal(await isDeviceNodeExecutable(candidate, process.env), false);
+    assert.equal(await isDeviceNodeExecutable(path.join(root, "missing"), process.env), false);
+  });
+});
+
+test("the device environment selects the resolved Node for nested helpers and clears Electron mode", () => {
+  const source = { PATH: "/usr/bin", ELECTRON_RUN_AS_NODE: "1", HOME: "/Users/me" };
+  const env = deviceNodeEnvironment(source, "/opt/node/bin/node");
+  assert.equal(env.PATH, "/opt/node/bin:/usr/bin");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(env.HOME, source.HOME);
+  assert.equal(source.ELECTRON_RUN_AS_NODE, "1");
 });

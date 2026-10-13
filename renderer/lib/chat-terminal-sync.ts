@@ -1,4 +1,4 @@
-import type { Chat, ChatReadResponse } from "./types";
+import type { Chat, ChatMessage, ChatReadResponse } from "./types";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
   isSafeSubagentIdentifier,
@@ -23,6 +23,8 @@ const FALLBACK_RETRY_DELAY_MS = 100;
 const detachedLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
 const fallbackLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
 const detachedLifecycleProjections = new Map<string, DetachedLifecycleProjection>();
+/** Runs this window watches but did not start (a phone's turn), one per chat. */
+const observedRunProjections = new Map<string, DetachedLifecycleProjection>();
 const fallbackSettlementInFlight = new Set<string>();
 const terminalSettlementInFlight = new Set<string>();
 const chatReadReconciliations = new Map<string, ChatReadReconciliation>();
@@ -50,6 +52,31 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
   /** Native (render_ui) visuals, kept beside the artifacts. */
   uiVisuals?: readonly ChatUiVisualV1[];
   subagents: readonly SubagentRunSnapshot[];
+  /**
+   * Mirrored from this Mac's run journal for a run this window did not start.
+   * Stop uses host authority; Steer is not offered because run input is owner-checked.
+   */
+  observed?: true;
+  /**
+   * The saved reply a mirrored run reported when it finished. A text-only
+   * reply carries no timeline, so this id is what marks it as the run's own.
+   */
+  doneMessageId?: string;
+  /** A mirrored run has finished: its text is final and nothing more streams. */
+  finished?: true;
+}
+
+/** What a watching window knows about a run it mirrors. */
+export interface ObservedRunSnapshot {
+  text: string;
+  reasoning: string;
+  timeline: GenerationTimeline | null;
+  /** The newest content was a text delta. */
+  textStreaming: boolean;
+  /** The assistant message the run saved, once it has finished. */
+  doneMessageId?: string | null;
+  /** The run finished (done, failed or cancelled). */
+  finished?: boolean;
 }
 
 export type DetachedLifecycleProjectionSeed = Omit<
@@ -341,12 +368,51 @@ export function detachedLifecycleChatProjection(
   workspaceId: string | undefined,
 ): DetachedLifecycleProjection | null {
   const expectedWorkspaceId = persistedChatWorkspaceId(workspaceId);
+  // The observed run is the chat's current one on this Mac, so it is the newest.
+  const observed = observedRunProjections.get(chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }));
+  if (observed) return observed;
   for (const projection of detachedLifecycleProjections.values()) {
     if (projection.chatId === chatId && projection.workspaceId === expectedWorkspaceId) {
       return projection;
     }
   }
   return null;
+}
+
+/**
+ * A durable terminal message can reach the cache before detached ownership is
+ * cleared; during that handoff the projection is hidden so nothing is offered
+ * to stop or steer. A mirrored run (a phone's turn) can start while the cache
+ * still ends with the previous turn's reply, so only its own saved reply hides
+ * it: one stamped with its timeline, or (a text-only reply has none) the
+ * message the run reported saving. The observer clears it once a read holds
+ * that reply.
+ */
+export function visibleDetachedLifecycleProjection(
+  projection: DetachedLifecycleProjection | null,
+  cachedMessages: readonly ChatMessage[] | undefined,
+): DetachedLifecycleProjection | null {
+  if (!projection) return null;
+  const last = cachedMessages?.[cachedMessages.length - 1];
+  if (last?.role !== "assistant") return projection;
+  if (
+    projection.observed === true &&
+    last.timeline?.generationId !== projection.streamId &&
+    (projection.doneMessageId === undefined || last.id !== projection.doneMessageId)
+  ) {
+    return projection;
+  }
+  return null;
+}
+
+/**
+ * Whether the pane presents a shown projection's text as final. A route-detached
+ * run is shown complete, as it always has been; a mirrored run (a phone's turn)
+ * streams live, with the paced reveal, until the run finishes.
+ */
+export function detachedProjectionStreamComplete(projection: DetachedLifecycleProjection | null): boolean {
+  if (!projection) return false;
+  return projection.observed !== true || projection.finished === true;
 }
 
 export function isDetachedLifecycleChatDraining(
@@ -360,8 +426,86 @@ export function isDetachedLifecycleChatDraining(
     ) ||
     [...chatReadReconciliations.values()].some(
       (owner) => owner.chatId === chatId && owner.workspaceId === expectedWorkspaceId,
-    )
+    ) ||
+    observedRunProjections.has(chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }))
   );
+}
+
+/**
+ * Shows a run this window is watching but did not start, live, through the
+ * same projection a route-detached run uses. A run this window owns keeps its
+ * own projection and is ignored here. Returns whether the projection changed.
+ */
+export function publishObservedRunProjection(
+  owner: DetachedLifecycleStreamOwner,
+  snapshot: ObservedRunSnapshot,
+  now: number = Date.now(),
+): boolean {
+  if (
+    !isSafeSubagentIdentifier(owner.streamId) ||
+    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isSafeSubagentIdentifier(owner.workspaceId)
+  ) {
+    return false;
+  }
+  const normalized = {
+    streamId: owner.streamId,
+    chatId: owner.chatId,
+    workspaceId: persistedChatWorkspaceId(owner.workspaceId),
+  };
+  const key = chatReadReconciliationKey(normalized);
+  if (detachedLifecycleStreams.has(normalized.streamId)) {
+    return clearObservedRunProjection(normalized.chatId, normalized.workspaceId, normalized.streamId);
+  }
+  const previous = observedRunProjections.get(key);
+  const sameRun = previous?.streamId === normalized.streamId;
+  const content = snapshot.text.slice(0, MAX_DETACHED_CONTENT_CHARS);
+  const reasoning = snapshot.reasoning.slice(0, MAX_DETACHED_REASONING_CHARS);
+  // The translator already validated the timeline; keep its identity so an unchanged one is not re-published.
+  const timeline = snapshot.timeline;
+  const textGrew = content.length > (sameRun ? previous.content.length : 0);
+  const next: DetachedLifecycleProjection = {
+    ...normalized,
+    content,
+    lastTextDeltaAt:
+      snapshot.textStreaming && textGrew ? now : sameRun ? previous.lastTextDeltaAt : null,
+    reasoning,
+    timeline: timeline?.generationId === normalized.streamId ? timeline : null,
+    artifacts: [],
+    uiVisuals: [],
+    subagents: [],
+    observed: true,
+    ...(snapshot.doneMessageId ? { doneMessageId: snapshot.doneMessageId } : {}),
+    ...(snapshot.finished ? { finished: true as const } : {}),
+  };
+  if (
+    sameRun &&
+    previous.content === next.content &&
+    previous.reasoning === next.reasoning &&
+    previous.timeline === next.timeline &&
+    previous.lastTextDeltaAt === next.lastTextDeltaAt &&
+    previous.doneMessageId === next.doneMessageId &&
+    previous.finished === next.finished
+  ) {
+    return false;
+  }
+  observedRunProjections.set(key, next);
+  emitRegistryChange();
+  return true;
+}
+
+/** Drops a chat's observed run, or only `streamId` when given. */
+export function clearObservedRunProjection(
+  chatId: string,
+  workspaceId: string | undefined,
+  streamId?: string,
+): boolean {
+  const key = chatReadReconciliationKey({ chatId, workspaceId: persistedChatWorkspaceId(workspaceId) });
+  const current = observedRunProjections.get(key);
+  if (!current || (streamId !== undefined && current.streamId !== streamId)) return false;
+  observedRunProjections.delete(key);
+  emitRegistryChange();
+  return true;
 }
 
 function ownsLifecycleChat(
@@ -415,9 +559,78 @@ export function clearInactiveDetachedLifecycleChat(
   ) {
     return false;
   }
+  return clearCapturedStreams(owner, owner.streamIds);
+}
+
+/**
+ * Drops the captured streams that main reports finished for good, even while
+ * the chat is busy with a newer run (a phone's turn that followed a
+ * route-detached one). Call it only after the chat cache has been re-read, so
+ * the transcript already holds what those streams persisted.
+ */
+export function clearSettledDetachedLifecycleStreams(
+  owner: DetachedLifecycleChatReconciliation,
+  settledStreamIds: readonly string[],
+): boolean {
+  if (
+    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isSafeSubagentIdentifier(owner.workspaceId) ||
+    !owner.streamIds.every(isSafeSubagentIdentifier)
+  ) {
+    return false;
+  }
+  const settled = new Set(settledStreamIds);
+  return clearCapturedStreams(owner, owner.streamIds.filter((streamId) => settled.has(streamId)));
+}
+
+export interface SettledStreamRelease {
+  /** Which of these streams main reports finished for good. */
+  settled(streamIds: readonly string[]): Promise<readonly string[]>;
+  /** Re-reads the chat (and its list row) so the cache holds what they persisted. */
+  refreshChat(chatId: string): Promise<void>;
+}
+
+/** Bound on one settled query, matching main's. */
+const MAX_SETTLED_QUERY = 64;
+/** Re-reads tried before a release gives way to the chat-level idle path. */
+const SETTLED_REFRESH_ATTEMPTS = 3;
+
+/**
+ * A per-stream settlement for a chat that is still busy (a phone's turn began
+ * right after a route-detached one) used to leave the detached marker in
+ * place until the whole chat went idle, so the pane said "Response continues
+ * in the background…" for a run that had already finished. This releases
+ * exactly the captured streams main confirms settled, after a fresh read.
+ */
+export async function releaseSettledDetachedLifecycleStreams(
+  owner: ChatSettlementNotification,
+  io: SettledStreamRelease,
+): Promise<boolean> {
+  const captured = captureDetachedLifecycleChat(owner);
+  if (!captured || captured.streamIds.length === 0) return false;
+  const settled = await io.settled(captured.streamIds.slice(-MAX_SETTLED_QUERY));
+  if (settled.length === 0) return false;
+  // A competing read of the same chat (the observer's) cancels this one, so a
+  // rejected read is tried again rather than leaving the marker until idle.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await io.refreshChat(captured.chatId);
+      break;
+    } catch (error) {
+      if (attempt >= SETTLED_REFRESH_ATTEMPTS) throw error;
+      await new Promise((resolve) => globalThis.setTimeout(resolve, FALLBACK_RETRY_DELAY_MS));
+    }
+  }
+  return clearSettledDetachedLifecycleStreams(captured, settled);
+}
+
+function clearCapturedStreams(
+  owner: DetachedLifecycleChatReconciliation,
+  streamIds: readonly string[],
+): boolean {
   const workspaceId = persistedChatWorkspaceId(owner.workspaceId);
   let changed = false;
-  for (const streamId of owner.streamIds) {
+  for (const streamId of streamIds) {
     const detachedOwner = detachedLifecycleStreams.get(streamId);
     if (detachedOwner && ownsLifecycleChat(detachedOwner, owner.chatId, workspaceId)) {
       detachedLifecycleStreams.delete(streamId);
