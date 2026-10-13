@@ -152,6 +152,7 @@ function statusFrom(
     hasKey: key !== null,
     ready,
     cachedModelCount: ready ? cache.models.length : 0,
+    skippedAmbiguousCount: ready ? cache.source.skippedAmbiguous : 0,
     fetchedAt: ready ? cache.source.fetchedAt : undefined,
     asOf: ready ? cache.source.asOf : undefined,
     citation: ready ? cache.source.citation : undefined,
@@ -180,8 +181,25 @@ class AsyncMutex {
 export class OpenRouterBenchmarkRuntime {
   private readonly actionMutex = new AsyncMutex();
   private readonly stateMutex = new AsyncMutex();
+  /**
+   * The cache `catalog()` serves (null without a key), remembered so ordinary
+   * model-info reads do not decrypt the credential each time. Every mutation of
+   * the credential or cache runs under `stateMutex` and clears it via `mutate`.
+   */
+  private catalogMemo: { value: OpenRouterBenchmarkCache | null } | undefined;
 
   constructor(private readonly dependencies: OpenRouterBenchmarkRuntimeDependencies) {}
+
+  /** Run a credential/cache mutation under the state lock and drop the memo however it ends. */
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    return this.stateMutex.run(async () => {
+      try {
+        return await operation();
+      } finally {
+        this.catalogMemo = undefined;
+      }
+    });
+  }
 
   async status(): Promise<ModelInsightsStatus> {
     return this.stateMutex.run(async () =>
@@ -191,8 +209,23 @@ export class OpenRouterBenchmarkRuntime {
 
   async catalog(): Promise<OpenRouterBenchmarkCache | null> {
     return this.stateMutex.run(async () => {
-      if (!(await this.dependencies.credentials.read())) return null;
-      return this.dependencies.cache.read();
+      if (this.catalogMemo) return this.catalogMemo.value;
+      const value = (await this.dependencies.credentials.read())
+        ? await this.dependencies.cache.read()
+        : null;
+      this.catalogMemo = { value };
+      return value;
+    });
+  }
+
+  /**
+   * Forget the remembered catalog so the next read sees the stored credential.
+   * For credential changes made outside this runtime, such as onboarding
+   * reset's catch-all credential pass.
+   */
+  invalidate(): Promise<void> {
+    return this.stateMutex.run(async () => {
+      this.catalogMemo = undefined;
     });
   }
 
@@ -200,7 +233,7 @@ export class OpenRouterBenchmarkRuntime {
     const key = normalizeOpenRouterBenchmarkApiKey(apiKey);
     return this.actionMutex.run(async () => {
       const cache = await this.dependencies.fetchCatalog(key);
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         const previousKey = await this.dependencies.credentials.read();
         await this.dependencies.credentials.write(key);
         try {
@@ -230,7 +263,7 @@ export class OpenRouterBenchmarkRuntime {
           "Connect a Model Pad OpenRouter key before fetching benchmark data.",
         );
       const cache = await this.dependencies.fetchCatalog(key);
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         if ((await this.dependencies.credentials.read()) !== key) {
           throw new ModelInsightsError(
             "local_error",
@@ -245,7 +278,7 @@ export class OpenRouterBenchmarkRuntime {
 
   async disconnect(): Promise<ModelInsightsStatus> {
     return this.actionMutex.run(async () => {
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         // Keep the key available for a retry if clearing the cache fails.
         await this.dependencies.cache.clear();
         await this.dependencies.credentials.deleteKey();
