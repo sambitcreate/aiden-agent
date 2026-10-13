@@ -12,6 +12,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenAgentStep
 import sbtbiswas.AidenOnTheGo.models.AidenAgentStepStatus
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
+import sbtbiswas.AidenOnTheGo.models.AidenLiveTool
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionnaireRecap
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 
@@ -101,5 +102,48 @@ class AidenQuestionnaireRecapUiTest {
         compose.onNodeWithText("Postgres").assertExists()
         compose.onNodeWithText("After", substring = true).assertExists()
         compose.onNodeWithText("Ask questions").assertDoesNotExist()
+    }
+
+    @Test
+    fun liveFallbackShowsTheRecapAndTheTimelineCallsInsteadOfThePlainQuestionRow() {
+        val timeline = AidenGenerationTimeline(
+            version = 3, generationId = "stream-fallback", status = AidenGenerationTimelineStatus.RUNNING,
+            startedAt = 1000.0,
+            steps = listOf(
+                AidenAgentStep(
+                    "tool-1", 0, AidenAgentStep.Kind.TOOL, toolCallId = "call-1", toolName = "read_file",
+                    label = "Read file", status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0,
+                    updatedAt = 1050.0, finishedAt = 1050.0, contentOffset = 40
+                ),
+                AidenAgentStep(
+                    "tool-2", 1, AidenAgentStep.Kind.TOOL, toolCallId = "call-2", toolName = "ask_user_question",
+                    label = "Ask questions", status = AidenAgentStepStatus.COMPLETED, startedAt = 1050.0,
+                    updatedAt = 1100.0, finishedAt = 1100.0, contentOffset = 40, questionnaire = answered
+                )
+            )
+        )
+        compose.setContent {
+            AidenTheme {
+                // The text has not reached the steps' offset, so there are no chronological rows.
+                ActiveStreamingCard(
+                    liveText = "Before.",
+                    reasoning = "",
+                    tools = listOf(
+                        AidenLiveTool("tool_1", "read_file", "completed"),
+                        AidenLiveTool("tool_2", "ask_user_question", "completed")
+                    ),
+                    activityTimeline = timeline,
+                    isBotChat = false,
+                    palette = AidenTheme.palette
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Your answers").assertExists()
+        compose.onNodeWithText("Postgres").assertIsDisplayed()
+        compose.onNodeWithText("Auth, Billing").assertIsDisplayed()
+        compose.onNodeWithText("ask_user_question").assertDoesNotExist()
+        compose.onNodeWithText("read_file").assertDoesNotExist()
+        compose.onNodeWithText("Read", substring = true).assertExists()
     }
 }

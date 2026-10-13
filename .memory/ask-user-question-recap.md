@@ -27,7 +27,9 @@ Live fallback (no chronological rows):
 - Live Remote tool rows carry the stream's own `tool_N` ids, which never match a timeline step's public `call-N` `toolCallId`. Pairing by order breaks after snapshot recovery.
 - Adding a correlation field to `tool_started` was tried and reverted. Installed revision-27 iOS and Android codecs reject unknown `tool_started` keys and would loop on the event. Any new field there needs negotiation or a new event type that older clients ignore.
 - iOS (`AidenAgentActivityPresentation.showsLiveToolRows`) hides the live tool card once the timeline has any tool step, recaps included. That is the pre-recap behavior, since questionnaire steps used to count as visible steps.
-- Android's fallback lists every live tool rather than the timeline. It keeps showing the plain question row and shows no recap mid-turn; the settled transcript shows the recap. A proper fix renders that fallback from timeline steps.
+- Android (`AidenAgentActivityPresentation.liveToolSteps`, `questionnaireSteps`, `showsLiveToolRows`) renders that fallback from timeline steps: once the timeline has a tool step, `ActiveStreamingCard` lists its non-questionnaire calls and shows each recap mid-turn, and the stream's live rows only appear before the timeline knows any call.
+
+Android recap styling is Material 3 Expressive: the cards form one borderless connected group (`AidenConnectedColumn` plus `aidenGroupItemShape`) on `surfaceContainerHigh`. In a live reply (`animateEntrance`) the group springs in from its trailing corner with `AidenMotion.spatial` and fades with `short()`, and both snap under reduced motion. Settled transcripts never animate it.
 
 Bot quick-reply questionnaires do not produce a recap yet.
 
