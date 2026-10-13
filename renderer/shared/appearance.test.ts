@@ -435,6 +435,11 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/ui.tsx",
     "components/settings/provider-model-visibility.tsx",
     "components/settings/model-pad/model-pad-settings.tsx",
+    "components/settings/model-pad/model-pad-add-popover.tsx",
+    "components/settings/model-pad/model-pad-arrange-menu.tsx",
+    "components/settings/model-pad/model-pad-canvas.tsx",
+    "components/settings/model-pad/model-pad-data-rows.tsx",
+    "components/settings/model-pad/model-pad-tray.tsx",
     "components/settings/telegram-settings.tsx",
   ].map(readRenderer);
   const radiusSources = [
@@ -443,6 +448,11 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/command-palette.tsx",
     "components/composer-slash-palette.tsx",
     "components/environment-panel.tsx",
+    "components/settings/model-pad/model-pad-add-popover.tsx",
+    "components/settings/model-pad/model-pad-arrange-menu.tsx",
+    "components/settings/model-pad/model-pad-canvas.tsx",
+    "components/settings/model-pad/model-pad-data-rows.tsx",
+    "components/settings/model-pad/model-pad-tray.tsx",
     "components/review-panel.tsx",
     "components/terminal-drawer.tsx",
     "components/ui.tsx",
