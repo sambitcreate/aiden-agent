@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.gestures.stopScroll
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -12,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * Owns whether a reverse-layout transcript follows its live edge (index 0,
@@ -48,12 +51,15 @@ class AidenTranscriptFollowState internal constructor(
     private var sawMomentum = false
     private var settleJob: Job? = null
     private var jumpGeneration = 0
+    private var leadingItemKey: Any? = null
+    private var leadingItemSize = 0
 
     val isFollowing: Boolean get() = latch.isFollowing
 
     val nestedScrollConnection: NestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            if (source == NestedScrollSource.UserInput) beginUserScroll()
+            // A sideways swipe through a wide code block is not a transcript scroll.
+            if (source == NestedScrollSource.UserInput && abs(available.y) > abs(available.x)) beginUserScroll()
             return Offset.Zero
         }
 
@@ -109,6 +115,26 @@ class AidenTranscriptFollowState internal constructor(
         if (!isFollowing || isUserScrolling) return
         if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
             listState.requestScrollToItem(0, 0)
+        }
+    }
+
+    /**
+     * Holds a detached reader's place inside the live item. In a reverse
+     * layout the list anchors item 0 by its bottom, so text appended below the
+     * reader would push what they are reading upward; growing the offset by
+     * the same amount keeps it still.
+     */
+    internal fun holdReaderInsideLeadingItem(layoutInfo: LazyListLayoutInfo) {
+        val leading = layoutInfo.visibleItemsInfo.firstOrNull()?.takeIf { it.index == 0 }
+        val previousKey = leadingItemKey
+        val previousSize = leadingItemSize
+        leadingItemKey = leading?.key
+        leadingItemSize = leading?.size ?: 0
+        if (leading == null || leading.key != previousKey || isFollowing || isUserScrolling) return
+        val growth = leading.size - previousSize
+        val offset = listState.firstVisibleItemScrollOffset
+        if (growth != 0 && offset > 0) {
+            listState.requestScrollToItem(0, (offset + growth).coerceAtLeast(0))
         }
     }
 
@@ -210,6 +236,9 @@ fun AidenTranscriptFollowEffects(state: AidenTranscriptFollowState, itemCount: I
             if (lastCount[0] >= 0) state.pinAfterContentChange()
             lastCount[0] = itemCount
         }
+    }
+    LaunchedEffect(state) {
+        snapshotFlow { state.listState.layoutInfo }.collect(state::holdReaderInsideLeadingItem)
     }
 }
 

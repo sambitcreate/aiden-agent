@@ -407,9 +407,10 @@ fun AidenChatDetailScreen(
         state = follow,
         itemCount = AidenChatScroll.reverseLayoutItemCount(chat?.messages?.size ?: 0, isStreaming),
     )
-    // Passed as a lambda so a latch flip recomposes only the rows that read it.
-    val isTranscriptFollowing = remember(follow) { { follow.isFollowing } }
     val streamingForJump by rememberUpdatedState(isStreaming)
+    // Passed as a lambda so a latch flip recomposes only the rows that read it.
+    // Only a streaming reply moves the edge, so idle rows keep their resize motion.
+    val isPinnedToStreamingEdge = remember(follow) { { streamingForJump && follow.isFollowing } }
     val showsJumpToLatest by remember(follow) {
         derivedStateOf { follow.showsJumpToLatest(streamingForJump) }
     }
@@ -1028,7 +1029,7 @@ fun AidenChatDetailScreen(
                             readAloudActive = readAloud.activeMessageId == message.id,
                             onOpenUrl = onOpenMessageUrl,
                             forkActions = forkActions,
-                            isTranscriptFollowing = isTranscriptFollowing,
+                            isPinnedToStreamingEdge = isPinnedToStreamingEdge,
                         )
                     }
                     // The summary stands where the copied conversation ends.
@@ -1298,7 +1299,7 @@ private fun AssistantMessageRow(
     readAloudActive: Boolean = false,
     onOpenUrl: (String) -> Unit,
     forkActions: AidenMessageForkActions? = null,
-    isTranscriptFollowing: () -> Boolean = { false },
+    isPinnedToStreamingEdge: () -> Boolean = { false },
 ) {
     val projection = if (isBotChat) {
         AidenBotReplyProjection.resolve(message.text, message.timeline, isActive = false)
@@ -1357,7 +1358,7 @@ private fun AssistantMessageRow(
         message.timeline?.let { timeline ->
             val activity = AidenAgentActivityPresentation.activityTimeline(timeline)
             if (activity.steps.isNotEmpty()) {
-                AidenTimelineCollapsibleCard(timeline = activity, palette = palette, isTranscriptFollowing = isTranscriptFollowing)
+                AidenTimelineCollapsibleCard(timeline = activity, palette = palette, isPinnedToStreamingEdge = isPinnedToStreamingEdge)
                 Spacer(modifier = Modifier.height(4.dp))
             }
             timeline.steps.forEach { step ->
@@ -1984,7 +1985,7 @@ private fun AidenActivityShimmerLabel(
 private fun AidenTimelineCollapsibleCard(
     timeline: AidenGenerationTimeline,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
-    isTranscriptFollowing: () -> Boolean,
+    isPinnedToStreamingEdge: () -> Boolean,
 ) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     val compactOnly = AidenAgentActivityPresentation.isCompactContextOnly(timeline.steps)
@@ -2003,8 +2004,8 @@ private fun AidenTimelineCollapsibleCard(
             .fillMaxWidth()
             .then(
                 // A height animation under the pinned live edge would drag the
-                // transcript with it, so the card resizes at once while followed.
-                if (isTranscriptFollowing()) Modifier
+                // streaming transcript with it, so the card resizes at once then.
+                if (isPinnedToStreamingEdge()) Modifier
                 else Modifier.animateContentSize(AidenMotion.spatialExpressiveSpring<IntSize>())
             )
     ) {

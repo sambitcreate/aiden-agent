@@ -9,7 +9,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -255,7 +258,14 @@ class AidenChatChromeUiTest {
                     ) {
                         item(key = "live_stream") {
                             val text = liveText(liveTokens.intValue)
-                            Text(text, Modifier.testTag("live"))
+                            Column {
+                                Text(text, Modifier.testTag("live"))
+                                Text(
+                                    "val wide = listOf(" + (1..60).joinToString { "\"column$it\"" } + ")",
+                                    softWrap = false,
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()).testTag("code"),
+                                )
+                            }
                             AidenStreamingFollowTrigger(follow, text.length)
                         }
                         items(HISTORY, key = { "message_$it" }) { index ->
@@ -291,7 +301,7 @@ class AidenChatChromeUiTest {
         compose.onNodeWithContentDescription("Jump to latest").assertDoesNotExist()
 
         compose.onNodeWithTag("transcript").performTouchInput { swipeDown() }
-        compose.waitForIdle()
+        settleGesture()
         val readerPlace = viewport()
         assertNotEquals(0 to 0, readerPlace)
 
@@ -305,7 +315,7 @@ class AidenChatChromeUiTest {
     fun jumpingToLatestDuringAStreamPinsTheNewestTextAboveTheComposer() {
         setStreamingTranscript()
         compose.onNodeWithTag("transcript").performTouchInput { swipeDown() }
-        compose.waitForIdle()
+        settleGesture()
         compose.onNodeWithContentDescription("Jump to latest").performClick()
         compose.waitForIdle()
 
@@ -330,10 +340,55 @@ class AidenChatChromeUiTest {
             moveBy(androidx.compose.ui.geometry.Offset(0f, 0f), delayMillis = 200)
             up()
         }
-        compose.waitForIdle()
+        settleGesture()
         compose.runOnIdle { assertTrue(follow.isFollowing) }
         stream(4)
         assertEquals(0 to 0, viewport())
+    }
+
+    @Test
+    fun readingInsideTheLiveReplyHoldsStillWhileItGrowsBelow() {
+        liveTokens.intValue = 400
+        setStreamingTranscript()
+        compose.onNodeWithTag("transcript").performTouchInput {
+            // A slow drag that stays inside the long live reply, released without a fling.
+            down(center)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 400f), delayMillis = 100)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 0f), delayMillis = 200)
+            up()
+        }
+        settleGesture()
+        val (index, offset) = viewport()
+        assertEquals(0, index)
+        assertTrue("the reader should sit inside the live reply, offset $offset", offset > 0)
+        compose.runOnIdle { assertFalse(follow.isFollowing) }
+        val readingTop = compose.onNodeWithTag("live").getUnclippedBoundsInRoot().top
+
+        stream(12)
+        assertEquals(readingTop, compose.onNodeWithTag("live").getUnclippedBoundsInRoot().top)
+        compose.runOnIdle { assertFalse(follow.isFollowing) }
+    }
+
+    @Test
+    fun swipingSidewaysThroughACodeBlockKeepsFollowingTheStream() {
+        setStreamingTranscript()
+        compose.onNodeWithTag("code").performTouchInput {
+            down(center)
+            moveBy(androidx.compose.ui.geometry.Offset(-300f, 0f), delayMillis = 100)
+        }
+        compose.onNodeWithTag("code").performTouchInput { moveBy(androidx.compose.ui.geometry.Offset(-200f, 0f), delayMillis = 100) }
+        // Mid-swipe, with the finger still down, the latch has not let go.
+        compose.runOnIdle { assertTrue(follow.isFollowing) }
+        compose.onNodeWithTag("code").performTouchInput { up() }
+        settleGesture()
+        stream(4)
+        assertEquals(0 to 0, viewport())
+    }
+
+    /** Lets the follow latch's post-gesture settle run on the test clock instead of real time. */
+    private fun settleGesture() {
+        compose.mainClock.advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + AidenChatScroll.MOMENTUM_SETTLE_MILLIS)
+        compose.waitForIdle()
     }
 
     private companion object {
