@@ -57,7 +57,6 @@ struct AidenBotCreateContractFixture: Codable, Equatable, Sendable {
         response = try values.decode(AidenBotDetail.self, forKey: .response)
         guard response.name == request.name,
               response.purpose == request.purpose,
-              response.openingGreeting == request.openingGreeting,
               response.instructions == request.instructions,
               response.avatar.semantic == request.avatar else {
             throw AidenBotContractError.invalidCombination("bot create fixture")
@@ -84,17 +83,8 @@ struct AidenBotIdentityContractFixture: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         request = try values.decode(AidenBotIdentityPatch.self, forKey: .request)
         response = try values.decode(AidenBotDetail.self, forKey: .response)
-        let greetingMatches: Bool
-        if let greeting = request.openingGreeting {
-            greetingMatches = greeting.isEmpty
-                ? response.openingGreeting == nil
-                : response.openingGreeting == greeting
-        } else {
-            greetingMatches = true
-        }
         guard request.name.map({ $0 == response.name }) ?? true,
               request.purpose.map({ $0 == response.purpose }) ?? true,
-              greetingMatches,
               request.instructions.map({ $0 == response.instructions }) ?? true,
               request.avatar.map({ $0 == response.avatar.semantic }) ?? true else {
             throw AidenBotContractError.invalidCombination("bot identity fixture")
@@ -169,6 +159,42 @@ typealias AidenBotConnectionRequestFixture = AidenBotRequestResponseFixture<
     AidenBotConnectionRequestReceipt
 >
 typealias AidenBotPresetCreateFixture = AidenBotRequestResponseFixture<AidenBotPresetCreateRequest, AidenBotPresetCreateResult>
+typealias AidenBotRoutineProposalRespondFixture = AidenBotRequestResponseFixture<
+    AidenBotRoutineProposalRespondRequest,
+    AidenBotRoutineProposalRespondResult
+>
+
+/// Contract revision 27: a memory edit, the view it returns, and the error
+/// codes the route can answer with (no view in any of them).
+struct AidenBotMemoryEditFixture: Decodable, Equatable {
+    struct ErrorCase: Decodable, Equatable {
+        let status: Int
+        let code: String
+
+        init(from decoder: Decoder) throws {
+            try fixtureRequireKeys(decoder, ["status", "code"])
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            status = try values.decode(Int.self, forKey: .status)
+            code = try values.decode(String.self, forKey: .code)
+        }
+
+        private enum CodingKeys: String, CodingKey { case status, code }
+    }
+
+    let request: AidenBotMemoryEditRequest
+    let response: AidenBotMemoryEditResponse
+    let errors: [ErrorCase]
+
+    init(from decoder: Decoder) throws {
+        try fixtureRequireKeys(decoder, ["request", "response", "errors"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        request = try values.decode(AidenBotMemoryEditRequest.self, forKey: .request)
+        response = try values.decode(AidenBotMemoryEditResponse.self, forKey: .response)
+        errors = try values.decode([ErrorCase].self, forKey: .errors)
+    }
+
+    private enum CodingKeys: String, CodingKey { case request, response, errors }
+}
 
 struct AidenBotLegacyNonNegotiatingFixture: Decodable, Equatable {
     let pairingExchange: AidenRemotePairing.PairingExchange
@@ -368,6 +394,12 @@ struct AidenRemoteContractFixture: Decodable {
     let botPresets: AidenBotPresetList
     let botPresetCreate: AidenBotPresetCreateFixture
     let legacyNonNegotiating: AidenBotLegacyNonNegotiatingFixture
+    let botMemory: AidenBotMemory
+    let botMemoryEdit: AidenBotMemoryEditFixture
+    let botRoutineProposalRespond: AidenBotRoutineProposalRespondFixture
+    let botRoutineSuggestions: AidenBotRoutineSuggestionList
+    let botRoutineNotifications: AidenBotRoutineNotificationFeed
+    let botSessionCards: AidenBotSession
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
     let agentInterrupt: AgentInterruptFixture?
@@ -431,6 +463,18 @@ struct AidenRemoteContractFixture: Decodable {
         botPresets = try values.decode(AidenBotPresetList.self, forKey: .botPresets)
         botPresetCreate = try values.decode(AidenBotPresetCreateFixture.self, forKey: .botPresetCreate)
         legacyNonNegotiating = try values.decode(AidenBotLegacyNonNegotiatingFixture.self, forKey: .legacyNonNegotiating)
+        botMemory = try values.decode(AidenBotMemory.self, forKey: .botMemory)
+        botMemoryEdit = try values.decode(AidenBotMemoryEditFixture.self, forKey: .botMemoryEdit)
+        botRoutineProposalRespond = try values.decode(
+            AidenBotRoutineProposalRespondFixture.self,
+            forKey: .botRoutineProposalRespond
+        )
+        botRoutineSuggestions = try values.decode(AidenBotRoutineSuggestionList.self, forKey: .botRoutineSuggestions)
+        botRoutineNotifications = try values.decode(
+            AidenBotRoutineNotificationFeed.self,
+            forKey: .botRoutineNotifications
+        )
+        botSessionCards = try values.decode(AidenBotSession.self, forKey: .botSessionCards)
         taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
         agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
         agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
@@ -532,6 +576,10 @@ struct AidenRemoteContractFixture: Decodable {
               botAvatarUpload.response == botAvatarMetadata,
               botAvatarMetadata == botDetail.avatar.asset,
               botSession.botId == botID,
+              botSessionCards.botId == botID,
+              botMemory.botId == botID,
+              botMemoryEdit.response.view.botId == botID,
+              botRoutineNotifications.notifications.allSatisfy({ $0.botId == botID }),
               botRoutines.routines.allSatisfy({ $0.botId == botID }),
               botPresetCreate.response.bot.name
                 == botPresets.presets.first(where: { $0.id == botPresetCreate.request.presetId })?.name else {
@@ -550,6 +598,8 @@ struct AidenRemoteContractFixture: Decodable {
         case botSessionResume, botSessionDismiss, botSessionQuestionAnswer, botRoutines, botRoutineCreate, botRoutineUpdate
         case botConnectionRequest, botPresets, botPresetCreate
         case legacyNonNegotiating
+        case botMemory, botMemoryEdit, botRoutineProposalRespond, botRoutineSuggestions
+        case botRoutineNotifications, botSessionCards
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
         case scheduleRunNotification, error, runControlError, phoneRunEvents

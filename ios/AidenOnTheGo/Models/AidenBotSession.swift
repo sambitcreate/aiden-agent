@@ -1,7 +1,9 @@
 import Foundation
 
 // Contract revision 25 (`bot-durable-session-v1`): a Bot's one durable
-// conversation, its live event stream, and the turn controls.
+// conversation, its live event stream, and the turn controls. Revision 27 adds
+// the `memory_update` and `routine_proposal` entries (`bot:cards`) and skips
+// entry types this client does not know.
 
 enum AidenBotSessionWire {
     static let maxEntries = 200
@@ -153,11 +155,53 @@ struct AidenBotFailedTurn: Equatable, Sendable {
     let retryText: String?
 }
 
+enum AidenBotRoutineProposalStatus: String, Codable, Sendable {
+    case pending, accepted, dismissed
+}
+
+/// Contract revision 27 (`bot:cards`): a routine the Bot suggested. A pending
+/// card is answered once through `POST …/routine-proposals/{proposalId}/respond`.
+struct AidenBotRoutineProposalCard: Equatable, Sendable {
+    let id: String
+    let proposalId: String
+    let name: String
+    let prompt: String
+    let label: String
+    let status: AidenBotRoutineProposalStatus
+    /// Present exactly when the proposal was accepted.
+    let routineId: String?
+    let createdAt: AidenRemoteTimestamp?
+
+    /// The same card after the Mac settled it.
+    func settled(_ result: AidenBotRoutineProposalRespondResult) -> Self {
+        Self(
+            id: id,
+            proposalId: proposalId,
+            name: name,
+            prompt: prompt,
+            label: label,
+            status: result.status,
+            routineId: result.routineId,
+            createdAt: createdAt
+        )
+    }
+}
+
 enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case message(AidenBotSessionMessage)
     case connectCard(AidenBotConnectCard)
     case notice(id: String, notice: AidenBotSessionNotice)
     case failedTurn(AidenBotFailedTurn)
+    /// Revision 27 (`bot:cards`): the Bot saved something to its memory.
+    case memoryUpdate(id: String, createdAt: AidenRemoteTimestamp?)
+    /// Revision 27 (`bot:cards`): a routine the Bot suggested.
+    case routineProposal(AidenBotRoutineProposalCard)
+
+    /// The entry types this client renders. A revision-27 client skips any
+    /// other type instead of failing the whole session.
+    static let knownTypes: Set<String> = [
+        "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
+    ]
 
     var id: String {
         switch self {
@@ -165,12 +209,22 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case let .connectCard(card): card.id
         case let .notice(id, _): id
         case let .failedTurn(turn): turn.id
+        case let .memoryUpdate(id, _): id
+        case let .routineProposal(card): card.id
         }
+    }
+
+    /// The `type` of an entry object, read without validating anything else.
+    static func wireType(from decoder: Decoder) throws -> String {
+        try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .type)
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let type = try values.decode(String.self, forKey: .type)
+        guard Self.knownTypes.contains(type) else {
+            throw AidenBotContractError.invalidField("entry.type")
+        }
         let id = try values.decode(String.self, forKey: .id)
         try AidenBotSessionWire.validateEntryID(id, field: "entry.id")
         switch type {
@@ -232,6 +286,45 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
                     maxLength: AidenBotSessionWire.maxTextLength
                 )
             ))
+        case "memory_update":
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "createdAt"])
+            self = .memoryUpdate(
+                id: id,
+                createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt)
+            )
+        case "routine_proposal":
+            try AidenBotWire.requireOnlyKeys(
+                decoder,
+                allowed: ["type", "id", "proposalId", "name", "prompt", "label", "status", "routineId", "createdAt"]
+            )
+            let proposalId = try values.decode(String.self, forKey: .proposalId)
+            try AidenBotProactiveWire.validateProposalID(proposalId)
+            let status = try values.decode(AidenBotRoutineProposalStatus.self, forKey: .status)
+            let routineId = try AidenBotWire.optional(String.self, from: values, forKey: .routineId)
+            if let routineId {
+                try AidenBotWire.validateIdentifier(
+                    routineId,
+                    field: "routineId",
+                    maxLength: AidenBotProactiveWire.maxRoutineIDLength
+                )
+            }
+            guard routineId == nil || status == .accepted else {
+                throw AidenBotContractError.invalidCombination("routine proposal routineId")
+            }
+            self = .routineProposal(AidenBotRoutineProposalCard(
+                id: id,
+                proposalId: proposalId,
+                name: try AidenBotWire.requiredString(values, forKey: .name, maxLength: AidenBotRoutineWire.maxNameLength),
+                prompt: try AidenBotWire.requiredString(
+                    values,
+                    forKey: .prompt,
+                    maxLength: AidenBotSessionWire.maxTextLength
+                ),
+                label: try AidenBotWire.requiredString(values, forKey: .label, maxLength: AidenBotSessionWire.maxLabelLength),
+                status: status,
+                routineId: routineId,
+                createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt)
+            ))
         default:
             throw AidenBotContractError.invalidField("entry.type")
         }
@@ -265,12 +358,41 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encode(turn.id, forKey: .id)
             try values.encodeIfPresent(turn.createdAt, forKey: .createdAt)
             try values.encodeIfPresent(turn.retryText, forKey: .retryText)
+        case let .memoryUpdate(id, createdAt):
+            try values.encode("memory_update", forKey: .type)
+            try values.encode(id, forKey: .id)
+            try values.encodeIfPresent(createdAt, forKey: .createdAt)
+        case let .routineProposal(card):
+            try values.encode("routine_proposal", forKey: .type)
+            try values.encode(card.id, forKey: .id)
+            try values.encode(card.proposalId, forKey: .proposalId)
+            try values.encode(card.name, forKey: .name)
+            try values.encode(card.prompt, forKey: .prompt)
+            try values.encode(card.label, forKey: .label)
+            try values.encode(card.status, forKey: .status)
+            try values.encodeIfPresent(card.routineId, forKey: .routineId)
+            try values.encodeIfPresent(card.createdAt, forKey: .createdAt)
         }
     }
 
     private enum CodingKeys: String, CodingKey {
         case type, id, role, text, createdAt, label, interrupted
         case pluginId, name, iconId, reason, status, notice, retryText
+        case proposalId, prompt, routineId
+    }
+}
+
+/// One element of a session's `entries`: a known entry, or nil for a type
+/// this client does not know (skipped, never an error). Known types are still
+/// validated strictly.
+private struct AidenBotSessionEntrySlot: Decodable {
+    let entry: AidenBotSessionEntry?
+
+    init(from decoder: Decoder) throws {
+        let type = try AidenBotSessionEntry.wireType(from: decoder)
+        entry = AidenBotSessionEntry.knownTypes.contains(type)
+            ? try AidenBotSessionEntry(from: decoder)
+            : nil
     }
 }
 
@@ -432,7 +554,11 @@ struct AidenBotSession: Codable, Equatable, Sendable {
             maxLength: AidenBotSessionWire.maxTextLength,
             allowEmpty: true
         )
-        entries = try values.decode([AidenBotSessionEntry].self, forKey: .entries)
+        let slots = try values.decode([AidenBotSessionEntrySlot].self, forKey: .entries)
+        guard slots.count <= AidenBotSessionWire.maxEntries else {
+            throw AidenBotContractError.invalidField("entries")
+        }
+        entries = slots.compactMap(\.entry)
         hasOlder = try values.decode(Bool.self, forKey: .hasOlder)
         question = try values.decode(AidenRemoteBotQuestion?.self, forKey: .question)
         approval = try values.decode(AidenRemoteBotApproval?.self, forKey: .approval)
@@ -469,6 +595,9 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case partial(String)
         /// Append, or replace by id; clears the partial.
         case entry(AidenBotSessionEntry)
+        /// An `entry` frame of a type this client does not know. It still
+        /// advances the sequence, but changes nothing on screen.
+        case unknownEntry(type: String)
         case state(AidenBotSessionStateView)
         /// The waiting question appeared (`question`) or was settled (nil).
         case question(AidenRemoteBotQuestion?)
@@ -494,7 +623,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         switch kind {
         case .snapshot: "snapshot"
         case .partial: "partial"
-        case .entry: "entry"
+        case .entry, .unknownEntry: "entry"
         case .state: "state"
         case .question: "question"
         case .approval: "approval"
@@ -536,7 +665,11 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
             ))
         case "entry":
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["entry"])
-            kind = .entry(try fields.decode(AidenBotSessionEntry.self, forKey: .entry))
+            let entryDecoder = try fields.superDecoder(forKey: .entry)
+            let type = try AidenBotSessionEntry.wireType(from: entryDecoder)
+            kind = AidenBotSessionEntry.knownTypes.contains(type)
+                ? .entry(try AidenBotSessionEntry(from: entryDecoder))
+                : .unknownEntry(type: type)
         case "state":
             kind = .state(try AidenBotSessionStateView(from: payload))
         case "question":
@@ -566,6 +699,9 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .snapshot(session): try fields.encode(session, forKey: .session)
         case let .partial(text): try fields.encode(text, forKey: .text)
         case let .entry(entry): try fields.encode(entry, forKey: .entry)
+        case let .unknownEntry(type):
+            var entry = fields.nestedContainer(keyedBy: AidenBotDynamicCodingKey.self, forKey: .entry)
+            if let key = AidenBotDynamicCodingKey(stringValue: "type") { try entry.encode(type, forKey: key) }
         case let .state(view): try view.encode(to: payload)
         case let .question(question): try fields.encode(question, forKey: .question)
         case let .approval(approval): try fields.encode(approval, forKey: .approval)

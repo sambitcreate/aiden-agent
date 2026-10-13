@@ -36,11 +36,12 @@ The CLI bundles Aiden's own extension cores (imported from `main/services/` — 
 | Todo | `todo` | Durable journal-replayed task graph + live widget above the editor (statuses, blockers, progress count) |
 | Memory | `recall_memory`, `remember_fact` | Per-workspace SQLite facts shared with the desktop at `~/.aiden/memory` (`ws-<folder-hash>` scopes); toggle with `memoryEnabled` in `aiden.json` |
 | Web Search | `web_search` | Aiden's provider router; anonymous Exa default-on, more providers via `<PROVIDER>_API_KEY` env vars |
+| Visuals | `render_artifact`, `render_ui` | HTML visuals export to a standalone file; native catalog visuals print as their plain-text rendering |
 | Display Image | `display_image` | Inline images in the TUI (Kitty/iTerm2 protocols); copies archived under `<agentDir>/artifacts` |
 | Advisor | `advisor` | One tool-free second opinion per response via Aiden's AdvisorRuntime (bundled from `main/services`); reviewer picked through Ask User Question when unnamed |
 | btw | `/btw <question>` | Bounded read-only side question about the conversation, with ephemeral session-scoped follow-ups |
 | Usage | `/usage` | Session totals plus a source-attributed durable usage ledger |
-| Voice | `/voice`, `/dictate` | Transcription provider settings (`gemini`/`openai`/`off`, persisted to `aiden.json`); dictation records via `sox`/`ffmpeg` and inserts the transcript into the editor. Local Parakeet transcription is available through `aiden speech` and Remote; desktop global-hotkey dictation remains desktop-only |
+| Voice | `/voice`, `/dictate` | Transcription provider settings (`gemini`/`openai`/`off`, persisted to `aiden.json`); dictation records via `sox`/`ffmpeg` and inserts the transcript into the editor. On-device transcription models are available through `aiden speech` and Remote; desktop global-hotkey dictation remains desktop-only |
 
 Settings for these live in `~/.aiden/agent/aiden.json` (device-local; shapes mirror the desktop's `AppSettings` subsets).
 

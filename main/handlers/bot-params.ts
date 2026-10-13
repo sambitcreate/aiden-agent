@@ -10,6 +10,7 @@ import {
   parseBotAccessUpdate,
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
+import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
 import {
   ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
   ASK_USER_MAX_LABEL_LENGTH,
@@ -25,7 +26,6 @@ const CREATE_KEYS = new Set([
   "description",
   "instructions",
   "name",
-  "openingGreeting",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
@@ -53,17 +53,10 @@ function text(value: unknown, label: string, maximum: number, optional = false) 
 
 function createFields(record: Record<string, unknown>): BotCreateInput {
   if (!isBotAvatar(record.avatar)) throw new Error("Invalid bot avatar.");
-  const openingGreeting = text(
-    record.openingGreeting,
-    "bot opening greeting",
-    BOT_LIMITS.openingGreetingChars,
-    true,
-  );
   return {
     name: text(record.name, "bot name", BOT_LIMITS.nameChars)!,
     description: text(record.description, "bot description", BOT_LIMITS.descriptionChars, true),
     instructions: text(record.instructions, "bot instructions", BOT_LIMITS.instructionsChars)!,
-    ...(openingGreeting === undefined ? {} : { openingGreeting }),
     avatar: record.avatar,
   };
 }
@@ -314,4 +307,48 @@ export function parseBotAccessUpdateInput(value: unknown): {
     expectedRevision: parseBotRevision(record.expectedRevision),
     access: parseBotAccessUpdate(record.access),
   };
+}
+
+const MEMORY_EDIT_INPUT_KEYS = new Set(["botId", "edit"]);
+const MEMORY_REPLACE_KEYS = new Set(["kind", "target", "entryId", "text"]);
+const MEMORY_REMOVE_KEYS = new Set(["kind", "target", "entryId"]);
+const MEMORY_CLEAR_KEYS = new Set(["kind"]);
+const MEMORY_ENTRY_ID = /^[0-9a-f]{16}$/u;
+/** Hard bound on edit text; the service explains anything over the entry limit. */
+const MEMORY_EDIT_TEXT_CHARS = 4_000;
+
+function memoryTarget(value: unknown): BotMemoryTarget {
+  if (value !== "memory" && value !== "user") throw new Error("Invalid bot memory target.");
+  return value;
+}
+
+function memoryEntryId(value: unknown): string {
+  if (typeof value !== "string" || !MEMORY_ENTRY_ID.test(value)) throw new Error("Invalid bot memory entry id.");
+  return value;
+}
+
+/** `bots:memory:edit`: `{ botId, edit }` with exactly the keys of one edit kind. */
+export function parseBotMemoryEdit(value: unknown): BotMemoryEditInput {
+  const record = exact(value, MEMORY_EDIT_INPUT_KEYS, "bot memory edit");
+  const botId = parseBotId(record.botId);
+  const kind = (record.edit as { kind?: unknown } | null | undefined)?.kind;
+  if (kind === "clear") {
+    exact(record.edit, MEMORY_CLEAR_KEYS, "bot memory edit");
+    return { botId, edit: { kind } };
+  }
+  if (kind === "remove") {
+    const edit = exact(record.edit, MEMORY_REMOVE_KEYS, "bot memory edit");
+    return { botId, edit: { kind, target: memoryTarget(edit.target), entryId: memoryEntryId(edit.entryId) } };
+  }
+  if (kind === "replace") {
+    const edit = exact(record.edit, MEMORY_REPLACE_KEYS, "bot memory edit");
+    if (typeof edit.text !== "string" || edit.text.length > MEMORY_EDIT_TEXT_CHARS) {
+      throw new Error("Invalid bot memory text.");
+    }
+    return {
+      botId,
+      edit: { kind, target: memoryTarget(edit.target), entryId: memoryEntryId(edit.entryId), text: edit.text },
+    };
+  }
+  throw new Error("Invalid bot memory edit.");
 }

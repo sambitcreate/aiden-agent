@@ -8,7 +8,10 @@ import {
   parseMcpOAuthSession,
   publicMcpClientInformation,
   sessionMatchesMcpBinding,
+  sameMcpOAuthGrant,
   sessionForFreshMcpAuthorization,
+  sessionForMcpAuthorizationAttempt,
+  sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -469,4 +472,70 @@ test("metadata observation rejects oversized wire documents and forgets policy a
   flow.saveDiscovery({ authorizationServerUrl: "https://identity.test", authorizationServerMetadata: { issuer: "https://identity.test", authorization_endpoint: "https://identity.test/authorize", token_endpoint: "https://identity.test/token", response_types_supported: ["code"] } });
   flow.authorizationUrl(new URL(`https://identity.test/authorize?state=${flow.state}`));
   assert.deepEqual(flow.callback(new URL(`http://127.0.0.1/callback?state=${flow.state}&code=allowed`)), { code: "allowed" });
+});
+
+test("an SDK token refresh keeps the same grant; re-authorization, revocation and sign-out do not", async () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const granted = sessionWithSavedMcpTokens(
+    sessionForMcpAuthorizationAttempt({ authorizationBinding: binding, clientInformation: { client_id: "client-1" } } as McpOAuthSession, binding),
+    binding,
+    { access_token: "access-1", token_type: "Bearer", refresh_token: "refresh-1", expires_in: 3600, scope: "pages.read pages.write" },
+  );
+  let stored = structuredClone(granted);
+  let refreshes = 0;
+  const provider: OAuthClientProvider = {
+    redirectUrl: "http://127.0.0.1:49152/callback",
+    clientMetadata: { redirect_uris: ["http://127.0.0.1:49152/callback"], token_endpoint_auth_method: "none" },
+    clientInformation: () => stored.clientInformation,
+    tokens: () => stored.tokens,
+    // The background provider's exact merge: rotate tokens into the bound session.
+    saveTokens: (tokens) => { stored = sessionWithSavedMcpTokens(stored, binding, tokens); },
+    saveCodeVerifier: () => undefined,
+    codeVerifier: () => "",
+    redirectToAuthorization: () => { throw new Error("A refresh must not open a browser."); },
+  };
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes("oauth-protected-resource")) return Response.json({ resource: "https://mcp.example.test/mcp", authorization_servers: ["https://accounts.example.test"] });
+    if (url.pathname.includes("oauth-authorization-server")) return Response.json({
+      issuer: "https://accounts.example.test",
+      authorization_endpoint: "https://accounts.example.test/authorize",
+      token_endpoint: "https://accounts.example.test/token",
+      response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
+    });
+    if (url.pathname === "/token") {
+      refreshes += 1;
+      assert.equal(new URLSearchParams(String(init?.body)).get("grant_type"), "refresh_token");
+      // A rotating provider: new access and refresh tokens, no scope echoed.
+      return Response.json({ access_token: `access-${refreshes + 1}`, token_type: "bearer", refresh_token: `refresh-${refreshes + 1}`, expires_in: 3599 });
+    }
+    throw new Error(`Unexpected OAuth request: ${url}`);
+  };
+
+  assert.equal(await auth(provider, { serverUrl: "https://mcp.example.test/mcp", fetchFn }), "AUTHORIZED");
+  assert.equal(refreshes, 1);
+  assert.equal(stored.tokens?.access_token, "access-2");
+  assert.equal(stored.tokens?.refresh_token, "refresh-2");
+  assert.equal(sameMcpOAuthGrant(granted, stored), true);
+
+  const reauthorized = sessionWithSavedMcpTokens(
+    sessionForMcpAuthorizationAttempt(stored, binding),
+    binding,
+    { access_token: "access-other", token_type: "Bearer", refresh_token: "refresh-other", scope: "pages.read pages.write" },
+  );
+  assert.equal(sameMcpOAuthGrant(stored, reauthorized), false, "an explicit sign-in is a new grant");
+
+  const revoked = structuredClone(stored);
+  delete revoked.tokens;
+  assert.equal(sameMcpOAuthGrant(stored, revoked), false);
+  assert.equal(sameMcpOAuthGrant(stored, {}), false);
+  assert.equal(
+    sameMcpOAuthGrant(stored, sessionWithSavedMcpTokens(stored, binding, { access_token: "narrow", token_type: "Bearer", refresh_token: "r", scope: "pages.read" })),
+    false,
+    "a narrower granted scope is a grant change",
+  );
+  assert.equal(
+    sameMcpOAuthGrant(stored, { ...stored, clientInformation: { client_id: "client-2", redirect_uris: ["http://127.0.0.1:49152/callback"] } }),
+    false,
+  );
 });

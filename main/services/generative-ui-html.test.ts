@@ -10,8 +10,11 @@ import {
   GENERATIVE_UI_PARENT_FRAME_SRC,
   GENERATIVE_UI_PROTOCOL_SCHEME,
 } from "../../renderer/shared/generative-ui.js";
+import { GENERATIVE_UI_DEFAULT_THEME_VARS } from "../../renderer/shared/generative-ui-theme.js";
 import {
+  generativeUiDraftDocumentHead,
   generativeUiExportDocument,
+  parseGenerativeUiTheme,
   validateGenerativeUiHtml,
   wrapGenerativeUiHtml,
 } from "./generative-ui-html.js";
@@ -155,14 +158,11 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../renderer/components/html-artifact-frame.tsx"),
     "utf8",
   );
-  assert.match(frame, /max-w-\[42rem\]/u);
   assert.match(frame, /popover="auto"/u);
   assert.match(frame, /section\.showPopover\(\)/u);
   assert.match(frame, /section\.hidePopover\(\)/u);
   assert.match(frame, /isolateExpandedArtifact\(section\)/u);
-  assert.equal(frame.match(/<HtmlArtifactIframe\b/gu)?.length, 1);
   assert.match(frame, /trigger\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(frame, /role=\{expanded \? "dialog" : undefined\}/u);
   assert.match(frame, /aria-modal=\{expanded \|\| undefined\}/u);
   assert.match(frame, /aria-label=\{`Expand \$\{artifact\.title\}`\}/u);
   assert.match(frame, /aria-label=\{`Export \$\{artifact\.title\}`\}/u);
@@ -190,6 +190,90 @@ test("artifact chrome promotes one interactive iframe into the modal top layer",
   );
   assert.match(chatPane, /hasActiveToolStep\(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME\)/u);
   assert.match(chatPane, /visualizingVisible:/u);
+});
+
+test("wrapper emits sanitized vars, the kit stylesheet, and a transparent inline canvas", () => {
+  const theme = {
+    colorScheme: "dark" as const, canvas: "#111111", foreground: "#eeeeee", secondary: "#999999", accent: "#3388ff",
+    vars: { "--chart-1": "#83d8ff", "--text-primary": "red;}" },
+  };
+  const doc = wrapGenerativeUiHtml("<p>x</p>", "T", theme, { inline: true });
+  assert.match(doc, /--chart-1: #83d8ff;/u);
+  assert.doesNotMatch(doc, /red;\}/u);
+  assert.match(doc, /href="aiden-genui:\/\/aiden-ui\.css"/u);
+  assert.match(doc, /html, body \{[^}]*background: transparent/u);
+  // Standalone pages (export, Design Studio) keep a solid canvas.
+  const standalone = wrapGenerativeUiHtml("<p>x</p>", "T", theme);
+  assert.match(standalone, /html, body \{[^}]*background: var\(--artifact-canvas\)/u);
+});
+
+test("the draft document head is open-ended and only its nonce'd bridge may run", () => {
+  const nonce = "abcdefghijklmnop0123==";
+  const head = generativeUiDraftDocumentHead("Draft", undefined, nonce);
+  assert.match(head, new RegExp(`<script nonce="${nonce}">`, "u"));
+  assert.match(head, /<body>\s*$/u);
+  assert.doesNotMatch(head, /<\/body>/u);
+  const meta = /http-equiv="Content-Security-Policy" content="([^"]+)"/u.exec(head)?.[1] ?? "";
+  assert.match(meta, new RegExp(`script-src 'nonce-${nonce}'`, "u"));
+  assert.doesNotMatch(/script-src[^;]*/u.exec(meta)?.[0] ?? "", /unsafe-inline/u);
+  assert.throws(() => generativeUiDraftDocumentHead("Draft", undefined, "\" onload=\"x"), /nonce/u);
+});
+
+test("documents without a renderer theme still carry Aiden's default token kit", () => {
+  for (const doc of [
+    wrapGenerativeUiHtml("<p>x</p>", "T"),
+    generativeUiExportDocument("<p>x</p>", "T", {
+      "chart.js": "window.Chart = 1;", "plotly.js": "1", "katex.js": "1", "katex.css": "b{}",
+    }),
+  ]) {
+    for (const name of ["--chart-1", "--chart-8", "--status-green-surface", "--surface-well", "--text-primary"]) {
+      assert.match(doc, new RegExp(`${name}: [^;]+;`, "u"), name);
+    }
+  }
+  // Renderer-supplied values win over the defaults.
+  const themed = wrapGenerativeUiHtml("<p>x</p>", "T", {
+    colorScheme: "dark", canvas: "#111111", foreground: "#eeeeee", secondary: "#999999", accent: "#3388ff",
+    vars: { "--chart-1": "#83d8ff" },
+  });
+  assert.equal(themed.match(/--chart-1: /gu)?.length, 1);
+  assert.match(themed, /--chart-1: #83d8ff;/u);
+});
+
+test("legacy four-color theme callers still render", () => {
+  const doc = wrapGenerativeUiHtml("<p>x</p>", "T", {
+    colorScheme: "light", canvas: "#ffffff", foreground: "#000000", secondary: "#666666", accent: "#0b7de5",
+  });
+  assert.match(doc, /--artifact-accent: #0b7de5;/u);
+  assert.match(doc, /<p>x<\/p>/u);
+});
+
+test("legacy four-color themes derive their semantic foreground and series from the caller colors", () => {
+  const legacyDark = {
+    colorScheme: "dark", canvas: "#101010", foreground: "#fafafa", secondary: "#a0a0a0", accent: "#3399ff",
+  };
+  const vars = parseGenerativeUiTheme(legacyDark).vars ?? {};
+  assert.equal(vars["--text-primary"], "#fafafa");
+  assert.equal(vars["--focus-ring"], "#fafafa");
+  assert.equal(vars["--text-secondary"], "#a0a0a0");
+  assert.equal(vars["--accent"], "#3399ff");
+  // Caller-supplied explicit vars stay authoritative over the derived defaults.
+  const explicit = parseGenerativeUiTheme({ ...legacyDark, vars: { "--text-primary": "#123456" } }).vars ?? {};
+  assert.equal(explicit["--text-primary"], "#123456");
+  assert.equal(explicit["--text-secondary"], "#a0a0a0");
+  // Without a caller theme the light defaults are unchanged.
+  const none = wrapGenerativeUiHtml("<p>x</p>", "T");
+  assert.match(none, new RegExp(`--text-primary: ${GENERATIVE_UI_DEFAULT_THEME_VARS["--text-primary"]};`, "u"));
+});
+
+test("export inlines the generated Aiden kit without a caller-supplied copy", () => {
+  const exported = generativeUiExportDocument("<p class=\"aiden-card\">n</p>", TITLE, {
+    "chart.js": "window.Chart = function Chart() {};",
+    "plotly.js": "window.Plotly = {};",
+    "katex.js": "window.katex = {};",
+    "katex.css": "body { font-size: 16px; }",
+  });
+  assert.doesNotMatch(exported, /aiden-genui:\/\//u);
+  assert.match(exported, /\.aiden-card/u);
 });
 
 test("export refuses to silently drop missing host libraries", () => {

@@ -13,6 +13,7 @@
 // builds; it never decides what a Bot may use.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
 import { connectionSuggestionFor, type ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
@@ -25,7 +26,6 @@ import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
 import { computerUseStatus } from "../computer-use/status.js";
 import type { ComputerUseController } from "../computer-use/controller.js";
-import type { ComputerUseArgs } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
@@ -33,7 +33,6 @@ import { logger } from "../../platform.js";
 import { createMcpInstructionCollector } from "../mcp-server-instructions.js";
 import { presetServerId } from "../mcp-presets.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
-import { scheduleTaskToolsForContext } from "../schedule-tool.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
 import { subagentsAllowedForGeneration } from "../subagents/eligibility.js";
@@ -43,7 +42,15 @@ import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
 import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
-import { shareImageCandidate, visionCandidate } from "./bot-tool-candidates.js";
+import {
+  routineNotesCandidate,
+  routinesCandidate,
+  routineTaskIdOfRun,
+  shareImageCandidate,
+  visionCandidate,
+} from "./bot-tool-candidates.js";
+import type { BotToolCall } from "./tool-adapter.js";
+import { botComputerUseApproval } from "./bot-computer-use-approval.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
@@ -93,6 +100,47 @@ export async function isConnected(pluginId: string): Promise<boolean> {
   return (await configStore.listMcpServers()).some((server) => server.id === serverId && server.enabled);
 }
 
+// Routine services load lazily: they import the scheduler, which must not
+// load while the Bot runtime module graph is still initializing.
+const routineServices = () => import("../scheduled-bot-routines-main.js");
+const proposalServices = () => import("../bot-routine-proposals-main.js");
+
+const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
+  list: async (botId) => (await routineServices()).botRoutineService.list(botId),
+  pause: async (botId, routineId) => (await routineServices()).botRoutineService.pause(botId, routineId),
+  propose: async (botId, input, append) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
+    return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+  },
+};
+
+const lazyRoutineNotes = {
+  set: async (botId: string, taskId: string, key: unknown, value: unknown) =>
+    (await routineServices()).botRoutineNotes.set(botId, taskId, key, value),
+  delete: async (botId: string, taskId: string, key: unknown) =>
+    (await routineServices()).botRoutineNotes.delete(botId, taskId, key),
+};
+
+/** The routine task id of the run making `call`, from the Bot's live session. */
+async function routineTaskIdOfCall(botId: string, call: BotToolCall): Promise<string | undefined> {
+  const { botSessionRuntime } = await import("./bot-session-main.js");
+  const runtime = await botSessionRuntime();
+  const conversation = await runtime.conversation(botId);
+  return routineTaskIdOfRun(await call.entries(), {
+    runningSubmissionId: async () => {
+      const state = await runtime.state(botId);
+      return state.kind === "running" ? state.submissionId : undefined;
+    },
+    submissionIdOf: async (requestId) => {
+      const submission = await conversation.commit(
+        (tx) => tx.submissionByRequest(conversation.id, requestId),
+        BACKGROUND_CONTEXT,
+      );
+      return submission === undefined ? undefined : String(submission.id);
+    },
+  });
+}
+
 function once<T>(load: () => Promise<T>): () => Promise<T> {
   let value: Promise<T> | undefined;
   return () => (value ??= load());
@@ -115,24 +163,31 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
   }
 
   /**
-   * The Bot's Computer Use controller, under the same gates as a legacy turn:
-   * platform support, the global beta, the Bot chat's own opt-in and a ready
-   * driver. A controller lives across the Bot's turns until it is no longer
-   * allowed, the Bot is deleted, or the app quits.
+   * The Bot's Computer Use controller: platform support, the global beta, an
+   * existing grant (Always allow, or the Bot chat was allowed from a desktop
+   * turn) and a ready driver. The durable runtime cannot raise the
+   * once-per-chat access card, so an ungranted Bot never gets the tool. A
+   * controller lives across the Bot's turns until it is no longer allowed,
+   * the Bot is deleted, or the app quits.
    */
-  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+  async function computerUseGranted(botId: string): Promise<boolean> {
     const chat = await chatStore.get(await deps.canonicalChatId(botId));
-    const enabled =
+    const settings = await configStore.getSettings();
+    return (
       computerUseSupported() &&
-      (await configStore.getSettings()).computerUseEnabled === true &&
-      chat?.computerUseEnabled === true;
-    if (!enabled) {
+      settings.computerUseEnabled === true &&
+      (settings.computerUseAlwaysAllow === true || chat?.computerUseAllowed === true)
+    );
+  }
+
+  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+    if (!(await computerUseGranted(botId))) {
       await closeController(botId);
       return undefined;
     }
     const status = await computerUseStatus.status({});
     if (!status.ready) {
-      logger.warn("bots", `Computer Use is enabled for Bot ${botId} but is not ready. ${status.detail}`);
+      logger.warn("bots", `Computer Use is allowed for Bot ${botId} but is not ready. ${status.detail}`);
       await closeController(botId);
       return undefined;
     }
@@ -284,9 +339,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         });
         if (vision) tools.push(vision);
       }
-      for (const tool of scheduleTaskToolsForContext({ bot: { botId, routineRun } })) {
-        tools.push({ tool, replay: "unsafe" });
-      }
+      // Both are always installed; ingress (`botIngressAllowsTool`) keeps
+      // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
+      tools.push(routinesCandidate(botId, botRoutineToolDependencies));
+      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: (call) => routineTaskIdOfCall(botId, call) }));
       tools.push({
         tool: createSuggestConnectionTool(botId, {
           isConnected,
@@ -312,13 +368,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
       const controller = controllers.get(botId);
       if (!controller) throw new Error("Computer Use is not enabled for this response.");
-      const args = call.args as ComputerUseArgs;
-      const descriptor = await controller.approvalFor(args, call.signal);
-      if (!descriptor) return null;
-      return {
-        summary: descriptor.summary,
-        onAllow: () => controller.authorize(call.callId, args, descriptor),
-      };
+      return botComputerUseApproval(controller, call, {
+        granted: () => computerUseGranted(botId),
+        revoke: () => closeController(botId),
+      });
     },
 
     async shutdown() {

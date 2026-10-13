@@ -365,6 +365,82 @@ test("a turn the person dismissed is settled and never delivered", async () => {
   }
 });
 
+const routineDelivery = {
+  botId: "bot:a",
+  requestId: "routine:task-1:1800000000000",
+  routineName: "Morning *brief*",
+  text: "Your first meeting is at 9:30.",
+  chatId: 7,
+  ownerUserId: 7,
+};
+
+test("a routine result goes to the bound chat once, with the routine name in bold", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => void delivered.push(reply),
+    routineTargetEnabled: async () => true,
+  });
+  assert.deepEqual(await ingress.enqueueRoutineDelivery(routineDelivery), { queued: true });
+  assert.deepEqual(await ingress.enqueueRoutineDelivery(routineDelivery), { queued: false }, "one row per firing");
+  await ingress.idle();
+  assert.deepEqual(delivered, [
+    { chatId: 7, ownerUserId: 7, text: "**Morning \\*brief\\***\n\nYour first meeting is at 9:30." },
+  ]);
+  assert.deepEqual((await ingress.rows()).map((row) => [row.kind, row.state]), [["routine", "sent"]]);
+});
+
+test("a routine result cut off by a crash mid-send is redelivered once with the duplicate label", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  let started!: () => void;
+  const sending = new Promise<void>((resolve) => { started = resolve; });
+  const crashed = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    // The process dies while Telegram has the message: the send never settles.
+    deliver: () => {
+      started();
+      return new Promise<void>(() => undefined);
+    },
+    routineTargetEnabled: async () => true,
+  });
+  await crashed.enqueueRoutineDelivery(routineDelivery);
+  await sending;
+  crashed.stop();
+
+  const delivered: string[] = [];
+  const restarted = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => void delivered.push(reply.text),
+    routineTargetEnabled: async () => true,
+  });
+  await restarted.recover();
+  await restarted.idle();
+  assert.deepEqual(delivered, [`${MAY_BE_DUPLICATE_PREFIX} **Morning \\*brief\\***\n\nYour first meeting is at 9:30.`]);
+  assert.deepEqual((await restarted.rows()).map((row) => row.state), ["sent"]);
+});
+
+test("a routine result for a binding switched off before the send is dropped unsent", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  const checked: Array<{ botId: string; chatId: number }> = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async () => assert.fail("a disabled binding is never sent to"),
+    routineTargetEnabled: async ({ botId, chatId }) => {
+      checked.push({ botId, chatId });
+      return false;
+    },
+  });
+  await ingress.enqueueRoutineDelivery(routineDelivery);
+  await ingress.idle();
+  assert.deepEqual(checked, [{ botId: "bot:a", chatId: 7 }]);
+  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["failed"]);
+});
+
 test("an interrupted turn delivers nothing", async () => {
   const file = path.join(tempDir(), "outbox.json");
   seed(file, [{ state: "awaiting" }]);

@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { ChevronLeft, Ellipsis } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
@@ -10,36 +11,40 @@ import {
 } from "../../components/ui";
 import type { BotDefinition } from "../../shared/bots";
 
-/** The title side of a Bot chat: back, then a name pill that opens the Profile. */
-export function BotChatTitle({
-  bot,
-  onBack,
-  onOpenProfile,
-}: {
-  bot: Pick<BotDefinition, "id" | "name" | "avatar">;
-  onBack(): void;
-  onOpenProfile(): void;
-}) {
+/** Back to the Bots list, in the chat toolbar's leading slot. */
+export function BotChatBackButton({ onBack }: { onBack(): void }) {
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
-        <ChevronLeft />
-      </Button>
-      <Button
-        variant="bar"
-        size="medium"
-        className="min-w-0 gap-1.5 pl-0.5 text-primary"
-        aria-label={`${bot.name} profile`}
-        onClick={onOpenProfile}
-      >
-        <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" />
-        <span className="truncate">{bot.name}</span>
-      </Button>
-    </span>
+    <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
+      <ChevronLeft />
+    </Button>
   );
 }
 
-/** The action side of a Bot chat: one ••• menu with Profile, Files, and Delete. */
+/** The chat toolbar's title: the Bot's avatar and name, which open its Profile. */
+export function BotChatNamePill({
+  bot,
+  onOpenProfile,
+}: {
+  bot: Pick<BotDefinition, "id" | "name" | "avatar">;
+  onOpenProfile(): void;
+}) {
+  return (
+    <Button
+      variant="bar"
+      size="medium"
+      // The heading clips overflow for the ellipsis, so the focus ring is drawn inside.
+      style={{ "--keyboard-focus-offset": "-2px" } as React.CSSProperties}
+      className="max-w-full min-w-0 shrink gap-1.5 pl-0.5 pr-2 text-primary"
+      aria-label={`${bot.name} profile`}
+      onClick={onOpenProfile}
+    >
+      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" />
+      <span className="truncate text-strong font-medium">{bot.name}</span>
+    </Button>
+  );
+}
+
+/** The action side of a Bot chat: one ••• menu with Profile, Files, and Delete Bot. */
 export function BotChatActions({
   bot,
   onOpenProfile,
@@ -63,7 +68,7 @@ export function BotChatActions({
         {onOpenFiles ? <DropdownMenuItem onSelect={onOpenFiles}>Files</DropdownMenuItem> : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem color="status-red" onSelect={onDelete}>
-          Delete
+          Delete Bot
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

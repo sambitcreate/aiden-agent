@@ -1,4 +1,5 @@
-// The renderer's chat mutations: rename, a model-titled rename, delete and append.
+// The renderer's chat mutations: rename, a model-titled rename, delete, append,
+// and dismissing a Computer Use continue callout.
 // Each asks its service to refuse a chat another Aiden feature owns (a Design
 // project's hidden chat). The handlers live here, apart from chats.ts, so they
 // load without Electron and the refusal is pinned by invoking them; chats.ts
@@ -14,7 +15,6 @@ import {
 import type { createChatApplicationService } from "../services/chat-application-service.js";
 import type { createChatStore } from "../services/chat-store-core.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
-import type { MemoryScope } from "../services/memory-store.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   commitSkillInvocationForAppend,
@@ -33,14 +33,16 @@ export function asString(value: unknown, name: string): string {
 
 /** The app singletons these handlers use; chats.ts passes the real ones. */
 export interface RendererChatMutationDeps {
-  chatStore: Pick<ReturnType<typeof createChatStore>, "get" | "appendMessage">;
+  chatStore: Pick<
+    ReturnType<typeof createChatStore>,
+    "get" | "appendMessage" | "setComputerUsePendingContinue"
+  >;
   chatApplicationService: Pick<ReturnType<typeof createChatApplicationService>, "rename" | "remove">;
   chatTitleService: {
     renameWithFoundationModels(chatId: string, options: { rejectFeatureOwned?: boolean }): Promise<unknown>;
   };
   botApplicationService: { deleteChat(input: { botId: string; chatId: string }): Promise<unknown> };
   hostPlatformCapabilities(): { bots: boolean };
-  memoryStore: { deleteScope(scope: MemoryScope): Promise<unknown> };
   closeDeviceSessionsForChat(chatId: string): void;
   chatReadMarkers: { remove(chatId: string): Promise<unknown> };
   rendererDocumentOwner(event: IpcMainInvokeEvent, invalidRequest: () => Error): RendererDocumentOwner;
@@ -63,7 +65,6 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     chatTitleService,
     botApplicationService,
     hostPlatformCapabilities,
-    memoryStore,
     closeDeviceSessionsForChat,
     chatReadMarkers,
     rendererDocumentOwner,
@@ -83,13 +84,16 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     renameWithFoundationModels: async (_event: IpcMainInvokeEvent, id: unknown) =>
       chatTitleService.renameWithFoundationModels(asString(id, "id"), { rejectFeatureOwned: true }),
 
+    /** Clear the post-restart "continue Computer Use" marker without resuming. */
+    dismissComputerUseContinue: async (_event: IpcMainInvokeEvent, id: unknown) =>
+      chatForRenderer(await chatStore.setComputerUsePendingContinue(asString(id, "id"), false)),
+
     remove: async (_event: IpcMainInvokeEvent, id: unknown) => {
       const chatId = asString(id, "id");
       const chat = await chatStore.get(chatId);
       const result = chat?.botId && hostPlatformCapabilities().bots
         ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
         : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
-      if (chat?.botId) await memoryStore.deleteScope({ kind: "bot", id: chat.botId });
       closeDeviceSessionsForChat(chatId);
       void chatReadMarkers.remove(chatId).catch(() => undefined);
       return result;

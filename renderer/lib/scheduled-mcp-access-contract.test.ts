@@ -42,7 +42,8 @@ test("Scheduled settings expose an MCP default without hiding exact task scope",
   assert.match(view, /settings\.isLoading/u);
   assert.match(view, /mcpServers\.isLoading/u);
   assert.doesNotMatch(view, /disabled=\{creationUnavailable\}/u);
-  assert.ok((view.match(/disabled=\{manualCreationUnavailable\}/gu)?.length ?? 0) >= 2);
+  // Suggestion-to-chat navigation is covered behaviorally by the Electron
+  // scheduling spec; suggestions no longer open the manual editor.
   assert.match(view, /const legacyMcpInventoryUnavailable =/u);
   assert.equal(view.match(/disabled=\{legacyMcpInventoryUnavailable\}/gu)?.length, 1);
   assert.match(view, /All enabled MCP servers \(legacy\)/u);

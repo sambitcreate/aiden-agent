@@ -39,6 +39,9 @@ struct ContentView: View {
                 guard coordinator.connectionState != .needsPairing else { return }
                 Task {
                     await coordinator.connectActiveInstallation()
+                    // Bot routine results land as local notifications when
+                    // the app comes to the foreground (there is no push).
+                    Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
                     if let context = try? coordinator.requestContext(),
                        let client = try? coordinator.remoteClient(for: context) {
                         await AidenRemoteLiveActivityManager.shared.reconcile(

@@ -28,13 +28,9 @@
   - Excluded: node_modules `.ts`, test/example/docs directories, and README/CHANGELOG-style
     `.md` files.
   - Not excluded: `doc`, because `yaml/dist/doc` is runtime code; `benchmark`; licence files.
-- **Onboarding art:** `npm run assets:onboarding` quantizes the PNGs to 256 colors and keeps
-  them as 8-bit RGBA, because the onboarding test requires color type 6.
-  - The script is idempotent.
-  - 21.8 MB became 10.5 MB, at ≥38 dB premultiplied PSNR.
-  - Run it after adding new art.
-  - `features/aiden-assistant.png` and `features/form-fill.png` are not referenced by the
-    bento, which is kept for planned tiles.
+- **Onboarding art:** the 10.5 MB of quantized PNGs (and `npm run assets:onboarding`) are gone
+  (2026-10-09). The feature tour now draws its art in code, a few tens of KB of TSX and CSS; see
+  `.memory/onboarding-art.md`.
 - **Native C helpers:**
   - Builds go through `compileNativeC`, which writes a `<output>.stamp` fingerprint
     covering the source, quoted local headers (transitively), compiler, args, env,
@@ -46,3 +42,27 @@
   limits the main window's entry module plus its modulepreloads.
   - The limit is 3,520,000 B raw and 1,075,000 B gzip.
   - At introduction the measured size was 3,407,897 B raw and 1,043,384 B gzip.
+
+## Ogg/Opus decoder for on-device Telegram voice notes (2026-10-09, STT engine foundation Task 7)
+
+- Main bundles use `packages: "external"`, so every production dependency ships in app.asar as
+  installed files (minus `build.files` exclusions: maps, `.d.ts`, README-style `.md`).
+- Measured the asar payload of `ogg-opus-decoder@1.7.5` on disk with those exclusions applied
+  (no `npm run package` run; that script vendors helpers and builds native code):
+  ogg-opus-decoder 4.22 MB (its `dist/` carries a 4.1 MB opus-ml bundle) +
+  `@wasm-audio-decoders/opus-ml` 8.20 MB (pulled in for its optional ML speech enhancement) +
+  opus-decoder 0.18 + codec-parser 0.13 + common 0.06 + @eshaz/web-worker 0.03 +
+  simple-yenc 0.02 ≈ **12.8 MB**. Over the spec's 5 MB limit.
+- Fallback taken per spec §11: `opus-decoder@0.7.12` + `codec-parser@2.5.0` (exact pins) used
+  directly by `main/services/local-speech-opus.ts`. Same measurement ≈ **0.42 MB** (opus-decoder,
+  codec-parser, @wasm-audio-decoders/common, @eshaz/web-worker, simple-yenc). WASM is inlined
+  in JS, so nothing needs `asarUnpack`.
+- Packaged `--dir` delta, measured 2026-10-09 (Task 10, `npm run package`, arm64 development):
+  the five packages occupy **0.413 MB** of app.asar (opus-decoder 0.178, codec-parser 0.134,
+  @wasm-audio-decoders/common 0.059, @eshaz/web-worker 0.026, simple-yenc 0.015), matching the
+  on-disk estimate. Whole app 459 MB, app.asar 96 MB. `Resources/speech/silero_vad.onnx`
+  (643,854 bytes) and `build/main/local-speech-worker.js` are present; `npm run package:verify`
+  passes.
+- Both are ESM-only and loaded through a dynamic `import()` on first decode, so the main
+  bundle does not compile libopus at startup. The CLI build bundles them as lazy chunks of
+  `dist/app/speech-worker.js`.

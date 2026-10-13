@@ -1,5 +1,5 @@
-// On-device voice settings: engine status, the active Parakeet model, and
-// when an idle model is unloaded to free memory.
+// On-device voice settings: engine status, the active model, when an idle
+// model is unloaded to free memory, and silence trimming.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   toast,
 } from "../ui";
@@ -21,11 +22,13 @@ import { Settings2 } from "lucide-react";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
 import { ModelManagerView } from "./model-manager-view";
+import { effectiveLocalModelId } from "../../shared/voice-provider";
 import {
   DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES,
   isLocalVoiceIdleUnloadMinutes,
   LOCAL_VOICE_IDLE_UNLOAD_CHOICES,
 } from "../../shared/dictation-preferences";
+import { voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
 
 function idleUnloadLabel(minutes: number): string {
   if (minutes === 0) return "Never";
@@ -74,6 +77,30 @@ export function IdleUnload() {
   );
 }
 
+function TrimSilence() {
+  const qc = useQueryClient();
+  const settings = useSettings();
+  const enabled = voiceTrimSilenceEnabled(settings.data?.voiceTrimSilence);
+
+  const change = async (value: boolean) => {
+    try {
+      await settingsApi.set({ voiceTrimSilence: value });
+      await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch {
+      toast.error("Aiden couldn’t change silence trimming.");
+    }
+  };
+
+  return (
+    <Field
+      label="Trim silence"
+      description="Skips silence and splits long recordings so every model can transcribe them."
+    >
+      <Switch aria-label="Trim silence" checked={enabled} onCheckedChange={(value) => void change(value)} />
+    </Field>
+  );
+}
+
 function EngineStatus() {
   const status = useEngineStatus();
   if (status.isLoading) {
@@ -96,7 +123,7 @@ function EngineStatus() {
     );
   }
   return (
-    <Field label="Engine" description="Transcription runs locally after you download a Parakeet model.">
+    <Field label="Engine" description="Transcription runs locally after you download a speech model.">
       <Badge color="green">Ready</Badge>
     </Field>
   );
@@ -107,8 +134,14 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   const models = useLocalModels();
   const settings = useSettings();
   const activeId = settings.data?.localVoiceModel ?? "";
-  const active = (models.data ?? []).find((m) => m.id === activeId && m.installed);
-  const installedCount = (models.data ?? []).filter((m) => m.installed).length;
+  const installed = (models.data ?? []).filter((m) => m.installed);
+  const installedCount = installed.length;
+  const active = installed.find((m) => m.id === activeId);
+  // With no usable choice, dictation falls back to the first installed model.
+  const fallbackId = active
+    ? undefined
+    : effectiveLocalModelId(undefined, installed.map((m) => m.id));
+  const fallback = installed.find((m) => m.id === fallbackId);
 
   React.useEffect(() => {
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
@@ -124,7 +157,9 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
         </Callout>
       ) : (
         <Field label="Active model" description="Used when you dictate with the on-device provider.">
-          <Text variant="small-strong">{active ? active.name : "None selected"}</Text>
+          <Text variant="small-strong">
+            {active ? active.name : fallback ? `${fallback.name} (automatic)` : "None selected"}
+          </Text>
         </Field>
       )}
       <Field label="Models" description="Download, remove, and choose your on-device transcription model.">
@@ -148,6 +183,7 @@ export function LocalVoiceSettings() {
         <EngineStatus />
         <ActiveModel onManage={() => setManaging(true)} />
         <IdleUnload />
+        <TrimSilence />
       </FieldSet>
     </div>
   );

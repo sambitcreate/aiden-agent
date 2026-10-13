@@ -100,7 +100,6 @@ async function fixture(t: TestContext) {
     },
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
     hostPlatformCapabilities: () => ({ bots: false }),
-    memoryStore: { deleteScope: async () => assert.fail("no Bot memory is deleted here") },
     closeDeviceSessionsForChat: () => undefined,
     chatReadMarkers: { remove: async () => undefined },
     rendererDocumentOwner: () => owner,
@@ -120,6 +119,7 @@ async function fixture(t: TestContext) {
     ["chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels as Handler],
     ["chats:remove", rendererChats.remove as Handler],
     ["chats:appendMessage", rendererChats.appendMessage as Handler],
+    ["chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue as Handler],
   ]);
   const invoke = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args);
   return { chatStore, invoke };
@@ -156,4 +156,24 @@ test("the same channels still rename, append to and delete an ordinary chat", as
   );
   await f.invoke("chats:remove", "regular-chat");
   assert.equal(await f.chatStore.get("regular-chat"), null);
+});
+
+test("dismissing the Computer Use continue callout clears only that chat's marker", async (t) => {
+  const f = await fixture(t);
+  await f.chatStore.setComputerUsePendingContinue("regular-chat", true);
+  await f.chatStore.setComputerUseAllowed("regular-chat", true);
+
+  const updated = (await f.invoke("chats:dismissComputerUseContinue", "regular-chat")) as {
+    id: string;
+    computerUsePendingContinue?: boolean;
+    computerUseAllowed?: boolean;
+  };
+  assert.equal(updated.id, "regular-chat");
+  assert.equal(updated.computerUsePendingContinue, undefined);
+  const stored = await f.chatStore.get("regular-chat");
+  assert.equal(stored?.computerUsePendingContinue, undefined);
+  assert.equal(stored?.computerUseAllowed, true, "dismissing does not revoke the chat's grant");
+
+  await assert.rejects(f.invoke("chats:dismissComputerUseContinue", ""), /non-empty string/u);
+  await assert.rejects(f.invoke("chats:dismissComputerUseContinue", "missing-chat"), /not found/u);
 });

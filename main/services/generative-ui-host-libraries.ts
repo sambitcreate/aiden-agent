@@ -1,9 +1,16 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GENERATIVE_UI_HOST_LIBS } from "../../renderer/shared/generative-ui.js";
+import {
+  GENERATIVE_UI_HOST_LIBS,
+  GENERATIVE_UI_KIT_LIB,
+  GENERATIVE_UI_VENDORED_LIBS,
+} from "../../renderer/shared/generative-ui.js";
+import { generativeUiKitCss } from "./generative-ui-kit.js";
 
-const FILE_NAMES: Record<(typeof GENERATIVE_UI_HOST_LIBS)[number], string> = {
+type VendoredLibrary = (typeof GENERATIVE_UI_VENDORED_LIBS)[number];
+
+const FILE_NAMES: Record<VendoredLibrary, string> = {
   "chart.js": "chart.umd.min.js",
   "plotly.js": "plotly.min.js",
   "katex.js": "katex.min.js",
@@ -25,13 +32,14 @@ export function generativeUiLibraryDirectory(): string {
   return development;
 }
 
-export function generativeUiLibraryPath(name: (typeof GENERATIVE_UI_HOST_LIBS)[number]): string {
+export function generativeUiLibraryPath(name: VendoredLibrary): string {
   return path.join(generativeUiLibraryDirectory(), FILE_NAMES[name]);
 }
 
+/** Vendored library sources for standalone export; the kit is inlined by the export builder. */
 export async function loadGenerativeUiHostLibraries(): Promise<Record<string, string>> {
   const libraries: Record<string, string> = {};
-  for (const name of GENERATIVE_UI_HOST_LIBS) {
+  for (const name of GENERATIVE_UI_VENDORED_LIBS) {
     let source: string;
     try {
       source = await fs.readFile(generativeUiLibraryPath(name), "utf8");
@@ -53,6 +61,9 @@ export async function readGenerativeUiHostLibrary(
 ): Promise<{ bytes: Buffer; mimeType: string } | undefined> {
   const allowed = GENERATIVE_UI_HOST_LIBS.find((item) => item === name);
   if (!allowed) return undefined;
+  if (allowed === GENERATIVE_UI_KIT_LIB) {
+    return { bytes: Buffer.from(generativeUiKitCss(), "utf8"), mimeType: "text/css; charset=utf-8" };
+  }
   try {
     const bytes = await fs.readFile(generativeUiLibraryPath(allowed));
     return {

@@ -27,12 +27,11 @@ import { assertGenerationContextCapacity, estimateStaticContextTokens } from "./
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import type { Chat } from "./types.js";
 
-function chat(id: string, workspaceId: string, botId?: string): Chat {
+function chat(id: string, workspaceId: string): Chat {
   return {
     id,
     title: id,
     workspaceId,
-    ...(botId ? { botId } : {}),
     messages: [{ id: `${id}-message`, role: "user", content: "What is our launch policy?", createdAt: 1 }],
     createdAt: 1,
     updatedAt: 1,
@@ -47,16 +46,17 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     await rm(root, { recursive: true, force: true });
   });
 
-  const macBotChat = chat("mac-bot-chat", "mac-workspace", "shared-bot");
-  const boundTelegramChat = chat("telegram-bot-chat", "telegram-workspace", "shared-bot");
+  // Two surfaces on one workspace share its scope; Bots keep their own memory files instead.
+  const macChat = chat("mac-chat", "shared-workspace");
+  const sharedTelegramChat = chat("telegram-shared-chat", "shared-workspace");
   const ordinaryTelegramChat = chat("telegram-workspace-chat", "telegram-workspace");
-  assert.deepEqual(memoryScopeForChat(macBotChat), memoryScopeForChat(boundTelegramChat));
-  assert.notDeepEqual(memoryScopeForChat(macBotChat), memoryScopeForChat(ordinaryTelegramChat));
+  assert.deepEqual(memoryScopeForChat(macChat), memoryScopeForChat(sharedTelegramChat));
+  assert.notDeepEqual(memoryScopeForChat(macChat), memoryScopeForChat(ordinaryTelegramChat));
 
-  const botScope = memoryScopeForChat(macBotChat);
+  const sharedScope = memoryScopeForChat(macChat);
   await store.put({
     id: "bot-launch-policy",
-    scope: botScope,
+    scope: sharedScope,
     text: "The Bot launch window is Wednesday.",
     provenance: { kind: "user_edit", sourceId: "memory-editor" },
     alwaysOn: true,
@@ -68,23 +68,23 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     provenance: { kind: "user_edit", sourceId: "memory-editor" },
   });
 
-  const attendedProvenance = memoryProvenanceForGeneration(macBotChat, "turn-mac", true);
+  const attendedProvenance = memoryProvenanceForGeneration(macChat, "turn-mac", true);
   assert.ok(attendedProvenance);
-  assert.equal(memoryProvenanceForGeneration(boundTelegramChat, "turn-telegram", false), undefined);
+  assert.equal(memoryProvenanceForGeneration(sharedTelegramChat, "turn-telegram", false), undefined);
   assert.deepEqual(prepareMemoryApproval({ fact: "Never commit headlessly." }, undefined), {
     ok: false,
     reason: "Memory writes require a current attended source turn.",
   });
   const preparedApproval = prepareMemoryApproval(
     { fact: "Commit only after approval.", alwaysOn: false },
-    { scope: botScope, provenance: attendedProvenance },
+    { scope: sharedScope, provenance: attendedProvenance },
   );
   assert.equal(preparedApproval.ok, true);
   if (preparedApproval.ok) assert.match(preparedApproval.summary, /turn:turn-mac/u);
-  const macExtension = await createMemoryExtension({ store, scope: botScope, provenance: attendedProvenance });
+  const macExtension = await createMemoryExtension({ store, scope: sharedScope, provenance: attendedProvenance });
   const boundTelegramExtension = await createMemoryExtension({
     store,
-    scope: memoryScopeForChat(boundTelegramChat),
+    scope: memoryScopeForChat(sharedTelegramChat),
   });
   const ordinaryTelegramExtension = await createMemoryExtension({
     store,
@@ -131,7 +131,7 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
         if (toolCall.name !== REMEMBER_MEMORY_TOOL_NAME) return undefined;
         const decision = await authorizeMemoryProposal(
           args,
-          { scope: botScope, provenance: attendedProvenance },
+          { scope: sharedScope, provenance: attendedProvenance },
           async () => allowed,
           signal,
         );
@@ -141,9 +141,9 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     await harness.prompt("remember the proposed fact");
   };
   await runProposal(false);
-  assert.equal((await store.list(botScope)).some(({ text }) => text.startsWith("Denied")), false);
+  assert.equal((await store.list(sharedScope)).some(({ text }) => text.startsWith("Denied")), false);
   await runProposal(true);
-  assert.equal((await store.list(botScope)).some(({ text }) => text.startsWith("Approved")), true);
+  assert.equal((await store.list(sharedScope)).some(({ text }) => text.startsWith("Approved")), true);
 
   const cancelled = new AbortController();
   cancelled.abort();
@@ -151,7 +151,7 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
   assert.deepEqual(
     await authorizeMemoryProposal(
       { fact: "Cancelled before approval.", alwaysOn: false },
-      { scope: botScope, provenance: attendedProvenance },
+      { scope: sharedScope, provenance: attendedProvenance },
       async () => {
         cancellationRequested = true;
         return true;
@@ -177,7 +177,7 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
     assert.deepEqual(
       await authorizeMemoryProposal(
         { fact: `Approval outcome ${outcome}.`, alwaysOn: false },
-        { scope: botScope, provenance: attendedProvenance },
+        { scope: sharedScope, provenance: attendedProvenance },
         async () => outcome,
       ),
       { allowed: false, reason },
@@ -186,12 +186,12 @@ test("production memory surface matrix preserves scope, attendance, replay, and 
 
   const boundRecall = boundTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
   const ordinaryRecall = ordinaryTelegramExtension.tools?.find(({ name }) => name === RECALL_MEMORY_TOOL_NAME)!;
-  const botResult = await boundRecall.execute("recall", { query: "launch window" });
+  const sharedResult = await boundRecall.execute("recall", { query: "launch window" });
   const workspaceResult = await ordinaryRecall.execute("recall", { query: "launch window" });
   const text = (result: Awaited<ReturnType<typeof boundRecall.execute>>) =>
     result.content[0]?.type === "text" ? result.content[0].text : "";
-  assert.match(text(botResult), /Wednesday/u);
-  assert.doesNotMatch(text(botResult), /Friday/u);
+  assert.match(text(sharedResult), /Wednesday/u);
+  assert.doesNotMatch(text(sharedResult), /Friday/u);
   assert.match(text(workspaceResult), /Friday/u);
   assert.doesNotMatch(text(workspaceResult), /Wednesday/u);
 

@@ -12,7 +12,7 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 - **Controller**: `executeFormFillBatch` — fresh exact-window observation per row, reacquire by token+index+role+label, set_value via brokered driver, re-read verified, stop-on-first-error, per-row results (filled/already_satisfied/needs_review/failed/not_attempted).
 - **Approval UX**: `form-fill-batch` details kind → `FormFillApproval` card (target app/window, doc name+hash prefix, per-row label→value+source line, deselect checkboxes, "This will not submit the form."). Renderer guard `isFormFillBatchApprovalDetails` fails closed. Deselections flow back via `chat:approve` options → `approvals.decide` payload → `takeDecisionPayload` → `authorize`. Confirm label "Fill N fields"; deny "Cancel". iOS remote approval contract carries no details — no mobile change needed.
 - **Settings**: Settings → Computer Use → "Form fill specialist" switch (default off) + model state row (Not downloaded/Downloading/Preparing/Ready/Update required/Error/Unsupported) with Download/Cancel/Retry/Remove. `formFillSpecialistEnabled` in AppSettings.
-- **Onboarding**: `formFill` bento tile in "control" group + `features/form-fill.png` (1024² RGBA).
+- **Onboarding**: the `formFill` tile is not advertised while the specialist is blocked. Its old `features/form-fill.png` was deleted with the rest of the PNG art (2026-10-09); a returning tile needs code-drawn art (see `.memory/onboarding-art.md`).
 
 ## Invariants
 
@@ -23,7 +23,7 @@ Narrow opt-in specialist layered on existing Computer Use. NOT a replacement age
 
 ## Status
 
-**Blocked, not delivered:** pinned cua-driver 0.8.3 has no document-lifetime identity or atomic conditional write. Production specialist tool admission, enabling/downloading, approval capture and batch execution now fail closed. Settings offers cleanup only; the shipped-feature tour tile is removed. Pure extraction/scoring/ledger code remains groundwork, not a usable filling feature.
+**Blocked, not delivered:** pinned cua-driver (0.8.3, and still 0.34.1 after the 2026-10-09 upgrade) has no document-lifetime identity or atomic conditional write. Production specialist tool admission, enabling/downloading, approval capture and batch execution now fail closed. Settings offers cleanup only; the shipped-feature tour tile is removed. Pure extraction/scoring/ledger code remains groundwork, not a usable filling feature.
 
 - All TS suites green (test:form-fill = 76+eval tests; test:computer-use incl. ipc-contract; type-check; eslint).
 - **Verified on macOS**: Swift helper compilation and 17 native tests with real SHA-verified FP16 model (zero skips). Still unverified: helper signing/notarization in a real package and end-to-end acceptance against a live form window.

@@ -4,6 +4,7 @@ import {
   type ToolApprovalScope,
 } from "../../renderer/shared/tool-approval-scope.js";
 import type { ChatRunInputAdmissionResult } from "../../renderer/shared/chat-run-input.js";
+import { isComputerUseAccessApprovalDetails } from "../../renderer/shared/computer-use-access.js";
 import {
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_TOOL_NAME,
@@ -198,13 +199,18 @@ function projectPayload(
 
 /**
  * Same policy as phone-owned stream approvals: an approval carrying host-only
- * details (anything but a scheduled-task summary), or whose details were too
- * large to journal, can be denied from a phone but allowed only on the host.
+ * details (anything but a scheduled-task summary or the Computer Use access
+ * card), or whose details were too large to journal, can be denied from a
+ * phone but allowed only on the host.
  */
 function phoneMayAllow(payload: Record<string, unknown>): boolean {
   if (payload.detailsOmitted === true) return false;
   const details = ownRecord(payload.details);
-  return details === undefined || details.kind === "scheduled-task";
+  return (
+    details === undefined ||
+    details.kind === "scheduled-task" ||
+    isComputerUseAccessApprovalDetails(details)
+  );
 }
 
 /**

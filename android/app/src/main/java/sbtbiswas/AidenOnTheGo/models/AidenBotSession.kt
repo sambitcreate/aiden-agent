@@ -36,7 +36,9 @@ import java.io.InputStreamReader
 import java.time.Instant
 
 // Contract revision 25 (`bot-durable-session-v1`): one durable conversation per Bot,
-// addressed by Bot id rather than chat id.
+// addressed by Bot id rather than chat id. Revision 27 adds the `memory_update` and
+// `routine_proposal` entries (`bot:cards` devices only) and skips entry types this build
+// can't read instead of refusing the whole session.
 
 /** Strict codec for the revision-25 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
 object AidenBotWireJson {
@@ -105,8 +107,15 @@ object AidenBotSessionWire {
     const val MAX_EPOCH_LENGTH = 64
     const val MAX_SUBMISSION_ID_LENGTH = 64
     const val MAX_PLUGIN_ID_LENGTH = 80
+    const val MAX_ROUTINE_ID_LENGTH = 160
     private val PLUGIN_ID = Regex("^[a-z0-9][a-z0-9._-]*$")
     private val EPOCH = Regex("^[A-Za-z0-9_-]+$")
+    private val PROPOSAL_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    /** A routine proposal id: a lowercase UUID minted by the host. */
+    fun validateProposalId(value: String, field: String) {
+        if (!PROPOSAL_ID.matches(value)) throw AidenBotContractException.InvalidField(field)
+    }
 
     /** Connection, icon and preset ids: lowercase, `^[a-z0-9][a-z0-9._-]*$`, at most 80 characters. */
     fun validatePluginId(value: String, field: String) {
@@ -225,6 +234,73 @@ sealed class AidenBotSessionEntry {
             retryText?.let { AidenBotWire.validateString(it, "entry.retryText", AidenBotSessionWire.MAX_TEXT_LENGTH) }
         }
     }
+
+    /** Revision 27 (`bot:cards` devices only): the Bot saved something to its memory. */
+    @Serializable
+    @SerialName("memory_update")
+    data class MemoryUpdate(
+        override val id: String,
+        @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null
+    ) : AidenBotSessionEntry() {
+        init {
+            AidenBotWire.validateIdentifier(id, "entry.id")
+        }
+    }
+
+    /**
+     * Revision 27 (`bot:cards` devices only): a routine the Bot suggested. A pending card is
+     * answered through `POST /bots/{botId}/routine-proposals/{proposalId}/respond`; only an
+     * accepted one names its [routineId].
+     */
+    @Serializable
+    @SerialName("routine_proposal")
+    data class RoutineProposal(
+        override val id: String,
+        val proposalId: String,
+        val name: String,
+        val prompt: String,
+        val label: String,
+        val status: AidenBotRoutineProposalStatus,
+        val routineId: String? = null,
+        @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null
+    ) : AidenBotSessionEntry() {
+        init {
+            AidenBotWire.validateIdentifier(id, "entry.id")
+            AidenBotSessionWire.validateProposalId(proposalId, "entry.proposalId")
+            AidenBotWire.validateString(name, "entry.name", AidenBotSessionWire.MAX_NAME_LENGTH)
+            AidenBotWire.validateString(prompt, "entry.prompt", AidenBotSessionWire.MAX_TEXT_LENGTH)
+            AidenBotWire.validateString(label, "entry.label", AidenBotSessionWire.MAX_LABEL_LENGTH)
+            routineId?.let { AidenBotWire.validateString(it, "entry.routineId", AidenBotSessionWire.MAX_ROUTINE_ID_LENGTH) }
+            if (routineId != null && status != AidenBotRoutineProposalStatus.ACCEPTED) {
+                throw AidenBotContractException.InvalidCombination("routine proposal routineId")
+            }
+        }
+    }
+
+    companion object {
+        /** The entry types this build reads. Any other `type` is skipped (revision 27). */
+        val KNOWN_TYPES: Set<String> = setOf(
+            "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal"
+        )
+
+        /**
+         * The entry's `type` when this build can't read it, or null when it can. A missing or
+         * non-string `type` is malformed, not unknown, and fails closed.
+         */
+        fun unknownType(element: JsonElement): String? {
+            val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("entry")
+            val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw AidenBotContractException.InvalidField("entry.type")
+            return type.takeUnless { it in KNOWN_TYPES }
+        }
+    }
+}
+
+@Serializable
+enum class AidenBotRoutineProposalStatus {
+    @SerialName("pending") PENDING,
+    @SerialName("accepted") ACCEPTED,
+    @SerialName("dismissed") DISMISSED
 }
 
 /**
@@ -425,9 +501,13 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val body = jsonDecoder.decodeJsonElement() as? JsonObject ?: throw AidenBotContractException.InvalidField("session")
         val question = body["question"] ?: throw AidenBotContractException.InvalidField("question")
         val approval = body["approval"] ?: throw AidenBotContractException.InvalidField("approval")
+        // Revision 27: entry types this build can't read are dropped; known ones stay strict.
+        val rawEntries = body["entries"] as? JsonArray ?: throw AidenBotContractException.InvalidField("entries")
+        if (rawEntries.size > AidenBotSessionWire.MAX_ENTRIES) throw AidenBotContractException.InvalidField("entries")
+        val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
-            JsonObject(body - "question" - "approval")
+            JsonObject(body - "question" - "approval" + ("entries" to readable))
         )
         return AidenBotSession(
             botId = fields.botId,
@@ -524,6 +604,11 @@ sealed class AidenBotSessionEventPayload {
     }
     /** Append, or replace by id; clears the partial. */
     data class Entry(val entry: AidenBotSessionEntry) : AidenBotSessionEventPayload()
+    /**
+     * An `entry` frame whose entry type this build can't read (revision 27). It only advances
+     * `seq`; [raw] is kept so the frame re-encodes unchanged.
+     */
+    data class SkippedEntry(val raw: JsonObject) : AidenBotSessionEventPayload()
     data class State(val view: AidenBotSessionStateView) : AidenBotSessionEventPayload()
     /** The waiting question appeared (non-null) or was settled (null). */
     data class Question(val question: AidenBotQuestion?) : AidenBotSessionEventPayload()
@@ -559,6 +644,7 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Snapshot -> "snapshot"
             is AidenBotSessionEventPayload.Partial -> "partial"
             is AidenBotSessionEventPayload.Entry -> "entry"
+            is AidenBotSessionEventPayload.SkippedEntry -> "entry"
             is AidenBotSessionEventPayload.State -> "state"
             is AidenBotSessionEventPayload.Question -> "question"
             is AidenBotSessionEventPayload.Approval -> "approval"
@@ -582,6 +668,7 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             is AidenBotSessionEventPayload.Entry -> buildJsonObject {
                 put("entry", wire.encodeToJsonElement(AidenBotSessionEntry.serializer(), p.entry))
             }
+            is AidenBotSessionEventPayload.SkippedEntry -> buildJsonObject { put("entry", p.raw) }
             is AidenBotSessionEventPayload.State ->
                 wire.encodeToJsonElement(AidenBotSessionStateView.serializer(), p.view).jsonObject
             is AidenBotSessionEventPayload.Question -> buildJsonObject {
@@ -633,9 +720,15 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             }
             "entry" -> {
                 payload.requireKeys(setOf("entry"))
-                AidenBotSessionEventPayload.Entry(
-                    wire.decodeFromJsonElement(AidenBotSessionEntry.serializer(), payload.getValue("entry"))
-                )
+                val entry = payload.getValue("entry")
+                // Revision 27: a newer entry type is ignored rather than tearing the feed down.
+                if (AidenBotSessionEntry.unknownType(entry) != null) {
+                    AidenBotSessionEventPayload.SkippedEntry(entry.jsonObject)
+                } else {
+                    AidenBotSessionEventPayload.Entry(
+                        wire.decodeFromJsonElement(AidenBotSessionEntry.serializer(), entry)
+                    )
+                }
             }
             "state" -> AidenBotSessionEventPayload.State(
                 wire.decodeFromJsonElement(AidenBotSessionStateView.serializer(), payload)

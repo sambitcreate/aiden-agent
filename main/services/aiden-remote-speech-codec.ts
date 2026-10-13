@@ -36,12 +36,10 @@ export function validateAidenRemotePcm16Base64(value: unknown): string {
   return value;
 }
 
-export function decodeAidenRemotePcm16(value: unknown): Float32Array {
+export function decodeAidenRemotePcm16ToInt16(value: unknown): Int16Array {
   const encoded = validateAidenRemotePcm16Base64(value);
   const bytes = Buffer.from(encoded, "base64");
-  const samples = new Float32Array(bytes.length / 2);
-  for (let index = 0; index < samples.length; index += 1) {
-    samples[index] = bytes.readInt16LE(index * 2) / 32_768;
-  }
+  const samples = new Int16Array(bytes.length / 2);
+  for (let index = 0; index < samples.length; index += 1) samples[index] = bytes.readInt16LE(index * 2);
   return samples;
 }

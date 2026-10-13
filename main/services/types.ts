@@ -15,7 +15,9 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
@@ -324,6 +326,12 @@ export interface ChatMessage {
   attachments?: Attachment[];
   /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
   htmlArtifacts?: ChatHtmlArtifactV1[];
+  /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
+  htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
+  uiVisuals?: ChatUiVisualV1[];
+  /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
+  visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -455,8 +463,16 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
   firstMessageCommit?: { turnId: string; fingerprint: string };
-  /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
-  computerUseEnabled?: boolean;
+  /**
+   * The user granted Computer Use for this chat ("Allow for this chat" on the
+   * access card). The global Computer Use beta setting remains authoritative.
+   */
+  computerUseAllowed?: boolean;
+  /**
+   * Set while a Computer Use access request waits on missing macOS
+   * permissions, so the chat can offer Continue after the user restarts Aiden.
+   */
+  computerUsePendingContinue?: boolean;
   messages: ChatMessage[];
 }
 
@@ -510,6 +526,8 @@ export interface ScheduledTask {
   botId?: string;
   /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
+  sourceProposalId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -557,6 +575,8 @@ export interface ScheduledTaskInput {
   botId?: string;
   /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
   routineSchedule?: BotRoutineSchedule;
+  /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
+  sourceProposalId?: string;
   notify?: boolean;
 }
 
@@ -700,8 +720,14 @@ export interface AppSettings {
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */
   geminiUsageScope?: GeminiUsageScope;
-  /** Selected on-device speech model id (see local-models catalog). */
+  /** Selected on-device speech model id (see local-speech-catalog). */
   localVoiceModel?: string;
+  /** "auto" or a base language code; resolved per model at use (see renderer/shared/voice-language.ts). */
+  voiceLanguage?: string;
+  /** Translate speech to English when the active on-device model can. */
+  voiceTranslateToEnglish?: boolean;
+  /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
@@ -744,6 +770,12 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** "Always allow" Computer Use in every chat without the per-chat access card. */
+  computerUseAlwaysAllow?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -915,6 +947,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals; automatic when absent. */
+  inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
   messages: Array<{
     role: ChatRole;
     content: string;

@@ -86,6 +86,27 @@ class AidenImageCarouselTest {
         )
     }
 
+    @Test
+    fun visualSnapshotFrameTakesTheDecodedImagesOwnShape() {
+        // A 720×1200 CSS visual captured at 2x: the frame is as tall as the image, never a 4:3 box.
+        val tall = AidenVisualSnapshotFrame.aspectRatio(imageWidth = 1_440, imageHeight = 2_400, wide = false)
+        assertEquals(0.6f, tall, 0.0001f)
+        // Full width on a 360dp phone column gives a 600dp-tall row, so the image fills it with no letterbox.
+        assertEquals(600f, 360f / tall, 0.01f)
+        // A wide layout follows the image too, once it is known.
+        assertEquals(2f, AidenVisualSnapshotFrame.aspectRatio(2_000, 1_000, wide = true), 0.0001f)
+        assertEquals(2f, AidenVisualSnapshotFrame.aspectRatio(2_000, 1_000, wide = false), 0.0001f)
+    }
+
+    @Test
+    fun visualSnapshotFrameHoldsAPlaceholderShapeUntilTheImageDecodes() {
+        assertEquals(4f / 3f, AidenVisualSnapshotFrame.aspectRatio(null, null, wide = false), 0.0001f)
+        assertEquals(16f / 9f, AidenVisualSnapshotFrame.aspectRatio(null, null, wide = true), 0.0001f)
+        // Unusable dimensions are treated as undecoded.
+        assertEquals(4f / 3f, AidenVisualSnapshotFrame.aspectRatio(0, 800, wide = false), 0.0001f)
+        assertEquals(16f / 9f, AidenVisualSnapshotFrame.aspectRatio(800, -1, wide = true), 0.0001f)
+    }
+
     private fun attachment(
         id: String,
         mime: String,

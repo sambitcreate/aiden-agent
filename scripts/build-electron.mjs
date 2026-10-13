@@ -55,8 +55,8 @@ export function electronBuildOptions({ production = false } = {}) {
     },
     {
       ...common,
-      entryPoints: ["main/services/parakeet-worker.ts"],
-      outfile: "build/main/parakeet-worker.js",
+      entryPoints: ["main/services/local-speech-worker.ts"],
+      outfile: "build/main/local-speech-worker.js",
       format: "esm",
       packages: "external",
     },

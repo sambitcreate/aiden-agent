@@ -341,6 +341,66 @@ test("files the Bot wrote in its folder and images it shared become chips; faile
   );
 });
 
+test("memory saves show one quiet line each: in-turn saves that changed something and reviews that added", () => {
+  const result = (id: number, toolCallId: string, details: unknown, isError = false) => ({
+    id,
+    kind: "pi.tool-result",
+    model: [{ role: "toolResult", toolCallId, toolName: "bot_memory", isError, details, content: [], timestamp: 5 }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "I have a dog" }], timestamp: 1 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{ role: "assistant", stopReason: "toolUse", timestamp: 2, content: [{ type: "toolCall", id: "m1", name: "bot_memory", arguments: {} }] }],
+    },
+    result(3, "m1", { changed: 1, targets: ["user"] }),
+    result(4, "m2", { changed: 0, targets: [] }),
+    result(5, "m3", { changed: 0, targets: [] }, true),
+    { id: 6, kind: "aiden.memory-review", data: { source: "review", added: 2, targets: ["user", "memory"] } },
+    { id: 7, kind: "aiden.memory-review", data: { source: "review", added: 0, targets: [] } },
+    { id: 8, kind: "aiden.memory-review", data: { source: "review", added: 0, targets: [], failed: true } },
+    { id: 9, kind: "aiden.memory-review", data: { source: "compaction", added: 1, targets: ["memory"] } },
+  ] as never);
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "memory_update"),
+    [
+      { id: "3:memory", type: "memory_update", targets: ["user"], source: "turn", at: 5 },
+      { id: "6", type: "memory_update", targets: ["user", "memory"], source: "review" },
+      { id: "9", type: "memory_update", targets: ["memory"], source: "compaction" },
+    ],
+  );
+});
+
+test("a routine proposal is one card that shows its newest decision", () => {
+  const proposal = (id: number, proposalId: string, name: string) => ({
+    id,
+    kind: "aiden.routine-proposal",
+    data: {
+      proposalId,
+      name,
+      prompt: "Plan this week's meals.",
+      schedule: { kind: "weekly", time: "09:00", days: [0] },
+      timezone: "Asia/Kolkata",
+      label: "Every Sunday at 9:00 AM",
+    },
+  });
+  const entries = projectBotTranscript([
+    proposal(1, "p-1", "Weekly meal plan"),
+    proposal(2, "p-2", "Daily check-in"),
+    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "p-1", status: "dismissed" } },
+    { id: 4, kind: "aiden.routine-proposal-status", data: { proposalId: "p-1", status: "accepted", routineId: "task-9" } },
+    { id: 5, kind: "aiden.routine-proposal-status", data: { proposalId: "unknown", status: "accepted" } },
+  ] as never);
+  assert.deepEqual(
+    entries.map((entry) => (entry.type === "routine_proposal" ? [entry.id, entry.proposal.name, entry.status, entry.routineId] : entry.type)),
+    [
+      ["1", "Weekly meal plan", "accepted", "task-9"],
+      ["2", "Daily check-in", "pending", undefined],
+    ],
+  );
+});
+
 test("a hidden prompt never shows, but its reply does", async () => {
   const fauxModels = createFauxModels([fauxAssistantMessage("Hi! I'm your Meal Planner.")]);
   const live = await start(fauxModels);

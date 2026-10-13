@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Onboarding feature-tour art (code-drawn tiles; see renderer/components/onboarding-art). */
+@import "./components/onboarding-art/onboarding-art.css";
 
 /* The Environment browser follows the app's quiet, compact workbench chrome. */
 .browser-panel { display: flex; height: 100%; min-width: 0; min-height: 0; flex-direction: column; color: var(--text-primary); background: var(--surface-popover); }
@@ -367,6 +369,16 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Categorical chart series for inline visuals: the bot-avatar hues, deepened
+     for >=3:1 non-text contrast on light surfaces. Never status colors. */
+  --chart-1: #1e88c7;
+  --chart-2: #1f9d63;
+  --chart-3: #b98200;
+  --chart-4: #e0544e;
+  --chart-5: #8a5cf0;
+  --chart-6: #138f88;
+  --chart-7: #d64d86;
+  --chart-8: #6f9a17;
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
@@ -445,6 +457,15 @@
   --bot-avatar-eye-highlight: #ffffff;
   --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
+  /* Dark surfaces take the bot-avatar hues as-is. */
+  --chart-1: var(--bot-avatar-sky);
+  --chart-2: var(--bot-avatar-mint);
+  --chart-3: var(--bot-avatar-sun);
+  --chart-4: var(--bot-avatar-coral);
+  --chart-5: var(--bot-avatar-lilac);
+  --chart-6: var(--bot-avatar-aqua);
+  --chart-7: var(--bot-avatar-rose);
+  --chart-8: var(--bot-avatar-lime);
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);
@@ -599,7 +620,6 @@ body {
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border-radius: 999px;
 }
 
 .ask-user-question-icon svg {
@@ -621,42 +641,10 @@ body {
   background: var(--surface-control);
 }
 
-.ask-user-question-option:focus-visible,
-.ask-user-question-custom:focus-visible,
-.ask-user-question-icon:focus-visible,
-.ask-user-question-pill:focus-visible {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus-ring) 72%, transparent);
-}
-
-.ask-user-question-option-arrow {
-  opacity: 0;
-}
-
-.ask-user-question-option:hover .ask-user-question-option-arrow,
-.ask-user-question-option:focus-visible .ask-user-question-option-arrow,
-.ask-user-question-option.is-selected .ask-user-question-option-arrow {
-  opacity: 1;
-}
-
 .ask-user-question-pill {
   min-height: 2.25rem;
   flex-shrink: 0;
-  border: 0;
-  border-radius: 999px;
   padding-inline: 0.9rem;
-  background: var(--surface-popover);
-  color: var(--text-primary);
-  box-shadow: var(--elevation-control);
-}
-
-.ask-user-question-pill:hover:not(:disabled) {
-  background: var(--surface-control-hover);
-  box-shadow: var(--elevation-control-hover);
-}
-
-.ask-user-question-pill:active:not(:disabled) {
-  background: var(--surface-control-active);
-  box-shadow: var(--elevation-control-pressed);
 }
 
 .ask-user-question-shell :disabled {
@@ -803,6 +791,94 @@ textarea {
 
 .aiden-html-artifact-popover::backdrop {
   background: transparent;
+}
+
+/* Inline visual: no card chrome. Undo the UA [popover] border, padding,
+   Canvas fill, and scroll box while it sits in the transcript. */
+.aiden-inline-visual:not(:popover-open) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+}
+
+/* A wide visual leaves the reading column for the chat pane: it grows to
+   the pane's width (inside a slim gutter, up to a cap), stays centred on the
+   column, and follows the window. Never narrower than the column. The dock
+   gutter only guards the composer row, which content already scrolls under. */
+.aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  --inline-visual-wide-width: max(
+    100%,
+    min(calc(100cqi - 2 * var(--inline-visual-wide-gutter)), var(--inline-visual-wide-max))
+  );
+  width: var(--inline-visual-wide-width);
+  max-width: none;
+  margin-inline: calc((100% - var(--inline-visual-wide-width)) / 2);
+}
+
+/* While Quick View is open, docked or floating, the card owns that space; stay in the column. */
+[data-chat-card-inset] .aiden-inline-visual[data-layout="wide"]:not(:popover-open) {
+  width: 100%;
+  margin-inline: 0;
+}
+
+.aiden-inline-visual-frame {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+/* The iframe never matches :focus-visible itself; the host marks the box
+   while keyboard focus is inside the guest. Drawn inside the clipped box. */
+.aiden-inline-visual-frame[data-guest-focused],
+[data-html-artifact-expanded] [data-inline-visual-frame][data-guest-focused] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Title and actions sit below the visual like a figure caption, so no
+   control ever covers guest content. Quiet at rest, clearer on hover. */
+.aiden-inline-visual-caption {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  margin-top: 2px;
+  opacity: 0.7;
+  transition: opacity 150ms var(--motion-easing);
+}
+
+.aiden-inline-visual:hover > .aiden-inline-visual-caption,
+.aiden-inline-visual:focus-within > .aiden-inline-visual-caption {
+  opacity: 1;
+}
+
+/* A visual's suggested follow-up waits here, in Aiden's own UI, for the
+   user's click; a soft well fill, no border. */
+.aiden-inline-visual-followup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-card);
+  background: var(--surface-well);
+}
+
+/* A drafting visual names itself above the frame; it never overlays content. */
+.aiden-inline-visual-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiden-inline-visual-frame,
+  .aiden-inline-visual-caption {
+    transition: none;
+  }
 }
 
 .reasoning-surface {
@@ -1455,23 +1531,34 @@ textarea {
   }
 }
 
+/*
+ * The composer footer stays one row and collapses by priority instead of
+ * wrapping: the model label truncates first (it is the row's only shrinking
+ * item), then "Full access" drops to its icon, then the context meter drops
+ * its percentage. Only a phone-width composer wraps.
+ */
+@container composer (max-width: 560px) {
+  .composer-permission-control {
+    width: 2rem;
+  }
+
+  .composer-permission-trigger {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .composer-permission-label {
+    display: none;
+  }
+}
+
 @container composer (max-width: 520px) {
   .composer-workspace-trigger {
     max-width: 9rem;
   }
 
-  .composer-permission-control {
-    width: 1.75rem;
-    padding-inline: 0;
-  }
-
-  .composer-permission-label,
   .composer-slash-detail {
     display: none;
-  }
-
-  .composer-action-row {
-    width: 100%;
   }
 
   .composer-branch-trigger {
@@ -1480,8 +1567,15 @@ textarea {
 }
 
 @container composer (max-width: 460px) {
-  .composer-local-label {
+  .composer-local-label,
+  .context-meter-percent {
     display: none;
+  }
+}
+
+@container composer (max-width: 380px) {
+  .composer-footer-row {
+    flex-wrap: wrap;
   }
 }
 
@@ -2466,14 +2560,17 @@ textarea {
 }
 
 /* ── Aiden dock inset ──────────────────────────────────────────────────── */
-/* Aiden's collapsed mark sits in the bottom-right of the window, right where
+/* Aiden's idle Live pill sits in the bottom-right of the window, right where
    the composer's send controls are. The chat column reserves that width on
    BOTH sides so the composer and the messages above it stay optically centered
-   rather than sliding left to dodge the mark. The gutter clears the 48px mark
-   plus its 16px offset plus a little breathing room. */
+   rather than sliding left to dodge the pill. The gutter clears the ~72px idle
+   "Live" pill plus its 16px offset plus a little breathing room; longer
+   in-session labels may reach the composer edge in narrow windows, like the HUD. */
 :root {
-  --aiden-dock-gutter: 4.5rem;
+  --aiden-dock-gutter: 6rem;
   --chat-content-max-width: 52rem;
+  --inline-visual-wide-max: 80rem;
+  --inline-visual-wide-gutter: 1.5rem;
 }
 
 .aiden-dock-inset {
@@ -2487,6 +2584,12 @@ textarea {
   width: 100%;
   max-width: var(--chat-content-max-width);
   margin-inline: auto;
+}
+
+/* The pane around the transcript column is the size container wide inline
+   visuals measure against (`cqi`), so they can grow past the column. */
+[data-scroll-content]:has(> .chat-content-column) {
+  container-type: inline-size;
 }
 
 /* Quick View docks beside the chat on narrower windows: the centered column
@@ -2652,83 +2755,109 @@ textarea {
   .busy-send-label, .busy-send-button [data-holding]::before { animation: none !important; }
 }
 
-/* Aiden Live replaces the previous Assistant panel with one persistent,
-   stateful control. Libraries.dev owns the motion; CSS owns layout and tint. */
+/* Aiden Live's window-level control: one compact pill. A leading Helix glyph
+   and a short label carry the session state; the pill height never changes. */
 :root {
-  --aiden-live-trigger-size: 3.5rem;
+  --aiden-live-trigger-size: 2rem;
   --aiden-live-edge-inset: 1rem;
 }
 .aiden-live-dock {
   bottom: var(--aiden-live-edge-inset);
 }
 /* Floating tools cannot move the launcher sideways at the minimum window
-   width. Leave its existing hit target and the panel's usual 3-spacing gap
-   below the panel instead. Inline tools already inset the dock horizontally. */
+   width. Leave the pill's height and the panel's usual 3-spacing gap below
+   the panel instead. Inline tools already inset the dock horizontally. */
 [data-app-focus-root]:has(> .aiden-live-dock) .environment-panel[data-surface-mode="tools-floating"] {
   bottom: calc(var(--aiden-live-edge-inset) + var(--aiden-live-trigger-size) + var(--spacing) * 3);
 }
 .aiden-live-trigger {
   position: relative;
-  display: grid;
-  width: var(--aiden-live-trigger-size);
+  display: inline-flex;
   height: var(--aiden-live-trigger-size);
-  place-items: center;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 8px;
   overflow: visible;
   border: 0;
+  border-radius: var(--radius-button);
+  corner-shape: squircle;
   background: var(--color-background);
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
   box-shadow:
     0 10px 30px rgb(0 0 0 / 16%),
     0 1px 2px rgb(0 0 0 / 10%);
-  outline: none;
   transition:
     transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms ease,
-    border-color 160ms ease;
+    background-color 160ms ease;
 }
-.aiden-live-trigger-logo-mask {
+.aiden-live-trigger:hover:not(:disabled) {
+  background: var(--color-control);
+  transform: translateY(-1px);
+}
+.aiden-live-trigger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.aiden-live-trigger:disabled {
+  cursor: default;
+  color: var(--color-secondary);
+}
+.aiden-live-trigger-glyph {
   display: grid;
-  width: 100%;
-  height: 100%;
+  width: 20px;
+  height: 20px;
+  flex: none;
   place-items: center;
-  overflow: hidden;
+  color: var(--accent);
 }
-.aiden-live-trigger[data-kind="logo"] img {
-  width: 100%;
-  height: 100%;
-  scale: 1.32;
-  object-fit: cover;
+.aiden-live-trigger[data-state="unavailable"],
+.aiden-live-trigger[data-state="error"] {
+  color: var(--color-secondary);
 }
-.aiden-live-trigger[data-kind="mark"] {
-  appearance: none;
-  border-color: transparent;
-  border-radius: 9999px;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
+.aiden-live-trigger[data-state="unavailable"] .aiden-live-trigger-glyph,
+.aiden-live-trigger[data-state="error"] .aiden-live-trigger-glyph {
+  opacity: 0.55;
 }
-.aiden-live-trigger:hover {
-  transform: translateY(-1px) scale(1.025);
+/* Same soft semantic error fill and text as the Live HUD alert; no border. */
+.aiden-live-trigger[data-state="error"],
+.aiden-live-trigger[data-state="error"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-support-red) 10%, var(--color-background));
+  color: var(--color-support-red);
 }
-.aiden-live-trigger:active {
-  transform: scale(0.96);
-}
-.aiden-live-trigger:focus-visible {
-  box-shadow:
-    0 0 0 3px var(--color-focus-ring),
-    0 10px 30px rgb(0 0 0 / 16%);
-}
-.aiden-live-trigger[data-kind="mark"]:focus-visible {
-  box-shadow: 0 0 0 3px var(--color-focus-ring);
+.aiden-live-trigger[data-state="error"] .aiden-live-trigger-glyph {
+  color: var(--color-support-red);
 }
 .aiden-live-trigger-badge {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: -2px;
+  right: -2px;
   width: 10px;
   height: 10px;
   border: 2px solid var(--color-background);
   border-radius: 9999px;
   background: var(--color-support-warning);
+}
+.aiden-live-stop-symbol {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--color-primary);
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger {
+  transition: none;
+}
+:root[data-reduce-motion="true"] .aiden-live-trigger:hover,
+:root[data-reduce-motion="true"] .aiden-live-trigger:active {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiden-live-trigger { transition: none !important; }
+  .aiden-live-trigger:hover,
+  .aiden-live-trigger:active { transform: none !important; }
 }
 .aiden-live-mark {
   position: relative;
@@ -2744,14 +2873,10 @@ textarea {
 }
 .aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
 @keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
-.aiden-live-stop-symbol { position: absolute; width: 16px; height: 16px; border-radius: 4px; background: var(--color-text-primary, currentColor); opacity: 0; transform: scale(.85); transition: opacity 220ms ease, transform 300ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
-.aiden-live-trigger[data-stop-revealed="true"] > .aiden-live-mark { opacity: 0; transform: scale(.94); }
-.aiden-live-trigger[data-stop-revealed="true"] .aiden-live-stop-symbol { opacity: 1; transform: scale(1); }
-:root[data-reduce-motion="true"] .aiden-live-mark,
-:root[data-reduce-motion="true"] .aiden-live-stop-symbol { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-mark { transition: none; }
 :root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .aiden-live-mark, .aiden-live-stop-symbol { transition: none !important; }
+  .aiden-live-mark { transition: none !important; }
   .aiden-live-mark > .aiden-mark { animation: none; }
 }
 
@@ -2971,13 +3096,6 @@ textarea {
 .gemini-live-hud-error {
   margin: 0 0.75rem 0.75rem;
   padding: 0.625rem 0.75rem;
-}
-:root[data-reduce-motion="true"] .aiden-live-trigger {
-  transition: none;
-}
-:root[data-reduce-motion="true"] .aiden-live-trigger:hover,
-:root[data-reduce-motion="true"] .aiden-live-trigger:active {
-  transform: none;
 }
 :root[data-reduce-motion="true"] .aiden-live-mark {
   transform: none;

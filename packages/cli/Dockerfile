@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:1
-FROM node:22-bookworm AS build
+FROM public.ecr.aws/docker/library/node:22-bookworm AS build
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 PI_TELEMETRY=0 PI_OFFLINE=1
 WORKDIR /build
 RUN apt-get update -qq && apt-get install -y --no-install-recommends libssl-dev ca-certificates openssl && rm -rf /var/lib/apt/lists/*
@@ -23,12 +22,12 @@ RUN npm test --prefix packages/cli
 # Runtime dependencies only: the externals the bundle loads at run time
 # (chord, photon, the optional sherpa-onnx speech engine). No esbuild,
 # TypeScript, sources, or tests reach the final image.
-FROM node:22-bookworm AS runtime-deps
+FROM public.ecr.aws/docker/library/node:22-bookworm AS runtime-deps
 WORKDIR /deps
 COPY packages/cli/package.json packages/cli/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
-FROM node:22-bookworm-slim
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim
 RUN apt-get update -qq && apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 && rm -rf /var/lib/apt/lists/*
 COPY --from=runtime-deps --chown=node:node /deps/node_modules /opt/aiden/node_modules
 COPY --from=build --chown=node:node /build/packages/cli/package.json /opt/aiden/package.json

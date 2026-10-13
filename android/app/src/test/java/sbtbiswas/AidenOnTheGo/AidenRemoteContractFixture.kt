@@ -26,7 +26,7 @@ data class AidenBotIdentityContractFixture(
 
 @Serializable
 data class AidenBotIdentityQuery(
-    val openingGreeting: String? = null
+    val purpose: String? = null
 )
 
 @Serializable

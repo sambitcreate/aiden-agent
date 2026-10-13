@@ -108,6 +108,141 @@ class AidenBotSessionControllerTest {
             approvalFailures.removeFirstOrNull()?.let { throw it }
             return AidenApprovalResponse(waitId, decision, resolvedAt = java.time.Instant.parse("2026-08-19T15:02:00Z"))
         }
+
+        data class ProposalCall(val proposalId: String, val decision: AidenBotRoutineProposalDecision, val key: UUID)
+        val proposalCalls = mutableListOf<ProposalCall>()
+        /** Failures the next proposal answers throw, in order. */
+        val proposalFailures = ArrayDeque<Exception>()
+
+        override suspend fun respondToRoutineProposal(
+            botId: String,
+            proposalId: String,
+            decision: AidenBotRoutineProposalDecision,
+            key: UUID
+        ): AidenBotRoutineProposalRespondResult {
+            proposalCalls += ProposalCall(proposalId, decision, key)
+            proposalFailures.removeFirstOrNull()?.let { throw it }
+            return when (decision) {
+                AidenBotRoutineProposalDecision.ACCEPT ->
+                    AidenBotRoutineProposalRespondResult(AidenBotRoutineProposalOutcome.ACCEPTED, "task_fixture_routine_03")
+                AidenBotRoutineProposalDecision.DISMISS ->
+                    AidenBotRoutineProposalRespondResult(AidenBotRoutineProposalOutcome.DISMISSED)
+            }
+        }
+    }
+
+    // --- Revision 27: memory captions and routine proposal cards ---
+
+    private val cardsSession by lazy { json.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("botSessionCards")) }
+    private val pendingProposalId = "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11"
+
+    private fun AidenBotSessionUiState.proposal(id: String) =
+        session!!.entries.filterIsInstance<AidenBotSessionEntry.RoutineProposal>().single { it.proposalId == id }
+
+    @Test
+    fun addingAProposedRoutineSettlesTheCardFromTheMacsAnswer() = runTest {
+        val transport = FakeTransport(cardsSession)
+        val controller = AidenBotSessionController(cardsSession.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertTrue(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.ACCEPT))
+        val settled = controller.state.value.proposal(pendingProposalId)
+        assertEquals(AidenBotRoutineProposalStatus.ACCEPTED, settled.status)
+        assertEquals("task_fixture_routine_03", settled.routineId)
+        assertEquals(null, controller.state.value.proposalResponses[pendingProposalId])
+        // Settled without waiting for the feed: no second read of the session.
+        assertEquals(1, transport.sessionReads)
+        // A settled card takes no second answer.
+        assertFalse(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.DISMISS))
+        assertEquals(1, transport.proposalCalls.size)
+    }
+
+    @Test
+    fun notNowSettlesTheCardAsNotAdded() = runTest {
+        val transport = FakeTransport(cardsSession)
+        val controller = AidenBotSessionController(cardsSession.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertTrue(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.DISMISS))
+        val settled = controller.state.value.proposal(pendingProposalId)
+        assertEquals(AidenBotRoutineProposalStatus.DISMISSED, settled.status)
+        assertEquals(null, settled.routineId)
+    }
+
+    @Test
+    fun aFailedAnswerKeepsTheCardPendingAndARetryReplaysTheSameKey() = runTest {
+        val transport = FakeTransport(cardsSession)
+        val controller = AidenBotSessionController(cardsSession.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.proposalFailures += IOException("offline")
+
+        assertFalse(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.ACCEPT))
+        assertEquals(AidenBotRoutineProposalStatus.PENDING, controller.state.value.proposal(pendingProposalId).status)
+        assertEquals(AidenBotProposalPhase.FAILED, controller.state.value.proposalResponses[pendingProposalId])
+
+        // The Mac may have acted before the connection dropped: Add again reuses the key.
+        assertTrue(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.ACCEPT))
+        assertEquals(transport.proposalCalls[0].key, transport.proposalCalls[1].key)
+        assertEquals(AidenBotRoutineProposalStatus.ACCEPTED, controller.state.value.proposal(pendingProposalId).status)
+    }
+
+    @Test
+    fun aProposalTheMacNoLongerHasReloadsTheSession() = runTest {
+        val transport = FakeTransport(cardsSession)
+        val controller = AidenBotSessionController(cardsSession.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.proposalFailures += serverError(404, AidenRemoteErrorCode.ROUTINE_PROPOSAL_NOT_FOUND)
+        // Meanwhile it was answered on the Mac.
+        transport.session = cardsSession.copy(
+            entries = cardsSession.entries.map {
+                if (it is AidenBotSessionEntry.RoutineProposal && it.proposalId == pendingProposalId) {
+                    it.copy(status = AidenBotRoutineProposalStatus.DISMISSED)
+                } else it
+            }
+        )
+
+        assertFalse(controller.respondToProposal(pendingProposalId, AidenBotRoutineProposalDecision.ACCEPT))
+        assertEquals(2, transport.sessionReads)
+        assertEquals(AidenBotRoutineProposalStatus.DISMISSED, controller.state.value.proposal(pendingProposalId).status)
+        assertEquals(null, controller.state.value.proposalResponses[pendingProposalId])
+    }
+
+    @Test
+    fun backToBackMemoryUpdatesShowAsOneCaption() {
+        val update = { id: String -> AidenBotSessionEntry.MemoryUpdate(id) }
+        val message = AidenBotSessionEntry.Message("m1", AidenBotMessageRole.ASSISTANT, "Noted.")
+        val rows = aidenBotSessionRows(listOf(update("u1"), update("u2"), message, update("u3")))
+        assertEquals(
+            listOf(
+                AidenBotSessionRow.MemoryUpdated(listOf("u1", "u2")),
+                AidenBotSessionRow.Entry(message),
+                AidenBotSessionRow.MemoryUpdated(listOf("u3"))
+            ),
+            rows
+        )
+        // A caption keeps its key as more updates join it, so the row is not recreated.
+        val grown = aidenBotSessionRows(listOf(update("u1"), update("u2"), update("u4")))
+        assertEquals(rows.first().key, grown.single().key)
+        // The fixture's cards: one caption, then both proposal cards.
+        assertEquals(
+            listOf("memory-entry_20", "entry_21", "entry_22"),
+            aidenBotSessionRows(cardsSession.entries).map { it.key }
+        )
+    }
+
+    @Test
+    fun aMemoryUpdateFrameAppendsWithoutClearingTheStreamingReply() = runTest {
+        val controller = AidenBotSessionController(cardsSession.botId, FakeTransport(cardsSession), backgroundScope)
+        val streaming = cardsSession.copy(state = AidenBotSessionState.RUNNING, partial = "Working on it")
+        controller.handle(snapshotOf(streaming))
+        val frame = AidenBotSessionEvent(
+            streaming.botId, streaming.epoch, streaming.seq + 1,
+            AidenBotSessionEventPayload.Entry(AidenBotSessionEntry.MemoryUpdate("entry_23"))
+        )
+        assertTrue(controller.handle(frame))
+        val session = controller.state.value.session!!
+        assertEquals("entry_23", session.entries.last().id)
+        assertEquals("Working on it", session.partial)
     }
 
     private val mailApproval = AidenBotApproval(

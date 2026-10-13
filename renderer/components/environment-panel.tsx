@@ -1855,7 +1855,7 @@ function cssLength(value: string, rootFontSize: number, fallback: number): numbe
 
 /** The chat column's maximum width and inner gutter, read from its CSS tokens as Appearance sets them. */
 function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
-  const [metrics, setMetrics] = React.useState({ maxWidth: 832, gutter: 72 });
+  const [metrics, setMetrics] = React.useState({ maxWidth: 832, gutter: 96 });
   React.useLayoutEffect(() => {
     const root = document.documentElement;
     const read = () => {
@@ -1863,7 +1863,7 @@ function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
       const rootFontSize = Number.parseFloat(style.fontSize) || 16;
       const next = {
         maxWidth: cssLength(style.getPropertyValue("--chat-content-max-width"), rootFontSize, 832),
-        gutter: cssLength(style.getPropertyValue("--aiden-dock-gutter"), rootFontSize, 72),
+        gutter: cssLength(style.getPropertyValue("--aiden-dock-gutter"), rootFontSize, 96),
       };
       setMetrics((current) =>
         current.maxWidth === next.maxWidth && current.gutter === next.gutter ? current : next,
@@ -1987,7 +1987,9 @@ export function EnvironmentWorkbench({
       data-environment-surface-mode={panel.surfaceMode}
       data-quick-view-open={quickViewOpen ? "true" : "false"}
       data-environment-stacked={stacked ? "true" : "false"}
-      className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
+      // Offscreen panels are clipped at the workbench boundary. A scrollport
+      // here lets focus/scrollIntoView pan the entire chat beneath the sidebar.
+      className="relative flex h-full min-h-0 w-full flex-1 overflow-clip"
     >
       <div
         data-browser-floating-container
