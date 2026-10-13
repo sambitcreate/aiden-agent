@@ -3,11 +3,8 @@ package sbtbiswas.AidenOnTheGo.features.chat
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -152,106 +149,38 @@ class AidenChatScrollTest {
         )
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test
-    fun nonFlingScrollsThatSettleAwayFromLiveEdgeDetachFollowing() = runTest {
-        val listState = LazyListState()
-        val followState = AidenTranscriptFollowState(
-            listState = listState,
-            scope = this,
-            initiallyFollowing = true,
-        )
-        followState.reArmPx = 36 // 12dp at 3x
-
-        // Simulate accessibility ScrollBy starting: calls onPreScroll with UserInput.
-        val consumed = followState.nestedScrollConnection.onPreScroll(
-            Offset(y = 100f, x = 0f),
-            NestedScrollSource.UserInput,
-        )
-        assertEquals(Offset.Zero, consumed)
-        assertTrue(followState.isFollowing) // Still following at this point
-
-        // Start monitoring non-fling scroll completion.
-        launch { followState.monitorNonFlingScrollCompletion() }
-        advanceUntilIdle()
-
-        // Accessibility scroll updates list state but never calls onPreFling/onPostFling.
-        // Manually update firstVisibleItemIndex to simulate the scroll settling far from edge.
-        listState.requestScrollToItem(1, 0)
-        advanceUntilIdle()
-
-        // Now simulate the scroll progress settling (the list stops being in progress).
-        // This happens when the accessibility framework finishes the scroll operation.
-        // The collect in monitorNonFlingScrollCompletion should detect this transition
-        // and call finishUserScroll.
-        advanceUntilIdle()
-
-        // Following should be false now because the scroll ended away from the edge.
-        assertFalse(followState.isFollowing)
+    // Wheel, keyboard and accessibility scrolls reach the list as UserInput
+    // deltas but never fling, so the latch must settle without onPreFling.
+    private fun TestScope.scrollWithoutFling(listState: LazyListState): AidenTranscriptFollowState {
+        val follow = AidenTranscriptFollowState(listState, this, initiallyFollowing = true)
+        follow.reArmPx = 36
+        follow.nestedScrollConnection.onPreScroll(Offset(0f, -120f), NestedScrollSource.UserInput)
+        assertFalse(follow.isFollowing)
+        return follow
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun nonFlingScrollsThatSettleAtLiveEdgeResumesFollowing() = runTest {
-        val listState = LazyListState()
-        val followState = AidenTranscriptFollowState(
-            listState = listState,
-            scope = this,
-            initiallyFollowing = false,
-        )
-        followState.reArmPx = 36 // 12dp at 3x
-
-        // Simulate accessibility ScrollBy: calls onPreScroll with UserInput.
-        val consumed = followState.nestedScrollConnection.onPreScroll(
-            Offset(y = 100f, x = 0f),
-            NestedScrollSource.UserInput,
-        )
-        assertEquals(Offset.Zero, consumed)
-
-        // Start monitoring non-fling scroll completion.
-        launch { followState.monitorNonFlingScrollCompletion() }
-        advanceUntilIdle()
-
-        // Accessibility scroll settles back at the live edge (index 0, offset 0).
-        // The monitor should detect scroll completion and resume following.
-        advanceUntilIdle()
-
-        // Following should be true now because the scroll ended at the edge.
-        assertTrue(followState.isFollowing)
+    fun aScrollWithoutAFlingThatEndsAtTheLiveEdgeFollowsAgain() = runTest {
+        val follow = scrollWithoutFling(LazyListState())
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + 1)
+        assertTrue(follow.isFollowing)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun semanticsScrollByAwayAndBackToLiveEdgeResumesFollowing() = runTest {
-        val listState = LazyListState()
-        val followState = AidenTranscriptFollowState(
-            listState = listState,
-            scope = this,
-            initiallyFollowing = true,
-        )
-        followState.reArmPx = 36 // 12dp at 3x
+    fun aScrollWithoutAFlingThatEndsAwayFromTheEdgeStaysDetached() = runTest {
+        val follow = scrollWithoutFling(LazyListState(firstVisibleItemIndex = 4))
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS + 1)
+        assertFalse(follow.isFollowing)
+    }
 
-        // Start monitoring non-fling scroll completion.
-        launch { followState.monitorNonFlingScrollCompletion() }
-        advanceUntilIdle()
-
-        // Simulate ScrollBy away from the edge.
-        followState.nestedScrollConnection.onPreScroll(
-            Offset(y = 100f, x = 0f),
-            NestedScrollSource.UserInput,
-        )
-        advanceUntilIdle()
-
-        assertTrue("Following should detach on scroll start", !followState.isFollowing)
-
-        // Simulate ScrollBy back to the live edge.
-        followState.nestedScrollConnection.onPreScroll(
-            Offset(y = 0f, x = 0f),
-            NestedScrollSource.UserInput,
-        )
-        advanceUntilIdle()
-
-        // Following should resume when settling back at the edge.
-        assertTrue("Following should resume when scroll settles at edge", followState.isFollowing)
+    @Test
+    fun eachScrollDeltaPostponesTheSettle() = runTest {
+        val follow = scrollWithoutFling(LazyListState())
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS - 20)
+        follow.nestedScrollConnection.onPreScroll(Offset(0f, 60f), NestedScrollSource.UserInput)
+        advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS - 20)
+        assertFalse(follow.isFollowing)
+        advanceTimeBy(21)
+        assertTrue(follow.isFollowing)
     }
 }
