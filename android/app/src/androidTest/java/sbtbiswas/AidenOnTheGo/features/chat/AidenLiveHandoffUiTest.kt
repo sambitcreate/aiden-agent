@@ -57,6 +57,8 @@ class AidenLiveHandoffUiTest {
                                     activityTimeline = null,
                                     isBotChat = true,
                                     palette = AidenTheme.palette,
+                                    onCopyMessage = {},
+                                    onOpenMessageUrl = {},
                                     isActive = state?.isTerminal == false
                                 )
                             }
