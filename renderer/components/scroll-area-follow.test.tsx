@@ -137,6 +137,23 @@ test("a smooth jump that lands short of content added mid-animation is corrected
   assert.equal(port.following(), true);
 });
 
+test("with Reduce Motion the jump lands at the bottom at once", async () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  try {
+    render(<Transcript chunks={1} streaming={false} />);
+    const port = scrollport();
+    fireEvent.wheel(port.viewport, { deltaY: -120 });
+    port.moveTo(200);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
+    assert.deepEqual(port.smoothTargets, [], "no animated scroll");
+    assert.equal(port.top(), port.bottom());
+    assert.equal(port.following(), true);
+  } finally {
+    delete document.documentElement.dataset.reduceMotion;
+  }
+});
+
 test("wheel momentum from before a jump neither breaks follow nor drags the view", async () => {
   render(<Transcript chunks={1} />);
   const port = scrollport();
@@ -256,6 +273,10 @@ test("reading keys break follow; typing in a field does not", () => {
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Copy" }), { key: "End" });
   assert.equal(port.following(), true, "a key toward the end is not a reason to stop following");
+
+  // Shift+Space presses the focused button instead of scrolling up.
+  fireEvent.keyDown(screen.getByRole("button", { name: "Copy" }), { key: " ", shiftKey: true });
+  assert.equal(port.following(), true, "pressing a button is not reading upward");
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Copy" }), { key: "PageUp" });
   assert.equal(port.following(), false);
