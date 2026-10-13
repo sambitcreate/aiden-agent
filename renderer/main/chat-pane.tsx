@@ -177,6 +177,7 @@ import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
   detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
+  detachedProjectionStreamComplete,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
   visibleDetachedLifecycleProjection,
@@ -3075,7 +3076,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingVisualDrafts={visualDrafts}
             streamingUiVisuals={displayedStreamingUiVisuals}
             streamingUiDrafts={uiDrafts}
-            streamComplete={streamComplete || visibleDetachedProjection !== null}
+            streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
             timeline={displayedGenerationTimeline}

@@ -6,6 +6,7 @@ import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
   detachedLifecycleChatProjection,
+  detachedProjectionStreamComplete,
   isDetachedLifecycleChatDraining,
   rememberDetachedLifecycleStream,
   visibleDetachedLifecycleProjection,
@@ -158,6 +159,7 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
   assert.equal(live?.content, "Hello there", "text arrives before the run settles");
   assert.equal(live?.reasoning, "Checking the plan");
   assert.equal(live?.observed, true);
+  assert.equal(detachedProjectionStreamComplete(live), false, "a running reply is revealed as it streams");
 
   // Stop from this window reaches the phone's run with host authority.
   assert.equal(await main.adapter.cancel(chatId, { runId: live!.streamId }), true);
@@ -174,6 +176,11 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
   // Until the saved reply is read, the streamed one stays rather than flashing away.
   assert.equal(reads.count(), 1);
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Hello there");
+  assert.equal(
+    detachedProjectionStreamComplete(detachedLifecycleChatProjection(chatId, WORKSPACE)),
+    true,
+    "the ended run's text is final",
+  );
   reads.saved.push(reply("run-phone"));
   await reads.finishAll();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
@@ -248,6 +255,7 @@ test("this window's own route-detached run keeps its own projection", async () =
   const projection = detachedLifecycleChatProjection(chatId, WORKSPACE);
   assert.equal(projection?.content, "Mine so far");
   assert.equal(projection?.observed, undefined);
+  assert.equal(detachedProjectionStreamComplete(projection), true, "a returning route shows its run's text as written");
   observation.close();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Mine so far", "closing leaves the owner's projection");
   assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);

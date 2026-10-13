@@ -62,6 +62,8 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
    * reply carries no timeline, so this id is what marks it as the run's own.
    */
   doneMessageId?: string;
+  /** A mirrored run has finished: its text is final and nothing more streams. */
+  finished?: true;
 }
 
 /** What a watching window knows about a run it mirrors. */
@@ -73,6 +75,8 @@ export interface ObservedRunSnapshot {
   textStreaming: boolean;
   /** The assistant message the run saved, once it has finished. */
   doneMessageId?: string | null;
+  /** The run finished (done, failed or cancelled). */
+  finished?: boolean;
 }
 
 export type DetachedLifecycleProjectionSeed = Omit<
@@ -401,6 +405,16 @@ export function visibleDetachedLifecycleProjection(
   return null;
 }
 
+/**
+ * Whether the pane presents a shown projection's text as final. A route-detached
+ * run is shown complete, as it always has been; a mirrored run (a phone's turn)
+ * streams live, with the paced reveal, until the run finishes.
+ */
+export function detachedProjectionStreamComplete(projection: DetachedLifecycleProjection | null): boolean {
+  if (!projection) return false;
+  return projection.observed !== true || projection.finished === true;
+}
+
 export function isDetachedLifecycleChatDraining(
   chatId: string,
   workspaceId: string | undefined,
@@ -462,6 +476,7 @@ export function publishObservedRunProjection(
     subagents: [],
     observed: true,
     ...(snapshot.doneMessageId ? { doneMessageId: snapshot.doneMessageId } : {}),
+    ...(snapshot.finished ? { finished: true as const } : {}),
   };
   if (
     sameRun &&
@@ -469,7 +484,8 @@ export function publishObservedRunProjection(
     previous.reasoning === next.reasoning &&
     previous.timeline === next.timeline &&
     previous.lastTextDeltaAt === next.lastTextDeltaAt &&
-    previous.doneMessageId === next.doneMessageId
+    previous.doneMessageId === next.doneMessageId &&
+    previous.finished === next.finished
   ) {
     return false;
   }

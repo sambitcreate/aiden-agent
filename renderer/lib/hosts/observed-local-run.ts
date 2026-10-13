@@ -114,6 +114,7 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
         timeline: view.timeline,
         textStreaming: view.textStreaming,
         doneMessageId: view.doneMessageId,
+        finished: settled(view),
       },
       now(),
     );
