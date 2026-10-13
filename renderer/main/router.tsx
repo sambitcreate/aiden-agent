@@ -20,6 +20,7 @@ import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
+import { guardHistoryTraversal } from "../lib/guarded-history";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
 // chunk. Every other route loads its own chunk; the router awaits the chunk
@@ -266,7 +267,8 @@ const queryClient = createAppQueryClient();
 
 const router = createRouter({
   routeTree,
-  history: createMemoryHistory(),
+  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
+  history: guardHistoryTraversal(createMemoryHistory()),
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
   context: {

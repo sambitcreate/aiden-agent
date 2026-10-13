@@ -726,6 +726,8 @@
         "renderer/lib/chat-draft.test.ts",
         "renderer/lib/chat-message-queue.test.ts",
         "renderer/lib/chat-pull-request-chip.test.ts",
+        "renderer/lib/workspace-chip.test.ts",
+        "renderer/lib/guarded-history.test.ts",
         "renderer/lib/chat-row-context.test.ts",
         "renderer/lib/chat-terminal-sync.test.ts",
         "renderer/lib/chat-title-reveal.test.ts",

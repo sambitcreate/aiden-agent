@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { ChevronLeft, Ellipsis } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
@@ -13,7 +14,7 @@ import type { BotDefinition } from "../../shared/bots";
 /** Back to the Bots list, in the chat toolbar's leading slot. */
 export function BotChatBackButton({ onBack }: { onBack(): void }) {
   return (
-    <Button iconOnly variant="toolbar" size="large" aria-label="All Bots" onClick={onBack}>
+    <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
       <ChevronLeft />
     </Button>
   );
@@ -29,9 +30,11 @@ export function BotChatNamePill({
 }) {
   return (
     <Button
-      variant="transparent"
-      size="large"
-      className="-ml-2 max-w-full min-w-0 gap-2 pl-1.5 pr-3"
+      variant="bar"
+      size="medium"
+      // The heading clips overflow for the ellipsis, so the focus ring is drawn inside.
+      style={{ "--keyboard-focus-offset": "-2px" } as React.CSSProperties}
+      className="max-w-full min-w-0 shrink gap-1.5 pl-0.5 pr-2 text-primary"
       aria-label={`${bot.name} profile`}
       onClick={onOpenProfile}
     >
@@ -56,7 +59,7 @@ export function BotChatActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button iconOnly variant="toolbar" size="large" aria-label={`More for ${bot.name}`}>
+        <Button iconOnly variant="bar" size="small" aria-label={`More for ${bot.name}`}>
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>
