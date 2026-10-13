@@ -5,7 +5,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, logger } from "../platform.js";
-import { EMPTY_ARTIFICIAL_ANALYSIS_CATALOG } from "./artificial-analysis-catalog-core.js";
 import { openRouterBenchmarkRuntime } from "./openrouter-benchmark-runtime.js";
 import { modelsDevCacheRuntime } from "./models-dev-cache.js";
 import {
@@ -81,13 +80,7 @@ export const modelsCatalog = {
       getDisplayModelsDev(),
       loadOpenRouterBenchmarks(),
     ]);
-    return resolveModelInfo(
-      modelsDev,
-      EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
-      provider,
-      modelId,
-      openRouterBenchmarks,
-    );
+    return resolveModelInfo(modelsDev, provider, modelId, openRouterBenchmarks);
   },
 
   /** Capability info for many models under one provider. */
@@ -100,16 +93,7 @@ export const modelsCatalog = {
       loadOpenRouterBenchmarks(),
     ]);
     return Object.fromEntries(
-      modelIds.map((id) => [
-        id,
-        resolveModelInfo(
-          modelsDev,
-          EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
-          provider,
-          id,
-          openRouterBenchmarks,
-        ),
-      ]),
+      modelIds.map((id) => [id, resolveModelInfo(modelsDev, provider, id, openRouterBenchmarks)]),
     );
   },
 };

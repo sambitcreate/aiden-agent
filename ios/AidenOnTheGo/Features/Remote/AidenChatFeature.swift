@@ -1335,6 +1335,9 @@ final class AidenChatViewModel {
     @ObservationIgnored private var heldStreamingFragmentLastTick = false
     @ObservationIgnored private var pendingStreamingRevealTask: Task<Void, Never>?
     @ObservationIgnored private let streamingRevealTick: @Sendable () async throws -> Void
+    /// Generations whose image this phone watched being generated; their
+    /// settled image plays the arrival reveal once.
+    private(set) var imageArrivalRevealGenerationIDs: Set<String> = []
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var pendingApproval: AidenPendingApproval?
@@ -3201,6 +3204,10 @@ final class AidenChatViewModel {
         await joinDeferredUploadRevocation()
     }
 
+    func finishImageArrivalReveal(generationID: String) {
+        imageArrivalRevealGenerationIDs.remove(generationID)
+    }
+
     func attachmentImageData(for attachment: AidenMessageAttachment) async -> Data? {
         guard !isReadOnlyFixture, !isRemoved else { return nil }
         guard attachment.kind == .image,
@@ -4087,7 +4094,13 @@ final class AidenChatViewModel {
                 await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
             }
         case .timeline:
-            if let timeline = payload.timeline { activityTimeline = timeline }
+            if let timeline = payload.timeline {
+                activityTimeline = timeline
+                imageArrivalRevealGenerationIDs = AidenImageGenerationPlaceholderState.armedArrivalReveals(
+                    imageArrivalRevealGenerationIDs,
+                    after: timeline
+                )
+            }
         case .approvalRequired:
             await restorePendingApproval(
                 streamID: event.streamId,
@@ -5335,6 +5348,7 @@ struct AidenChatDetailView: View {
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
+                imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
                     if model.askAbout(selection) { composerIsFocused = true }
                 },
@@ -5823,6 +5837,8 @@ private struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// Generations whose settled image plays the arrival reveal.
+    var imageArrivalRevealIDs: Set<String> = []
     /// Quotes a selection into the composer; nil while the chat is read-only.
     /// Closure identity is excluded from equality like the stable `model`.
     var onAskAbout: ((String) -> Void)? = nil
@@ -5844,7 +5860,8 @@ private struct AidenSettledMessageRows: View, Equatable {
         // body renders — `chat`, the Read Aloud state — and the presentation style.
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
-            lhs.readAloudActiveID == rhs.readAloudActiveID
+            lhs.readAloudActiveID == rhs.readAloudActiveID &&
+            lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs
     }
 
     var body: some View {
@@ -5883,6 +5900,12 @@ private struct AidenSettledMessageRows: View, Equatable {
         // Bot bubbles join into clusters; only the cluster's last bubble
         // carries the footer so the Messages rhythm stays compact.
         let showsFooter = !isBotMessage || next.map { !aidenMessagesJoin(message, $0) } ?? true
+        let revealGenerationID = message.timeline.map(\.generationId).flatMap {
+            imageArrivalRevealIDs.contains($0) ? $0 : nil
+        }
+        let revealAttachmentID = revealGenerationID.flatMap { _ in
+            AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: message)
+        }
 
         return AidenMessageView(
             message: message,
@@ -5895,7 +5918,11 @@ private struct AidenSettledMessageRows: View, Equatable {
             showsFooter: showsFooter,
             onAskAbout: onAskAbout,
             forkActions: onFork == nil ? [] : forkActions,
-            onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } }
+            onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } },
+            imageArrivalRevealAttachmentID: revealAttachmentID,
+            onImageArrivalRevealed: revealGenerationID.map { generationID in
+                { model.finishImageArrivalReveal(generationID: generationID) }
+            }
         )
         .equatable()
         .padding(.top, topPadding)
@@ -5913,6 +5940,9 @@ private struct AidenMessageView: View, Equatable {
     var onAskAbout: ((String) -> Void)? = nil
     var forkActions: [AidenChatForkMenuAction] = []
     var onFork: ((AidenChatForkMenuAction) -> Void)? = nil
+    /// The generated image that plays the one-shot arrival reveal, if any.
+    var imageArrivalRevealAttachmentID: String? = nil
+    var onImageArrivalRevealed: (() -> Void)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -5925,7 +5955,8 @@ private struct AidenMessageView: View, Equatable {
             lhs.showsFooter == rhs.showsFooter &&
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
             lhs.forkActions == rhs.forkActions &&
-            (lhs.onFork == nil) == (rhs.onFork == nil)
+            (lhs.onFork == nil) == (rhs.onFork == nil) &&
+            lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID
     }
 
     private var selectableText: String {
@@ -6092,16 +6123,14 @@ private struct AidenMessageView: View, Equatable {
             // Snapshots appear once, inline at their visual, never in the strip.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
-                let identifierCounts = Dictionary(grouping: attachments, by: \.id).mapValues(\.count)
-                let imageAttachments = attachments.filter { attachment in
-                    AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
-                        && identifierCounts[attachment.id] == 1
-                }
+                let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
                 if !imageAttachments.isEmpty {
                     AidenMessageImageAttachmentsView(
                         attachments: imageAttachments,
                         edge: AidenMessageMediaEdge.forRole(message.role),
-                        loadData: loadAttachmentImage
+                        loadData: loadAttachmentImage,
+                        revealAttachmentID: imageArrivalRevealAttachmentID,
+                        onArrivalRevealed: onImageArrivalRevealed
                     )
                 }
                 let fallbackAttachments = attachments.filter { attachment in
@@ -6470,6 +6499,9 @@ private struct AidenMessageImageAttachmentsView: View {
     let attachments: [AidenMessageAttachment]
     let edge: AidenMessageMediaEdge
     let loadData: (AidenMessageAttachment) async -> Data?
+    /// Only this attachment plays the arrival reveal; the others draw as usual.
+    var revealAttachmentID: String? = nil
+    var onArrivalRevealed: (() -> Void)? = nil
     @State private var gallerySelection: AidenAttachmentGallerySelection?
     @State private var deckSelection = 0
     @State private var deckDragTranslation: CGFloat = 0
@@ -6484,7 +6516,9 @@ private struct AidenMessageImageAttachmentsView: View {
                     contentMode: .fit,
                     showsBackground: false,
                     imageCornerRadius: AidenInlineCardDeckLayout.singleImageCornerRadius,
-                    imageAlignment: edge.alignment
+                    imageAlignment: edge.alignment,
+                    revealsArrival: attachments[0].id == revealAttachmentID,
+                    onArrivalRevealed: onArrivalRevealed
                 )
                 .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
                 .onTapGesture { openGallery(at: 0) }
@@ -6572,7 +6606,9 @@ private struct AidenMessageImageAttachmentsView: View {
             contentMode: .fit,
             showsBackground: false,
             imageCornerRadius: AidenInlineCardDeckLayout.cardCornerRadius,
-            imageAlignment: edge.alignment
+            imageAlignment: edge.alignment,
+            revealsArrival: attachment.id == revealAttachmentID,
+            onArrivalRevealed: onArrivalRevealed
         )
         .frame(width: width)
         .aspectRatio(AidenInlineCardDeckLayout.viewportAspectRatio, contentMode: .fit)
@@ -6673,6 +6709,8 @@ private struct AidenAttachmentThumbnailView: View {
     var showsBackground = true
     var imageCornerRadius: CGFloat = 0
     var imageAlignment: Alignment = .center
+    var revealsArrival = false
+    var onArrivalRevealed: (() -> Void)? = nil
     var onImageLoaded: ((UIImage) -> Void)? = nil
     @State private var state: LoadState = .loading
 
@@ -6690,6 +6728,7 @@ private struct AidenAttachmentThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+                    .aidenImageArrivalReveal(revealsArrival) { onArrivalRevealed?() }
                     .clipShape(RoundedRectangle(
                         cornerRadius: imageCornerRadius,
                         style: .continuous
@@ -7454,6 +7493,13 @@ private struct AidenLiveResponseView: View {
                             }
                         }
                     }
+            }
+
+            if model.isStreaming {
+                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
+                    AidenImageGenerationPlaceholderView(item: item)
+                        .transition(.opacity)
+                }
             }
 
             if let visualizingLabel,

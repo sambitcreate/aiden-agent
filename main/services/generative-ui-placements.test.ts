@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
+import { createArtifactPlacementLedger, imageAttachmentPlacements } from "./generative-ui-placements.js";
+import { parseChatImagePlacements } from "../../renderer/shared/chat-artifacts.js";
 
 test("placements use the timeline's public call ids, not raw provider ids", () => {
   const ledger = createArtifactPlacementLedger();
@@ -42,4 +43,18 @@ test("a revision keeps the first call's position but takes the latest layout", (
   assert.deepEqual(ledger.placementsFor([{ mediaId: "media-a" }]), [
     { mediaId: "media-a", toolCallId: "call-1" },
   ]);
+});
+
+test("generated image placements persist only kept attachments with resolvable calls", () => {
+  const ledger = createArtifactPlacementLedger();
+  ledger.setResolver((raw) => ({ toolu_a: "call-1", toolu_b: "call-2" } as Record<string, string>)[raw]);
+  ledger.record("img-a", "toolu_a");
+  ledger.record("img-b", "toolu_b");
+  ledger.record("img-lost", "toolu_unknown");
+  const placements = imageAttachmentPlacements(ledger, [{ id: "img-b" }, { id: "img-lost" }, { id: "upload" }]);
+  assert.deepEqual(placements, [{ attachmentId: "img-b", toolCallId: "call-2" }]);
+  assert.equal(imageAttachmentPlacements(ledger, [{ id: "upload" }]), undefined);
+  // Stored placements round-trip through the lenient parser; junk is dropped.
+  assert.deepEqual(parseChatImagePlacements([...placements!, { attachmentId: 3 }, null, { attachmentId: "img-b", toolCallId: "call-9" }]), placements);
+  assert.equal(parseChatImagePlacements("nope"), undefined);
 });

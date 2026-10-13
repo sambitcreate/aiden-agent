@@ -40,6 +40,21 @@ interface EncryptedPiCredentialStoreOptions {
 
 export interface PiCredentialWriteChange {
   readonly grantChanged: boolean;
+  /** The stored id being written or deleted; null for whole-document migrations. */
+  readonly providerId: string | null;
+}
+
+/**
+ * Aiden-internal slots (image-generation keys, the Model Pad key, ...) never
+ * authorize a Bot's inference provider, so writing them must not fence Bot
+ * runtime authority.
+ */
+export const PI_CREDENTIAL_INTERNAL_PREFIX = "aiden-internal:";
+
+/** True when a credential publication should invalidate running Bot turns. */
+export function piCredentialChangeFencesBotAuthority(change: PiCredentialWriteChange): boolean {
+  if (!change.grantChanged) return false;
+  return !(change.providerId?.startsWith(PI_CREDENTIAL_INTERNAL_PREFIX) ?? false);
 }
 
 /**
@@ -256,7 +271,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   private async writeDocument(
     document: CredentialDocument,
     beginPublication: () => void,
-    change: PiCredentialWriteChange = { grantChanged: true },
+    change: PiCredentialWriteChange,
   ): Promise<void> {
     const destination = await this.resolvedFilePath();
     const directory = path.dirname(destination);
@@ -311,7 +326,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
         document.entries.azure = legacy;
       }
       delete document.entries["azure-openai-responses"];
-      await this.writeDocument(document, () => options?.signal?.throwIfAborted());
+      await this.writeDocument(document, () => options?.signal?.throwIfAborted(), {
+        grantChanged: true,
+        providerId: null,
+      });
     });
   }
 
@@ -395,6 +413,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             document.entries[providerId] = encrypted;
             await this.writeDocument(document, beginPublication, {
               grantChanged: !samePiCredentialGrant(current, next),
+              providerId,
             });
           });
           return next;
@@ -419,7 +438,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             options?.signal?.throwIfAborted();
             if (!document.entries[providerId]) return;
             delete document.entries[providerId];
-            await this.writeDocument(document, beginPublication);
+            await this.writeDocument(document, beginPublication, { grantChanged: true, providerId });
           });
         },
         () => this.options.onLockQueued?.(`provider:${providerId}`),

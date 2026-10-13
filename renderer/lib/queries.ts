@@ -1,5 +1,6 @@
 // React Query hooks for providers, chats, and settings.
 
+import { useCallback } from "react";
 import {
   keepPreviousData,
   queryOptions,
@@ -22,6 +23,7 @@ import {
   localVoiceApi,
   mcpApi,
   modelInsightsApi,
+  modelPaceApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -72,6 +74,7 @@ export const queryKeys = {
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
   modelInsightsStatus: ["modelInsightsStatus"] as const,
+  modelPaceSummaries: ["modelPaceSummaries"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
@@ -363,9 +366,35 @@ export function useModelInfo(
   });
 }
 
+interface ModelInfoQueryResult {
+  data?: Record<string, ModelInfo>;
+  isLoading: boolean;
+  isError: boolean;
+}
+
+const PROVIDER_ID_SEPARATOR = "\u0000";
+
 /** Resolve offline display and capability metadata for every picker connection. */
 export function useProvidersModelInfo(providers: Provider[]) {
-  const results = useQueries({
+  // `combine` is keyed on the provider ids only, so it is not re-run on every
+  // render (the composer re-renders per streamed token) while they are unchanged.
+  const providerIdsKey = providers.map((provider) => provider.id).join(PROVIDER_ID_SEPARATOR);
+  const combine = useCallback(
+    (results: readonly ModelInfoQueryResult[]) => {
+      const providerIds = providerIdsKey ? providerIdsKey.split(PROVIDER_ID_SEPARATOR) : [];
+      const data: Record<string, Record<string, ModelInfo>> = {};
+      providerIds.forEach((providerId, index) => {
+        data[providerId] = results[index]?.data ?? {};
+      });
+      return {
+        data,
+        isLoading: results.some((result) => result.isLoading),
+        isError: results.some((result) => result.isError),
+      };
+    },
+    [providerIdsKey],
+  );
+  return useQueries({
     queries: providers.map((provider) => {
       const key = [...provider.models].sort().join(",");
       return {
@@ -375,15 +404,10 @@ export function useProvidersModelInfo(providers: Provider[]) {
         staleTime: 60 * 60 * 1000,
       };
     }),
+    // Combined results are structurally shared, so `data` keeps its identity
+    // until some provider's model info changes and callers can memoize on it.
+    combine,
   });
-  const data: Record<string, Record<string, ModelInfo>> = {};
-  providers.forEach((provider, index) => {
-    data[provider.id] = results[index]?.data ?? {};
-  });
-  return {
-    data,
-    isLoading: results.some((result) => result.isLoading),
-  };
 }
 
 // Git display reads are refreshed by `git:changed`, agent tool results,
@@ -606,6 +630,33 @@ export function useModelInsightsStatus() {
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
+}
+
+/**
+ * Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a
+ * Pad surface mounts. A surface that stays mounted can pass `enabled` (only read
+ * while visible) and `staleTime: 0` to read again each time it is shown.
+ */
+export function useModelPaceSummaries(options: { enabled?: boolean; staleTime?: number } = {}) {
+  return useQuery({
+    queryKey: queryKeys.modelPaceSummaries,
+    queryFn: modelPaceApi.summaries,
+    enabled: options.enabled ?? true,
+    retry: false,
+    staleTime: options.staleTime ?? 30_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Forget every measured speed, then drop the cached summaries so every Pad re-reads. */
+export async function clearModelPaceSummaries(
+  queryClient: QueryClient,
+  clear: () => Promise<void> = modelPaceApi.clear,
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: queryKeys.modelPaceSummaries });
+  await clear();
+  await queryClient.invalidateQueries({ queryKey: queryKeys.modelPaceSummaries });
 }
 
 /** How often a surface waiting on macOS permissions forces a fresh Computer Use probe. */
