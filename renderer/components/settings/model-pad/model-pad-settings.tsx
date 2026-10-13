@@ -5,10 +5,12 @@ import { InfoHint } from "../../ui-info-hint";
 import { ProviderIcon } from "../../provider-icon";
 import {
   alsoViaLabel,
+  alsoViaProviders,
   benchmarkCoverage,
   createModelEntries,
-  encodeSelection,
   modelBenchmarkPercentiles,
+  modelInfoByValue,
+  modelPlacementLabel,
   modelSiblings,
   pinnedAndRecentQuickStart,
   previewBenchmarkSuggestions,
@@ -52,14 +54,12 @@ import {
   useProvidersModelInfo,
   useSettings,
 } from "../../../lib/queries";
-import type { ModelInfo } from "../../../lib/types";
-import { ModelPadAddPopover, MODEL_PAD_ADD_RECENT_LIMIT } from "./model-pad-add-popover";
+import { ModelPadAddPopover } from "./model-pad-add-popover";
 import { ModelPadArrangeMenu, ModelPadMetricChip, ModelPadMoreMenu } from "./model-pad-arrange-menu";
 import {
   ModelPadCanvas,
   ModelPadPreviewBar,
   ModelPadQuickStart,
-  padCellKey,
   type ModelPadGhostView,
   type ModelPadMarkerView,
 } from "./model-pad-canvas";
@@ -72,9 +72,8 @@ function gridLocation(point: ModelPadPoint, gridSize: number): string {
   return `row ${row}, column ${column}`;
 }
 
-function placementLabel(entry: ModelEntry): string {
-  return `${entry.label} from ${entry.providerLabel}`;
-}
+/** How many pinned and recent models the Add list's Recent section lists at most. */
+const ADD_RECENT_LIMIT = 5;
 
 /** A benchmark score as the Pad shows it: one decimal at most. */
 function formatScore(score: number): string {
@@ -216,12 +215,13 @@ export function ModelPadSettings() {
   const [dragState, setDragState] = React.useState<ModelPadDragState>();
   const [announcement, setAnnouncement] = React.useState("");
   const padRef = React.useRef<HTMLDivElement | null>(null);
+  const canvasRef = React.useRef<HTMLDivElement | null>(null);
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
-    const pad = padRef.current;
-    const canvas = pad?.parentElement;
-    const body = canvas?.parentElement;
-    if (!pad || !canvas || !body) return;
+    const canvas = canvasRef.current;
+    const body = bodyRef.current;
+    if (!canvas || !body) return;
 
     // Measure the real settings viewport: window width alone ignores the app
     // sidebar, settings navigation, the tray, and user interface zoom.
@@ -266,19 +266,18 @@ export function ModelPadSettings() {
       window.removeEventListener("resize", schedule);
     };
   }, []);
+  const focusAdd = React.useCallback(() => addButtonRef.current, []);
   const helpId = React.useId();
   const statusId = React.useId();
 
-  const entries = React.useMemo(() => {
-    const infoByValue: Record<string, ModelInfo | undefined> = {};
-    providers.forEach((provider) => {
-      const data = catalog.data[provider.id];
-      for (const modelId of provider.models) {
-        infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
-      }
-    });
-    return visibleModelEntries(createModelEntries(providers, infoByValue), hiddenModelsByProvider);
-  }, [providers, catalog.data, hiddenModelsByProvider]);
+  const entries = React.useMemo(
+    () =>
+      visibleModelEntries(
+        createModelEntries(providers, modelInfoByValue(providers, catalog.data)),
+        hiddenModelsByProvider,
+      ),
+    [providers, catalog.data, hiddenModelsByProvider],
+  );
   const visibleValues = React.useMemo(() => entries.map((entry) => entry.value), [entries]);
   // Other visible routes to the same model ("Also via …"); placements stay per provider.
   const siblingsByValue = React.useMemo(() => modelSiblings(entries), [entries]);
@@ -308,13 +307,18 @@ export function ModelPadSettings() {
     suggestionPreview && previewFits && pendingSuggestions.length > 0
       ? suggestionPreview.gridSize
       : placedGridSize;
-  const snappedPlacements = React.useMemo(() => {
-    const snapped = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
-    // A move waiting for its save is shown at once.
-    return pendingMove && snapped[pendingMove.value]
-      ? { ...snapped, [pendingMove.value]: pendingMove.placement }
-      : snapped;
-  }, [placements, visibleValues, gridSize, pendingMove]);
+  const reflowedPlacements = React.useMemo(
+    () => reflowVisibleModelPadPlacements(placements, visibleValues, gridSize),
+    [placements, visibleValues, gridSize],
+  );
+  // A move waiting for its save is shown at once, without reflowing for every nudge.
+  const snappedPlacements = React.useMemo(
+    () =>
+      pendingMove && reflowedPlacements[pendingMove.value]
+        ? { ...reflowedPlacements, [pendingMove.value]: pendingMove.placement }
+        : reflowedPlacements,
+    [reflowedPlacements, pendingMove],
+  );
   const placed = React.useMemo(
     () => entries.filter((entry) => snappedPlacements[entry.value]),
     [entries, snappedPlacements],
@@ -335,7 +339,7 @@ export function ModelPadSettings() {
         placed.flatMap((entry) => {
           const point =
             dragState?.value === entry.value ? dragState.point : snappedPlacements[entry.value];
-          return point ? [padCellKey(point, gridSize)] : [];
+          return point ? [modelPadPointKey(point, gridSize)] : [];
         }),
       ),
     [placed, dragState, snappedPlacements, gridSize],
@@ -345,7 +349,7 @@ export function ModelPadSettings() {
     () =>
       pendingSuggestions.flatMap((suggestion) => {
         const entry = entriesByValue.get(suggestion.value);
-        return entry && !occupiedCells.has(padCellKey(suggestion.placement, gridSize))
+        return entry && !occupiedCells.has(modelPadPointKey(suggestion.placement, gridSize))
           ? [{ ...suggestion, entry }]
           : [];
       }),
@@ -355,7 +359,7 @@ export function ModelPadSettings() {
     () =>
       new Set([
         ...occupiedCells,
-        ...shownSuggestions.map(({ placement }) => padCellKey(placement, gridSize)),
+        ...shownSuggestions.map(({ placement }) => modelPadPointKey(placement, gridSize)),
       ]),
     [occupiedCells, shownSuggestions, gridSize],
   );
@@ -389,14 +393,14 @@ export function ModelPadSettings() {
   // Coverage counts are only meaningful once every model and its details have loaded.
   const coverageReady = !loading && !providersQuery.isError && !catalog.isError;
   const insightsReady = Boolean(modelInsights.data?.ready);
+  // Unplaced visible models with a score for the metric: what suggestions can draw from.
   const suggestionCount = React.useMemo(
     () =>
-      topBenchmarkSuggestions(entries, benchmarkPercentiles, {
-        placements,
-        limit: Number.POSITIVE_INFINITY,
-      }).length,
+      entries.filter((entry) => !placements[entry.value] && benchmarkPercentiles.has(entry.value))
+        .length,
     [entries, benchmarkPercentiles, placements],
   );
+  const placedValues = React.useMemo(() => new Set(Object.keys(placements)), [placements]);
   const pinnedModels = padPreferences.pinnedModels;
   const recentModels = padPreferences.recentModels;
   // Pinned, then recent visible models not on the Pad: the Add list's Recent section.
@@ -406,7 +410,7 @@ export function ModelPadSettings() {
         pinned: pinnedModels,
         recent: recentModels,
         placements,
-        limit: MODEL_PAD_ADD_RECENT_LIMIT,
+        limit: ADD_RECENT_LIMIT,
       }),
     [entries, pinnedModels, recentModels, placements],
   );
@@ -560,7 +564,7 @@ export function ModelPadSettings() {
   const dropPlacement = (entry: ModelEntry, point: ModelPadPoint) => {
     showPendingMove({
       value: entry.value,
-      label: placementLabel(entry),
+      label: modelPlacementLabel(entry),
       placement: { ...point, xSource: "user", ySource: "user" },
       gridSize,
       visibleValues,
@@ -575,8 +579,8 @@ export function ModelPadSettings() {
     const placement = pending?.value === value ? pending.placement : snappedPlacements[value];
     if (!placement) return;
     const occupied = [
-      ...visibleValues.flatMap((candidate) =>
-        candidate !== value && snappedPlacements[candidate] ? [snappedPlacements[candidate]] : [],
+      ...placed.flatMap((candidate) =>
+        candidate.value !== value ? [snappedPlacements[candidate.value]] : [],
       ),
       ...suggestionPoints,
     ];
@@ -584,7 +588,7 @@ export function ModelPadSettings() {
     if (modelPadPointKey(point, gridSize) === modelPadPointKey(placement, gridSize)) return;
     showPendingMove({
       value,
-      label: placementLabel(entry),
+      label: modelPlacementLabel(entry),
       placement: {
         ...placement,
         ...point,
@@ -606,7 +610,7 @@ export function ModelPadSettings() {
     setActiveValue(entry.value);
     void persistAction((current) => {
       const next = addModelPadPlacement(current, visibleValues, entry.value);
-      return next === current ? null : { placements: next, message: `Added ${placementLabel(entry)}` };
+      return next === current ? null : { placements: next, message: `Added ${modelPlacementLabel(entry)}` };
     });
   };
 
@@ -618,7 +622,7 @@ export function ModelPadSettings() {
       if (!current[entry.value]) return null;
       const next = { ...current };
       delete next[entry.value];
-      return { placements: next, message: `Removed ${placementLabel(entry)}` };
+      return { placements: next, message: `Removed ${modelPlacementLabel(entry)}` };
     });
   };
 
@@ -801,7 +805,7 @@ export function ModelPadSettings() {
         // The Pad already shows its models on the preview grid; save them there.
         const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
         next[suggestion.value] = suggestion.placement;
-        return { placements: next, message: `Added ${placementLabel(entry)}` };
+        return { placements: next, message: `Added ${modelPlacementLabel(entry)}` };
       }),
     ).then((saved) => {
       // Never leave focus armed for a marker that will not appear.
@@ -902,7 +906,7 @@ export function ModelPadSettings() {
         point,
         kind: modelPadPlacementKind(sourcePlacement),
         ariaLabel: `${[
-          placementLabel(entry),
+          modelPlacementLabel(entry),
           modelPadPlacementSourceLabel(sourcePlacement),
           paceDescription,
           measuredSpeed,
@@ -940,7 +944,15 @@ export function ModelPadSettings() {
           onPointerMove: (event) => {
             if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
             const snapped = snapPointer(entry.value, event);
-            if (snapped) setDragState({ value: entry.value, ...snapped });
+            if (!snapped) return;
+            // Most moves stay on the same dot; only a new dot re-renders the Pad.
+            setDragState((previous) =>
+              previous?.value === entry.value &&
+              previous.displaced === snapped.displaced &&
+              modelPadPointKey(previous.point, gridSize) === modelPadPointKey(snapped.point, gridSize)
+                ? previous
+                : { value: entry.value, ...snapped },
+            );
           },
           onPointerUp: (event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -1003,7 +1015,7 @@ export function ModelPadSettings() {
     return {
       value: suggestion.value,
       point: suggestion.placement,
-      ariaLabel: `Keep suggestion: ${placementLabel(entry)}${scoreLabel}`,
+      ariaLabel: `Keep suggestion: ${modelPlacementLabel(entry)}${scoreLabel}`,
       hot: hotValue === suggestion.value,
       tag: {
         title: entry.label,
@@ -1022,16 +1034,14 @@ export function ModelPadSettings() {
     .flatMap((entry) => {
       const placement = snappedPlacements[entry.value];
       if (!placement) return [];
-      const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
+      const alsoVia = alsoViaProviders(siblingsByValue.get(entry.value));
       return [
         {
           entry,
           placement,
           kind: modelPadPlacementKind(placement),
           sourceLabel: modelPadPlacementSourceLabel(placement),
-          secondary: [entry.providerLabel, alsoVia?.replace(/^Also via/u, "also via")]
-            .filter(Boolean)
-            .join(" · "),
+          secondary: alsoVia ? `${entry.providerLabel} · also via ${alsoVia}` : entry.providerLabel,
         },
       ];
     })
@@ -1068,7 +1078,7 @@ export function ModelPadSettings() {
             triggerRef={addButtonRef}
             entries={entries}
             recentEntries={recentToAdd}
-            isOnPad={(value) => Boolean(placements[value])}
+            placedValues={placedValues}
             loading={loading}
             onToggle={toggleModel}
           />
@@ -1092,8 +1102,9 @@ export function ModelPadSettings() {
             onRemoveAll={removeAll}
           />
         </div>
-        <div className="model-pad-body">
+        <div ref={bodyRef} className="model-pad-body">
           <ModelPadCanvas
+            canvasRef={canvasRef}
             padRef={padRef}
             gridSize={gridSize}
             hiddenCells={hiddenCells}
@@ -1174,7 +1185,7 @@ export function ModelPadSettings() {
             onHotChange={setHot}
             onShow={showOnPad}
             onRemove={removeModel}
-            fallbackFocus={() => addButtonRef.current}
+            fallbackFocus={focusAdd}
           />
         </div>
       </FieldSet>
@@ -1183,7 +1194,7 @@ export function ModelPadSettings() {
         matchedWithoutMetric={matchedWithoutMetric}
         metric={benchmarkMetric}
         measuredCount={measuredCount}
-        fallbackFocus={() => addButtonRef.current}
+        fallbackFocus={focusAdd}
       />
     </>
   );

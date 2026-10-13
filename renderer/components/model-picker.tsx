@@ -44,8 +44,6 @@ import { formatModelPace } from "../lib/model-pad-pace";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import {
   BASE_MODEL_PAD_GRID_SIZE,
-  MODEL_PAD_INSET_PERCENT,
-  MODEL_PAD_RANGE_PERCENT,
   addModelPadPlacement,
   modelPadGridSizeForPlacements,
   modelPadHasBenchmarkHeight,
@@ -55,6 +53,7 @@ import { useModelPadPreferences } from "../lib/model-pad-preferences";
 import { recordRecentModel } from "../shared/model-pad-preferences";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, Grid2x2Check, Grid2x2Plus, Pin, SlidersHorizontal } from "lucide-react";
+import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
 import { providerDeploymentLabel } from "../shared/provider-deployment";
@@ -169,20 +168,7 @@ function EmptyModelPad({
   return (
     <div className="model-pad relative aspect-square w-full overflow-hidden rounded-card">
       <div aria-hidden="true" className="absolute inset-0 opacity-55">
-        {Array.from({ length: gridSize * gridSize }, (_, index) => {
-          const column = index % gridSize;
-          const row = Math.floor(index / gridSize);
-          return (
-            <span
-              key={index}
-              className="absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20"
-              style={{
-                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-              }}
-            />
-          );
-        })}
+        <ModelPadLattice gridSize={gridSize} dotClassName="bg-primary/20" />
       </div>
       <div className="absolute inset-0 bg-popover/45 backdrop-blur-[2px]" />
       <div className="relative flex h-full flex-col items-center justify-center px-8 text-center">

@@ -1,8 +1,7 @@
 import * as React from "react";
 import { Button } from "../../ui";
+import { ModelPadLattice } from "../../model-pad-lattice";
 import {
-  MODEL_PAD_INSET_PERCENT,
-  MODEL_PAD_RANGE_PERCENT,
   modelPadLabelPlacement,
   modelPadLeftPercent,
   modelPadTopPercent,
@@ -10,11 +9,6 @@ import {
   type ModelPadPoint,
 } from "../../../lib/model-pad-layout";
 import { cn } from "../../../lib/ui-utils";
-
-/** `column:row` of a grid point, rows counted from the top. */
-export function padCellKey(point: ModelPadPoint, gridSize: number): string {
-  return `${Math.round(point.x * (gridSize - 1))}:${Math.round((1 - point.y) * (gridSize - 1))}`;
-}
 
 /** The floating tag a marker shows on hover, focus, selection or tray hover. */
 export interface ModelPadTag {
@@ -77,6 +71,7 @@ function MarkerTag({ tag }: { tag: ModelPadTag }) {
  * and the empty state. Under it, the suggestion bar while a preview is open.
  */
 export function ModelPadCanvas({
+  canvasRef,
   padRef,
   gridSize,
   hiddenCells,
@@ -89,9 +84,10 @@ export function ModelPadCanvas({
   children,
   onBackgroundPointerDown,
 }: {
+  canvasRef: React.Ref<HTMLDivElement>;
   padRef: React.Ref<HTMLDivElement>;
   gridSize: number;
-  /** Cells under a marker or ghost; no grid dot is drawn there. */
+  /** `modelPadPointKey` cells under a marker or ghost; no grid dot is drawn there. */
   hiddenCells: ReadonlySet<string>;
   markers: readonly ModelPadMarkerView[];
   ghosts: readonly ModelPadGhostView[];
@@ -104,7 +100,7 @@ export function ModelPadCanvas({
   onBackgroundPointerDown: () => void;
 }) {
   return (
-    <div className="model-pad-canvas min-w-0">
+    <div ref={canvasRef} className="model-pad-canvas min-w-0">
       <div
         ref={padRef}
         aria-describedby={describedBy}
@@ -126,25 +122,7 @@ export function ModelPadCanvas({
           <span data-axis="deliberate">More deliberate</span>
         </span>
 
-        {Array.from({ length: gridSize * gridSize }, (_, index) => {
-          const column = index % gridSize;
-          const row = Math.floor(index / gridSize);
-          // A dot under a marker (including a dragged one) would read as a dot inside a
-          // hollow ring, so occupied cells skip it; the marker itself is the affordance.
-          if (hiddenCells.has(`${column}:${row}`)) return null;
-          return (
-            <span
-              key={index}
-              aria-hidden="true"
-              data-grid-cell=""
-              className="model-pad-node absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/16"
-              style={{
-                left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-                top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-              }}
-            />
-          );
-        })}
+        <ModelPadLattice gridSize={gridSize} hiddenCells={hiddenCells} />
 
         {emptyState}
 

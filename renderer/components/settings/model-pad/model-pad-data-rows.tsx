@@ -616,8 +616,10 @@ function ModelPadMeasuredSpeedRow({
 /**
  * The Data group under the Pad: benchmark scores (connection, coverage) and
  * the speeds measured from the user's chats, as two quiet settings rows.
+ * Memoized, so hovering or dragging on the Pad above leaves it alone; pass a
+ * stable `fallbackFocus`.
  */
-export function ModelPadDataRows({
+export const ModelPadDataRows = React.memo(function ModelPadDataRows({
   coverage,
   matchedWithoutMetric,
   metric,
@@ -642,4 +644,4 @@ export function ModelPadDataRows({
       <ModelPadMeasuredSpeedRow measuredCount={measuredCount} fallbackFocus={fallbackFocus} />
     </FieldSet>
   );
-}
+});

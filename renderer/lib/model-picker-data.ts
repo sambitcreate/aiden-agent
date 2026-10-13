@@ -285,11 +285,30 @@ export function modelSiblings(entries: readonly ModelEntry[]): Map<string, Model
 
 /** "Also via A", "Also via A, B" or "Also via A, B +n" for an entry's sibling routes. */
 export function alsoViaLabel(siblings: readonly ModelEntry[] | undefined): string | undefined {
+  const providers = alsoViaProviders(siblings);
+  return providers ? `Also via ${providers}` : undefined;
+}
+
+/** The providers part of {@link alsoViaLabel} ("OpenRouter, Azure +2"), for mid-sentence use. */
+export function alsoViaProviders(siblings: readonly ModelEntry[] | undefined): string | undefined {
   const providers = [...new Set((siblings ?? []).map((entry) => entry.providerLabel))];
   if (providers.length === 0) return undefined;
   const named = providers.slice(0, 2).join(", ");
   const rest = providers.length - 2;
-  return `Also via ${named}${rest > 0 ? ` +${rest}` : ""}`;
+  return `${named}${rest > 0 ? ` +${rest}` : ""}`;
+}
+
+/** A model named with its provider, since one model can be reachable through several. */
+export function modelPlacementLabel(entry: Pick<ModelEntry, "label" | "providerLabel">): string {
+  return `${entry.label} from ${entry.providerLabel}`;
+}
+
+/** Models by provider, then by name. */
+export function sortModelsByProviderAndName(entries: readonly ModelEntry[]): ModelEntry[] {
+  return [...entries].sort(
+    (left, right) =>
+      left.providerLabel.localeCompare(right.providerLabel) || left.label.localeCompare(right.label),
+  );
 }
 
 /** Group only text-generating models while preserving the configured provider order. */

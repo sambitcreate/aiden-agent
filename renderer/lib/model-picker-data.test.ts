@@ -21,6 +21,8 @@ import {
   visibleModelEntries,
   resolveExplicitModelSelection,
   alsoViaLabel,
+  alsoViaProviders,
+  sortModelsByProviderAndName,
   modelIdentityKey,
   modelSiblings,
   type ModelEntry,
@@ -1045,4 +1047,21 @@ test("the also-via label names one or two providers and counts the rest", () => 
   assert.equal(alsoViaLabel(one), "Also via OpenRouter");
   assert.equal(alsoViaLabel(two), "Also via OpenRouter, Azure");
   assert.equal(alsoViaLabel(four), "Also via OpenRouter, Azure +2");
+  assert.equal(alsoViaProviders(four), "OpenRouter, Azure +2");
+  assert.equal(alsoViaProviders([]), undefined);
+});
+
+test("models sort by provider, then by name, without changing the input", () => {
+  const entries = [
+    routeEntry("zephyr", "Zephyr", "swift"),
+    routeEntry("acme", "Acme", "nova"),
+    routeEntry("zephyr", "Zephyr", "atlas"),
+    routeEntry("acme", "Acme", "bolt"),
+  ];
+  const sorted = sortModelsByProviderAndName(entries);
+  assert.deepEqual(
+    sorted.map((entry) => `${entry.providerLabel}/${entry.model}`),
+    ["Acme/bolt", "Acme/nova", "Zephyr/atlas", "Zephyr/swift"],
+  );
+  assert.equal(entries[0].model, "swift");
 });

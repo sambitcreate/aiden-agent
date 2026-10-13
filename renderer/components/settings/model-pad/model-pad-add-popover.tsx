@@ -14,24 +14,19 @@ import {
 } from "../../ui";
 import { InfoHint } from "../../ui-info-hint";
 import { ProviderIcon } from "../../provider-icon";
-import type { ModelEntry } from "../../../lib/model-picker-data";
+import {
+  modelPlacementLabel,
+  sortModelsByProviderAndName,
+  type ModelEntry,
+} from "../../../lib/model-picker-data";
 
-/** How many pinned and recent models the Recent section lists at most. */
-export const MODEL_PAD_ADD_RECENT_LIMIT = 5;
-
-function placementLabel(entry: ModelEntry): string {
-  return `${entry.label} from ${entry.providerLabel}`;
+/** Keeps provider → name order: a row either matches the search or is hidden. */
+function filterAddRow(_value: string, search: string, keywords?: string[]): number {
+  const term = search.trim().toLocaleLowerCase();
+  return keywords?.some((keyword) => keyword.toLocaleLowerCase().includes(term)) ? 1 : 0;
 }
 
-/** Every model the Add list offers: by provider, then by name. */
-export function sortModelsForAdding(entries: readonly ModelEntry[]): ModelEntry[] {
-  return [...entries].sort(
-    (left, right) =>
-      left.providerLabel.localeCompare(right.providerLabel) || left.label.localeCompare(right.label),
-  );
-}
-
-function AddRow({
+const AddRow = React.memo(function AddRow({
   entry,
   section,
   onPad,
@@ -45,8 +40,9 @@ function AddRow({
   return (
     <CommandItem
       value={`${section}:${entry.value}`}
+      keywords={[entry.label, entry.providerLabel, entry.model]}
       aria-label={
-        onPad ? `Remove ${placementLabel(entry)} from Pad` : `Add ${placementLabel(entry)} to Pad`
+        onPad ? `Remove ${modelPlacementLabel(entry)} from Pad` : `Add ${modelPlacementLabel(entry)} to Pad`
       }
       data-on-pad={onPad ? "true" : undefined}
       className="min-h-9 py-1"
@@ -71,7 +67,7 @@ function AddRow({
       </span>
     </CommandItem>
   );
-}
+});
 
 /**
  * The header's Add button: a searchable list of visible models. Each row
@@ -82,19 +78,26 @@ export function ModelPadAddPopover({
   triggerRef,
   entries,
   recentEntries,
-  isOnPad,
+  placedValues,
   loading,
   onToggle,
 }: {
   triggerRef?: React.Ref<HTMLButtonElement>;
   /** Visible models. */
   entries: readonly ModelEntry[];
-  /** Pinned, then recent visible models that are not on the Pad. */
+  /** Pinned, then recent visible models that are not on the Pad, already capped. */
   recentEntries: readonly ModelEntry[];
-  isOnPad: (value: string) => boolean;
+  /** Values of the models on the Pad. */
+  placedValues: ReadonlySet<string>;
   loading: boolean;
   onToggle: (entry: ModelEntry) => void;
 }) {
+  // One stable toggle for every row, so a row re-renders only when its own state changes.
+  const onToggleRef = React.useRef(onToggle);
+  React.useLayoutEffect(() => {
+    onToggleRef.current = onToggle;
+  });
+  const toggle = React.useCallback((entry: ModelEntry) => onToggleRef.current(entry), []);
   const [query, setQuery] = React.useState("");
   const [open, setOpen] = React.useState(false);
   // Recent keeps the rows it opened with until the list closes: toggling one
@@ -105,14 +108,10 @@ export function ModelPadAddPopover({
   React.useEffect(() => {
     if (open && shownRecent.length === 0 && recentEntries.length > 0) setShownRecent(recentEntries);
   }, [open, shownRecent.length, recentEntries]);
-  const term = query.trim().toLocaleLowerCase();
-  const sorted = React.useMemo(() => sortModelsForAdding(entries), [entries]);
-  const matches = term
-    ? sorted.filter((entry) =>
-        `${entry.label} ${entry.providerLabel} ${entry.model}`.toLocaleLowerCase().includes(term),
-      )
-    : sorted;
-  const recent = term ? [] : shownRecent.slice(0, MODEL_PAD_ADD_RECENT_LIMIT);
+  const searching = query.trim().length > 0;
+  const sorted = React.useMemo(() => sortModelsByProviderAndName(entries), [entries]);
+  // Recent is for browsing; a search looks through every model once.
+  const recent = searching ? [] : shownRecent;
 
   return (
     <Popover
@@ -134,7 +133,7 @@ export function ModelPadAddPopover({
         aria-label="Add models to the Pad"
         className="w-80 max-w-[calc(100vw-2rem)] p-1.5"
       >
-        <Command shouldFilter={false} loop label="Search models">
+        <Command filter={filterAddRow} loop label="Search models">
           <CommandInput
             value={query}
             onValueChange={setQuery}
@@ -163,21 +162,21 @@ export function ModelPadAddPopover({
                         key={entry.value}
                         entry={entry}
                         section="recent"
-                        onPad={isOnPad(entry.value)}
-                        onToggle={onToggle}
+                        onPad={placedValues.has(entry.value)}
+                        onToggle={toggle}
                       />
                     ))}
                   </CommandGroup>
                 ) : null}
-                {matches.length > 0 ? (
-                  <CommandGroup heading={term ? undefined : "All models"}>
-                    {matches.map((entry) => (
+                {sorted.length > 0 ? (
+                  <CommandGroup heading={searching ? undefined : "All models"}>
+                    {sorted.map((entry) => (
                       <AddRow
                         key={entry.value}
                         entry={entry}
                         section="all"
-                        onPad={isOnPad(entry.value)}
-                        onToggle={onToggle}
+                        onPad={placedValues.has(entry.value)}
+                        onToggle={toggle}
                       />
                     ))}
                   </CommandGroup>
