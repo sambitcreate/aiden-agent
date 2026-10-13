@@ -687,6 +687,7 @@
         "renderer/components/image-model-logo.test.tsx",
         "renderer/components/image-generation-placeholder.test.tsx",
         "renderer/components/assistant-image-actions.test.tsx",
+        "renderer/lib/image-dimensions.test.ts",
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
         "renderer/components/sidebar-organize-menu.test.tsx",
