@@ -6,6 +6,7 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import type { ChatMessage } from "../lib/types";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
+import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 
 afterEach(() => {
   cleanup();
@@ -31,9 +32,20 @@ interface Frame {
   persistedHandoffMessageId?: string | null;
   timeline?: GenerationTimeline | null;
   live?: boolean;
+  liveSubagents?: SubagentRunSnapshotV1[];
+  subagentsEnabled?: boolean;
 }
 
-function transcript({ messages, streamingText, streamComplete, persistedHandoffMessageId, timeline, live }: Frame) {
+function transcript({
+  messages,
+  streamingText,
+  streamComplete,
+  persistedHandoffMessageId,
+  timeline,
+  live,
+  liveSubagents,
+  subagentsEnabled,
+}: Frame) {
   return (
     <MessageList
       chatId="chat-settle"
@@ -44,8 +56,8 @@ function transcript({ messages, streamingText, streamComplete, persistedHandoffM
       streamComplete={streamComplete}
       persistedHandoffMessageId={persistedHandoffMessageId ?? null}
       timeline={timeline ?? null}
-      liveSubagents={[]}
-      subagentsEnabled={false}
+      liveSubagents={liveSubagents ?? []}
+      subagentsEnabled={subagentsEnabled ?? false}
       onOpenSubagent={() => undefined}
       agentActivity={null}
       error={null}
@@ -196,4 +208,68 @@ test("text closed by a tool step finishes its reveal instead of appearing all at
   );
   await wait(1_000);
   assert.ok(view.container.textContent?.includes("Sentence 24 ends here."), "and it finishes revealing");
+});
+
+function liveRun(runId: string): SubagentRunSnapshotV1 {
+  return {
+    version: 1,
+    runId,
+    groupId: "group-1",
+    generationId: "generation-1",
+    childId: `child-${runId}`,
+    chatId: "chat-settle",
+    workspaceId: "workspace-1",
+    revision: 1,
+    role: "scout",
+    label: "Code scout",
+    taskPreview: "Review the renderer integration",
+    state: "running",
+    activity: "Reading component boundaries",
+    startedAt: 1,
+    updatedAt: 2,
+    modelId: "test-model",
+    turns: 1,
+    tools: 1,
+    tokens: 10,
+    warnings: [],
+  };
+}
+
+function chipRunIds(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]")].map(
+    (chip) => chip.dataset.subagentChipRunId ?? "",
+  );
+}
+
+test("subagent chips show on live and saved replies only while subagents are enabled", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const reference: SubagentMessageReferenceV1 = {
+    version: 1,
+    generationId: "generation-0",
+    runIds: ["saved-run"],
+    total: 1,
+    completed: 1,
+    failed: 0,
+    timedOut: 0,
+    interrupted: 0,
+  };
+  const earlier: ChatMessage = {
+    id: "assistant-0",
+    role: "assistant",
+    content: "Earlier answer.",
+    createdAt: 0,
+    subagents: reference,
+  };
+  const frame = (subagentsEnabled: boolean): Frame => ({
+    messages: [earlier, prompt],
+    streamingText: "Working on it.\n\n",
+    liveSubagents: [liveRun("live-run")],
+    subagentsEnabled,
+  });
+
+  const view = render(transcript(frame(true)));
+  assert.deepEqual(chipRunIds(view.container).sort(), ["live-run", "saved-run"]);
+
+  view.rerender(transcript(frame(false)));
+  assert.deepEqual(chipRunIds(view.container), [], "a disabled capability hides every chip");
 });

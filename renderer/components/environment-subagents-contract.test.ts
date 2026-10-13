@@ -265,7 +265,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const appHandler = source("../../main/handlers/app.ts");
   const bootstrap = source("../main/app.tsx");
   const environment = source("./environment-panel.tsx");
-  const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
   assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
@@ -290,8 +289,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(
     pane,
     /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,
