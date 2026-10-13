@@ -1980,6 +1980,26 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAMacRunsRetainedTextShowsWithTheToolThatFollowedItWhenThePhoneAttaches() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture(
+            replay: AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Checking the file"}"#)
+                + AidenLiveForeignRunFixture.frame(3, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+        )
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Checking the file", "the text before the tool shows with it, without waiting for a tick")
+    }
+
+    @MainActor
     func testHeldCatalogCannotPublishAfterRemovalOrUnpair() async throws {
         for unpair in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-invalidation-\(UUID())")
@@ -10991,6 +11011,13 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 /// A Mac run that is live when the chat opens; its event response stays open,
 /// so the test pushes each later frame with `pushEvent`.
 private final class AidenLiveForeignRunFixture: @unchecked Sendable {
+    /// Events the Mac has retained for the run when the phone attaches.
+    private let replay: String
+
+    init(replay: String = AidenLiveForeignRunFixture.frame(2, "text_delta", #"{"text":"Hello wor"}"#)) {
+        self.replay = replay
+    }
+
     func response(_ request: URLRequest) -> (Int, String, Data)? {
         switch request.url!.path {
         case "/api/aiden/v1/server":
@@ -11003,7 +11030,7 @@ private final class AidenLiveForeignRunFixture: @unchecked Sendable {
         case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
             return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data((
                 Self.frame(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
-                    + Self.frame(2, "text_delta", #"{"text":"Hello wor"}"#)
+                    + replay
             ).utf8))
         default:
             return nil

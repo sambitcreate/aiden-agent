@@ -9401,7 +9401,11 @@ extension AidenChatViewModel {
         foreignRunIsLive = true
         foreignRunAccountedRunId = projection.runId
         foreignRunsShownLive += 1
-        publishForeignRun(context: context)
+        // The retained replay lands at once: text it holds before a tool,
+        // approval or other structural state shows before that state.
+        let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
+            || projection.pendingApproval != nil || projection.pendingQuestion != nil
+        publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
             chatID: chat.id,
