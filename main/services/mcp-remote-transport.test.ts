@@ -9,6 +9,8 @@ import { SseError } from "@modelcontextprotocol/sdk/client/sse.js";
 import { GenerationBoundConnectionCache } from "./generation-bound-connection-cache.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { observeSseReauthentication } from "./mcp-sse-auth-lifecycle.js";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
 
 const serviceUrl = "https://mcp.example/mcp";
 const initialized = {
@@ -226,7 +228,8 @@ test("HTTP tools/list POST succeeds on the same session after optional GET retri
 });
 
 function authenticatedFixture(kind: "http" | "sse", mode: "failed" | "successful" | "transient") {
-  let tokens: OAuthTokens = { access_token: "old-token", refresh_token: "refresh-token", token_type: "Bearer" };
+  // A distinct grant per fixture: identical concurrent refreshes are shared process-wide.
+  let tokens: OAuthTokens = { access_token: "old-token", refresh_token: `refresh-token-${kind}-${mode}`, token_type: "Bearer" };
   let rejectOldToken = false;
   let refreshFails = mode === "failed";
   let transient = mode === "transient";
@@ -379,4 +382,177 @@ test("a late SSE auth failure cannot evict a replacement connection", async () =
   assert.equal(await acquire(), replacement);
   assert.notEqual(replacement, first);
   await cache.disconnect("server");
+});
+
+
+/**
+ * Provider over one shared session store, with the background provider's
+ * persistence rules: rotate saved tokens into the bound session and
+ * invalidate only the tokens this provider last observed.
+ */
+function storeBackedProvider(store: { session: McpOAuthSession }): OAuthClientProvider {
+  const binding = mcpAuthorizationBinding(serviceUrl);
+  let observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined;
+  return {
+    redirectUrl: "http://127.0.0.1:41432/callback",
+    clientMetadata: { redirect_uris: ["http://127.0.0.1:41432/callback"] },
+    clientInformation: () => ({ client_id: "fixture-client" }),
+    tokens: () => {
+      const tokens = store.session.tokens;
+      observed = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+      return tokens;
+    },
+    saveTokens: (tokens) => {
+      store.session = sessionWithSavedMcpTokens(store.session, binding, tokens);
+      observed = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+    },
+    invalidateCredentials: (scope) => {
+      if (scope !== "tokens") return;
+      const next = sessionAfterTokenInvalidation(store.session, observed);
+      if (next) store.session = next;
+    },
+    redirectToAuthorization: () => { throw new Error("fixture sign-in required"); },
+    saveCodeVerifier: () => {},
+    codeVerifier: () => "fixture-verifier",
+  };
+}
+
+/** Rotating authorization server: each refresh token works exactly once. */
+function rotatingAuthority(grant: string) {
+  let generation = 1;
+  let expired = false;
+  let refreshPosts = 0;
+  let gate: Promise<void> = Promise.resolve();
+  let release: () => void = () => {};
+  const valid = () => `${grant}-access-${generation}`;
+  const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit): Promise<Response | undefined> => {
+    const url = String(input);
+    if (url.includes("oauth-protected-resource")) {
+      return Response.json({ resource: serviceUrl, authorization_servers: ["https://auth.example"] });
+    }
+    if (url === "https://auth.example/token") {
+      refreshPosts += 1;
+      const presented = new URLSearchParams(String(init?.body)).get("refresh_token");
+      await gate;
+      if (presented !== `${grant}-refresh-${generation}`) {
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
+      }
+      generation += 1;
+      return Response.json({ access_token: valid(), refresh_token: `${grant}-refresh-${generation}`, token_type: "Bearer" });
+    }
+    if (url.startsWith("https://auth.example")) {
+      return Response.json({ issuer: "https://auth.example", authorization_endpoint: "https://auth.example/authorize",
+        token_endpoint: "https://auth.example/token", response_types_supported: ["code"],
+        code_challenge_methods_supported: ["S256"] });
+    }
+    return undefined;
+  };
+  return {
+    fetch, valid, refreshPosts: () => refreshPosts,
+    /** Only the newest access token works, and the first one stops working once expired. */
+    accepts: (init?: RequestInit) => new Headers(init?.headers).get("authorization") === `Bearer ${valid()}` && !(expired && generation === 1),
+    expire() { expired = true; },
+    hold() { gate = new Promise((resolve) => { release = resolve; }); },
+    release: () => release(),
+    initialTokens: (): OAuthTokens => ({ access_token: valid(), refresh_token: `${grant}-refresh-${generation}`, token_type: "Bearer" }),
+  };
+}
+
+test("concurrent 401s from separate clients share one rotating refresh and keep the saved tokens", async (t) => {
+  const authority = rotatingAuthority("concurrent");
+  const store = { session: { authorizationBinding: mcpAuthorizationBinding(serviceUrl), tokens: authority.initialTokens() } as McpOAuthSession };
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const oauth = await authority.fetch(input, init);
+    if (oauth) return oauth;
+    if (init?.method === "GET") return new Response(null, { status: 405 });
+    if (!authority.accepts(init)) {
+      return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } });
+    }
+    const request = JSON.parse(String(init?.body));
+    if (request.id === undefined) return new Response(null, { status: 202 });
+    return Response.json({ jsonrpc: "2.0", id: request.id, result: request.method === "initialize" ? initialized : { tools } });
+  };
+  const clients = [0, 1].map(() => new Client({ name: "refresh-regression", version: "1" }));
+  t.after(() => Promise.all(clients.map((client) => client.close())));
+  for (const client of clients) {
+    await client.connect(createMcpRemoteTransport({ transport: "http", serviceUrl, fetch, authProvider: storeBackedProvider(store) }));
+  }
+  authority.expire();
+  authority.hold();
+  const listed = Promise.all(clients.map((client) => client.listTools()));
+  await until(() => authority.refreshPosts() >= 1);
+  await delay(20);
+  authority.release();
+  const results = await listed;
+  assert.deepEqual(results.map(({ tools: listedTools }) => listedTools.length), [1, 1]);
+  assert.equal(authority.refreshPosts(), 1, "both clients shared one refresh_token POST");
+  assert.equal(store.session.tokens?.access_token, "concurrent-access-2");
+  assert.equal(store.session.tokens?.refresh_token, "concurrent-refresh-2");
+});
+
+test("a stale invalid_grant never deletes tokens another client already rotated", async () => {
+  const binding = mcpAuthorizationBinding(serviceUrl);
+  const store = { session: { authorizationBinding: binding, tokens: { access_token: "stale-access", refresh_token: "stale-refresh", token_type: "Bearer" } } as McpOAuthSession };
+  const provider = storeBackedProvider(store);
+  let posts = 0;
+  const fetchFn: typeof globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("oauth-protected-resource")) return Response.json({ resource: serviceUrl, authorization_servers: ["https://auth.example"] });
+    if (url === "https://auth.example/token") {
+      posts += 1;
+      const presented = new URLSearchParams(String(init?.body)).get("refresh_token");
+      if (presented === "stale-refresh") {
+        // Another client rotated first and saved its result while this request was in flight.
+        store.session = sessionWithSavedMcpTokens(store.session, binding, { access_token: "rotated-access", refresh_token: "rotated-refresh", token_type: "Bearer" });
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
+      }
+      assert.equal(presented, "rotated-refresh");
+      return Response.json({ access_token: "next-access", refresh_token: "next-refresh", token_type: "Bearer" });
+    }
+    return Response.json({ issuer: "https://auth.example", authorization_endpoint: "https://auth.example/authorize",
+      token_endpoint: "https://auth.example/token", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"] });
+  };
+  assert.equal(await auth(provider, { serverUrl: serviceUrl, fetchFn }), "AUTHORIZED");
+  assert.equal(posts, 2);
+  assert.equal(store.session.tokens?.access_token, "next-access");
+  // Whereas the tokens a provider itself observed are still revocable.
+  assert.equal(sessionAfterTokenInvalidation(store.session, { access_token: "next-access", refresh_token: "next-refresh" })?.tokens, undefined);
+});
+
+test("a request cancelled while its 401 refresh is pending is never re-sent", async (t) => {
+  const authority = rotatingAuthority("cancelled");
+  const store = { session: { authorizationBinding: mcpAuthorizationBinding(serviceUrl), tokens: authority.initialTokens() } as McpOAuthSession };
+  const toolCalls: unknown[] = [];
+  const cancellations: unknown[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const oauth = await authority.fetch(input, init);
+    if (oauth) return oauth;
+    if (init?.method === "GET") return new Response(null, { status: 405 });
+    const request = JSON.parse(String(init?.body));
+    if (request.method === "tools/call") toolCalls.push(request.id);
+    if (request.method === "notifications/cancelled") cancellations.push(request.params.requestId);
+    if (!authority.accepts(init)) {
+      return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } });
+    }
+    if (request.id === undefined) return new Response(null, { status: 202 });
+    return Response.json({ jsonrpc: "2.0", id: request.id, result: request.method === "initialize" ? initialized : { content: [] } });
+  };
+  const client = new Client({ name: "cancel-regression", version: "1" });
+  client.onerror = () => {};
+  t.after(() => client.close());
+  await client.connect(createMcpRemoteTransport({ transport: "http", serviceUrl, fetch, authProvider: storeBackedProvider(store) }));
+  authority.expire();
+  authority.hold();
+  const controller = new AbortController();
+  const call = client.callTool({ name: "example", arguments: {} }, undefined, { signal: controller.signal });
+  await until(() => authority.refreshPosts() >= 1);
+  controller.abort(new Error("caller cancelled"));
+  await assert.rejects(call, /caller cancelled/u);
+  authority.release();
+  await until(() => cancellations.length >= 2);
+  await delay(20);
+  assert.equal(toolCalls.length, 1, "the cancelled tools/call reached the server only once, before the refresh");
+  assert.equal(store.session.tokens?.access_token, authority.valid(), "refreshed tokens persist");
+  // The connection itself remains usable after the refresh.
+  assert.deepEqual((await client.callTool({ name: "example", arguments: {} })).content, []);
 });

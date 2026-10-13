@@ -331,7 +331,7 @@ function cleanupApplication(): void {
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
-  void mcpManager.closeAll();
+  void mcpManager.closeAll({ final: true });
 }
 
 /** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */

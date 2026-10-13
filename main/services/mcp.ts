@@ -1,7 +1,7 @@
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
-import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
@@ -9,9 +9,9 @@ import { snapshotMcpServerInstructions, type McpServerInstructionSnapshot } from
 // / SSE) via the official MCP SDK, caches clients, and exposes their tools as
 // pi agent tools for the generation loop.
 
-import { createMcpResourceTool } from "./mcp-resources.js";
+import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage } from "./mcp-resources.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
@@ -126,14 +126,13 @@ function makeTransport(
   if (server.transport === "stdio") {
     if (!server.command)
       throw new Error("This MCP server needs a command to run.");
-    return new StdioClientTransport({
+    // Only the SDK's safe default environment plus the server's declared env:
+    // Aiden's own environment (tokens, proxy secrets) never reaches the child.
+    return createMcpStdioTransport({
       command: server.command,
       maxBufferSize: MAX_MCP_RESPONSE_BYTES,
       args: server.args ?? [],
-      env: {
-        ...(process.env as Record<string, string>),
-        ...(server.env ?? {}),
-      },
+      env: server.env ?? {},
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
@@ -299,9 +298,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
 
 
 class McpManager {
-  private readonly clients = new GenerationBoundConnectionCache<Client>();
+  // Bound the whole attempt (transport start included), not just initialize.
+  private readonly clients = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
   private readonly statusClients =
-    new GenerationBoundConnectionAttempts<Client>();
+    new GenerationBoundConnectionAttempts<Client>({ connectTimeoutMs: MCP_DISCOVERY_DEADLINES.connectMs });
+  private closed = false;
   private readonly toolInventories = createMcpToolInventoryCache<{
     tools: McpToolInfo[];
     guard: ReturnType<typeof createMcpToolCallGuard>;
@@ -404,8 +405,18 @@ class McpManager {
     this.activity.forget(id);
   }
 
-  /** Close every server in parallel, including closes already under way. */
-  async closeAll(): Promise<void> {
+  /**
+   * Close every server in parallel, including closes already under way.
+   * `final` (application shutdown) also refuses every later connection, so a
+   * discovery racing quit cannot spawn a server after its close.
+   */
+  async closeAll(options: { final?: boolean } = {}): Promise<void> {
+    if (options.final) {
+      this.closed = true;
+      const shutdown = Promise.all([this.clients.shutdown(), this.statusClients.shutdown()]).then(() => undefined);
+      this.disconnecting.add(shutdown);
+      void shutdown.finally(() => this.disconnecting.delete(shutdown)).catch(() => undefined);
+    }
     for (const id of new Set([
       ...this.clients.ids(),
       ...this.statusClients.ids(),
@@ -418,7 +429,7 @@ class McpManager {
 
   /** Shutdown variant: resolves false instead of waiting past `budgetMs`. */
   closeAllWithin(budgetMs: number): Promise<boolean> {
-    return raceDeadline(this.closeAll(), budgetMs, "MCP shutdown").then(
+    return raceDeadline(this.closeAll({ final: true }), budgetMs, "MCP shutdown").then(
       () => true,
       () => false,
     );
@@ -443,6 +454,7 @@ class McpManager {
           const active = () => isCurrent() && connectionIsCurrent();
           await client.connect(
             makeTransport(await resolveAuth(server, active), active) as never,
+            mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
           );
         },
         (client, connectionIsCurrent) =>
@@ -466,6 +478,7 @@ class McpManager {
     generation: number,
     providerScope?: McpProviderExecutionScope,
   ): Promise<{ tools: AgentTool[]; instructions?: McpServerInstructionSnapshot }> {
+    if (this.closed) throw new Error("MCP connections are shut down.");
     const lease = mcpConfigurationLeases.acquire(server.id);
     if (server.authProvider && !providerScope) throw new Error("Provider-authenticated MCP requires a live attended operation.");
     const scoped = <R>(use: (client: Client, signal: AbortSignal) => Promise<R>, callerSignal?: AbortSignal): Promise<R> => withMcpProviderOperation({
@@ -490,7 +503,7 @@ class McpManager {
       const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
         signal,
         assertCurrent,
-        listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal }),
+        listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs),
       }) as McpToolInfo[] : [];
       return { tools, guard: createMcpToolCallGuard(tools) };
     };
@@ -509,15 +522,18 @@ class McpManager {
       ...describe(client),
     }));
     assertGeneration();
-    const client: Pick<Client, "callTool" | "listResources" | "listResourceTemplates" | "readResource"> = cachedClient ? {
+    type ToolCallOptions = Parameters<typeof callMcpTool>[2];
+    const client: Parameters<typeof createMcpResourceTool>[1] & {
+      callTool(params: Parameters<typeof callMcpTool>[1], schema: undefined, options?: ToolCallOptions): ReturnType<typeof callMcpTool>;
+    } = cachedClient ? {
       callTool: (params, _schema, options) => this.withLiveClient(server, generation, cachedClient, (live) => callMcpTool(live, params, options)),
-      listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResources(params, options)),
-      listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.listResourceTemplates(params, options)),
+      listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourcesPage(live, params, options)),
+      listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourceTemplatesPage(live, params, options)),
       readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => live.readResource(params, options)),
     } : {
       callTool: (params, _schema, options) => scoped((connection, signal) => callMcpTool(connection, params, { ...options, signal }), options?.signal),
-      listResources: (params, options) => scoped((connection, signal) => connection.listResources(params, { ...options, signal }), options?.signal),
-      listResourceTemplates: (params, options) => scoped((connection, signal) => connection.listResourceTemplates(params, { ...options, signal }), options?.signal),
+      listResources: (params, options) => scoped((connection, signal) => listMcpResourcesPage(connection, params, { ...options, signal }), options?.signal),
+      listResourceTemplates: (params, options) => scoped((connection, signal) => listMcpResourceTemplatesPage(connection, params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => connection.readResource(params, { ...options, signal }), options?.signal),
     };
     const { tools, guard: callGuard } = metadata;

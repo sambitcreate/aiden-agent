@@ -21,13 +21,16 @@ import type {
 import { shell, logger } from "../platform.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
+  clearMcpStepUpScope,
   hasMcpOAuthSessionData,
+  mcpInteractiveAuthorizationScope,
   McpOAuthSessionTransaction,
   McpOAuthAuthorizationFlow,
   mcpAuthorizationBinding,
   publicMcpClientInformation,
   sessionMatchesMcpBinding,
   sessionForMcpAuthorizationAttempt,
+  sessionAfterTokenInvalidation,
   sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
@@ -172,9 +175,13 @@ class McpOAuthProvider implements OAuthClientProvider {
     });
   }
 
+  /** The tokens this provider last handed to (or received from) the SDK. */
+  private lastTokens?: Pick<OAuthTokens, "access_token" | "refresh_token">;
+
   async tokens(): Promise<OAuthTokens | undefined> {
     const tokens = (await this.boundSession()).tokens;
     if (tokens) this.observeTokens?.(tokens);
+    this.lastTokens = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
     return tokens;
   }
 
@@ -188,6 +195,7 @@ class McpOAuthProvider implements OAuthClientProvider {
     await this.saveSession(
       sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope),
     );
+    this.lastTokens = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -217,7 +225,10 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.assertCanMutate();
     const session = await this.boundSession();
     this.assertCanMutate();
-    const boundUrl = this.authorization.authorizationUrl(authorizationUrl, session.tokens?.scope || session.grantedScope);
+    const boundUrl = this.authorization.authorizationUrl(
+      authorizationUrl,
+      mcpInteractiveAuthorizationScope(this.metadataServer?.url, session.tokens?.scope || session.grantedScope),
+    );
     await shell.openExternal(boundUrl.toString());
   }
 
@@ -237,8 +248,11 @@ class McpOAuthProvider implements OAuthClientProvider {
     const session = await this.boundSession();
     this.assertCanMutate();
     if (scope === "tokens") {
-      if (session.tokens?.scope) session.grantedScope = session.tokens.scope;
-      delete session.tokens;
+      // Compare-and-delete: newer tokens saved by a concurrent client survive.
+      const next = sessionAfterTokenInvalidation(session, this.lastTokens);
+      if (!next) return;
+      await this.saveSession(next);
+      return;
     }
     if (scope === "verifier") delete session.codeVerifier;
     if (scope === "client") delete session.clientInformation;
@@ -519,6 +533,7 @@ export async function authorizeMcpServer(
           return isCurrent() && oauthOperations.isCurrent(operation);
         }),
       );
+      clearMcpStepUpScope(server.url);
       return;
     } catch (error) {
       await client.close().catch(() => {});
@@ -560,6 +575,7 @@ export async function authorizeMcpServer(
         return isCurrent() && oauthOperations.isCurrent(operation);
       }),
     );
+    clearMcpStepUpScope(server.url);
   } catch (error) {
     if (commitAttempted && oauthOperations.isCurrent(operation)) {
       try {
