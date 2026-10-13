@@ -215,6 +215,21 @@ test("the default model is the stored choice when usable, otherwise the first av
   assert.equal((await runtime.defaultModel())?.id, "fal-ai/flux/schnell");
 });
 
+test("with no stored default, Nano Banana 2 is preferred over earlier-listed models, then the first available", async (t) => {
+  // Pi's bundled list puts FLUX before Nano Banana 2, as here.
+  const { runtime } = await setup(t, {
+    env: { AIDEN_IMAGE_OPENROUTER_API_KEY: "sk-or-image-env" },
+    openRouterModels: () => [
+      imageModel("openrouter", "black-forest-labs/flux-3-image", "openrouter-images"),
+      imageModel("openrouter", "google/gemini-3.1-flash-image", "openrouter-images", ["text", "image"]),
+    ],
+  });
+  assert.equal((await runtime.snapshot()).defaultModel?.id, "google/gemini-3.1-flash-image");
+
+  await runtime.setModelEnabled("openrouter", "google/gemini-3.1-flash-image", false);
+  assert.equal((await runtime.snapshot()).defaultModel?.id, "black-forest-labs/flux-3-image");
+});
+
 test("clearing for onboarding reset removes image keys and settings but not chat keys", async (t) => {
   const { runtime, credentials, root } = await setup(t);
   await runtime.setKey("fal", "fal-stored-key-1");

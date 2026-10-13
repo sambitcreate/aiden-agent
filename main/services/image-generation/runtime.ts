@@ -40,6 +40,7 @@ import {
   type ImageModelRef,
   type ReplicateReferenceField,
 } from "../../../renderer/shared/image-generation/types.js";
+import { DEFAULT_IMAGE_MODEL } from "../../../renderer/shared/images/schema.js";
 import { requestedAspectRatio } from "./adapter-core.js";
 import { createImageCredentialView } from "./credential-view.js";
 import { CatalogFetchError, fetchImageModels, IMAGE_CATALOG_FETCH_TIMEOUT_MS } from "./catalog-fetch.js";
@@ -726,7 +727,8 @@ export class ImageGenerationRuntime {
 
   /**
    * The model to preselect: the stored default when it is enabled and its
-   * provider has a key, otherwise the first available model.
+   * provider has a key, otherwise Nano Banana 2 when usable, otherwise the
+   * first available model.
    */
   async defaultModel(): Promise<ImageModel<ImageApi> | undefined> {
     const row = await this.defaultRow();
@@ -750,12 +752,10 @@ export class ImageGenerationRuntime {
     await this.registration;
     const keys = await this.keyStatuses();
     const usable = this.rows.filter((row) => row.enabled && keys[row.entry.provider].connected);
-    const preferred = this.settingsSnapshot?.defaultModel;
-    return (
-      (preferred &&
-        usable.find((row) => row.entry.provider === preferred.provider && row.entry.id === preferred.id)) ||
-      usable[0]
-    );
+    const find = (ref: { readonly provider: string; readonly id: string } | null | undefined) =>
+      ref ? usable.find((row) => row.entry.provider === ref.provider && row.entry.id === ref.id) : undefined;
+    // Automatic: the owner's Nano Banana 2 preference (shared with Create Images), then the first available.
+    return find(this.settingsSnapshot?.defaultModel) ?? find(DEFAULT_IMAGE_MODEL) ?? usable[0];
   }
 
   /** Onboarding reset: remove every image key and the settings file contents. */
