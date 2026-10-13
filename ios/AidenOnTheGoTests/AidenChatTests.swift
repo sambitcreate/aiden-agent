@@ -11292,6 +11292,47 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
     }
 }
 
+// MARK: - Markdown content cache margin inference
+
+final class AidenMarkdownContentCacheTests: XCTestCase {
+    private typealias Cache = AidenMarkdownContentCache.ChunkMarginInference
+
+    func testFencedCodeBlockStartingWithDashesIsNotASetextHeading() {
+        // A fenced YAML block whose first content line is `---` (the YAML
+        // document separator) was being misclassified as a Setext heading,
+        // causing an 8pt margin jump from 16pt to 24pt in rendered content.
+        let yaml = """
+        ```yaml
+        ---
+        foo: bar
+        ```
+        """
+        let topMargin = Cache.topMargin(ofFirstBlockIn: yaml)
+        XCTAssertEqual(topMargin, 0, "fenced code blocks should have zero top margin")
+    }
+
+    func testQuotedThematicBreakHasHeadingMargin() {
+        // Quoted thematic breaks should inherit the heading margin (24pt, the
+        // child's natural margin in MarkdownUI), not the block default (16pt).
+        // This matches topMargin behavior for quoted ATX headings and thematic
+        // breaks.
+        let quoted = "> ---"
+        let bottomMargin = Cache.bottomMargin(ofLastBlockIn: quoted)
+        // thematicBreak is 24.0
+        XCTAssertEqual(bottomMargin, 24.0, "quoted thematic breaks should use heading margin")
+    }
+
+    func testFencedBackticksAndTildesAreRecognized() {
+        // Sanity check: both ``` and ~~~ are valid fence markers, and both
+        // starting with `---` should not be treated as Setext headings.
+        for fence in ["```", "~~~"] {
+            let code = "\(fence)\n---\ncontent\n\(fence)"
+            let topMargin = Cache.topMargin(ofFirstBlockIn: code)
+            XCTAssertEqual(topMargin, 0)
+        }
+    }
+}
+
 // MARK: - Transcript follow latch (cases ported from Hermex ChatScrollPolicyTests)
 
 final class AidenChatScrollFollowTests: XCTestCase {

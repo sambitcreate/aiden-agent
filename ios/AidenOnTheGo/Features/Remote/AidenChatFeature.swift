@@ -9196,6 +9196,11 @@ extension AidenChatViewModel {
     private func publishForeignRun(context: AidenRemoteRequestContext) {
         guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
         receiveCumulativeLiveText(projection.liveText)
+        // Flush any buffered text before publishing structural events: a
+        // text_delta followed by tool_started or approval_required must show
+        // the text before the structural event, not after (matching the
+        // owned-stream path's apply method).
+        flushPendingStreamingContent()
         reasoning = projection.reasoning
         tools = projection.tools
         if streamState != projection.state { streamState = projection.state }
