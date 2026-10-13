@@ -57,3 +57,22 @@ test("a credential lookup failure marks that preset unready instead of rejecting
   assert.equal(failed.error, "Keychain is locked");
   assert.ok(result.filter((entry) => entry.preset.id !== first!.id).every((entry) => !entry.error && !entry.configured));
 });
+
+test("a configured preset whose sign-in was rejected reports needsSignIn, not ready", async () => {
+  const configured = serverFromPreset(first);
+  const result = await buildMcpPresetStates({
+    presets: MCP_PRESETS,
+    servers: [configured],
+    serverIdFor: (preset) => presetServerId(preset.id),
+    validate: (server) => {
+      assertMcpPresetServer(server);
+    },
+    isReady: async () => false,
+    needsSignIn: () => true,
+  });
+  const own = result.find((state) => state.preset.id === first.id)!;
+  assert.equal(own.ready, false);
+  assert.equal(own.needsSignIn, true);
+  // Unconfigured presets never claim a sign-in problem.
+  assert.equal(result.find((state) => state.preset.id === second.id)!.needsSignIn, undefined);
+});

@@ -111,6 +111,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "formFill:progress",
   "localModels:progress",
   "localVoice:state",
+  /** Live per-server MCP connection status for Settings (`McpLiveStatus`). */
+  "mcp:statusChanged",
   "providers:auth:done",
   "providers:auth:error",
   "providers:auth:event",

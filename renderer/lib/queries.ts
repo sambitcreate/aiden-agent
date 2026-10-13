@@ -1,6 +1,6 @@
 // React Query hooks for providers, chats, and settings.
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   keepPreviousData,
   queryOptions,
@@ -49,6 +49,7 @@ import type {
   Provider,
   Chat,
   GitHubPullRequestStatus,
+  McpLiveStatus,
   UsageDateRange,
 } from "./types";
 
@@ -83,6 +84,8 @@ export const queryKeys = {
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
+  mcpLiveStatus: ["mcpLiveStatus"] as const,
+  mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
@@ -749,6 +752,44 @@ export function useMcpPresets() {
     queryKey: queryKeys.mcpPresets,
     queryFn: mcpApi.presets,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Live per-server MCP status keyed by server id. Reads the current snapshot
+ * once, then applies main's `mcp:statusChanged` pushes; it never polls. A
+ * change in sign-in health refreshes the preset list's readiness.
+ */
+export function useMcpLiveStatus() {
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      mcpApi.onStatusChanged((status) => {
+        let signInChanged = false;
+        queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+          const previous = current.find((entry) => entry.serverId === status.serverId);
+          signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+          const others = current.filter((entry) => entry.serverId !== status.serverId);
+          return status.removed ? others : [...others, status];
+        });
+        if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+      }),
+    [queryClient],
+  );
+  const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
+  return useMemo(
+    () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
+    [query.data],
+  );
+}
+
+/** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
+export function useMcpDependents(serverId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.mcpDependents(serverId ?? ""),
+    queryFn: () => mcpApi.dependents(serverId!),
+    enabled: Boolean(serverId),
+    staleTime: 0,
   });
 }
 

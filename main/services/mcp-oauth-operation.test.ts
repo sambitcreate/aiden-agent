@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { McpOAuthOperationGate } from "./mcp-oauth-operation.js";
+import { McpOAuthCancelledError, McpOAuthOperationGate } from "./mcp-oauth-operation.js";
 
 test("background OAuth cannot mutate PKCE while interactive authorization owns the server", () => {
   const gate = new McpOAuthOperationGate();
@@ -54,4 +54,19 @@ test("cleanup suspension blocks new OAuth operations and every stale writer unti
   assert.equal(gate.isCurrent(duringCleanup), false);
   const next = gate.begin("linear");
   assert.equal(gate.isCurrent(next), true);
+});
+
+test("cancelling a waiting sign-in aborts it as cancelled and lets a new sign-in start at once", () => {
+  const gate = new McpOAuthOperationGate();
+  assert.equal(gate.cancel("linear"), false);
+  const waiting = gate.begin("linear");
+  assert.equal(gate.cancel("linear"), true);
+  assert.equal(waiting.signal.aborted, true);
+  assert.ok(waiting.signal.reason instanceof McpOAuthCancelledError);
+  assert.equal(gate.isCurrent(waiting), false);
+  // The cancelled flow's own cleanup must not end its replacement.
+  const retry = gate.begin("linear");
+  gate.end(waiting);
+  assert.equal(gate.isCurrent(retry), true);
+  assert.throws(() => gate.begin("linear"), /already in progress/u);
 });

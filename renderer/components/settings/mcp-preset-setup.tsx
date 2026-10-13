@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
-import { ShieldCheck } from "lucide-react";
+import { McpSignInControls } from "./mcp-sign-in-controls";
 import { mcpApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
 import { mcpPresetCredentialReady } from "../../lib/mcp-preset-state";
@@ -44,6 +44,12 @@ export function PresetSetupDialog({
   const [key, setKey] = React.useState("");
   const [hasKey, setHasKey] = React.useState(state.ready);
   const [authorized, setAuthorized] = React.useState(state.ready);
+  const [needsSignIn, setNeedsSignIn] = React.useState(Boolean(state.needsSignIn));
+  const [signingOut, setSigningOut] = React.useState(false);
+  // Set up for sign-in only: removed again if the dialog closes without Connect.
+  const storedForSignIn = React.useRef(false);
+  const confirmed = React.useRef(false);
+  const cancelledSignIn = React.useRef(false);
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
@@ -59,9 +65,12 @@ export function PresetSetupDialog({
       setKey("");
       setHasKey(state.ready);
       setAuthorized(state.ready);
+      setNeedsSignIn(Boolean(state.needsSignIn));
       setEnabled(server?.enabled ?? true);
+      storedForSignIn.current = false;
+      confirmed.current = false;
     }
-  }, [open, server, preset, state.enabled, state.ready]);
+  }, [open, server, preset, state.enabled, state.ready, state.needsSignIn]);
 
   const build = (): McpServer => ({
     id: state.serverId,
@@ -92,27 +101,77 @@ export function PresetSetupDialog({
 
   const handleAuthorize = async () => {
     setAuthorizing(true);
+    cancelledSignIn.current = false;
     try {
-      const record = build();
-      await mcpApi.save(record);
+      // Tokens need a saved endpoint. A new preset is stored for sign-in and
+      // removed again if the dialog is cancelled; a configured one only takes
+      // an address change, never its other unsaved edits.
+      const address = url.trim() || preset.url;
+      const record: McpServer = server && !storedForSignIn.current ? { ...server, url: address } : build();
+      if (!server || storedForSignIn.current) {
+        await mcpApi.save(record);
+        storedForSignIn.current = true;
+      } else if (server.url !== address) {
+        await mcpApi.save(record);
+      }
       await mcpApi.authorize(record);
       setAuthorized(true);
+      setNeedsSignIn(false);
       await refresh();
       toast.success(`Authorized — you're signed in to ${preset.name}.`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      if (!cancelledSignIn.current) toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setAuthorizing(false);
     }
   };
 
+  const cancelSignIn = async () => {
+    cancelledSignIn.current = true;
+    await mcpApi.cancelAuthorize(state.serverId).catch(() => undefined);
+  };
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await mcpApi.signOut(state.serverId);
+      setAuthorized(false);
+      setNeedsSignIn(false);
+      await refresh();
+      toast.success(`Signed out of ${preset.name}.`);
+    } catch (error) {
+      toast.error(`Couldn’t sign out: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const closeDialog = (next: boolean) => {
+    if (!next) {
+      if (authorizing) void cancelSignIn();
+      if (storedForSignIn.current && !confirmed.current) {
+        storedForSignIn.current = false;
+        void mcpApi
+          .remove(state.serverId)
+          .catch(() => undefined)
+          .then(refresh);
+      }
+    }
+    onOpenChange(next);
+  };
+
   const handleTest = async () => {
     setTesting(true);
     try {
-      await mcpApi.save(build());
-      await persistKey(); // store a freshly pasted key before connecting
-      await refresh();
-      const status = await mcpApi.status(build());
+      // Tests the draft (and any pasted key) without saving either.
+      const status = await mcpApi.testDraft(
+        build(),
+        preset.auth.kind === "apiKey" && key.trim() ? key.trim() : undefined,
+      );
+      if (status.needsSignIn) {
+        setNeedsSignIn(true);
+        setAuthorized(false);
+      }
       if (status.connected)
         toast.success(
           `Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`,
@@ -157,7 +216,7 @@ export function PresetSetupDialog({
     <Dialog
       submitOnEnter
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={closeDialog}
       title={
         <span className="flex items-center gap-2.5">
           <span
@@ -171,7 +230,7 @@ export function PresetSetupDialog({
       }
       description={preset.tagline}
       size="large"
-      busy={saving || testing || authorizing || toggling}
+      busy={saving || testing || toggling}
       confirmLabel={saving ? "Saving…" : server ? "Save" : "Connect"}
       confirmDisabled={
         saving ||
@@ -186,6 +245,7 @@ export function PresetSetupDialog({
         setSaving(true); setConnectionError(null);
         try {
           await mcpApi.save(build());
+          confirmed.current = true;
           await persistKey();
           await refresh();
           if (enabled) {
@@ -294,25 +354,25 @@ export function PresetSetupDialog({
           <Field
             label="Authentication"
             description={
-              authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."
+              authorizing
+                ? "Finish signing in in your browser, or cancel."
+                : needsSignIn
+                  ? `Your ${preset.name} sign-in expired or was revoked. Sign in again to reconnect.`
+                  : authorized
+                    ? "Signed in. Re-run to refresh access."
+                    : "Opens your browser to sign in."
             }
           >
-            <div className="flex items-center gap-2">
-              <Button
-                size="small"
-                variant="filled"
-                onClick={handleAuthorize}
-                disabled={saving || testing || authorizing || toggling || !url.trim()}
-              >
-                {authorizing ? "Waiting for browser…" : authorized ? "Re-authorize" : "Authorize"}
-              </Button>
-              {authorized ? (
-                <span className="flex items-center gap-1 text-small text-support-green">
-                  <ShieldCheck className="size-4" />
-                  Authorized
-                </span>
-              ) : null}
-            </div>
+            <McpSignInControls
+              authorizing={authorizing}
+              authorized={authorized}
+              needsSignIn={needsSignIn}
+              signingOut={signingOut}
+              disabled={saving || testing || toggling || !url.trim()}
+              onAuthorize={() => void handleAuthorize()}
+              onCancel={() => void cancelSignIn()}
+              onSignOut={() => void handleSignOut()}
+            />
           </Field>
         )}
 

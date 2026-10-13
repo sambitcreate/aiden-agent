@@ -1,4 +1,4 @@
-import type { McpPresetAuth, McpPresetState, McpServer } from "./types";
+import type { McpLiveStatus, McpPresetAuth, McpPresetState, McpServer, McpServerDependents } from "./types";
 
 export function mcpPresetCredentialReady({
   auth,
@@ -54,4 +54,58 @@ export function mcpServerDraftForEditor(
   const next = { ...server };
   delete next.presetId;
   return next;
+}
+
+export type McpLiveTone = "green" | "red" | "warning" | "neutral";
+
+/** What a configured row says about its live connection. */
+export function mcpLiveStatusView(
+  status: McpLiveStatus | undefined,
+  enabled: boolean,
+): { label: string; tone: McpLiveTone; error?: string } | null {
+  if (!enabled) return null;
+  if (status?.needsSignIn) return { label: "Needs sign-in", tone: "warning" };
+  switch (status?.state) {
+    case "connected":
+      return { label: "Connected", tone: "green" };
+    case "connecting":
+      return { label: "Connecting…", tone: "neutral" };
+    case "failed":
+      return { label: "Couldn’t connect", tone: "red", error: status.error };
+    case "closed":
+      return { label: "Idle", tone: "neutral" };
+    default:
+      return { label: "Not connected yet", tone: "neutral" };
+  }
+}
+
+/** One sentence naming what relies on a server, or null when nothing does. */
+export function mcpDependentsSummary(dependents: McpServerDependents | undefined): string | null {
+  if (!dependents) return null;
+  const quote = (names: string[]) => names.map((name) => `“${name}”`).join(", ");
+  const parts = [
+    dependents.schedules.length
+      ? `${dependents.schedules.length === 1 ? "Scheduled task" : "Scheduled tasks"} ${quote(dependents.schedules.map((task) => task.name))}`
+      : null,
+    dependents.bots.length
+      ? `${dependents.bots.length === 1 ? "Bot" : "Bots"} ${quote(dependents.bots.map((bot) => bot.name))}`
+      : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length ? parts.join(" and ") : null;
+}
+
+/** Fields that decide where and how Aiden connects; changing them re-requires approval. */
+export function mcpConnectionChanged(saved: McpServer, draft: McpServer): boolean {
+  const pick = (server: McpServer) =>
+    JSON.stringify([
+      server.transport,
+      server.command ?? null,
+      server.args ?? [],
+      server.url ?? null,
+      server.oauth === true,
+      server.authServerMetadataUrl ?? null,
+      server.oauthClientName ?? null,
+      server.authProvider ?? null,
+    ]);
+  return pick(saved) !== pick(draft);
 }
