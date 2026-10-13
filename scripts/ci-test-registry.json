@@ -900,6 +900,7 @@
         "renderer/shared/bot-connections.test.ts",
         "renderer/shared/bot-presets.test.ts",
         "renderer/components/aiden-activity-mark.test.tsx",
+        "renderer/components/ui-info-hint.test.tsx",
         "renderer/components/settings/model-pad/model-pad-settings.test.tsx",
         "renderer/components/settings/model-pad/model-pad-autosave.test.tsx",
         "renderer/components/settings/model-pad/model-pad-first-visit.test.tsx",
