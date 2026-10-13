@@ -1,20 +1,8 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { flushSync } from "react-dom";
-import {
-  ChevronDown,
-  Gauge,
-  Layers3,
-  Loader2,
-  Pin,
-  Plus,
-  Search,
-  X,
-} from "lucide-react";
-import { AlertDialog, Badge, Button, Field, FieldSet, Input, Text, toast } from "../../ui";
+import { Pin } from "lucide-react";
+import { FieldSet, Text, toast } from "../../ui";
+import { InfoHint } from "../../ui-info-hint";
 import { ProviderIcon } from "../../provider-icon";
-import { ModelPadLegend } from "./model-pad-legend";
-import { ModelPadBenchmarkConnection } from "./model-pad-data-rows";
 import {
   alsoViaLabel,
   benchmarkCoverage,
@@ -22,7 +10,6 @@ import {
   encodeSelection,
   modelBenchmarkPercentiles,
   modelSiblings,
-  MODEL_PAD_QUICK_START_LIMIT,
   pinnedAndRecentQuickStart,
   previewBenchmarkSuggestions,
   topBenchmarkSuggestions,
@@ -32,26 +19,20 @@ import {
 import {
   addModelPadPlacement,
   distributeCapabilityOnlyModelPadSuggestions,
+  measureModelPadAvailableSize,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
   modelPadHasBenchmarkHeight,
-  modelPadHeightCaption,
-  modelPadLeftPercent,
+  modelPadPlacementKind,
+  modelPadPlacementSourceLabel,
   modelPadPointFromPointer,
   modelPadPointKey,
-  modelPadTopPercent,
   moveModelPadPoint,
   nearestAvailableModelPadPoint,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
   snapToModelPadGrid,
-  measureModelPadAvailableSize,
-  modelPadLabelPlacement,
-  modelPadPlacementKind,
-  modelPadPlacementSourceLabel,
-  MODEL_PAD_INSET_PERCENT,
   MODEL_PAD_METRIC_LABELS,
-  MODEL_PAD_RANGE_PERCENT,
   type ModelPadCapabilitySuggestion,
   type ModelPadDirection,
   type ModelPadMetric,
@@ -65,7 +46,6 @@ import {
 import { useModelPadPreferences } from "../../../lib/model-pad-preferences";
 import type { ModelPadPlacement, ModelPadPlacements } from "../../../shared/model-pad-preferences";
 import {
-  clearModelPaceSummaries,
   useModelInsightsStatus,
   useModelPaceSummaries,
   useProviders,
@@ -73,13 +53,18 @@ import {
   useSettings,
 } from "../../../lib/queries";
 import type { ModelInfo } from "../../../lib/types";
-import { cn } from "../../../lib/ui-utils";
-import { prefersReducedMotion } from "../../../lib/appearance-runtime";
-
-/** `column:row` of a grid point, rows counted from the top. */
-function padCellKey(point: ModelPadPoint, gridSize: number): string {
-  return `${Math.round(point.x * (gridSize - 1))}:${Math.round((1 - point.y) * (gridSize - 1))}`;
-}
+import { ModelPadAddPopover, MODEL_PAD_ADD_RECENT_LIMIT } from "./model-pad-add-popover";
+import { ModelPadArrangeMenu, ModelPadMetricChip, ModelPadMoreMenu } from "./model-pad-arrange-menu";
+import {
+  ModelPadCanvas,
+  ModelPadPreviewBar,
+  ModelPadQuickStart,
+  padCellKey,
+  type ModelPadGhostView,
+  type ModelPadMarkerView,
+} from "./model-pad-canvas";
+import { ModelPadDataRows } from "./model-pad-data-rows";
+import { ModelPadTray, type ModelPadTrayRow } from "./model-pad-tray";
 
 function gridLocation(point: ModelPadPoint, gridSize: number): string {
   const column = Math.round(point.x * (gridSize - 1)) + 1;
@@ -89,6 +74,16 @@ function gridLocation(point: ModelPadPoint, gridSize: number): string {
 
 function placementLabel(entry: ModelEntry): string {
   return `${entry.label} from ${entry.providerLabel}`;
+}
+
+/** A benchmark score as the Pad shows it: one decimal at most. */
+function formatScore(score: number): string {
+  return String(Math.round(score * 10) / 10);
+}
+
+function benchmarkScore(entry: ModelEntry, metric: ModelPadMetric): number | undefined {
+  const score = entry.info?.benchmark?.[metric];
+  return typeof score === "number" && Number.isFinite(score) ? score : undefined;
 }
 
 interface ModelPadDragState {
@@ -120,8 +115,7 @@ interface ModelPadAction {
 }
 
 const QUICK_START_LOADING_REASON = "Loading your models…";
-
-const MODEL_PAD_METRICS: readonly ModelPadMetric[] = ["intelligence", "coding", "agentic"];
+const BENCHMARKS_NOT_CONNECTED_REASON = "Connect benchmark scores in Data below first";
 
 function addedSuggestionsMessage(count: number): string {
   return `Added ${count} suggestion${count === 1 ? "" : "s"}`;
@@ -164,7 +158,7 @@ function layoutBenchmarkSuggestions(
   return Object.keys(added).length > 0 ? { gridSize, placements, added } : null;
 }
 
-/** One previewed benchmark suggestion: a ghost marker the user can accept. */
+/** One previewed benchmark suggestion: a ghost marker the user can keep. */
 interface ModelPadSuggestion {
   value: string;
   placement: ModelPadPlacement;
@@ -172,64 +166,17 @@ interface ModelPadSuggestion {
 
 /**
  * Previewed suggestions (transient, never persisted). Their spots are fixed on
- * the grid for placed + previewed models, so accepting some or all of them
+ * the grid for placed + previewed models, so keeping some or all of them
  * never moves the rest.
  */
 interface ModelPadSuggestionPreview {
   gridSize: number;
+  /** The score the ghosts were laid out for; their tags name it. */
+  metric: ModelPadMetric;
   suggestions: readonly ModelPadSuggestion[];
 }
 
-/**
- * A Pad action that can be unavailable: an empty-Pad quick start, or Set pace
- * from measured speed. When it can't run it stays focusable (aria-disabled) so
- * keyboard and screen reader users hear why.
- */
-function ModelPadActionButton({
-  icon,
-  label,
-  disabledReason,
-  variant,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  disabledReason?: string;
-  variant?: React.ComponentProps<typeof Button>["variant"];
-  onClick: () => void;
-}) {
-  const reasonId = React.useId();
-  return (
-    <>
-      <Button
-        size="small"
-        variant={variant}
-        // Wraps instead of clipping on a small Pad.
-        className={cn(
-          "h-auto min-h-7 max-w-full whitespace-normal py-1 text-center",
-          disabledReason && "cursor-default opacity-45",
-        )}
-        aria-disabled={Boolean(disabledReason)}
-        aria-describedby={disabledReason ? reasonId : undefined}
-        title={disabledReason}
-        onClick={() => {
-          if (!disabledReason) onClick();
-        }}
-      >
-        {icon}
-        {label}
-      </Button>
-      {disabledReason ? (
-        <span id={reasonId} className="sr-only">
-          {disabledReason}.
-        </span>
-      ) : null}
-    </>
-  );
-}
-
 export function ModelPadSettings() {
-  const queryClient = useQueryClient();
   const providersQuery = useProviders();
   const providers = React.useMemo(() => providersQuery.data ?? [], [providersQuery.data]);
   const catalog = useProvidersModelInfo(providers);
@@ -239,12 +186,9 @@ export function ModelPadSettings() {
   const padPreferences = useModelPadPreferences();
   const savePadPreferences = padPreferences.save;
   // Device-local speed measured from the user's own chats; display-only until
-  // the user chooses Set pace from measured speed.
+  // the user chooses Pace from my chats.
   const paceQuery = useModelPaceSummaries();
   const paceSummaries = paceQuery.data;
-  const [confirmClearPace, setConfirmClearPace] = React.useState(false);
-  const [clearingPace, setClearingPace] = React.useState(false);
-  const clearPaceButtonRef = React.useRef<HTMLButtonElement | null>(null);
   // The settings query is the only copy of the layout: every action saves
   // straight away, the save updates the query optimistically, and a failed
   // save rolls it back. Only in-progress gestures live in local state.
@@ -254,37 +198,35 @@ export function ModelPadSettings() {
   const nudgeTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Bumped by every save and Undo; an older generation's toast or Undo is stale.
   const saveGenerationRef = React.useRef(0);
-  const browseButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const [filter, setFilter] = React.useState("");
+  const addButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const arrangeButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const [activeValue, setActiveValue] = React.useState<string>();
-  const [hoveredValue, setHoveredValue] = React.useState<string>();
+  // Shared by a marker and its tray row: hovering (or focusing a row) lights both.
+  const [hotValue, setHotValue] = React.useState<string>();
   const benchmarkMetric = padPreferences.metric;
   const [suggestionPreview, setSuggestionPreview] = React.useState<ModelPadSuggestionPreview>();
-  // Accept saves still in flight. Their optimistic layout already holds the
-  // accepted models, so the preview may look used up; it must survive until
+  // Keep saves still in flight. Their optimistic layout already holds the
+  // kept models, so the preview may look used up; it must survive until
   // the save settles, because a failed save rolls back and shows the ghosts again.
   const [acceptsInFlight, setAcceptsInFlight] = React.useState(0);
-  // A value to focus once it renders: a suggestion, or a marker just placed from one.
+  // A value to focus once it renders: a suggestion, a marker, or a tray row.
   const focusValueRef = React.useRef<string | undefined>(undefined);
-  const insightsButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const previewButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const [activePanel, setActivePanel] = React.useState<"models" | "insights" | null>(null);
+  // A menu action that moved focus on purpose; the closing menu must not take it back.
+  const keepFocusOnMenuCloseRef = React.useRef(false);
   const [dragState, setDragState] = React.useState<ModelPadDragState>();
   const [announcement, setAnnouncement] = React.useState("");
   const padRef = React.useRef<HTMLDivElement | null>(null);
-  const catalogRef = React.useRef<HTMLDivElement | null>(null);
-  const modelsPanelRef = React.useRef<HTMLElement | null>(null);
-  const panelTransitionRef = React.useRef<ViewTransition | null>(null);
+  const trayRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
     const pad = padRef.current;
     const canvas = pad?.parentElement;
-    const grid = canvas?.parentElement;
-    if (!pad || !canvas || !grid) return;
+    const body = canvas?.parentElement;
+    if (!pad || !canvas || !body) return;
 
     // Measure the real settings viewport: window width alone ignores the app
-    // sidebar, settings navigation, wrapped controls, and user interface zoom.
-    let scrollport = grid.parentElement;
+    // sidebar, settings navigation, the tray, and user interface zoom.
+    let scrollport = body.parentElement;
     while (scrollport && !/(auto|scroll)/u.test(getComputedStyle(scrollport).overflowY)) {
       scrollport = scrollport.parentElement;
     }
@@ -305,17 +247,17 @@ export function ModelPadSettings() {
         scrollportClientHeight: scrollport?.clientHeight ?? window.innerHeight,
       });
       const value = `${size}px`;
-      if (grid.style.getPropertyValue("--model-pad-available-size") !== value) {
-        grid.style.setProperty("--model-pad-available-size", value);
+      if (body.style.getPropertyValue("--model-pad-available-size") !== value) {
+        body.style.setProperty("--model-pad-available-size", value);
       }
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(measure);
     };
     const observer = new ResizeObserver(schedule);
-    // Watch the grid and scrollport only. Observing the canvas height (labels +
-    // square) fed legend wrapping back into the square size and made the outline jump.
-    observer.observe(grid);
+    // Watch the body and scrollport only; observing the canvas height (square +
+    // suggestion bar) would feed the bar back into the square size.
+    observer.observe(body);
     if (scrollport) observer.observe(scrollport);
     measure();
     window.addEventListener("resize", schedule);
@@ -324,16 +266,9 @@ export function ModelPadSettings() {
       observer.disconnect();
       window.removeEventListener("resize", schedule);
     };
-  }, [activePanel]);
-  const [catalogScrollState, setCatalogScrollState] = React.useState({
-    scrollable: false,
-    hasMoreBelow: false,
-  });
+  }, []);
   const helpId = React.useId();
   const statusId = React.useId();
-  const modelsPanelId = React.useId();
-  const insightsPanelId = React.useId();
-  const managementId = React.useId();
 
   const entries = React.useMemo(() => {
     const infoByValue: Record<string, ModelInfo | undefined> = {};
@@ -386,16 +321,13 @@ export function ModelPadSettings() {
     [entries, snappedPlacements],
   );
   const placedCount = placed.length;
-  // The hovered, else focused or selected, marker's siblings share its highlight. A
-  // hovered marker that has since left the Pad (removed from the keyboard with the
-  // pointer resting on it) no longer counts.
-  const hoveredPlaced = hoveredValue && snappedPlacements[hoveredValue] ? hoveredValue : undefined;
-  const linkSource = hoveredPlaced ?? activeValue;
+  // The hot (hovered, or tray-focused) marker, else the focused or selected one,
+  // shares its highlight with its siblings. A hot marker that has since left the
+  // Pad (removed with the pointer resting on it) no longer counts.
+  const hotPlaced = hotValue && snappedPlacements[hotValue] ? hotValue : undefined;
+  const linkSource = hotPlaced ?? activeValue;
   const linkedValues = React.useMemo(
-    () =>
-      new Set(
-        siblingsByValue.get(linkSource ?? "")?.map((entry) => entry.value) ?? [],
-      ),
+    () => new Set(siblingsByValue.get(linkSource ?? "")?.map((entry) => entry.value) ?? []),
     [siblingsByValue, linkSource],
   );
   const occupiedCells = React.useMemo(
@@ -420,36 +352,36 @@ export function ModelPadSettings() {
       }),
     [pendingSuggestions, entriesByValue, occupiedCells, gridSize],
   );
-  const suggestionCells = React.useMemo(
-    () => new Set(shownSuggestions.map(({ placement }) => padCellKey(placement, gridSize))),
-    [shownSuggestions, gridSize],
+  const hiddenCells = React.useMemo(
+    () =>
+      new Set([
+        ...occupiedCells,
+        ...shownSuggestions.map(({ placement }) => padCellKey(placement, gridSize)),
+      ]),
+    [occupiedCells, shownSuggestions, gridSize],
   );
   const previewActive = previewFits && shownSuggestions.length > 0;
   React.useEffect(() => {
     if (!suggestionPreview) return;
     // The Pad outgrew the preview grid, or every suggestion is on the Pad and
-    // no accept is still saving: the preview is done.
+    // no keep is still saving: the preview is done.
     if (!previewFits || (!previewActive && acceptsInFlight === 0)) {
       setSuggestionPreview(undefined);
     }
   }, [suggestionPreview, previewFits, previewActive, acceptsInFlight]);
-  // The first visit to an empty Pad starts with the model list open. This is
-  // decided once, after loading, so it never reopens after the user closes the
-  // list or empties the Pad later on.
-  const browseAutoOpenSettledRef = React.useRef(false);
   const preferencesReady = padPreferences.ready;
   const loading = providersQuery.isLoading || catalog.isLoading;
+  // The first visit to an empty Pad starts at Add. Decided once, after
+  // loading, and only when nothing else has focus, so it never steals focus.
+  const firstVisitSettledRef = React.useRef(false);
   React.useLayoutEffect(() => {
-    if (browseAutoOpenSettledRef.current || loading || !preferencesReady) return;
-    browseAutoOpenSettledRef.current = true;
-    if (placedCount === 0) setActivePanel((current) => current ?? "models");
+    if (firstVisitSettledRef.current || loading || !preferencesReady) return;
+    firstVisitSettledRef.current = true;
+    const focused = document.activeElement;
+    if (placedCount === 0 && (!focused || focused === document.body)) {
+      addButtonRef.current?.focus();
+    }
   }, [loading, preferencesReady, placedCount]);
-  const query = filter.trim().toLocaleLowerCase();
-  const filteredEntries = query
-    ? entries.filter((entry) =>
-        `${entry.label} ${entry.providerLabel} ${entry.model}`.toLocaleLowerCase().includes(query),
-      )
-    : entries;
   const coverage = React.useMemo(
     () => benchmarkCoverage(entries, placements),
     [entries, placements],
@@ -462,6 +394,7 @@ export function ModelPadSettings() {
   const matchedWithoutMetric = coverage.visible.matched - benchmarkPercentiles.size;
   // Coverage counts are only meaningful once every model and its details have loaded.
   const coverageReady = !loading && !providersQuery.isError && !catalog.isError;
+  const insightsReady = Boolean(modelInsights.data?.ready);
   const suggestionCount = React.useMemo(
     () =>
       topBenchmarkSuggestions(entries, benchmarkPercentiles, {
@@ -470,107 +403,48 @@ export function ModelPadSettings() {
       }).length,
     [entries, benchmarkPercentiles, placements],
   );
-  const hasUnavailablePlacements = Object.keys(placements).some(
-    (value) => !entriesByValue.has(value),
-  );
   const pinnedModels = padPreferences.pinnedModels;
   const recentModels = padPreferences.recentModels;
-  // Only the empty Pad offers quick starts, so skip the lookup otherwise.
-  const hasPinnedOrRecentToAdd =
-    placedCount === 0 &&
-    pinnedAndRecentQuickStart(entries, {
-      pinned: pinnedModels,
-      recent: recentModels,
-      placements,
-      limit: 1,
-    }).length > 0;
+  // Pinned, then recent visible models not on the Pad: the Add list's Recent section.
+  const recentToAdd = React.useMemo(
+    () =>
+      pinnedAndRecentQuickStart(entries, {
+        pinned: pinnedModels,
+        recent: recentModels,
+        placements,
+        limit: MODEL_PAD_ADD_RECENT_LIMIT,
+      }),
+    [entries, pinnedModels, recentModels, placements],
+  );
   const quickStartsLoading = loading || !preferencesReady || modelInsights.isLoading;
-  const hasPaceSamples = Object.values(paceSummaries ?? {}).some(
+  const measuredCount = Object.values(paceSummaries ?? {}).filter(
     (summary) => summary.sampleCount > 0,
-  );
-  const measuredPaceUnavailableReason = React.useMemo(() => {
-    if (paceQuery.isLoading) return "Loading measured speeds…";
-    if (paceQuery.isError) return "Couldn’t read measured speeds";
+  ).length;
+  const measuredPace = React.useMemo(() => {
+    if (paceQuery.isLoading) return { ready: 0, reason: "Loading measured speeds…" };
+    if (paceQuery.isError) return { ready: 0, reason: "Couldn’t read measured speeds" };
+    if (placedCount === 0) return { ready: 0, reason: "Add models to the Pad first" };
     const result = measuredPacePlacements(placements, visibleValues, paceSummaries ?? {});
-    if (result.updated.length === 0) return MEASURED_PACE_UNAVAILABLE_REASON;
-    return result.placements === placements ? "Pace is already up to date" : undefined;
-  }, [paceQuery.isLoading, paceQuery.isError, placements, visibleValues, paceSummaries]);
-
-  const toggleSupportingPanel = (panel: Exclude<typeof activePanel, null>, animate: boolean) => {
-    browseAutoOpenSettledRef.current = true;
-    const nextPanel = activePanel === panel ? null : panel;
-    panelTransitionRef.current?.skipTransition();
-    panelTransitionRef.current = null;
-
-    if (!animate || prefersReducedMotion() || !("startViewTransition" in document)) {
-      setActivePanel(nextPanel);
-      return;
-    }
-
-    const transition = document.startViewTransition(() => {
-      flushSync(() => setActivePanel(nextPanel));
-    });
-    panelTransitionRef.current = transition;
-    void transition.finished
-      .finally(() => {
-        if (panelTransitionRef.current === transition) panelTransitionRef.current = null;
-      })
-      .catch(() => undefined);
-  };
-
-  React.useEffect(
-    () => () => {
-      panelTransitionRef.current?.skipTransition();
-    },
-    [],
-  );
-
-  const updateCatalogScrollState = React.useCallback((element = catalogRef.current) => {
-    if (!element) return;
-    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const next = {
-      scrollable: element.scrollHeight - element.clientHeight > 2,
-      hasMoreBelow: remaining > 2,
+    if (result.updated.length === 0) return { ready: 0, reason: MEASURED_PACE_UNAVAILABLE_REASON };
+    return {
+      ready: result.updated.length,
+      reason: result.placements === placements ? "Pace is already up to date" : undefined,
     };
-    setCatalogScrollState((current) =>
-      current.scrollable === next.scrollable && current.hasMoreBelow === next.hasMoreBelow
-        ? current
-        : next,
-    );
-  }, []);
-
-  React.useLayoutEffect(() => {
-    if (activePanel !== "models") return;
-    const element = catalogRef.current;
-    if (!element) return;
-    const update = () => updateCatalogScrollState(element);
-    update();
-    const frame = requestAnimationFrame(update);
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [activePanel, filteredEntries.length, loading, updateCatalogScrollState]);
-
-  const scrollToMoreModels = () => {
-    const element = catalogRef.current;
-    if (!element) return;
-    element.scrollBy({
-      top: Math.max(176, element.clientHeight * 0.72),
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
-  };
-
-  const scrollToModelBrowser = () => {
-    const element = modelsPanelRef.current;
-    if (!element) return;
-    element.scrollIntoView({
-      block: "start",
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
-  };
+  }, [
+    paceQuery.isLoading,
+    paceQuery.isError,
+    placedCount,
+    placements,
+    visibleValues,
+    paceSummaries,
+  ]);
+  const suggestUnavailableReason = quickStartsLoading
+    ? QUICK_START_LOADING_REASON
+    : !insightsReady
+      ? BENCHMARKS_NOT_CONNECTED_REASON
+      : suggestionCount === 0
+        ? `No model off the Pad has a ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`
+        : undefined;
 
   const restorePlacements = React.useCallback(
     (snapshot: ModelPadPlacements) => {
@@ -754,12 +628,16 @@ export function ModelPadSettings() {
     });
   };
 
+  const toggleModel = (entry: ModelEntry) =>
+    placements[entry.value] ? removeModel(entry) : addModel(entry);
+
+  const setHot = (value: string, hot: boolean) =>
+    setHotValue((current) => (hot ? value : current === value ? undefined : current));
+
   const removeAll = () => {
     flushPendingMove();
     setSuggestionPreview(undefined);
     setActiveValue(undefined);
-    // Pad management closes once the Pad is empty; keep focus on a stable control.
-    browseButtonRef.current?.focus();
     void persistAction((current) =>
       Object.keys(current).length > 0 ? { placements: {}, message: "Cleared the Pad" } : null,
     );
@@ -767,7 +645,7 @@ export function ModelPadSettings() {
 
   // A quick start removes the empty-Pad overlay (and the focused button with
   // it). Focus the first placed marker so arranging can start at once, or
-  // Browse models when nothing was placed.
+  // Add when nothing was placed.
   const focusFirstMarkerRef = React.useRef(false);
   React.useEffect(() => {
     if (!focusFirstMarkerRef.current || placedCount === 0) return;
@@ -783,7 +661,7 @@ export function ModelPadSettings() {
       focusFirstMarkerRef.current = false;
       const focused = document.activeElement;
       if (!focused || focused === document.body || !focused.isConnected) {
-        browseButtonRef.current?.focus();
+        addButtonRef.current?.focus();
       }
     });
   };
@@ -830,14 +708,16 @@ export function ModelPadSettings() {
   };
 
   /**
-   * Show up to eight suggestions for `percentiles` as ghosts on the Pad, saving
-   * nothing. Focus moves to the first one only when asked (the Preview button).
+   * Show up to eight suggestions for `metric` as ghosts on the Pad, saving
+   * nothing. Focus moves to the first one only when asked (Suggest models).
    */
   const previewSuggestions = ({
-    percentiles = benchmarkPercentiles,
+    metric = benchmarkMetric,
     focus = true,
-  }: { percentiles?: ReadonlyMap<string, number>; focus?: boolean } = {}) => {
+  }: { metric?: ModelPadMetric; focus?: boolean } = {}) => {
     flushPendingMove();
+    const percentiles =
+      metric === benchmarkMetric ? benchmarkPercentiles : modelBenchmarkPercentiles(entries, metric);
     const chosen = previewBenchmarkSuggestions(entries, percentiles, {
       placements,
       pinned: pinnedModels,
@@ -850,12 +730,17 @@ export function ModelPadSettings() {
         )
       : [];
     setSuggestionPreview(
-      layout && suggestions.length > 0 ? { gridSize: layout.gridSize, suggestions } : undefined,
+      layout && suggestions.length > 0
+        ? { gridSize: layout.gridSize, metric, suggestions }
+        : undefined,
     );
-    if (focus) focusValueRef.current = suggestions[0]?.value;
+    if (focus && suggestions[0]) {
+      focusValueRef.current = suggestions[0].value;
+      keepFocusOnMenuCloseRef.current = true;
+    }
     setAnnouncement(
       suggestions.length > 0
-        ? `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} shown on the Pad. Accept one at a time, or accept all.`
+        ? `${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} shown on the Pad. Keep one at a time, or keep all.`
         : "No suggestions to show.",
     );
   };
@@ -875,20 +760,6 @@ export function ModelPadSettings() {
     });
   };
 
-  const clearMeasuredSpeeds = async () => {
-    if (clearingPace) return;
-    setClearingPace(true);
-    try {
-      await clearModelPaceSummaries(queryClient);
-      toast.success("Measured speeds cleared.");
-    } catch {
-      toast.error("Aiden couldn’t clear measured speeds.");
-    } finally {
-      setConfirmClearPace(false);
-      setClearingPace(false);
-    }
-  };
-
   const changeMetric = (metric: ModelPadMetric) => {
     if (metric === benchmarkMetric) return;
     savePadPreferences({ modelPadMetric: metric }).catch(() => {
@@ -896,35 +767,33 @@ export function ModelPadSettings() {
       // The ghosts were laid out for the score that didn't save.
       setSuggestionPreview(undefined);
     });
-    // An open preview follows the new score; focus stays on the metric buttons.
-    if (suggestionPreview) {
-      previewSuggestions({ percentiles: modelBenchmarkPercentiles(entries, metric), focus: false });
-    }
+    // An open preview follows the new score; focus stays where it is.
+    if (suggestionPreview) previewSuggestions({ metric, focus: false });
   };
 
   /** Keep focus near the suggestions once the one that had it goes away. */
-  const focusAfterAccepting = (value: string) => {
+  const focusAfterKeeping = (value: string) => {
     if (document.activeElement?.getAttribute("data-value") !== value) return;
     const remaining = shownSuggestions.filter((suggestion) => suggestion.value !== value);
     const index = shownSuggestions.findIndex((suggestion) => suggestion.value === value);
     focusValueRef.current = (remaining[index] ?? remaining[index - 1])?.value ?? value;
   };
 
-  /** Keep the preview alive until an accept's save settles (see `acceptsInFlight`). */
+  /** Keep the preview alive until a keep's save settles (see `acceptsInFlight`). */
   const trackAccept = (save: Promise<boolean>): Promise<boolean> => {
     setAcceptsInFlight((count) => count + 1);
     return save.finally(() => setAcceptsInFlight((count) => count - 1));
   };
 
-  // Accepting never removes a ghost itself. It stops showing once the
+  // Keeping never removes a ghost itself. It stops showing once the
   // optimistic layout holds its model (pendingSuggestions skips placed models);
   // a failed save rolls that layout back before the save settles, so the ghost
   // shows again, and the preview stays alive meanwhile (`acceptsInFlight`).
-  const acceptSuggestion = (suggestion: ModelPadSuggestion, entry: ModelEntry) => {
+  const keepSuggestion = (suggestion: ModelPadSuggestion, entry: ModelEntry) => {
     const preview = suggestionPreview;
     if (!preview) return;
     flushPendingMove();
-    focusAfterAccepting(suggestion.value);
+    focusAfterKeeping(suggestion.value);
     const focusTarget = focusValueRef.current;
     void trackAccept(
       persistAction((current) => {
@@ -940,10 +809,10 @@ export function ModelPadSettings() {
     });
   };
 
-  const acceptAllSuggestions = () => {
+  const keepAllSuggestions = () => {
     const preview = suggestionPreview;
     if (!preview) return;
-    const accepted = shownSuggestions;
+    const kept = shownSuggestions;
     flushPendingMove();
     // The preview ends once the saved layout holds every suggestion; a failed
     // save rolls back and leaves the ghosts in place.
@@ -952,7 +821,7 @@ export function ModelPadSettings() {
         persistAction((current) => {
           const next = reflowVisibleModelPadPlacements(current, visibleValues, preview.gridSize);
           let added = 0;
-          for (const suggestion of accepted) {
+          for (const suggestion of kept) {
             if (current[suggestion.value]) continue;
             next[suggestion.value] = suggestion.placement;
             added += 1;
@@ -966,8 +835,28 @@ export function ModelPadSettings() {
   const dismissSuggestions = () => {
     setSuggestionPreview(undefined);
     setAnnouncement("Suggestions dismissed.");
-    const preview = previewButtonRef.current;
-    (preview && !preview.closest("[hidden]") ? preview : insightsButtonRef.current)?.focus();
+    arrangeButtonRef.current?.focus();
+  };
+
+  /** Choosing a tray row focuses its marker, so arrows can move it at once. */
+  const showOnPad = (value: string) => {
+    setActiveValue(value);
+    [...(padRef.current?.querySelectorAll<HTMLElement>(".model-pad-marker") ?? [])]
+      .find((element) => element.dataset.value === value)
+      ?.focus();
+  };
+
+  /** Remove from the tray; focus moves to the next row, else to Add. */
+  const removeFromTray = (entry: ModelEntry, rows: readonly ModelPadTrayRow[]) => {
+    const index = rows.findIndex((row) => row.entry.value === entry.value);
+    const neighbor = (rows[index + 1] ?? rows[index - 1])?.entry.value;
+    const neighborRow = [
+      ...(trayRef.current?.querySelectorAll<HTMLElement>("li[data-value]") ?? []),
+    ].find((element) => element.dataset.value === neighbor);
+    // The removed row takes its buttons with it; move focus before it goes.
+    (neighborRow?.querySelector<HTMLElement>("button") ?? addButtonRef.current)?.focus();
+    setHotValue((current) => (current === entry.value ? undefined : current));
+    removeModel(entry);
   };
 
   React.useEffect(() => {
@@ -979,140 +868,249 @@ export function ModelPadSettings() {
     if (!target) return;
     focusValueRef.current = undefined;
     target.focus();
+    // A closing menu can still hold focus for one more render; try again once it is gone.
+    if (document.activeElement !== target) {
+      setTimeout(() => {
+        if (target.isConnected) target.focus();
+      }, 0);
+    }
   });
 
+  const markers: ModelPadMarkerView[] = placed.flatMap((entry) => {
+    const point = pointForValue(entry.value);
+    const sourcePlacement = snappedPlacements[entry.value];
+    if (!point || !sourcePlacement) return [];
+    const paceDescription =
+      sourcePlacement.xSource === "neutral"
+        ? "Pace unmeasured; horizontal spread is for readability"
+        : gridLocation(point, gridSize);
+    const paceSummary = paceSummaries?.[entry.value];
+    const measuredSpeed =
+      paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
+    const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
+    const score = benchmarkScore(entry, benchmarkMetric);
+    const detail =
+      measuredSpeed ??
+      (score === undefined
+        ? undefined
+        : `${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score ${formatScore(score)}`);
+    return [
+      {
+        value: entry.value,
+        point,
+        kind: modelPadPlacementKind(sourcePlacement),
+        ariaLabel: `${placementLabel(entry)}, ${modelPadPlacementSourceLabel(sourcePlacement)}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`,
+        selected: activeValue === entry.value,
+        dragging: dragState?.value === entry.value,
+        linked: linkedValues.has(entry.value),
+        hot: hotPlaced === entry.value,
+        tag: {
+          title: entry.label,
+          lines: [
+            [entry.providerLabel, alsoVia].filter(Boolean).join(" · "),
+            ...(detail ? [detail] : []),
+          ],
+        },
+        handlers: {
+          onFocus: () => setActiveValue(entry.value),
+          onBlur: flushPendingMove,
+          onPointerEnter: () => setHot(entry.value, true),
+          onPointerLeave: () => setHot(entry.value, false),
+          onPointerDown: (event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            flushPendingMove();
+            setActiveValue(entry.value);
+            event.currentTarget.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const snapped = snapPointer(entry.value, event);
+            if (snapped) setDragState({ value: entry.value, ...snapped });
+          },
+          onPointerMove: (event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            const snapped = snapPointer(entry.value, event);
+            if (snapped) setDragState({ value: entry.value, ...snapped });
+          },
+          onPointerUp: (event) => {
+            const snapped = snapPointer(entry.value, event);
+            const dropPoint = snapped?.point ?? dragState?.point;
+            const displaced = snapped?.displaced ?? dragState?.displaced ?? false;
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            const moved =
+              dropPoint &&
+              modelPadPointKey(dropPoint, gridSize) !== modelPadPointKey(sourcePlacement, gridSize);
+            if (dropPoint && moved) {
+              dropPlacement(entry, dropPoint);
+              setAnnouncement(
+                `${entry.label} moved to ${gridLocation(dropPoint, gridSize)}.${
+                  displaced
+                    ? " The requested dot was occupied, so Aiden used the closest open dot."
+                    : ""
+                }`,
+              );
+            }
+            setDragState(undefined);
+          },
+          onPointerCancel: (event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            setDragState(undefined);
+            setAnnouncement(`${entry.label} movement cancelled.`);
+          },
+          onKeyDown: (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setActiveValue(undefined);
+              event.currentTarget.blur();
+              setAnnouncement(`${entry.label} selection cleared.`);
+              return;
+            }
+            const direction = {
+              ArrowLeft: "left",
+              ArrowRight: "right",
+              ArrowUp: "up",
+              ArrowDown: "down",
+            }[event.key];
+            if (!direction) return;
+            event.preventDefault();
+            nudgePlacement(entry, direction as ModelPadDirection, event.shiftKey ? 3 : 1);
+          },
+        },
+      },
+    ];
+  });
+
+  const previewMetric = suggestionPreview?.metric ?? benchmarkMetric;
+  const ghosts: ModelPadGhostView[] = shownSuggestions.map(({ entry, ...suggestion }) => {
+    const score = benchmarkScore(entry, previewMetric);
+    return {
+      value: suggestion.value,
+      point: suggestion.placement,
+      ariaLabel: `Keep suggestion: ${placementLabel(entry)}`,
+      hot: hotValue === suggestion.value,
+      tag: {
+        title: entry.label,
+        lines: [
+          entry.providerLabel,
+          `Click to keep${score === undefined ? "" : ` · ${MODEL_PAD_METRIC_LABELS[previewMetric]} ${formatScore(score)}`}`,
+        ],
+      },
+      onKeep: () => keepSuggestion(suggestion, entry),
+      onHotChange: (hot) => setHot(suggestion.value, hot),
+    };
+  });
+
+  // Top to bottom, then left to right, as the Pad shows them.
+  const trayRows: ModelPadTrayRow[] = placed
+    .flatMap((entry) => {
+      const placement = snappedPlacements[entry.value];
+      if (!placement) return [];
+      const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
+      return [
+        {
+          entry,
+          placement,
+          kind: modelPadPlacementKind(placement),
+          sourceLabel: modelPadPlacementSourceLabel(placement),
+          secondary: [entry.providerLabel, alsoVia?.replace(/^Also via/u, "also via")]
+            .filter(Boolean)
+            .join(" · "),
+        },
+      ];
+    })
+    .sort((left, right) => right.placement.y - left.placement.y || left.placement.x - right.placement.x)
+    .map(({ placement: _placement, ...row }) => row);
+
+  const showMetricChip =
+    previewActive || (placedCount > 0 && modelPadHasBenchmarkHeight(placements, visibleValues));
+
   return (
-    <FieldSet className="model-pad-fieldset">
-      <Field
-        orientation="vertical"
-        className="model-pad-field"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2" aria-live="polite">
-            <Badge>{placedCount} on Pad</Badge>
-            <Badge>
-              {gridSize}×{gridSize} dots
-            </Badge>
-          </div>
-          <div className="model-pad-toolbar-actions flex flex-wrap justify-end gap-2">
-            <Button
-              ref={browseButtonRef}
-              size="small"
-              variant={activePanel === "models" ? "filled" : "transparent"}
-              aria-expanded={activePanel === "models"}
-              aria-controls={modelsPanelId}
-              onClick={(event) => toggleSupportingPanel("models", event.detail > 0)}
-            >
-              <Layers3 />
-              Browse models
-            </Button>
-            <Button
-              size="small"
-              variant={activePanel === "insights" ? "filled" : "transparent"}
-              ref={insightsButtonRef}
-              aria-expanded={activePanel === "insights"}
-              aria-controls={insightsPanelId}
-              onClick={(event) => toggleSupportingPanel("insights", event.detail > 0)}
-            >
-              <ProviderIcon providerId="openrouter" providerLabel="OpenRouter" className="size-4" />
-              Benchmark insights
-            </Button>
-            {placedCount > 0 ? (
-              <ModelPadActionButton
-                icon={<Gauge />}
-                label="Set pace from measured speed"
-                variant="transparent"
-                disabledReason={measuredPaceUnavailableReason}
-                onClick={setPaceFromMeasuredSpeed}
-              />
-            ) : null}
-          </div>
+    <>
+      <FieldSet className="model-pad-fieldset">
+        <div className="model-pad-header">
+          {placedCount > 0 ? (
+            <span className="text-small text-secondary tabular-nums">
+              {`${placedCount} model${placedCount === 1 ? "" : "s"}`}
+            </span>
+          ) : null}
+          <InfoHint topic="Pad markers">
+            <p>
+              <b>Solid</b> — you placed it. <b>Ring</b> — placed from benchmarks or your speed.{" "}
+              <b>Dashed</b> — a suggestion; click to keep.
+            </p>
+            <p>
+              Drag a dot, or focus it and use <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>{" "}
+              (<kbd>⇧</kbd> moves 3). Every change saves; Undo is in the toast.
+            </p>
+          </InfoHint>
+          <span className="flex-1" />
+          <ModelPadAddPopover
+            triggerRef={addButtonRef}
+            entries={entries}
+            recentEntries={recentToAdd}
+            isOnPad={(value) => Boolean(placements[value])}
+            loading={loading}
+            onToggle={toggleModel}
+          />
+          <ModelPadArrangeMenu
+            triggerRef={arrangeButtonRef}
+            metric={benchmarkMetric}
+            onMetricChange={changeMetric}
+            suggestUnavailableReason={suggestUnavailableReason}
+            onSuggest={() => previewSuggestions()}
+            paceReadyCount={measuredPace.ready}
+            paceUnavailableReason={measuredPace.reason}
+            onPace={setPaceFromMeasuredSpeed}
+            onCloseAutoFocus={(event) => {
+              if (!keepFocusOnMenuCloseRef.current) return;
+              keepFocusOnMenuCloseRef.current = false;
+              event.preventDefault();
+            }}
+          />
+          <ModelPadMoreMenu
+            removeAllUnavailableReason={placedCount === 0 ? "The Pad is empty" : undefined}
+            onRemoveAll={removeAll}
+          />
         </div>
-
-        {activePanel === "models" ? (
-          <div className="model-pad-panel-below">
-            <Button
-              size="small"
-              variant="transparent"
-              aria-label="Scroll down to the model list"
-              title="Scroll to the model list, or enlarge the window to view it beside the Pad"
-              onClick={scrollToModelBrowser}
-            >
-              Model list below
-              <ChevronDown aria-hidden="true" className="size-3.5" />
-            </Button>
-          </div>
-        ) : null}
-
-        <div
-          className="settings-model-pad-grid grid gap-4"
-          data-panel-open={activePanel === "models" ? "true" : "false"}
-        >
-          <div className="model-pad-canvas min-w-0">
-            <div className="model-pad-axis-label mb-2 flex items-center justify-center">
-              More capable
-            </div>
-            <div
-              ref={padRef}
-              aria-describedby={`${helpId} ${statusId}`}
-              aria-label="Personal Model Pad arrangement"
-              role="group"
-              data-dragging={dragState ? "true" : "false"}
-              data-grid-size={gridSize}
-              className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card"
-              onPointerDown={(event) => {
-                const target = event.target;
-                if (target instanceof Element && !target.closest(".model-pad-marker")) {
-                  setActiveValue(undefined);
-                }
-              }}
-            >
-              {Array.from({ length: gridSize * gridSize }, (_, index) => {
-                const column = index % gridSize;
-                const row = Math.floor(index / gridSize);
-                // A node under a marker (including a dragged one) would read as a dot inside
-                // a hollow ring, so occupied cells skip it; the marker itself is the affordance.
-                const cell = `${column}:${row}`;
-                if (occupiedCells.has(cell) || suggestionCells.has(cell)) return null;
-                return (
-                  <span
-                    key={index}
-                    aria-hidden="true"
-                    data-grid-cell=""
-                    className="model-pad-node absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/16"
-                    style={{
-                      left: `${MODEL_PAD_INSET_PERCENT + (column / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-                      top: `${MODEL_PAD_INSET_PERCENT + (row / (gridSize - 1)) * MODEL_PAD_RANGE_PERCENT}%`,
-                    }}
-                  />
-                );
-              })}
-
-              {placedCount === 0 && !previewActive ? (
+        <div className="model-pad-body">
+          <ModelPadCanvas
+            padRef={padRef}
+            gridSize={gridSize}
+            hiddenCells={hiddenCells}
+            markers={markers}
+            ghosts={ghosts}
+            dragging={Boolean(dragState)}
+            describedBy={`${helpId} ${statusId}`}
+            metricChip={
+              showMetricChip ? (
+                <ModelPadMetricChip metric={benchmarkMetric} onMetricChange={changeMetric} />
+              ) : null
+            }
+            emptyState={
+              placedCount === 0 && !previewActive ? (
                 <div className="model-pad-empty-state">
                   <div className="model-pad-empty-state-content">
-                    <Text
-                      as="p"
-                      variant="small"
-                      color="secondary"
-                      className="model-pad-empty-hint max-w-52 text-pretty"
-                    >
-                      Add a few models from the list, then drag them into place.
+                    <Text as="p" variant="small-strong" className="model-pad-empty-hint">
+                      Your Pad is empty
                     </Text>
-                    <div className="pointer-events-auto flex max-w-full flex-wrap justify-center gap-2">
-                      <ModelPadActionButton
+                    <div className="pointer-events-auto flex max-w-full flex-col items-stretch gap-1.5">
+                      <ModelPadQuickStart
                         icon={<Pin />}
                         label="Add pinned & recent"
+                        variant="accent"
                         disabledReason={
                           quickStartsLoading
                             ? QUICK_START_LOADING_REASON
-                            : hasPinnedOrRecentToAdd
+                            : recentToAdd.length > 0
                               ? undefined
                               : "Pin or choose a few models first"
                         }
                         onClick={() => runQuickStart(addPinnedAndRecent)}
                       />
-                      <ModelPadActionButton
+                      <ModelPadQuickStart
                         icon={
                           <ProviderIcon
                             providerId="openrouter"
@@ -1124,219 +1122,30 @@ export function ModelPadSettings() {
                         disabledReason={
                           quickStartsLoading
                             ? QUICK_START_LOADING_REASON
-                            : !modelInsights.data?.ready
-                              ? "Connect benchmark insights first"
+                            : !insightsReady
+                              ? BENCHMARKS_NOT_CONNECTED_REASON
                               : suggestionCount === 0
                                 ? "None of your visible models has a score for this benchmark yet"
                                 : undefined
                         }
-                        onClick={() =>
-                          runQuickStart(placeBenchmarkSuggestions)
-                        }
+                        onClick={() => runQuickStart(placeBenchmarkSuggestions)}
                       />
                     </div>
                   </div>
                 </div>
-              ) : null}
-
-              {placed.map((entry) => {
-                const placement = pointForValue(entry.value);
-                const sourcePlacement = snappedPlacements[entry.value];
-                if (!placement || !sourcePlacement) return null;
-                const selected = activeValue === entry.value;
-                const dragging = dragState?.value === entry.value;
-                const placementKind = modelPadPlacementKind(sourcePlacement);
-                const labelPlacement = modelPadLabelPlacement(placement);
-                const paceDescription =
-                  sourcePlacement.xSource === "neutral"
-                    ? "Pace unmeasured; horizontal spread is for readability"
-                    : gridLocation(placement, gridSize);
-                const paceSummary = paceSummaries?.[entry.value];
-                const measuredSpeed =
-                  paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
-                const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
-                return (
-                  <button
-                    key={entry.value}
-                    type="button"
-                    aria-label={`${placementLabel(entry)}, ${modelPadPlacementSourceLabel(sourcePlacement)}, ${paceDescription}${measuredSpeed ? `, ${measuredSpeed}` : ""}${alsoVia ? `, ${alsoVia}` : ""}. Drag to another dot; use arrow keys to move one dot.`}
-                    aria-pressed={selected}
-                    data-value={entry.value}
-                    data-placement-source={placementKind}
-                    data-selected={selected ? "true" : "false"}
-                    data-linked={linkedValues.has(entry.value) ? "true" : undefined}
-                    data-label-align={labelPlacement.align}
-                    data-label-side={labelPlacement.side}
-                    className={cn(
-                      "model-pad-chip model-pad-marker group absolute z-10 grid size-6 -translate-x-1/2 -translate-y-1/2 cursor-grab place-items-center rounded-full bg-transparent outline-none transition-[left,top,opacity] duration-150 ease-out active:cursor-grabbing focus-visible:outline-none",
-                      selected && "z-30",
-                      dragging && "z-30 cursor-grabbing opacity-80 duration-75",
-                    )}
-                    style={{
-                      left: `${modelPadLeftPercent(placement.x)}%`,
-                      top: `${modelPadTopPercent(placement.y)}%`,
-                    }}
-                    onFocus={() => setActiveValue(entry.value)}
-                    onBlur={flushPendingMove}
-                    onPointerEnter={() => setHoveredValue(entry.value)}
-                    onPointerLeave={() =>
-                      setHoveredValue((current) => (current === entry.value ? undefined : current))
-                    }
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) return;
-                      event.preventDefault();
-                      flushPendingMove();
-                      setActiveValue(entry.value);
-                      event.currentTarget.focus();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      const snapped = snapPointer(entry.value, event);
-                      if (snapped) setDragState({ value: entry.value, ...snapped });
-                    }}
-                    onPointerMove={(event) => {
-                      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-                      const snapped = snapPointer(entry.value, event);
-                      if (snapped) setDragState({ value: entry.value, ...snapped });
-                    }}
-                    onPointerUp={(event) => {
-                      const snapped = snapPointer(entry.value, event);
-                      const point = snapped?.point ?? dragState?.point;
-                      const displaced = snapped?.displaced ?? dragState?.displaced ?? false;
-                      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                        event.currentTarget.releasePointerCapture(event.pointerId);
-                      }
-                      const moved =
-                        point &&
-                        modelPadPointKey(point, gridSize) !==
-                          modelPadPointKey(sourcePlacement, gridSize);
-                      if (point && moved) {
-                        dropPlacement(entry, point);
-                        setAnnouncement(
-                          `${entry.label} moved to ${gridLocation(point, gridSize)}.${
-                            displaced
-                              ? " The requested dot was occupied, so Aiden used the closest open dot."
-                              : ""
-                          }`,
-                        );
-                      }
-                      setDragState(undefined);
-                    }}
-                    onPointerCancel={(event) => {
-                      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                        event.currentTarget.releasePointerCapture(event.pointerId);
-                      }
-                      setDragState(undefined);
-                      setAnnouncement(`${entry.label} movement cancelled.`);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        setActiveValue(undefined);
-                        event.currentTarget.blur();
-                        setAnnouncement(`${entry.label} selection cleared.`);
-                        return;
-                      }
-                      const direction = {
-                        ArrowLeft: "left",
-                        ArrowRight: "right",
-                        ArrowUp: "up",
-                        ArrowDown: "down",
-                      }[event.key];
-                      if (!direction) return;
-                      event.preventDefault();
-                      nudgePlacement(
-                        entry,
-                        direction as ModelPadDirection,
-                        event.shiftKey ? 3 : 1,
-                      );
-                    }}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="model-pad-marker-visual block size-3 rounded-full"
-                    />
-                    <span aria-hidden="true" className="model-pad-marker-label">
-                      <span className="block truncate text-small-strong text-primary">
-                        {entry.label}
-                      </span>
-                      <span className="mt-0.5 block truncate text-mini font-normal text-secondary">
-                        {entry.providerLabel} · {paceDescription}
-                      </span>
-                      {measuredSpeed ? (
-                        <span className="block truncate text-mini font-normal text-secondary">
-                          {measuredSpeed}
-                        </span>
-                      ) : null}
-                      {alsoVia ? (
-                        <span className="block truncate text-mini font-normal text-secondary">
-                          {alsoVia}
-                        </span>
-                      ) : null}
-                    </span>
-                  </button>
-                );
-              })}
-
-              {shownSuggestions.map(({ entry, ...suggestion }) => {
-                const labelPlacement = modelPadLabelPlacement(suggestion.placement);
-                return (
-                  <button
-                    key={suggestion.value}
-                    type="button"
-                    aria-label={`Accept suggestion: ${placementLabel(entry)}`}
-                    data-value={suggestion.value}
-                    data-placement-source="suggestion"
-                    data-label-align={labelPlacement.align}
-                    data-label-side={labelPlacement.side}
-                    className="model-pad-marker absolute z-10 grid size-6 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-transparent outline-none focus-visible:outline-none"
-                    style={{
-                      left: `${modelPadLeftPercent(suggestion.placement.x)}%`,
-                      top: `${modelPadTopPercent(suggestion.placement.y)}%`,
-                    }}
-                    onClick={() => acceptSuggestion(suggestion, entry)}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="model-pad-marker-visual block size-3 rounded-full"
-                    />
-                    <span aria-hidden="true" className="model-pad-marker-label">
-                      <span className="block truncate text-small-strong text-primary">
-                        {entry.label}
-                      </span>
-                      <span className="mt-0.5 block truncate text-mini font-normal text-secondary">
-                        {entry.providerLabel} · Suggested · Click to accept
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="model-pad-axis-label mt-2 flex items-center justify-between">
-              <span>Faster</span>
-              <span>More deliberate</span>
-            </div>
-            <ModelPadLegend
-              heightCaption={
-                previewActive || modelPadHasBenchmarkHeight(placements, visibleValues)
-                  ? modelPadHeightCaption(benchmarkMetric)
-                  : undefined
-              }
-              showSuggestions={previewActive}
-            >
-              {previewActive ? (
-                <span
-                  role="group"
-                  aria-label="Benchmark suggestions"
-                  className="flex flex-wrap items-center gap-2"
-                >
-                  <Button size="small" onClick={acceptAllSuggestions}>
-                    Accept all ({shownSuggestions.length})
-                  </Button>
-                  <Button size="small" variant="transparent" onClick={dismissSuggestions}>
-                    Dismiss
-                  </Button>
-                </span>
-              ) : null}
-            </ModelPadLegend>
+              ) : null
+            }
+            previewBar={
+              previewActive ? (
+                <ModelPadPreviewBar
+                  count={shownSuggestions.length}
+                  onKeepAll={keepAllSuggestions}
+                  onDismiss={dismissSuggestions}
+                />
+              ) : null
+            }
+            onBackgroundPointerDown={() => setActiveValue(undefined)}
+          >
             <p id={helpId} className="sr-only">
               Move models vertically by personal capability and horizontally by perceived response
               pace. This Pad has {gridSize} rows and {gridSize} columns. Arrow keys move one dot;
@@ -1345,285 +1154,26 @@ export function ModelPadSettings() {
             <p id={statusId} className="sr-only" aria-live="polite">
               {announcement}
             </p>
+          </ModelPadCanvas>
+          <div ref={trayRef} className="min-w-0">
+            <ModelPadTray
+              rows={trayRows}
+              hotValue={hotPlaced}
+              selectedValue={activeValue}
+              onHotChange={setHot}
+              onShow={showOnPad}
+              onRemove={(entry) => removeFromTray(entry, trayRows)}
+            />
           </div>
-
-          <aside
-            ref={modelsPanelRef}
-            id={modelsPanelId}
-            hidden={activePanel !== "models"}
-            className="model-pad-browser min-w-0 rounded-card bg-background/35 p-2"
-            aria-label="Browse models for the Pad"
-          >
-            <div className="model-pad-browser-header mb-2 px-1">
-              <div className="min-w-0">
-                <Text as="h3" variant="small-strong">
-                  Browse models
-                </Text>
-                <Text as="p" variant="small" color="secondary">
-                  Add or remove visible models.
-                </Text>
-              </div>
-              <span
-                className="model-pad-browser-count"
-                aria-label={`${entries.length} model${entries.length === 1 ? "" : "s"} available`}
-              >
-                <span aria-hidden="true">{`${entries.length} model${entries.length === 1 ? "" : "s"}`}</span>
-              </span>
-            </div>
-            <label className="relative block">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-tertiary"
-              />
-              <Input
-                type="search"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-                placeholder="Filter models…"
-                aria-label="Filter models available for the Pad"
-                className="pl-8"
-              />
-            </label>
-            <div
-              className="model-pad-catalog-shell mt-2"
-              data-more-below={catalogScrollState.hasMoreBelow ? "true" : "false"}
-            >
-              <div
-                ref={catalogRef}
-                className={cn(
-                  "model-pad-catalog overflow-y-auto rounded-control bg-background/35 p-1",
-                  catalogScrollState.scrollable && "pb-10",
-                )}
-                onScroll={(event) => updateCatalogScrollState(event.currentTarget)}
-              >
-                {loading ? (
-                  <div className="flex items-center justify-center gap-2 px-3 py-8 text-small text-secondary">
-                    <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-                    Loading models…
-                  </div>
-                ) : filteredEntries.length === 0 ? (
-                  <Text as="p" variant="small" color="secondary" className="px-3 py-8 text-center">
-                    {entries.length === 0
-                      ? "Connect or discover a chat model first."
-                      : "No models match this filter."}
-                  </Text>
-                ) : (
-                  filteredEntries.map((entry) => {
-                    const onPad = Boolean(placements[entry.value]);
-                    const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
-                    return (
-                      <div
-                        key={entry.value}
-                        className="flex min-h-11 items-center gap-2 rounded-control px-2 py-1.5 hover:bg-list-hover"
-                      >
-                        <ProviderIcon
-                          providerId={entry.providerId}
-                          providerLabel={entry.providerLabel}
-                          modelId={entry.model}
-                          artwork={entry.providerArtwork}
-                          className="size-3.5 text-tertiary"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-small-strong text-primary">
-                            {entry.label}
-                          </span>
-                          <span className="block truncate text-mini text-tertiary">
-                            {entry.providerLabel}
-                            {entry.isLocal ? " · Local" : " · Hosted"}
-                            {alsoVia ? ` · ${alsoVia}` : ""}
-                          </span>
-                        </span>
-                        <Button
-                          size="small"
-                          variant="transparent"
-                          iconOnly
-                          aria-label={
-                            onPad
-                              ? `Remove ${placementLabel(entry)} from Pad`
-                              : `Add ${placementLabel(entry)} to Pad`
-                          }
-                          title={onPad ? "Remove from Pad" : "Add to Pad"}
-                          onClick={() => (onPad ? removeModel(entry) : addModel(entry))}
-                        >
-                          {onPad ? <X /> : <Plus />}
-                        </Button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-              {catalogScrollState.hasMoreBelow ? (
-                <Button
-                  size="small"
-                  variant="filled"
-                  className="model-pad-catalog-more"
-                  aria-label="Scroll down to more available models"
-                  title="Scroll for more models or enlarge the window"
-                  onClick={scrollToMoreModels}
-                >
-                  More models below
-                  <ChevronDown aria-hidden="true" className="size-3.5" />
-                </Button>
-              ) : null}
-            </div>
-          </aside>
         </div>
-
-        <section
-          id={insightsPanelId}
-          hidden={activePanel !== "insights"}
-          className="model-pad-disclosure rounded-card bg-well p-3"
-          aria-label="Benchmark insights"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-control bg-background/45 px-3 py-2.5">
-            <div className="min-w-0 flex-1 basis-72">
-              <Text as="h3" variant="small-strong">
-                Suggest placements
-              </Text>
-              <Text as="p" variant="small" color="secondary" className="mt-0.5">
-                {modelInsights.data?.ready
-                  ? suggestionCount > 0
-                    ? `${suggestionCount} unplaced model${suggestionCount === 1 ? " has" : "s have"} cached capability evidence. Preview up to ${MODEL_PAD_QUICK_START_LIMIT} on the Pad, then accept the ones you want. Scores set height; horizontal spread is only for readability until you rate pace.`
-                    : "No unplaced models currently have cached benchmark positions."
-                  : "Connect OpenRouter below to fetch optional capability evidence for your visible models."}
-              </Text>
-              {modelInsights.data?.ready ? (
-                <div
-                  className="mt-2 flex flex-wrap gap-1"
-                  role="group"
-                  aria-label="Benchmark capability metric"
-                >
-                  {MODEL_PAD_METRICS.map((metric) => (
-                    <Button
-                      key={metric}
-                      size="small"
-                      variant={benchmarkMetric === metric ? "accent" : "transparent"}
-                      aria-pressed={benchmarkMetric === metric}
-                      onClick={() => changeMetric(metric)}
-                    >
-                      {MODEL_PAD_METRIC_LABELS[metric]}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <Button
-              ref={previewButtonRef}
-              size="small"
-              onClick={() => previewSuggestions()}
-              disabled={!modelInsights.data?.ready || suggestionCount === 0}
-            >
-              <ProviderIcon providerId="openrouter" providerLabel="OpenRouter" className="size-4" />
-              Preview suggestions
-            </Button>
-          </div>
-          {modelInsights.data?.ready && coverageReady ? (
-            <div className="mt-2 rounded-control bg-background/45 px-3 py-2.5">
-              <Text as="h3" variant="small-strong">
-                Coverage
-              </Text>
-              <ul className="mt-0.5 grid gap-0.5 text-small text-secondary">
-                <li>
-                  {coverage.pad.total === 0
-                    ? "No models on the Pad yet"
-                    : `${coverage.pad.matched} of ${coverage.pad.total} Pad model${coverage.pad.total === 1 ? "" : "s"} matched`}
-                </li>
-                <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible model${coverage.visible.total === 1 ? "" : "s"}`}</li>
-                {matchedWithoutMetric > 0 ? (
-                  <li>
-                    {`${matchedWithoutMetric} matched visible model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score`}
-                  </li>
-                ) : null}
-                {modelInsights.data.skippedAmbiguousCount > 0 ? (
-                  <li>
-                    {`${modelInsights.data.skippedAmbiguousCount} ambiguous benchmark row${modelInsights.data.skippedAmbiguousCount === 1 ? "" : "s"} skipped`}
-                  </li>
-                ) : null}
-              </ul>
-              {coverage.unmatchedPad.length > 0 ? (
-                <details className="model-pad-coverage-details -mx-2 mt-1.5">
-                  <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
-                    {`Unmatched Pad models (${coverage.unmatchedPad.length})`}
-                  </summary>
-                  <div className="grid gap-1.5 px-2 pb-1 pt-1">
-                    <Text as="p" variant="small" color="tertiary">
-                      Benchmarks cover hosted models; reasoning variants are matched separately.
-                    </Text>
-                    <ul className="grid gap-1 text-small">
-                      {coverage.unmatchedPad.map((model) => (
-                        <li
-                          key={model.value}
-                          className="flex min-w-0 items-baseline justify-between gap-3"
-                        >
-                          <span className="min-w-0 truncate text-primary">
-                            {`${model.label} · ${model.providerLabel}`}
-                          </span>
-                          <span className="shrink-0 text-tertiary">
-                            {model.reason === "local" ? "Local model" : "No benchmark row"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </details>
-              ) : null}
-            </div>
-          ) : null}
-          <ModelPadBenchmarkConnection />
-        </section>
-
-        {(placedCount > 0 || hasUnavailablePlacements || hasPaceSamples) && (
-          <details id={managementId} className="model-pad-management group rounded-control">
-            <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection">
-              Pad management
-            </summary>
-            <div className="grid gap-2 px-2 pb-2 pt-1">
-              {hasUnavailablePlacements ? (
-                <Text as="p" variant="small" color="secondary">
-                  Saved positions for temporarily unavailable models are retained and return when
-                  those models are available again.
-                </Text>
-              ) : null}
-              {placedCount > 0 ? (
-                <Button
-                  size="small"
-                  variant="transparent"
-                  className="w-fit text-secondary"
-                  onClick={removeAll}
-                >
-                  Remove all models from Pad
-                </Button>
-              ) : null}
-              {hasPaceSamples ? (
-                <Button
-                  ref={clearPaceButtonRef}
-                  size="small"
-                  variant="transparent"
-                  className="w-fit text-secondary"
-                  onClick={() => setConfirmClearPace(true)}
-                >
-                  Clear measured speeds
-                </Button>
-              ) : null}
-            </div>
-          </details>
-        )}
-        <AlertDialog
-          open={confirmClearPace}
-          onOpenChange={setConfirmClearPace}
-          title="Clear measured speeds?"
-          description="Aiden will forget the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
-          confirmLabel="Clear speeds"
-          confirmVariant="destructive"
-          busy={clearingPace}
-          keepOpenOnConfirm
-          returnFocus={() => {
-            const button = clearPaceButtonRef.current;
-            return button?.isConnected ? button : browseButtonRef.current;
-          }}
-          onConfirm={clearMeasuredSpeeds}
-        />
-      </Field>
-    </FieldSet>
+      </FieldSet>
+      <ModelPadDataRows
+        coverage={insightsReady && coverageReady ? coverage : undefined}
+        matchedWithoutMetric={matchedWithoutMetric}
+        metric={benchmarkMetric}
+        measuredCount={measuredCount}
+        fallbackFocus={() => addButtonRef.current}
+      />
+    </>
   );
 }

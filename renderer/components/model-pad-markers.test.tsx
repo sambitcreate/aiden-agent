@@ -8,7 +8,6 @@ import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
 import type { AppSettings, Provider } from "../lib/types";
 import { ModelPickerPad } from "./model-picker-pad";
-import { ModelPadLegend } from "./settings/model-pad/model-pad-legend";
 import { ModelPadSettings } from "./settings/model-pad/model-pad-settings";
 
 afterEach(cleanup);
@@ -91,20 +90,6 @@ test("selected and previewed options keep their source and expose a separate sta
   assert.equal(resting.dataset.state, "resting");
 });
 
-test("the settings legend shows one marker per placement source, with matching wording", () => {
-  const { container } = render(<ModelPadLegend />);
-  const markers = [...container.querySelectorAll<HTMLElement>("[data-placement-source]")];
-  assert.deepEqual(
-    markers.map((marker) => [marker.dataset.placementSource, marker.parentElement?.textContent]),
-    [
-      ["personal", "Placed by you"],
-      ["benchmark", "Data-assisted"],
-    ],
-  );
-  for (const marker of markers) assert.equal(marker.getAttribute("aria-hidden"), "true");
-  assert.match(container.textContent ?? "", /Hover, focus, or select a marker to see its model/u);
-});
-
 /** Grid dots are aria-hidden spans; return the positions of those sharing a marker's spot. */
 function gridDotsUnder(container: HTMLElement, marker: HTMLElement): string[] {
   return [...container.querySelectorAll<HTMLElement>("[data-grid-cell]")]
@@ -166,6 +151,18 @@ test("the settings editor draws no grid node inside an occupied marker", async (
     ],
   );
   for (const marker of markers) assert.deepEqual(gridDotsUnder(container, marker), []);
+  // The tray's glyph for each model speaks the same marker language.
+  const tray = screen.getByRole("complementary", { name: "On your Pad" });
+  assert.deepEqual(
+    [...tray.querySelectorAll<HTMLElement>("li[data-value]")].map((row) => [
+      row.dataset.value,
+      row.querySelector<HTMLElement>("[data-placement-source]")?.dataset.placementSource,
+    ]),
+    [
+      ["test::mine", "personal"],
+      ["test::assisted", "benchmark"],
+    ],
+  );
   const gridSize = Number(pad.dataset.gridSize);
   assert.equal(
     pad.querySelectorAll("[data-grid-cell]").length,

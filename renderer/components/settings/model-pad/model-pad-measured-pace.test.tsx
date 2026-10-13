@@ -1,7 +1,7 @@
 import "../../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../../main/bots/test-providers";
@@ -89,6 +89,17 @@ function marker(pad: HTMLElement, value: string): HTMLElement {
   return element;
 }
 
+/** Open Arrange and return its "Pace from my chats" item. */
+async function openPaceAction(): Promise<HTMLElement> {
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  return screen.findByRole("menuitem", { name: "Pace from my chats" });
+}
+
+function unavailableReason(item: HTMLElement): string {
+  assert.equal(item.getAttribute("aria-disabled"), "true");
+  return document.getElementById(item.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+}
+
 test("markers show measured speed once a model has a sample, in the label and its accessible name", async () => {
   editorServer(measured);
   const pad = await mountEditor();
@@ -107,11 +118,13 @@ test("markers show measured speed once a model has a sample, in the label and it
   assert.doesNotMatch(marker(pad, "test::plain").getAttribute("aria-label") ?? "", /tok\/s/u);
 });
 
-test("Set pace from measured speed saves measured X for well-sampled models and can be undone", async () => {
+test("Pace from my chats saves measured X for well-sampled models and can be undone", async () => {
   const server = editorServer(measured);
   const pad = await mountEditor();
-  const action = await screen.findByRole("button", { name: "Set pace from measured speed" });
-  await waitFor(() => assert.equal(action.getAttribute("aria-disabled"), "false"));
+  const action = await openPaceAction();
+  await waitFor(() => assert.notEqual(action.getAttribute("aria-disabled"), "true"));
+  // Fast and Slow have three or more chats; Fresh has two.
+  assert.match(action.textContent ?? "", /2 ready/u);
 
   fireEvent.click(action);
 
@@ -137,12 +150,13 @@ test("Set pace from measured speed saves measured X for well-sampled models and 
   );
 
   // Once the Pad shows the measured pace, setting it again has nothing to do.
-  await waitFor(() => assert.equal(action.getAttribute("aria-disabled"), "true"));
-  assert.match(action.getAttribute("title") ?? "", /Pace is already up to date/u);
+  const again = await openPaceAction();
+  await waitFor(() => assert.match(unavailableReason(again), /Pace is already up to date/u));
   toast.dismiss();
-  fireEvent.click(action);
+  fireEvent.click(again);
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(server.writes(), 1);
+  fireEvent.keyDown(again, { key: "Escape" });
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), initialPlacements));
@@ -151,8 +165,8 @@ test("Set pace from measured speed saves measured X for well-sampled models and 
 test("moving a measured model sideways makes its pace yours; moving it up keeps it measured", async () => {
   const server = editorServer(measured);
   const pad = await mountEditor();
-  const action = await screen.findByRole("button", { name: "Set pace from measured speed" });
-  await waitFor(() => assert.equal(action.getAttribute("aria-disabled"), "false"));
+  const action = await openPaceAction();
+  await waitFor(() => assert.notEqual(action.getAttribute("aria-disabled"), "true"));
   fireEvent.click(action);
   await waitFor(() => assert.equal(server.stored()?.["test::slow"]?.xSource, "measured"));
 
@@ -173,11 +187,10 @@ test("moving a measured model sideways makes its pace yours; moving it up keeps 
 test("without three samples for any placed model the action explains itself and saves nothing", async () => {
   const server = editorServer({ "test::fresh": measured["test::fresh"] });
   await mountEditor();
-  const action = await screen.findByRole("button", {
-    name: "Set pace from measured speed",
-    description: /Use a few models in chat first to measure their speed/u,
-  });
-  await waitFor(() => assert.equal(action.getAttribute("aria-disabled"), "true"));
+  const action = await openPaceAction();
+  await waitFor(() =>
+    assert.match(unavailableReason(action), /Use a few models in chat first to measure their speed/u),
+  );
 
   fireEvent.click(action);
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
@@ -195,11 +208,8 @@ test("when measured speeds can't be read the action says so", async () => {
     "settings:get": () => ({ modelPadPlacements: initialPlacements, pinnedModels: [] }),
   });
   await mountEditor();
-  const action = await screen.findByRole("button", { name: "Set pace from measured speed" });
-  await waitFor(() =>
-    assert.match(action.getAttribute("title") ?? "", /Couldn’t read measured speeds/u),
-  );
-  assert.equal(action.getAttribute("aria-disabled"), "true");
+  const action = await openPaceAction();
+  await waitFor(() => assert.match(unavailableReason(action), /Couldn’t read measured speeds/u));
   fireEvent.click(action);
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.ok(!calls.some((call) => call.channel === "settings:set"));
@@ -208,8 +218,9 @@ test("when measured speeds can't be read the action says so", async () => {
 test("Clear measured speeds asks first, forgets the speeds, and leaves the Pad as it is", async () => {
   const server = editorServer(measured);
   const pad = await mountEditor();
-  fireEvent.click(screen.getByText("Pad management"));
-  fireEvent.click(await screen.findByRole("button", { name: "Clear measured speeds" }));
+  const data = screen.getByRole("group", { name: "Measured speed" });
+  await within(data).findByText("3 models · from your chats on this Mac");
+  fireEvent.click(await within(data).findByRole("button", { name: "Clear measured speeds" }));
 
   const confirm = await screen.findByRole("button", { name: "Clear speeds" });
   assert.equal(server.clears(), 0);
@@ -232,7 +243,6 @@ test("Clear measured speeds asks first, forgets the speeds, and leaves the Pad a
 test("Clear measured speeds is not offered before any speed is measured", async () => {
   editorServer({});
   await mountEditor();
-  fireEvent.click(screen.getByText("Pad management"));
-  await screen.findByRole("button", { name: "Remove all models from Pad" });
+  await screen.findByText("Nothing measured yet");
   assert.ok(!screen.queryByRole("button", { name: "Clear measured speeds" }));
 });

@@ -75,8 +75,8 @@ function marker(pad: HTMLElement, label: string): HTMLElement | null {
 }
 
 async function addExtra() {
-  fireEvent.click(screen.getByRole("button", { name: "Browse models" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Add Extra from Test to Pad" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Add Extra from Test to Pad" }));
 }
 
 test("there is no Save or Reset step: adding a model saves it immediately", async () => {
@@ -152,17 +152,24 @@ test("a nudge burst still saves when focus leaves the marker", async () => {
 test("removing every model needs no confirmation and can be undone", async () => {
   const server = settingsServer();
   const pad = await mountEditor();
-  fireEvent.click(screen.getByText("Pad management"));
-  fireEvent.click(screen.getByRole("button", { name: "Remove all models from Pad" }));
+  const more = screen.getByRole("button", { name: "More Pad actions" });
+  fireEvent.keyDown(more, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Remove all" }));
 
   await waitFor(() => assert.deepEqual(server.stored(), {}));
   await screen.findByText("Cleared the Pad");
   assert.equal(pad.querySelectorAll("[data-placement-source]").length, 0);
-  // The Pad management section closes with the last model; focus lands on a stable control.
-  assert.ok(
-    document.activeElement === screen.getByRole("button", { name: "Browse models" }),
-    "focus moved to Browse models",
+  // The menu closes and focus returns to its trigger, which stays on the page.
+  await waitFor(() => assert.ok(document.activeElement === more, "focus is back on More Pad actions"));
+  // With the Pad empty, Remove all says why it can't run and does nothing.
+  fireEvent.keyDown(more, { key: "Enter" });
+  const unavailable = await screen.findByRole("menuitem", { name: "Remove all" });
+  assert.equal(unavailable.getAttribute("aria-disabled"), "true");
+  assert.match(
+    document.getElementById(unavailable.getAttribute("aria-describedby") ?? "")?.textContent ?? "",
+    /The Pad is empty/u,
   );
+  fireEvent.keyDown(unavailable, { key: "Escape" });
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), initialPlacements));

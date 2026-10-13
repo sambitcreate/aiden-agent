@@ -150,8 +150,27 @@ function mountEditor() {
   );
 }
 
-function browseButton(): HTMLElement {
-  return screen.getByRole("button", { name: "Browse models" });
+function addButton(): HTMLElement {
+  return screen.getByRole("button", { name: "Add" });
+}
+
+/** Open the header's Arrange menu and return one of its items. */
+async function arrangeItem(name: string): Promise<HTMLElement> {
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  return screen.findByRole("menuitem", { name });
+}
+
+/** Wait until the empty Pad's quick starts stop saying the models are loading. */
+async function modelsLoaded(): Promise<void> {
+  await waitFor(() => {
+    for (const name of ["Add pinned & recent", "Start from benchmarks"]) {
+      assert.doesNotMatch(screen.getByRole("button", { name }).getAttribute("title") ?? "", /Loading/u);
+    }
+  });
+}
+
+function itemReason(item: HTMLElement): string {
+  return document.getElementById(item.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
 }
 
 function assertFocusOnMarker() {
@@ -178,12 +197,12 @@ function markerCount(): number {
 }
 
 function suggestions(): HTMLElement[] {
-  return screen.queryAllByRole("button", { name: /^Accept suggestion: / });
+  return screen.queryAllByRole("button", { name: /^Keep suggestion: / });
 }
 
 function suggestionNames(): string[] {
   return suggestions().map((ghost) =>
-    (ghost.getAttribute("aria-label") ?? "").replace(/^Accept suggestion: (\S+) from Test$/u, "$1"),
+    (ghost.getAttribute("aria-label") ?? "").replace(/^Keep suggestion: (\S+) from Test$/u, "$1"),
   );
 }
 
@@ -202,77 +221,72 @@ function marker(model: string): HTMLElement {
 }
 
 async function openPreview(): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const preview = screen.getByRole("button", { name: "Preview suggestions" });
-  await waitFor(() => assert.equal((preview as HTMLButtonElement).disabled, false));
-  fireEvent.click(preview);
+  const suggest = await arrangeItem("Suggest models");
+  await waitFor(() => assert.notEqual(suggest.getAttribute("aria-disabled"), "true"));
+  fireEvent.click(suggest);
   await waitFor(() => assert.ok(suggestions().length > 0));
 }
 
-test("an empty Pad opens Browse models once loading finishes", async () => {
+function keepAllButton(): HTMLElement | null {
+  return screen.queryByRole("button", { name: "Keep all" });
+}
+
+function previewBar(): HTMLElement {
+  return screen.getByRole("group", { name: "Benchmark suggestions" });
+}
+
+test("an empty Pad puts focus on Add once loading finishes", async () => {
   editorServer();
   mountEditor();
-
-  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
-  const panel = screen.getByRole("complementary", { name: "Browse models for the Pad" });
-  assert.equal(panel.hidden, false);
-  const rows = await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
-  assert.equal(rows.length, MODELS.length);
+  await waitFor(() => assert.ok(document.activeElement === addButton(), "Add has focus"));
+  // The empty Pad offers both quick starts and the tray says what will appear.
+  assert.ok(screen.getByRole("button", { name: "Add pinned & recent" }));
+  assert.ok(screen.getByRole("button", { name: "Start from benchmarks" }));
+  assert.ok(screen.getByText("Models you add appear here."));
 });
 
-test("Browse models counts the available models in the singular and plural", async () => {
+test("Add lists the available models and counts them in the singular and plural", async () => {
   editorServer();
   mountEditor();
-  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
-  assert.ok(await screen.findByLabelText("10 models available"));
+  fireEvent.click(addButton());
+  assert.ok(await screen.findByPlaceholderText("Search 10 models"));
+  const options = await screen.findAllByRole("option", { name: /^Add .+ from Test to Pad$/u });
+  assert.equal(options.length, MODELS.length);
   cleanup();
 
   editorServer({ models: ["m0"] });
   mountEditor();
-  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
-  assert.ok(await screen.findByLabelText("1 model available"));
+  fireEvent.click(addButton());
+  assert.ok(await screen.findByPlaceholderText("Search 1 model"));
 });
 
-test("a Pad with models opens with Browse models closed", async () => {
+test("a Pad with models leaves focus where it was", async () => {
   editorServer({
     placements: { "test::m1": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
   });
   mountEditor();
 
   await waitFor(() => assert.equal(markerCount(), 1));
-  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.ok(document.activeElement !== addButton(), "Add did not take focus");
 });
 
-test("Browse models is not reopened after the Pad empties", async () => {
-  const server = editorServer({
-    placements: { "test::m1": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } },
-  });
-  mountEditor();
-  await waitFor(() => assert.equal(markerCount(), 1));
-
-  fireEvent.click(screen.getByText("Pad management"));
-  fireEvent.click(screen.getByRole("button", { name: "Remove all models from Pad" }));
-  await waitFor(() => assert.deepEqual(server.stored(), {}));
-  await screen.findByText("Cleared the Pad");
-  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
-});
-
-test("Browse models stays closed once the user closes it, even when the Pad empties again", async () => {
+test("Add takes focus only on the first visit, not when the Pad empties again", async () => {
   const server = editorServer({ pinnedModels: ["test::m3"] });
   mountEditor();
-  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
-
-  fireEvent.click(browseButton());
-  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
+  await waitFor(() => assert.ok(document.activeElement === addButton()));
 
   const add = screen.getByRole("button", { name: "Add pinned & recent" });
   await waitFor(() => assert.notEqual(add.getAttribute("aria-disabled"), "true"));
   fireEvent.click(add);
   await screen.findByText("Added 1 model");
+  await waitFor(assertFocusOnMarker);
+  act(() => (document.activeElement as HTMLElement | null)?.blur());
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.deepEqual(server.stored(), {}));
   await waitFor(() => assert.equal(markerCount(), 0));
-  assert.equal(browseButton().getAttribute("aria-expanded"), "false");
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.ok(document.activeElement !== addButton(), "Add was not refocused");
 });
 
 test("Add pinned & recent places pinned then recent models on the empty Pad, with Undo", async () => {
@@ -317,7 +331,7 @@ test("without pinned or recent models the quick start explains why it is unavail
   const server = editorServer();
   mountEditor();
   const add = await screen.findByRole("button", { name: "Add pinned & recent" });
-  await waitFor(() => assert.equal(browseButton().getAttribute("aria-expanded"), "true"));
+  await modelsLoaded();
 
   assert.equal(add.getAttribute("aria-disabled"), "true");
   const reason = document.getElementById(add.getAttribute("aria-describedby") ?? "");
@@ -327,7 +341,7 @@ test("without pinned or recent models the quick start explains why it is unavail
   assert.equal(server.writes(), 0);
 });
 
-test("Start from benchmarks needs benchmark insights first", async () => {
+test("Start from benchmarks needs benchmark scores connected first", async () => {
   editorServer({ pinnedModels: ["test::m1"] });
   mountEditor();
   const start = await screen.findByRole("button", { name: "Start from benchmarks" });
@@ -339,7 +353,7 @@ test("Start from benchmarks needs benchmark insights first", async () => {
   );
   assert.equal(start.getAttribute("aria-disabled"), "true");
   const reason = document.getElementById(start.getAttribute("aria-describedby") ?? "");
-  assert.match(reason?.textContent ?? "", /Connect benchmark insights first/u);
+  assert.match(reason?.textContent ?? "", /Connect benchmark scores in Data below first/u);
 });
 
 test("Start from benchmarks places the eight most capable models as benchmark suggestions", async () => {
@@ -390,7 +404,7 @@ test("while models are loading, both quick starts say so", async () => {
 
 const userPlacement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } as const;
 
-test("Preview suggestions shows pinned and recent models first, then the most capable, without saving", async () => {
+test("Suggest models shows pinned and recent models first, then the most capable, without saving", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -404,13 +418,16 @@ test("Preview suggestions shows pinned and recent models first, then the most ca
   assert.deepEqual(suggestionNames(), ["M2", "M1", "M9", "M8", "M7", "M6", "M5", "M4"]);
   assert.equal(server.writes(), 0);
   assert.equal(markerCount(), 1);
-  // The canvas offers both choices while the insights panel is closed again.
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  assert.ok(screen.getByRole("button", { name: "Accept all (8)" }));
-  assert.ok(screen.getByRole("button", { name: "Dismiss" }));
+  // The bar under the Pad counts the suggestions and offers both choices.
+  assert.match(previewBar().textContent ?? "", /^8 suggestions/u);
+  assert.ok(within(previewBar()).getByRole("button", { name: "Keep all" }));
+  assert.ok(within(previewBar()).getByRole("button", { name: "Dismiss" }));
+  // Suggest models moved focus to the first ghost, and its tag says how to keep it.
+  await waitFor(() => assert.ok(document.activeElement === suggestions()[0], "focus is on the first suggestion"));
+  assert.match(suggestions()[0].textContent ?? "", /Click to keep · Coding \d+/u);
 });
 
-test("accepting one suggestion saves only that model where it was previewed, with Undo", async () => {
+test("keeping one suggestion saves only that model where it was previewed, with Undo", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -422,7 +439,7 @@ test("accepting one suggestion saves only that model where it was previewed, wit
     suggestions().map((ghost) => [ghost.getAttribute("aria-label"), position(ghost)]),
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Accept suggestion: M5 from Test" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep suggestion: M5 from Test" }));
 
   await screen.findByText("Added M5 from Test");
   const stored = server.stored();
@@ -430,7 +447,7 @@ test("accepting one suggestion saves only that model where it was previewed, wit
   assert.equal(stored["test::m5"].xSource, "neutral");
   assert.equal(stored["test::m5"].ySource, "benchmark");
   await waitFor(() => assert.equal(markerCount(), 2));
-  assert.equal(position(marker("M5")), before.get("Accept suggestion: M5 from Test"));
+  assert.equal(position(marker("M5")), before.get("Keep suggestion: M5 from Test"));
   // The other suggestions stay where they were.
   assert.equal(suggestions().length, 7);
   for (const ghost of suggestions()) {
@@ -441,7 +458,7 @@ test("accepting one suggestion saves only that model where it was previewed, wit
   await waitFor(() => assert.deepEqual(Object.keys(server.stored()), ["test::m0"]));
 });
 
-test("Accept all places every suggestion where it was previewed", async () => {
+test("Keep all places every suggestion where it was previewed", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -451,20 +468,20 @@ test("Accept all places every suggestion where it was previewed", async () => {
   await openPreview();
   const previewed = new Map(
     suggestions().map((ghost) => [
-      (ghost.getAttribute("aria-label") ?? "").replace(/^Accept suggestion: (\S+) from Test$/u, "$1"),
+      (ghost.getAttribute("aria-label") ?? "").replace(/^Keep suggestion: (\S+) from Test$/u, "$1"),
       position(ghost),
     ]),
   );
   previewed.set("M0", position(marker("M0")));
 
-  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+  fireEvent.click(keepAllButton()!);
 
   await screen.findByText("Added 8 suggestions");
   assert.equal(Object.keys(server.stored()).length, 9);
   await waitFor(() => assert.equal(markerCount(), 9));
   assert.equal(suggestions().length, 0);
   for (const [model, spot] of previewed) assert.equal(position(marker(model)), spot, model);
-  assert.ok(!screen.queryByRole("button", { name: /^Accept all/u }));
+  assert.ok(!keepAllButton());
 });
 
 test("Dismiss clears the suggestions without saving", async () => {
@@ -476,45 +493,69 @@ test("Dismiss clears the suggestions without saving", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
   assert.equal(suggestions().length, 0);
-  assert.ok(!screen.queryByRole("button", { name: /^Accept all/u }));
+  assert.ok(!keepAllButton());
   assert.equal(server.writes(), 0);
 });
 
-test("changing the metric saves it and previews again for the new score", async () => {
+test("changing the metric in Arrange saves it and previews again for the new score", async () => {
   const server = editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
   assert.deepEqual(suggestionNames().slice(0, 2), ["M9", "M8"]);
-  assert.equal(
-    screen.getByRole("button", { name: "Coding" }).getAttribute("aria-pressed"),
-    "true",
-  );
 
-  const general = screen.getByRole("button", { name: "General" });
-  general.focus();
-  fireEvent.click(general);
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  const coding = await screen.findByRole("menuitemradio", { name: "Coding" });
+  assert.equal(coding.getAttribute("aria-checked"), "true");
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "General" }));
 
   await waitFor(() => assert.equal(server.settings().modelPadMetric, "intelligence"));
+  // The score switch works like a segmented control: the menu stays open on the new choice.
+  const general = screen.getByRole("menuitemradio", { name: "General" });
+  assert.equal(general.getAttribute("aria-checked"), "true");
+  fireEvent.keyDown(general, { key: "Escape" });
   // m0 is placed, so the most capable unplaced General models are m1 onwards.
   await waitFor(() =>
     assert.deepEqual(suggestionNames(), ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]),
   );
-  assert.equal(
-    screen.getByRole("button", { name: "General" }).getAttribute("aria-pressed"),
-    "true",
-  );
-  // Keyboard users stay on the metric buttons; only Preview suggestions moves focus.
-  assert.equal(document.activeElement, general);
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });
 
-test("Start from benchmarks uses the saved metric and the legend names it", async () => {
+test("Suggest models explains why it is unavailable", async () => {
+  editorServer({ placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  const suggest = await arrangeItem("Suggest models");
+  await waitFor(() => assert.match(itemReason(suggest), /Connect benchmark scores in Data below first/u));
+  assert.equal(suggest.getAttribute("aria-disabled"), "true");
+  fireEvent.click(suggest);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(suggestions().length, 0);
+  fireEvent.keyDown(suggest, { key: "Escape" });
+  cleanup();
+
+  editorServer({ insightsReady: true, scored: false, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  const none = await arrangeItem("Suggest models");
+  await waitFor(() => assert.match(itemReason(none), /No model off the Pad has a Coding score/u));
+});
+
+test("Dismiss returns focus to Arrange", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  fireEvent.click(within(previewBar()).getByRole("button", { name: "Dismiss" }));
+  assert.ok(document.activeElement === screen.getByRole("button", { name: "Arrange" }), "focus is on Arrange");
+});
+
+test("Start from benchmarks uses the saved metric and the Pad's chip names it", async () => {
   const server = editorServer({ insightsReady: true, metric: "intelligence" });
   mountEditor();
   const start = await screen.findByRole("button", { name: "Start from benchmarks" });
   await waitFor(() => assert.notEqual(start.getAttribute("aria-disabled"), "true"));
-  assert.ok(!screen.queryByText(/^Height:/u));
+  assert.ok(!screen.queryByRole("button", { name: /^Height:/u }));
   fireEvent.click(start);
 
   await screen.findByText("Added 8 suggestions");
@@ -522,14 +563,20 @@ test("Start from benchmarks uses the saved metric and the legend names it", asyn
     Object.keys(server.stored()).sort(),
     ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"].map((model) => `test::${model}`),
   );
-  await screen.findByText("Height: General");
+  const chip = await screen.findByRole("button", { name: /^Height: General score/u });
+  assert.equal(chip.textContent, "General");
+  // The chip switches the score too.
+  fireEvent.keyDown(chip, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Agentic" }));
+  await waitFor(() => assert.equal(server.settings().modelPadMetric, "agentic"));
+  await screen.findByRole("button", { name: /^Height: Agentic score/u });
 });
 
-test("the legend names no metric while every height is the user's own", async () => {
+test("the Pad names no metric while every height is the user's own", async () => {
   editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  assert.ok(!screen.queryByText(/^Height:/u));
+  assert.ok(!screen.queryByRole("button", { name: /^Height:/u }));
 });
 
 function percentPoint(element: HTMLElement): [number, number] {
@@ -561,20 +608,21 @@ test("adding or removing a model from the list dismisses an open preview", async
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
-  fireEvent.click(browseButton());
+  fireEvent.click(addButton());
   // M1 is the one unplaced model that is not previewed.
-  fireEvent.click(screen.getByRole("button", { name: "Add M1 from Test to Pad" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Add M1 from Test to Pad" }));
   await screen.findByText("Added M1 from Test");
   assert.equal(suggestions().length, 0);
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Add models to the Pad" }), { key: "Escape" });
 
   await openPreview();
-  fireEvent.click(browseButton());
-  fireEvent.click(screen.getByRole("button", { name: "Remove M0 from Test from Pad" }));
+  fireEvent.click(addButton());
+  fireEvent.click(await screen.findByRole("option", { name: "Remove M0 from Test from Pad" }));
   await screen.findByText("Removed M0 from Test");
   assert.equal(suggestions().length, 0);
 });
 
-test("the Pad keeps the preview grid while Accept all is saving", async () => {
+test("the Pad keeps the preview grid while Keep all is saving", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -588,7 +636,7 @@ test("the Pad keeps the preview grid while Accept all is saving", async () => {
   const observer = new MutationObserver(() => seen.push(pad().dataset.gridSize ?? ""));
   observer.observe(pad(), { attributes: true, attributeFilter: ["data-grid-size"] });
 
-  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+  fireEvent.click(keepAllButton()!);
   // The optimistic layout shows the accepted models while the write is held.
   await waitFor(() => assert.equal(markerCount(), 9));
   assert.equal(pad().dataset.gridSize, previewGrid);
@@ -605,7 +653,7 @@ test("the Pad keeps the preview grid while Accept all is saving", async () => {
   assert.equal(suggestions().length, 0);
 });
 
-test("a failed accept keeps the suggestion on the Pad", async () => {
+test("a failed keep keeps the suggestion on the Pad", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -615,13 +663,13 @@ test("a failed accept keeps the suggestion on the Pad", async () => {
   await waitFor(() => assert.equal(markerCount(), 1));
   await openPreview();
 
-  const ghost = screen.getByRole("button", { name: "Accept suggestion: M5 from Test" });
+  const ghost = screen.getByRole("button", { name: "Keep suggestion: M5 from Test" });
   ghost.focus();
   fireEvent.click(ghost);
 
   await screen.findByText("Aiden couldn’t save your Model Pad.");
   await waitFor(() => assert.equal(suggestions().length, 8));
-  assert.ok(screen.getByRole("button", { name: "Accept suggestion: M5 from Test" }));
+  assert.ok(screen.getByRole("button", { name: "Keep suggestion: M5 from Test" }));
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });
 
@@ -632,7 +680,7 @@ async function failHeldWrite(server: ReturnType<typeof editorServer>, optimistic
   await screen.findByText("Aiden couldn’t save your Model Pad.");
 }
 
-test("a failed Accept all brings every suggestion back and adds no models", async () => {
+test("a failed Keep all brings every suggestion back and adds no models", async () => {
   const server = editorServer({
     insightsReady: true,
     placements: { "test::m0": userPlacement },
@@ -644,16 +692,16 @@ test("a failed Accept all brings every suggestion back and adds no models", asyn
   await openPreview();
   const previewed = suggestionNames();
 
-  fireEvent.click(screen.getByRole("button", { name: "Accept all (8)" }));
+  fireEvent.click(keepAllButton()!);
   await failHeldWrite(server, 9);
 
   await waitFor(() => assert.deepEqual(suggestionNames(), previewed));
   assert.equal(markerCount(), 1);
-  assert.ok(screen.getByRole("button", { name: "Accept all (8)" }));
+  assert.match(previewBar().textContent ?? "", /^8 suggestions/u);
   assert.deepEqual(Object.keys(server.stored()), ["test::m0"]);
 });
 
-test("a failed accept of the last suggestion brings it back", async () => {
+test("a failed keep of the last suggestion brings it back", async () => {
   const placements: ModelPadPlacements = Object.fromEntries(
     MODELS.slice(0, 9).map((model, index) => [
       `test::${model}`,
@@ -666,7 +714,7 @@ test("a failed accept of the last suggestion brings it back", async () => {
   await openPreview();
   assert.deepEqual(suggestionNames(), ["M9"]);
 
-  fireEvent.click(screen.getByRole("button", { name: "Accept suggestion: M9 from Test" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep suggestion: M9 from Test" }));
   await failHeldWrite(server, 10);
 
   await waitFor(() => assert.deepEqual(suggestionNames(), ["M9"]));
@@ -688,9 +736,7 @@ test("benchmark insights report Pad and visible coverage and why Pad models are 
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 3));
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
   await within(panel).findByText("1 of 3 Pad models matched");
   within(panel).getByText("3 of 11 visible models");
   within(panel).getByText("3 ambiguous benchmark rows skipped");
@@ -713,9 +759,7 @@ test("a single skipped benchmark row is counted in the singular", async () => {
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
   await within(panel).findByText("1 ambiguous benchmark row skipped");
 });
 
@@ -723,9 +767,7 @@ test("benchmark coverage omits the unmatched list and skipped rows when there ar
   editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
   await within(panel).findByText("1 of 1 Pad model matched");
   assert.ok(!within(panel).queryByText(/Unmatched Pad models/u));
   assert.ok(!within(panel).queryByText(/ambiguous benchmark rows skipped/u));
@@ -735,38 +777,32 @@ test("benchmark coverage omits the unmatched list and skipped rows when there ar
 test("benchmark coverage stays hidden until insights are ready", async () => {
   editorServer({ scored: true });
   mountEditor();
-  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
+  await modelsLoaded();
   assert.ok(!screen.queryByText(/Pad models? matched/u));
 });
 
 test("benchmark coverage waits for the model list instead of counting nothing", async () => {
   editorServer({ insightsReady: true, providersPending: true });
   mountEditor();
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText("Benchmark insights ready");
-  assert.ok(!within(panel).queryByText("Coverage"));
-  assert.ok(!within(panel).queryByText(/visible models?$/u));
+  await screen.findByText("Benchmark insights ready");
+  assert.ok(!screen.queryByRole("group", { name: "Benchmark coverage" }));
+  assert.ok(!screen.queryByText(/visible models?$/u));
 });
 
 test("benchmark coverage stays hidden when model details can't be read", async () => {
   editorServer({ insightsReady: true, infoFails: true });
   mountEditor();
-  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText("Benchmark insights ready");
-  assert.ok(!within(panel).queryByText("Coverage"));
-  assert.ok(!within(panel).queryByText(/visible models?$/u));
+  await modelsLoaded();
+  await screen.findByText("Benchmark insights ready");
+  assert.ok(!screen.queryByRole("group", { name: "Benchmark coverage" }));
+  assert.ok(!screen.queryByText(/visible models?$/u));
 });
 
 test("benchmark coverage on an empty Pad says there is nothing to match yet", async () => {
   editorServer({ insightsReady: true });
   mountEditor();
-  await screen.findAllByRole("button", { name: /^Add .+ from Test to Pad$/u });
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  await modelsLoaded();
+  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
   await within(panel).findByText("No models on the Pad yet");
   within(panel).getByText("10 of 10 visible models");
   assert.ok(!within(panel).queryByText(/Pad models? matched/u));
@@ -781,13 +817,12 @@ test("benchmark coverage counts matched visible models without a score for the c
   });
   mountEditor();
   await waitFor(() => assert.equal(markerCount(), 1));
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
+  const panel = await screen.findByRole("group", { name: "Benchmark coverage" });
   await within(panel).findByText("1 of 1 Pad model matched");
   within(panel).getByText("3 matched visible models have no Agentic score");
 
-  fireEvent.click(within(panel).getByRole("button", { name: "Coding" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Coding" }));
   await waitFor(() => assert.ok(!within(panel).queryByText(/matched models? ha(?:s|ve) no/u)));
 });
 
@@ -797,16 +832,12 @@ test("the benchmark connection suggests fetching again once the snapshot is over
     fetchedAt: new Date(Date.now() - 61 * 24 * 60 * 60 * 1_000).toISOString(),
   });
   mountEditor();
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText("Benchmarks are over 60 days old. Fetch latest to update.");
+  await screen.findByText("Benchmarks are over 60 days old. Fetch latest to update.");
 });
 
 test("a recent benchmark snapshot shows no staleness hint", async () => {
   editorServer({ insightsReady: true, fetchedAt: new Date(Date.now() - 3_600_000).toISOString() });
   mountEditor();
-  fireEvent.click(screen.getByRole("button", { name: "Benchmark insights" }));
-  const panel = screen.getByRole("region", { name: "Benchmark insights" });
-  await within(panel).findByText(/Fetched /u);
-  assert.ok(!within(panel).queryByText(/over 60 days old/u));
+  await screen.findByText(/Fetched /u);
+  assert.ok(!screen.queryByText(/over 60 days old/u));
 });

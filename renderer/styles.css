@@ -851,71 +851,106 @@ textarea {
   container: model-pad-fieldset / inline-size;
 }
 
-.model-pad-field {
-  padding: 1.5rem;
+.model-pad-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.75rem 0.75rem 0 1rem;
 }
 
-.model-pad-field::after {
-  inset-inline: 1.5rem;
-}
-
-.settings-model-pad-grid {
-  grid-template-columns: minmax(0, 1fr);
+.model-pad-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16.25rem;
   align-items: start;
-  justify-content: center;
-  margin-top: 1.25rem;
-}
-
-.settings-model-pad-grid[data-panel-open="true"] {
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
+  gap: 1rem;
+  padding: 0.75rem 1rem 1rem;
 }
 
 .model-pad-canvas {
-  width: min(100%, 40rem);
-  margin-inline: auto;
-  view-transition-name: model-pad-canvas;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.model-pad-browser {
-  position: sticky;
-  top: 1rem;
+.model-pad-tray-list {
+  max-height: max(12rem, var(--model-pad-available-size, 28rem));
+  overflow-y: auto;
+}
+
+/* The tray's source glyph speaks the Pad's marker language at row size. */
+.model-pad-tray-glyph {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex-shrink: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 9999px;
+}
+
+.model-pad-tray-glyph[data-placement-source="personal"] {
+  background: var(--accent);
+}
+
+/* Names the score behind benchmark heights, in the square's top-right inset. */
+.model-pad-metric-chip {
+  position: absolute;
+  z-index: 5;
+  top: 0.375rem;
+  right: 0.5rem;
+  display: inline-flex;
+  height: 1.25rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
   border: 0;
-  box-shadow: var(--elevation-control);
-  view-transition-name: model-pad-browser;
-}
-
-.model-pad-browser-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.75rem;
-}
-
-.model-pad-browser-count {
-  padding-top: 0.125rem;
-  color: var(--text-tertiary);
-  font-size: var(--text-mini);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--text-mini--line-height);
-  white-space: nowrap;
-}
-
-.model-pad-panel-below {
-  display: none;
-}
-
-.model-pad-axis-label {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
-  margin-inline: auto;
+  border-radius: 0.625rem;
+  background: var(--surface-control);
   color: var(--text-secondary);
-  font-size: var(--text-strong);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: var(--text-strong--line-height);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  outline: none;
+  transition:
+    background-color var(--motion-duration) var(--ease-standard),
+    color var(--motion-duration) var(--ease-standard);
+}
+
+.model-pad-metric-chip:hover,
+.model-pad-metric-chip[data-state="open"] {
+  background: var(--surface-control-hover);
+  color: var(--text-primary);
+}
+
+.model-pad-metric-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Under the square while suggestions are previewed. */
+.model-pad-preview-bar {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  margin-top: 0.625rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.75rem;
+  border-radius: 1.125rem;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  font-size: var(--text-small);
+}
+
+.info-hint-content kbd {
+  padding-inline: 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
 }
 
 .model-pad {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  width: min(100%, 30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
   min-width: 0;
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
@@ -980,27 +1015,24 @@ textarea {
 }
 
 /*
- * One marker language on both Pad surfaces (composer picker, settings editor, legend):
+ * One marker language on both Pad surfaces (composer picker, settings editor and tray):
  * a personal placement is a solid accent dot; any data-assisted placement is a hollow
  * accent ring; a previewed suggestion (settings only, not saved yet) is a faint dashed
  * ring. The kinds differ by shape, not only by color.
  */
 .model-pad-model[data-placement-source="personal"],
-.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual,
-.model-pad-legend-marker[data-placement-source="personal"] {
+.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
   border-color: var(--accent);
   background: var(--accent);
 }
 
 .model-pad-model[data-placement-source="benchmark"],
-.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual,
-.model-pad-legend-marker[data-placement-source="benchmark"] {
+.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
   border-color: var(--accent);
   background: transparent;
 }
 
-.model-pad-marker[data-placement-source="suggestion"] .model-pad-marker-visual,
-.model-pad-legend-marker[data-placement-source="suggestion"] {
+.model-pad-marker[data-placement-source="suggestion"] .model-pad-marker-visual {
   border-style: dashed;
   border-color: var(--accent);
   background: transparent;
@@ -1017,7 +1049,8 @@ textarea {
 
 .model-pad-marker:hover,
 .model-pad-marker:focus-visible,
-.model-pad-marker[data-selected="true"] {
+.model-pad-marker[data-selected="true"],
+.model-pad-marker[data-hot="true"] {
   z-index: 30;
 }
 
@@ -1027,7 +1060,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-visual,
 .model-pad-marker:focus-visible .model-pad-marker-visual,
-.model-pad-marker[data-selected="true"] .model-pad-marker-visual {
+.model-pad-marker[data-selected="true"] .model-pad-marker-visual,
+.model-pad-marker[data-hot="true"] .model-pad-marker-visual {
   box-shadow: var(--elevation-control-hover);
   transform: scale(1.08);
 }
@@ -1076,7 +1110,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-label,
 .model-pad-marker:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-hot="true"] .model-pad-marker-label {
   opacity: 1;
   transform: translate(-50%, 0) scale(1);
 }
@@ -1089,7 +1124,8 @@ textarea {
 
 .model-pad-marker[data-label-side="bottom"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-hot="true"] .model-pad-marker-label {
   transform: translate(-50%, 0) scale(1);
 }
 
@@ -1101,7 +1137,8 @@ textarea {
 
 .model-pad-marker[data-label-align="start"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="start"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="start"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
@@ -1114,7 +1151,8 @@ textarea {
 
 .model-pad-marker[data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="end"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="end"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
@@ -1129,163 +1167,22 @@ textarea {
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-selected="true"]
   .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-hot="true"]
+  .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:focus-visible
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-hot="true"]
   .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
-.model-pad-legend {
-  min-height: 2.5rem;
-}
-
-.model-pad-legend-marker {
-  display: inline-block;
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 2px solid transparent;
-  border-radius: 9999px;
-  box-shadow: var(--elevation-control);
-}
-
-.model-pad-catalog {
-  max-height: max(8rem, var(--model-pad-available-size, calc(100dvh - 24rem)));
-}
-
-.model-pad-catalog-shell {
-  position: relative;
-}
-
-.model-pad-catalog-shell[data-more-below="true"]::after {
-  position: absolute;
-  z-index: 10;
-  inset-inline: 0;
-  bottom: 0;
-  height: 4rem;
-  border-radius: 0 0 var(--radius-control) var(--radius-control);
-  background: linear-gradient(to bottom, transparent, var(--surface-background) 78%);
-  content: "";
-  pointer-events: none;
-}
-
-.model-pad-catalog-more {
-  position: absolute;
-  z-index: 20;
-  bottom: 0.5rem;
-  left: 50%;
-  min-width: max-content;
-  border: 0;
-  background: color-mix(in srgb, var(--surface-popover) 94%, transparent);
-  box-shadow: var(--elevation-popover);
-  transform: translateX(-50%);
-  white-space: nowrap;
-  backdrop-filter: blur(12px) saturate(1.08);
-  -webkit-backdrop-filter: blur(12px) saturate(1.08);
-}
-
-.model-pad-catalog-more:hover {
-  background: var(--surface-popover);
-}
-
-.model-pad-disclosure {
-  margin-top: 1.5rem;
-  border: 0;
-  box-shadow: none;
-  view-transition-name: model-pad-insights;
-}
-
-/*
- * Supporting-panel switches use document snapshots so the Pad can move and
- * resize on the compositor instead of transitioning grid width. The root is
- * kept stable; only the named Pad and disclosed panel participate.
- */
-::view-transition-group(root) {
-  animation: none;
-}
-
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-::view-transition-group(model-pad-canvas) {
-  z-index: 2;
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1);
-}
-
-::view-transition-old(model-pad-canvas) {
-  animation: none;
-  opacity: 0;
-}
-
-::view-transition-new(model-pad-canvas) {
-  animation: none;
-  opacity: 1;
-}
-
-::view-transition-group(model-pad-browser),
-::view-transition-group(model-pad-insights) {
-  z-index: 3;
-}
-
-::view-transition-new(model-pad-browser) {
-  animation: model-pad-browser-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-browser) {
-  animation: model-pad-browser-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-new(model-pad-insights) {
-  animation: model-pad-insights-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-insights) {
-  animation: model-pad-insights-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-@keyframes model-pad-browser-in {
-  from {
-    opacity: 0;
-    transform: translateX(8px) scale(0.985);
-  }
-}
-
-@keyframes model-pad-browser-out {
-  to {
-    opacity: 0;
-    transform: translateX(4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-out {
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.995);
-  }
-}
-
-.model-pad-management {
-  margin-top: 1.5rem;
-}
-
-.model-pad-management > summary::-webkit-details-marker,
 .model-pad-coverage-details > summary::-webkit-details-marker {
   display: none;
 }
 
-.model-pad-management > summary::after,
 .model-pad-coverage-details > summary::after {
   float: right;
   color: var(--text-tertiary);
@@ -1294,7 +1191,6 @@ textarea {
   transition: transform 150ms ease-out;
 }
 
-.model-pad-management[open] > summary::after,
 .model-pad-coverage-details[open] > summary::after {
   transform: rotate(-90deg);
 }
@@ -1627,50 +1523,18 @@ textarea {
   }
 }
 
-/* Short windows share one wrapping row flow for Pad counts and actions. This
- * avoids an otherwise nearly empty counts row pushing the minimum-size Pad
- * and its legend below the Linux content viewport. Keep control sizes intact. */
-@media (max-height: 640px) {
-  .model-pad-toolbar-actions {
-    display: contents;
-  }
+/* The tray moves under the Pad when the card itself is narrow. */
 
-  .settings-model-pad-grid {
-    margin-top: 0.75rem;
-  }
-}
-
-@container settings-content (max-width: 620px) {
-  .settings-model-pad-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@container model-pad-fieldset (max-width: 760px) {
-  .settings-model-pad-grid[data-panel-open="true"] {
+@container model-pad-fieldset (max-width: 640px) {
+  .model-pad-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-pad-browser {
-    position: static;
-    scroll-margin-top: 1rem;
-  }
-
-  .model-pad-panel-below {
-    display: flex;
-    justify-content: center;
-    margin-block: -0.125rem -0.375rem;
-  }
-
-  .model-pad-catalog {
-    max-height: 18rem;
-  }
-
-  .model-pad-legend > :last-child {
-    width: 100%;
-    margin-left: 0;
+  .model-pad-tray-list {
+    max-height: none;
   }
 }
+
 
 @container settings-content (max-width: 540px) {
   .settings-field-horizontal {
@@ -2703,6 +2567,7 @@ textarea {
   .model-pad-knob,
   .model-pad-marker-label,
   .model-pad-marker-visual,
+  .model-pad-metric-chip,
   .model-pad-model,
   .model-pad-node {
     transition: none;
@@ -2724,6 +2589,7 @@ textarea {
 :root[data-reduce-motion="true"] .model-pad-chip,
 :root[data-reduce-motion="true"] .model-pad-marker-label,
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
+:root[data-reduce-motion="true"] .model-pad-metric-chip,
 :root[data-reduce-motion="true"] .model-pad-model,
 :root[data-reduce-motion="true"] .model-pad-node {
   transition: none;

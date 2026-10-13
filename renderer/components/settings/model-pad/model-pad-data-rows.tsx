@@ -1,15 +1,18 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
-import { AlertDialog, Badge, Button, Callout, Field, Input, Text, toast } from "../../ui";
+import { AlertDialog, Badge, Button, Callout, Field, FieldSet, Input, Text, toast } from "../../ui";
 import { modelInsightsApi } from "../../../lib/ipc";
 import {
   beginModelInsightsAction,
   commitModelInsightsState,
+  clearModelPaceSummaries,
   refreshModelInsightsState,
   useModelInsightsStatus,
 } from "../../../lib/queries";
 import { BENCHMARK_STALE_DAYS, isOlderThanDays } from "../../../lib/model-details";
+import type { BenchmarkCoverage } from "../../../lib/model-picker-data";
+import { MODEL_PAD_METRIC_LABELS, type ModelPadMetric } from "../../../lib/model-pad-layout";
 
 type ModelInsightsOperation = "connect" | "refresh" | "disconnect";
 
@@ -24,7 +27,7 @@ function modelInsightsDate(value: string | undefined): string | null {
   return Number.isFinite(date.getTime()) ? MODEL_INSIGHTS_DATE_FORMATTER.format(date) : null;
 }
 
-export function ModelPadBenchmarkConnection() {
+function ModelPadBenchmarkConnection() {
   const queryClient = useQueryClient();
   const statusQuery = useModelInsightsStatus();
   const [keyDraft, setKeyDraft] = React.useState("");
@@ -284,3 +287,165 @@ export function ModelPadBenchmarkConnection() {
   );
 }
 
+
+/** How much of the Pad and the visible models the cached benchmark snapshot covers. */
+function ModelPadBenchmarkCoverage({
+  coverage,
+  matchedWithoutMetric,
+  metric,
+  skippedAmbiguousCount,
+}: {
+  coverage: BenchmarkCoverage;
+  matchedWithoutMetric: number;
+  metric: ModelPadMetric;
+  skippedAmbiguousCount: number;
+}) {
+  return (
+    <Field label="Benchmark coverage" orientation="vertical">
+      <ul className="grid gap-0.5 text-small text-secondary">
+        <li>
+          {coverage.pad.total === 0
+            ? "No models on the Pad yet"
+            : `${coverage.pad.matched} of ${coverage.pad.total} Pad model${coverage.pad.total === 1 ? "" : "s"} matched`}
+        </li>
+        <li>{`${coverage.visible.matched} of ${coverage.visible.total} visible model${coverage.visible.total === 1 ? "" : "s"}`}</li>
+        {matchedWithoutMetric > 0 ? (
+          <li>
+            {`${matchedWithoutMetric} matched visible model${matchedWithoutMetric === 1 ? "" : "s"} ${matchedWithoutMetric === 1 ? "has" : "have"} no ${MODEL_PAD_METRIC_LABELS[metric]} score`}
+          </li>
+        ) : null}
+        {skippedAmbiguousCount > 0 ? (
+          <li>
+            {`${skippedAmbiguousCount} ambiguous benchmark row${skippedAmbiguousCount === 1 ? "" : "s"} skipped`}
+          </li>
+        ) : null}
+      </ul>
+      {coverage.unmatchedPad.length > 0 ? (
+        <details className="model-pad-coverage-details -mx-2">
+          <summary className="cursor-default list-none rounded-control px-2 py-1.5 text-small text-secondary outline-none hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+            {`Unmatched Pad models (${coverage.unmatchedPad.length})`}
+          </summary>
+          <div className="grid gap-1.5 px-2 pb-1 pt-1">
+            <Text as="p" variant="small" color="tertiary">
+              Benchmarks cover hosted models; reasoning variants are matched separately.
+            </Text>
+            <ul className="grid gap-1 text-small">
+              {coverage.unmatchedPad.map((model) => (
+                <li key={model.value} className="flex min-w-0 items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate text-primary">
+                    {`${model.label} · ${model.providerLabel}`}
+                  </span>
+                  <span className="shrink-0 text-tertiary">
+                    {model.reason === "local" ? "Local model" : "No benchmark row"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
+      ) : null}
+    </Field>
+  );
+}
+
+/** Forget the speeds measured from the user's chats, after a confirmation. */
+function ModelPadMeasuredSpeed({
+  measuredCount,
+  fallbackFocus,
+}: {
+  measuredCount: number;
+  fallbackFocus: () => HTMLElement | null;
+}) {
+  const queryClient = useQueryClient();
+  const [confirmClear, setConfirmClear] = React.useState(false);
+  const [clearing, setClearing] = React.useState(false);
+  const clearButtonRef = React.useRef<HTMLButtonElement | null>(null);
+
+  const clear = async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      await clearModelPaceSummaries(queryClient);
+      toast.success("Measured speeds cleared.");
+    } catch {
+      toast.error("Aiden couldn’t clear measured speeds.");
+    } finally {
+      setConfirmClear(false);
+      setClearing(false);
+    }
+  };
+
+  return (
+    <Field
+      label="Measured speed"
+      description={
+        measuredCount > 0
+          ? `${measuredCount} model${measuredCount === 1 ? "" : "s"} · from your chats on this Mac`
+          : "Nothing measured yet"
+      }
+    >
+      <div className="flex justify-end">
+        {measuredCount > 0 ? (
+          <Button
+            ref={clearButtonRef}
+            size="small"
+            variant="transparent"
+            onClick={() => setConfirmClear(true)}
+          >
+            Clear measured speeds
+          </Button>
+        ) : null}
+      </div>
+      <AlertDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear measured speeds?"
+        description="Aiden will forget the response speeds it measured from your chats on this Mac. Models stay where they are on your Pad."
+        confirmLabel="Clear speeds"
+        confirmVariant="destructive"
+        busy={clearing}
+        keepOpenOnConfirm
+        returnFocus={() => {
+          const button = clearButtonRef.current;
+          return button?.isConnected ? button : fallbackFocus();
+        }}
+        onConfirm={clear}
+      />
+    </Field>
+  );
+}
+
+/**
+ * The Data group under the Pad: the benchmark connection and its coverage,
+ * and the speeds measured from the user's chats.
+ */
+export function ModelPadDataRows({
+  coverage,
+  matchedWithoutMetric,
+  metric,
+  measuredCount,
+  fallbackFocus,
+}: {
+  /** Shown once insights are ready and every model has loaded. */
+  coverage?: BenchmarkCoverage;
+  matchedWithoutMetric: number;
+  metric: ModelPadMetric;
+  measuredCount: number;
+  fallbackFocus: () => HTMLElement | null;
+}) {
+  const status = useModelInsightsStatus().data;
+  return (
+    <FieldSet title="Data">
+      <ModelPadBenchmarkConnection />
+      {coverage ? (
+        <ModelPadBenchmarkCoverage
+          coverage={coverage}
+          matchedWithoutMetric={matchedWithoutMetric}
+          metric={metric}
+          skippedAmbiguousCount={status?.skippedAmbiguousCount ?? 0}
+        />
+      ) : null}
+      <ModelPadMeasuredSpeed measuredCount={measuredCount} fallbackFocus={fallbackFocus} />
+    </FieldSet>
+  );
+}

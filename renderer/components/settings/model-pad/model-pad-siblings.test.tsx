@@ -122,9 +122,9 @@ test("a hovered marker removed from the Pad stops highlighting its siblings", as
   await waitFor(() => assert.deepEqual(linkedValues(pad), ["test::gpt-4o"]));
 
   // Removed while the pointer still rests on it, so no pointer leave arrives.
-  fireEvent.click(screen.getByRole("button", { name: "Browse models" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
   fireEvent.click(
-    await screen.findByRole("button", {
+    await screen.findByRole("option", {
       name: /^Remove .* from Relay Hub from Pad$/u,
     }),
   );
@@ -160,21 +160,12 @@ test("focusing or hovering a marker links its placed siblings and nothing else",
   assert.deepEqual(linkedValues(pad), []);
 });
 
-test("Browse rows add the other providers to the provider line", async () => {
+test("tray rows add the other providers to the provider line", async () => {
   await mountEditor();
-  fireEvent.click(screen.getByRole("button", { name: "Browse models" }));
-  const rows = (
-    await screen.findAllByRole("button", {
-      name: /^(?:Add|Remove) .* (?:to|from) Pad$/u,
-    })
-  ).map((button) => button.parentElement?.textContent ?? "");
-  assert.ok(
-    rows.some((text) => /Relay Hub · Hosted · Also via Test/u.test(text)),
-  );
-  assert.ok(
-    rows.some((text) => /Test · Hosted · Also via Relay Hub/u.test(text)),
-  );
-  const solo = rows.filter((text) => /Solo/iu.test(text));
-  assert.equal(solo.length, 1);
-  assert.doesNotMatch(solo[0], /Also via/u);
+  const tray = screen.getByRole("complementary", { name: "On your Pad" });
+  const secondary = (value: string) =>
+    tray.querySelector(`li[data-value="${value}"]`)?.textContent ?? "";
+  assert.match(secondary("relay::openai/gpt-4o"), /Relay Hub · also via Test/u);
+  assert.match(secondary("test::gpt-4o"), /Test · also via Relay Hub/u);
+  assert.doesNotMatch(secondary("test::solo"), /also via/iu);
 });

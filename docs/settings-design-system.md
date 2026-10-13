@@ -15,7 +15,7 @@ The `.settings-responsive` container defines `--settings-card-radius`, `--settin
 
 Rows respond to their allocated content width, not the whole window. Below 540px complex controls stack under descriptions, while switches remain on the right. Grid groups must use `minmax(0, 1fr)` / `grid-cols-1` so long provider names or endpoints cannot force horizontal overflow. Controls and text must stay reachable without horizontal page scrolling.
 
-Model Pad measures the actual scrollport and remaining column. Axis captions and the legend use a reserved height so the square outline stays put while surrounding copy, marker labels, and catalog text change. The square is constrained by remaining height, column width, and the visible scrollport. On very short or highly zoomed windows, it keeps a usable canvas (160px when the scrollport allows) and the Settings page scrolls; the Pad and its labels remain reachable. Ordinary window allocations show the full canvas and legend together. Opening model or benchmark panels uses the same measurement.
+Model Pad is one card: a header (model count with an ⓘ hint for the marker language and keys, then Add, Arrange and ⋯), the Pad square with its axis captions, metric chip and suggestion bar, and an "On your Pad" tray beside it that stacks under the square when the card is narrower than 640px (a container query on the card, not the window). Explanations live behind the shared `InfoHint` (`renderer/components/ui-info-hint.tsx`) rather than paragraphs on the page. A "Data" group under the card holds the benchmark connection, coverage and measured speeds. The square is sized from the actual scrollport and remaining column (`measureModelPadAvailableSize`), capped at 30rem; on very short or highly zoomed windows it keeps a usable canvas (160px when the scrollport allows) and the Settings page scrolls.
 
 ## Workspace labels
 
@@ -37,7 +37,7 @@ Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain 
 
 ## Checks
 
-`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom/panel states, scrolling, keyboard movement, and autosave with Undo). Keep layout assertions tied to rendered geometry rather than only source strings.
+`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (window/zoom states, scrolling, keyboard movement, and autosave with Undo). Keep layout assertions tied to rendered geometry rather than only source strings.
 
 ## Composer context usage
 
