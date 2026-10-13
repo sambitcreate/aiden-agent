@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Window } from "happy-dom";
+import { McpSettings } from "./mcp-settings";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -14,7 +19,7 @@ test("Live device pickers keep chevrons on one line and truncate long device nam
 test("every settings destination uses the shared page and grouped row system", () => {
   const view = read("../../main/settings-view.tsx");
   assert.match(view, /<SettingsPage[\s\S]*<ActiveSection \/>[\s\S]*<\/SettingsPage>/u);
-  for (const page of ["appearance", "providers", "mcp", "skills", "shortcut", "web-search"]) {
+  for (const page of ["appearance", "providers", "skills", "shortcut", "web-search"]) {
     assert.match(read(`./${page}-settings.tsx`), /settings-page-heading/u);
   }
   assert.match(
@@ -64,4 +69,15 @@ test("Telegram switches have explicit accessible names and setup uses the real w
     assert.ok(telegram.includes(`aria-label="${label}"`));
   }
   assert.doesNotMatch(telegram, /Settings → Workspaces/u);
+});
+
+test("Plugins settings render their title inside the shared settings page heading", () => {
+  const markup = renderToStaticMarkup(
+    createElement(QueryClientProvider, { client: new QueryClient() }, createElement(McpSettings)),
+  );
+  const { document } = new Window();
+  document.body.innerHTML = markup;
+  const headings = [...document.querySelectorAll("h1")];
+  assert.deepEqual(headings.map((heading) => heading.textContent), ["Plugins"]);
+  assert.ok(headings[0]!.closest(".settings-page-heading"), "the page title sits in the shared heading");
 });

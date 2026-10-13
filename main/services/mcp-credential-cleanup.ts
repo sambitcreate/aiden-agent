@@ -208,25 +208,6 @@ export function mutateCredentialForConfiguredMcp<R>(
   });
 }
 
-export function mutateMcpConfig<R>(
-  serverId: string,
-  mutation: () => Promise<R>,
-  isCurrent: () => boolean = () => true,
-): Promise<R> {
-  return mutatePortableConfigAndSync(() =>
-    serialized(async () => {
-      await reconcileNow(isCurrent);
-      const release = suspendMcpOAuthOperations(serverId);
-      try {
-        assertCurrent(isCurrent);
-        return await mutation();
-      } finally {
-        release();
-      }
-    }),
-  );
-}
-
 export function withConfiguredMcp<R>(
   serverId: string,
   expected: McpRuntimeConnectionSnapshot | null,

@@ -5,6 +5,7 @@ import {
   isConnectablePlugin,
   PLUGIN_CATALOG,
   PLUGIN_CATALOG_SOURCE_URL,
+  PLUGIN_CATALOG_VERIFIED_ON,
   pluginCompatibilityLabel,
 } from "./plugin-catalog.js";
 import {
@@ -31,13 +32,18 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
     assert.ok(plugin.vendor.startsWith("By "));
     assert.ok(plugin.category.length > 0);
     assert.match(plugin.docsUrl, /^https:\/\//);
+    if (plugin.url) {
+      // Every listed MCP endpoint, connectable or not, is HTTPS Streamable
+      // HTTP without embedded credentials; legacy SSE endpoints are not offered.
+      const url = new URL(plugin.url);
+      assert.equal(url.protocol, "https:", `${plugin.id} uses HTTPS`);
+      assert.doesNotMatch(url.pathname, /\/sse\/?$/u, `${plugin.id} uses an SSE endpoint`);
+      assert.equal(url.username + url.password, "");
+    }
+    if (plugin.auth?.kind === "apiKey") assert.match(plugin.auth.keyHelpUrl, /^https:\/\//u);
     if (plugin.compatibility === "http-mcp") {
       assert.equal(plugin.transport, "http");
       assert.ok(plugin.url);
-      assert.match(plugin.url, /^https:\/\//);
-      // Connectable presets use Streamable HTTP; legacy SSE endpoints are not offered.
-      assert.doesNotMatch(new URL(plugin.url).pathname, /\/sse\/?$/u, `${plugin.id} uses an SSE endpoint`);
-      assert.equal(new URL(plugin.url).username + new URL(plugin.url).password, "");
       assert.ok(plugin.auth);
       assert.equal(isConnectablePlugin(plugin), true);
     } else {
@@ -45,6 +51,13 @@ test("plugin catalog ids are unique kebab-case entries from Codex plus Composio"
       assert.equal(isConnectablePlugin(plugin), false);
     }
   }
+});
+
+test("the catalog records when it was last reviewed against upstream", () => {
+  assert.match(PLUGIN_CATALOG_VERIFIED_ON, /^\d{4}-\d{2}-\d{2}$/u);
+  const verified = new Date(`${PLUGIN_CATALOG_VERIFIED_ON}T00:00:00Z`);
+  assert.equal(verified.toISOString().slice(0, 10), PLUGIN_CATALOG_VERIFIED_ON, "a real calendar date");
+  assert.ok(verified.getTime() <= Date.now(), "a review cannot be dated in the future");
 });
 
 test("search and compatibility filters keep connectable MCP separate from skills", () => {

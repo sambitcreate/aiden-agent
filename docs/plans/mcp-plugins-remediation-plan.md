@@ -91,25 +91,25 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 
 ### 9. Exposure controls (config, runtime, Settings)
 
-- [ ] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
-- [ ] Foreground, Assistant, Bot and child paths honour it.
-- [ ] Settings row control and per-tool list.
+- [x] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
+- [x] Foreground, Assistant, Bot and child paths honour it.
+- [x] Settings row control and per-tool list.
 
-### 10. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings)
+### 10. Cleanup and catalog
+
+- [x] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
+- [x] Replace source-grep MCP tests with behavioural tests.
+- [x] Dev-only `npm run plugins:refresh` and catalog invariant tests.
+
+### 11. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings)
 
 - [ ] Secret-looking env and header values move to the keychain and are masked; externally added stdio servers need first-run approval.
 
-### 11. Pi 1.2.0 lockstep upgrade
+### 12. Pi 1.2.0 lockstep upgrade
 
 - [ ] Root and CLI pins to 1.2.0 (`pi-ai`, `pi-agent-core`, `pi-codemode`, `pi-durable`, `chord`, `pi-coding-agent`, `pi-mcp`); drop the CLI `chord` dependency if unused.
 - [ ] `before_agent_start` union (`session-parity.ts`), `deliverAs` on `/attach`, `pi-durable` `output` rename, patch anchors (`SETTINGS_DEFAULTS.enableInstallTelemetry`, `PI_AI_VERSION`), theme `$schema` URL, reject `+`/`-`-prefixed server names.
 - [ ] Pi upgrade evaluation and CLI suites.
-
-### 12. Cleanup and catalog
-
-- [ ] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
-- [ ] Replace source-grep MCP tests with behavioural tests.
-- [ ] Dev-only `npm run plugins:refresh` and catalog invariant tests.
 
 ## Validation
 

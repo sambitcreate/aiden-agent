@@ -173,21 +173,6 @@ function toText(result: unknown, maxChars = MAX_MCP_RESULT_TEXT_CHARS, maxParts 
   return (parts.join("") || "MCP tool returned no result.") + (truncated ? OMITTED : "");
 }
 
-/**
- * Preserve MCP's resolved `isError` outcome as a thrown tool failure so Pi,
- * Activity, and claim checking all observe the same terminal state.
- */
-export function mcpAgentToolResult(result: unknown): AgentToolResult<null> {
-  const images = imagesFor(result);
-  const text = toText(result, MAX_MCP_RESULT_TEXT_CHARS, MAX_PARTS, images);
-  if ((result as { isError?: unknown } | null)?.isError === true) {
-    throw new Error(text);
-  }
-  const structured = record(result) ? structuredContent(result.structuredContent) : undefined;
-  return { content: [{ type: "text", text }, ...images.values()], details: null,
-    ...(structured === undefined ? {} : { structuredContent: structured }) };
-}
-
 /** What a codemode script receives from an MCP call: the server's result, bounded far above the model's view. */
 export interface McpScriptResult {
   content: JsonValue[];
