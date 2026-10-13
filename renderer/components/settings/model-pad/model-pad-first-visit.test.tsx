@@ -611,6 +611,47 @@ test("switching the score re-ranks saved benchmark heights, and Undo puts them b
   );
 });
 
+test("switching the score with suggestions open packs the new ghosts around the re-ranked markers", async () => {
+  const coding = (x: number, y: number) =>
+    ({ x, y, xSource: "user", ySource: "benchmark", yMetric: "coding" }) as const;
+  const server = editorServer({
+    insightsReady: true,
+    placements: {
+      "test::m0": coding(1 / 3, 0),
+      "test::m1": coding(2 / 3, 1 / 3),
+      "test::m2": coding(1, 0.5),
+      "test::m3": coding(1 / 6, 5 / 6),
+      "test::m4": coding(0.5, 1),
+    },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 5));
+  await openPreview();
+  assert.equal(suggestions().length, 5);
+
+  await chooseMetric("General");
+
+  await screen.findByText("Heights now use General scores");
+  // Every unplaced model with a General score is still offered, M5 (the best) included.
+  await waitFor(() => assert.deepEqual([...suggestionNames()].sort(), ["M5", "M6", "M7", "M8", "M9"]));
+  const markerSpots = ["M0", "M1", "M2", "M3", "M4"].map((model) => position(marker(model)));
+  for (const ghostElement of suggestions()) {
+    assert.ok(!markerSpots.includes(position(ghostElement)), "no ghost shares a marker's dot");
+  }
+
+  // Keeping one, then the rest, saves them where they were previewed.
+  const previewed = new Map(suggestionNames().map((name, index) => [name, position(suggestions()[index])]));
+  fireEvent.click(ghost("M5"));
+  await screen.findByText("Added M5 from Test");
+  fireEvent.click(keepAllButton()!);
+  await screen.findByText("Added 4 suggestions");
+  await waitFor(() => assert.equal(markerCount(), 10));
+  for (const [model, spot] of previewed) assert.equal(position(marker(model)), spot, model);
+  for (const model of ["m5", "m6", "m7", "m8", "m9"]) {
+    assert.equal(server.stored()[`test::${model}`].yMetric, "intelligence", model);
+  }
+});
+
 test("a height with no score for the new metric stays put, keeps its own score, and the chip says mixed", async () => {
   const server = editorServer({
     insightsReady: true,

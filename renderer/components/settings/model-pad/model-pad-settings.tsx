@@ -797,7 +797,13 @@ export function ModelPadSettings() {
   const previewSuggestions = ({
     metric = benchmarkMetric,
     focus = true,
-  }: { metric?: ModelPadMetric; focus?: boolean } = {}): number => {
+    placements = padPreferences.placements,
+  }: {
+    metric?: ModelPadMetric;
+    focus?: boolean;
+    /** The layout to pack ghosts around: a metric switch passes its re-ranked one. */
+    placements?: ModelPadPlacements;
+  } = {}): number => {
     flushPendingMove();
     const percentiles =
       metric === benchmarkMetric ? benchmarkPercentiles : modelBenchmarkPercentiles(entries, metric);
@@ -853,6 +859,16 @@ export function ModelPadSettings() {
     if (metric === benchmarkMetric) return;
     flushPendingMove();
     const percentiles = modelBenchmarkPercentiles(entries, metric);
+    // An open preview follows the new score, packed around where the saved
+    // markers move to (not where they were), so no ghost lands on one.
+    if (suggestionPreview) {
+      const reranked = rerankModelPadBenchmarkHeights(placements, visibleValues, {
+        percentiles,
+        metric,
+        previousMetric: benchmarkMetric,
+      }).placements;
+      previewSuggestions({ metric, focus: false, placements: reranked });
+    }
     void persistAction((current, currentMetric) => {
       if (currentMetric === metric) return null;
       const result = rerankModelPadBenchmarkHeights(current, visibleValues, {
@@ -872,8 +888,6 @@ export function ModelPadSettings() {
       // The ghosts were laid out for the score that didn't save.
       if (!saved) setSuggestionPreview(undefined);
     });
-    // An open preview follows the new score; focus stays where it is.
-    if (suggestionPreview) previewSuggestions({ metric, focus: false });
   };
 
   /** Keep focus near the suggestions once the one that had it goes away. */
