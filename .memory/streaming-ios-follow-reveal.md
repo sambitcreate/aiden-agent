@@ -9,6 +9,10 @@ Part of the live cross-device streaming plan (iOS lane I1–I3). The direction w
 - Streaming growth snaps the view through a trigger leaf coalesced at 16 ms, so the chat owner is not re-rendered.
 - Every follow scroll carries a generation token, so a stale snap never lands after a newer jump or drag.
 - The jump button appears after a short settle and hides as soon as the view returns to the bottom.
+- Review fixes:
+  - A resting finger (`isTracking` with no movement) does not stop follow.
+  - An idle Jump that lands short of the bottom gets one corrective snap.
+  - Scrolls with no pan gesture (keyboard, VoiceOver, status-bar tap) still settle the latch. Moving away is caught by `movedAwayFromBottom`. Arriving at the bottom from far above re-arms follow through `confirmBottomArrival()` after `animationSettle`, unless a drag or scroll-away happens in between (`bottomArrivalGeneration`). Trackpad and mouse scrolling go through the pan recogniser, so the normal drag-end path covers them.
 - Tests: `AidenTranscriptFollowControllerTests`, `AidenChatScrollFollowTests`.
 
 ## I2 — reveal gate and sealed chunks (`stream/ios-i2-reveal-gate`)
@@ -25,28 +29,32 @@ Part of the live cross-device streaming plan (iOS lane I1–I3). The direction w
 - Deviation from the plan: Hermex has no per-chunk fade. Aiden's splitter seals a block only after the next block's first line is complete, so a newly sealed chunk usually holds text that is already on screen.
   - `AidenMarkdownChunkReveal.newChunkIndices` fades only chunks that start at or past the previously rendered UTF-8 length.
   - There is no fade under Reduce Motion or Low Power Mode.
-- `scripts/check-ios-shipping-target.test.mjs` has one existing source-grep regex. It was only widened to accept `replaceLiveText("")`. Follow-up: replace it with a behavioural bot-snapshot test.
+- Cumulative frames (foreign runs) are handled in bounded work by `AidenCumulativeReplyText`, which compares only the received UTF-8 count and a short tail rather than the whole reply.
+- The bot-chat snapshot behaviour is covered by `testABotChatSnapshotDropsRevealedBufferedAndReasoningText`. The old source-grep regex in `scripts/check-ios-shipping-target.test.mjs` was removed.
+- Chunk spacing finding: MarkdownUI draws `max(previous bottom, next top)` between blocks. Aiden's chat paragraph style sits outside `.markdownTheme`, so the theme's 16 pt paragraph margin wins and the intended 8 pt paragraph override has no effect. That is pre-existing on main and left as is. `AidenMarkdownChunkSpacing` therefore uses 16 pt after paragraphs, lists, quotes and code, which makes a settled chunked reply exactly as tall as the single-document render.
 
 ## I3 — attaching to runs started elsewhere (`stream/ios-i3-attach-foreign-runs`)
 
 - Announced turns:
-  - `applyProgress(.agentsUpdate)` compares the accepted roster's `turnId` with `lastRosterTurnId`. `acceptAgentRoster` updates `lastRosterTurnId` from both the snapshot fetch and live events.
-  - A new turn calls `attachToAnnouncedTurn()`, which runs `startForeignRunObservationIfNeeded(reason: .announcedTurn)`.
-  - If an attach is already in flight, `announcedTurnAwaitingAttach` defers the new turn until that attach ends.
-  - Turns this phone starts are skipped because `activeStreamID` or `isStarting` is set.
-- `observeForeignRun` takes a `ForeignRunAttachReason`: `.load`, `.announcedTurn` or `.probe`.
-  - An announced attach retries once after `announcedRunRetryDelay`, which is 400 ms. It retries when it gets a 404 before any frame arrives. It also retries when `runs/current` replays a finished run whose ID matches `foreignRunAccountedRunId`.
+  - `acceptAgentRoster` compares every accepted roster's `turnId` with `lastRosterTurnId`. That covers live `agents_update` events and the snapshots read on load, reconnect and return to the foreground.
+  - A changed turn calls `attachToAnnouncedTurn(reason: .announcedTurn)`.
+  - The first turn a chat sees calls it with `.firstRosterTurn`. The opening lookup can be answered before a Mac run registers and before the first roster arrives, so that turn is looked up once, without the not-found retry. This mirrors Android PR #452 finding 1, which iOS also had. It costs one extra `runs/current` request the first time a chat with a roster opens.
+  - If a lookup is already in flight, `turnAwaitingLookup` keeps the signal (an announced turn outranks a first-roster turn). Once that lookup ends, a single lookup covers every signal it kept. This is Android finding 2. iOS already coalesced the signal through a Bool, and it is now covered by a test.
+  - Turns this phone starts are skipped while `activeStreamID` or `isStarting` is set. Setting `activeStreamID` also records the run in `foreignRunAccountedRunId`, so its turn announced after the stream ends is never read again.
+- `observeForeignRun` takes a `ForeignRunAttachReason`: `.load`, `.announcedTurn`, `.firstRosterTurn` or `.probe`.
+  - An announced attach retries once after `announcedRunRetryDelay`, which is 400 ms. Tests inject the wait through `announcedRunRetrySleep`. It retries when it gets a 404 before any frame arrives. It also retries when `runs/current` replays a finished run whose ID matches `foreignRunAccountedRunId`.
   - The host returns the newest *retained* run for the chat, so a just-announced run can lose that race to the previous run.
 - A run that finished before the attach (`ForeignRunStep.endedBeforeAttach`) is never shown live.
-  - `.announcedTurn` reconciles the chat exactly once.
-  - `.probe` reconciles once, and only when the run ID is new.
-  - `.load` does not reconcile, because the load has just read the chat.
+  - It reconciles the chat once, and only when its run ID is new and the reason is not `.load`, which has just read the chat.
+  - A run already accounted for, whether shown live, read before or this phone's own run, is neither replayed nor read again.
   - An announced run that still answers 404 after the retry also reconciles once.
 - Devices without `agents:read` (`!canReadAgentRoster`) get a foreground-only probe:
-  - `startForeignRunProbeIfNeeded` starts it from `startProgressObservation` and `load(observeProgress: true)`.
+  - `startForeignRunProbeIfNeeded` starts it from `startProgressObservation` and `load(observeProgress: true)`. The load starts it only while its progress generation is still current, so a load that resumes after the chat left the foreground does not restart it.
   - `stopProgressObservation` stops it. That covers scene suspend, disappear and removal.
   - The backoff is `foreignRunProbeDelay(afterIdleProbes:)`: 5 s, 10 s, 20 s, then 30 s. It resets after a run goes live (`foreignRunsShownLive`).
   - Tests shorten the waits with `foreignRunProbeSleep`.
 - Tests live in `AidenChatTests`:
   - The announced-run tests and the probe tests use `AidenAnnouncedRunFixture`.
   - The progress stream stays open through `openEventStreamStatus`, and the test pushes roster frames with `pushEvent`. Only one sink exists, so a live `runs/current` response takes the sink over.
+  - `isLookingForForeignRun` and `agentRoster?.revision` give tests deterministic waits instead of sleeps.
+  - The fixture also serves this phone's own turn (`/turns` with stream `run-mac`) for the own-run accounting test.
