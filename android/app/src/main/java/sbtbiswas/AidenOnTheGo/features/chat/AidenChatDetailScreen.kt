@@ -1688,6 +1688,9 @@ internal fun ActiveStreamingCard(
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
     val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
     val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
+    // Recaps that already sprang in during this reply. The card moves between the
+    // fallback and the chronological rows as the text catches up, and must not replay.
+    val enteredRecaps = remember { mutableSetOf<String>() }
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1706,7 +1709,8 @@ internal fun ActiveStreamingCard(
                     active = true,
                     palette = palette,
                     onCopy = {},
-                    onOpenUrl = {}
+                    onOpenUrl = {},
+                    enteredRecaps = enteredRecaps
                 )
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
@@ -1783,7 +1787,8 @@ internal fun ActiveStreamingCard(
             fallbackQuestionnaires.forEach { step ->
                 step.questionnaireRecap?.let { recap ->
                     key(step.id) {
-                        AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = true)
+                        val firstAppearance = remember { enteredRecaps.add(step.id) }
+                        AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1883,7 +1888,9 @@ private fun AidenChronologicalTranscript(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
-    renderVisual: @Composable (AidenChatVisual) -> Unit = {}
+    renderVisual: @Composable (AidenChatVisual) -> Unit = {},
+    // Step ids of recaps already shown in this live reply; null for a settled message.
+    enteredRecaps: MutableSet<String>? = null
 ) {
     val lastTextId = rows.lastOrNull { it.kind == AidenChronologicalRow.Kind.TEXT }?.id
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1918,7 +1925,10 @@ private fun AidenChronologicalTranscript(
                     }
                     AidenChronologicalRow.Kind.QUESTIONNAIRE -> {
                         row.questionnaire?.let { recap ->
-                            AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = active)
+                            val firstAppearance = remember {
+                                row.steps.firstOrNull()?.id?.let { enteredRecaps?.add(it) } == true
+                            }
+                            AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }

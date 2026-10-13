@@ -29,7 +29,7 @@ Live fallback (no chronological rows):
 - iOS (`AidenAgentActivityPresentation.showsLiveToolRows`) hides the live tool card once the timeline has any tool step, recaps included. That is the pre-recap behavior, since questionnaire steps used to count as visible steps.
 - Android (`AidenAgentActivityPresentation.liveToolSteps`, `questionnaireSteps`, `showsLiveToolRows`) renders that fallback from timeline steps: once the timeline has a tool step, `ActiveStreamingCard` lists its non-questionnaire calls and shows each recap mid-turn, and the stream's live rows only appear before the timeline knows any call.
 
-Android recap styling is Material 3 Expressive: the cards form one borderless connected group (`AidenConnectedColumn` plus `aidenGroupItemShape`) on `surfaceContainerHigh`. In a live reply (`animateEntrance`) the group springs in from its trailing corner with `AidenMotion.spatial` and fades with `short()`, and both snap under reduced motion. Settled transcripts never animate it.
+Android recap styling is Material 3 Expressive: the cards form one borderless connected group (`AidenConnectedColumn` plus `aidenGroupItemShape`) on `surfaceContainerHigh`. In a live reply (`animateEntrance`) the group springs in from its trailing corner with `AidenMotion.spatial` and fades with `short()`, and both snap under reduced motion. `ActiveStreamingCard` remembers which recap step ids have already entered, so a recap that moves from the fallback into the chronological rows as the text catches up does not replay. Settled transcripts never animate it.
 
 Bot quick-reply questionnaires do not produce a recap yet.
 
