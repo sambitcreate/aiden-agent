@@ -27,6 +27,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertFalse
@@ -238,6 +240,9 @@ class AidenChatChromeUiTest {
     private lateinit var transcript: LazyListState
     private lateinit var follow: AidenTranscriptFollowState
 
+    /** The live text's top after every layout pass, i.e. where each frame draws it. */
+    private val liveTopPerLayout = mutableListOf<Float>()
+
     private fun liveText(tokens: Int) = (1..tokens).joinToString(" ") { "token$it" }
 
     /** The chat screen's follow wiring around a streaming reply and older history. */
@@ -260,7 +265,10 @@ class AidenChatChromeUiTest {
                         item(key = "live_stream") {
                             val text = liveText(liveTokens.intValue)
                             Column {
-                                Text(text, Modifier.testTag("live"))
+                                Text(
+                                    text,
+                                    Modifier.testTag("live").onGloballyPositioned { liveTopPerLayout += it.positionInRoot().y },
+                                )
                                 Text(
                                     "val wide = listOf(" + (1..60).joinToString { "\"column$it\"" } + ")",
                                     softWrap = false,
@@ -364,8 +372,24 @@ class AidenChatChromeUiTest {
         assertTrue("the reader should sit inside the live reply, offset $offset", offset > 0)
         compose.runOnIdle { assertFalse(follow.isFollowing) }
         val readingTop = compose.onNodeWithTag("live").getUnclippedBoundsInRoot().top
+        val readingTopPx = compose.runOnIdle { liveTopPerLayout.last() }
 
-        stream(12)
+        // Step each reveal frame by frame: no laid-out frame may show the text moved, even briefly.
+        compose.mainClock.autoAdvance = false
+        repeat(12) { tick ->
+            compose.runOnIdle { liveTopPerLayout.clear() }
+            liveTokens.intValue += 7
+            repeat(3) { frame ->
+                compose.mainClock.advanceTimeByFrame()
+                compose.runOnIdle {
+                    assertTrue(
+                        "tick $tick frame $frame drew the reading line at $liveTopPerLayout, not $readingTopPx",
+                        liveTopPerLayout.all { it == readingTopPx },
+                    )
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = true
         assertEquals(readingTop, compose.onNodeWithTag("live").getUnclippedBoundsInRoot().top)
         compose.runOnIdle { assertFalse(follow.isFollowing) }
     }

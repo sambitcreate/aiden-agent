@@ -13,14 +13,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.invalidateMeasurement
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -122,20 +129,21 @@ class AidenTranscriptFollowState internal constructor(
      * Holds a detached reader's place inside the live item. In a reverse
      * layout the list anchors item 0 by its bottom, so text appended below the
      * reader would push what they are reading upward; growing the offset by
-     * the same amount keeps it still.
+     * the same amount keeps it still. Returns whether the list must be
+     * measured again to apply that offset.
      */
-    internal fun holdReaderInsideLeadingItem(layoutInfo: LazyListLayoutInfo) {
+    internal fun holdReaderInsideLeadingItem(layoutInfo: LazyListLayoutInfo): Boolean {
         val leading = layoutInfo.visibleItemsInfo.firstOrNull()?.takeIf { it.index == 0 }
         val previousKey = leadingItemKey
         val previousSize = leadingItemSize
         leadingItemKey = leading?.key
         leadingItemSize = leading?.size ?: 0
-        if (leading == null || leading.key != previousKey || isFollowing || isUserScrolling) return
+        if (leading == null || leading.key != previousKey || isFollowing || isUserScrolling) return false
         val growth = leading.size - previousSize
         val offset = listState.firstVisibleItemScrollOffset
-        if (growth != 0 && offset > 0) {
-            listState.requestScrollToItem(0, (offset + growth).coerceAtLeast(0))
-        }
+        if (growth == 0 || offset <= 0) return false
+        listState.requestScrollToItem(0, (offset + growth).coerceAtLeast(0))
+        return true
     }
 
     /** The reader asked to see the latest message. Any coasting fling is discarded. */
@@ -224,7 +232,36 @@ fun rememberAidenTranscriptFollowState(listState: LazyListState): AidenTranscrip
 
 /** Attach to the transcript's LazyColumn so drags and flings reach the follow latch. */
 fun Modifier.aidenTranscriptFollow(state: AidenTranscriptFollowState): Modifier =
-    nestedScroll(state.nestedScrollConnection)
+    nestedScroll(state.nestedScrollConnection) then AidenHoldReaderElement(state)
+
+private data class AidenHoldReaderElement(val state: AidenTranscriptFollowState) :
+    ModifierNodeElement<AidenHoldReaderNode>() {
+    override fun create() = AidenHoldReaderNode(state)
+
+    override fun update(node: AidenHoldReaderNode) {
+        node.state = state
+    }
+}
+
+/**
+ * Checks the live item's growth right after the list measures it. A
+ * correction re-measures the list within the same layout pass, so a frame
+ * never draws the reader's text moved and then snaps it back.
+ */
+private class AidenHoldReaderNode(var state: AidenTranscriptFollowState) : Modifier.Node(), LayoutModifierNode {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        val placeable = measurable.measure(constraints)
+        val corrected = Snapshot.withoutReadObservation {
+            state.holdReaderInsideLeadingItem(state.listState.layoutInfo)
+        }
+        return layout(placeable.width, placeable.height) {
+            placeable.place(0, 0)
+            // Requested while laying out (a request mid-measure is dropped), the
+            // re-measure runs in this same pass, before the frame draws.
+            if (corrected) invalidateMeasurement()
+        }
+    }
+}
 
 /**
  * Re-pins the live edge whenever the transcript gains or loses an item. It
@@ -239,9 +276,6 @@ fun AidenTranscriptFollowEffects(state: AidenTranscriptFollowState, itemCount: I
             if (lastCount[0] >= 0) state.pinAfterContentChange()
             lastCount[0] = itemCount
         }
-    }
-    LaunchedEffect(state) {
-        snapshotFlow { state.listState.layoutInfo }.collect(state::holdReaderInsideLeadingItem)
     }
 }
 
