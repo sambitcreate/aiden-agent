@@ -224,17 +224,24 @@ fun Modifier.aidenTranscriptFollow(state: AidenTranscriptFollowState): Modifier 
     nestedScroll(state.nestedScrollConnection)
 
 /**
- * Re-pins the live edge whenever the transcript gains or loses an item. It
- * runs as a side effect of the same composition, so the next measure already
- * uses index 0 instead of keeping the displaced item by key.
+ * Re-pins the live edge whenever the transcript gains or loses an item, or
+ * its newest item is replaced (the live card handing over to the final
+ * message). It runs as a side effect of the same composition, so the next
+ * measure already uses index 0 instead of keeping the displaced item by key.
  */
 @Composable
-fun AidenTranscriptFollowEffects(state: AidenTranscriptFollowState, itemCount: Int) {
-    val lastCount = remember(state) { intArrayOf(-1) }
+fun AidenTranscriptFollowEffects(
+    state: AidenTranscriptFollowState,
+    itemCount: Int,
+    leadingItemKey: Any? = null,
+) {
+    val last = remember(state) { arrayOfNulls<Any>(2) }
     SideEffect {
-        if (lastCount[0] != itemCount) {
-            if (lastCount[0] >= 0) state.pinAfterContentChange()
-            lastCount[0] = itemCount
+        val seen = last[0] != null
+        if (last[0] != itemCount || last[1] != leadingItemKey) {
+            if (seen) state.pinAfterContentChange()
+            last[0] = itemCount
+            last[1] = leadingItemKey
         }
     }
     LaunchedEffect(state) {

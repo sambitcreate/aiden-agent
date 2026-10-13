@@ -101,8 +101,14 @@ class AidenChatViewModel(
     private val _reasoning = MutableStateFlow("")
     val reasoning: StateFlow<String> = _reasoning.asStateFlow()
 
-    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+    // Reply text passes through the word gate before it is shown, so a word
+    // never appears half-typed; reasoning is shown as it arrives.
+    private val liveReveal = AidenStreamingRevealGate(viewModelScope) { text ->
         _liveText.value = text
+    }
+
+    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+        liveReveal.submit(text)
         _reasoning.value = reasoning
     }
 
@@ -1594,8 +1600,12 @@ class AidenChatViewModel(
     private suspend fun apply(event: AidenRemoteStreamEvent) {
         if (activeStreamId != event.streamId) return
         val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
-        // Timeline offsets and terminal states describe the text received so far.
-        if (!isDelta) liveTranscript.flush()
+        // Timeline offsets and terminal states describe the text received so far,
+        // so everything received is shown first, including a held word.
+        if (!isDelta) {
+            liveTranscript.flush()
+            liveReveal.flush()
+        }
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
                 _streamState.value = AidenStreamState.RECONCILING
@@ -2325,7 +2335,7 @@ class AidenChatViewModel(
         val canControl = foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
-        _liveText.value = projection.liveText
+        liveReveal.submit(projection.liveText)
         _reasoning.value = projection.reasoning
         _tools.value = projection.tools
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
@@ -2359,6 +2369,8 @@ class AidenChatViewModel(
     private suspend fun finishForeignRun() {
         foreignSettleJob?.cancel()
         val projection = foreignProjection ?: return
+        // The run is over, so a word the gate was holding back is complete.
+        liveReveal.flush()
         foreignRunId = null
         foreignProjection = null
         val client = activeClient()
@@ -2377,7 +2389,7 @@ class AidenChatViewModel(
     }
 
     private fun clearForeignLiveOutput() {
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
     }
@@ -2410,7 +2422,7 @@ class AidenChatViewModel(
         foreignRunId = null
         foreignProjection = null
         if (!wasPresented || activeStreamId != null) return
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
         _pendingApproval.value = null

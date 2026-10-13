@@ -169,6 +169,16 @@ fun AidenChatDetailScreen(
     val streamState by viewModel.streamState.collectAsStateWithLifecycle()
     val hasActiveStream by viewModel.hasActiveStream.collectAsStateWithLifecycle()
     val isStreaming = streamState != null && !streamState!!.isTerminal
+    // Read through derivedStateOf so tokens never recompose the screen.
+    val liveTextState = viewModel.liveText.collectAsStateWithLifecycle()
+    val liveReasoningState = viewModel.reasoning.collectAsStateWithLifecycle()
+    val liveToolsState = viewModel.tools.collectAsStateWithLifecycle()
+    val hasLiveOutput by remember {
+        derivedStateOf {
+            liveTextState.value.isNotEmpty() || liveReasoningState.value.isNotEmpty() || liveToolsState.value.isNotEmpty()
+        }
+    }
+    val showsLiveCard = AidenChatScroll.showsLiveCard(streamState, hasLiveOutput)
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
@@ -405,7 +415,8 @@ fun AidenChatDetailScreen(
 
     AidenTranscriptFollowEffects(
         state = follow,
-        itemCount = AidenChatScroll.reverseLayoutItemCount(chat?.messages?.size ?: 0, isStreaming),
+        itemCount = AidenChatScroll.reverseLayoutItemCount(chat?.messages?.size ?: 0, showsLiveCard),
+        leadingItemKey = if (showsLiveCard) LIVE_STREAM_ITEM_KEY else chat?.messages?.lastOrNull()?.id,
     )
     val streamingForJump by rememberUpdatedState(isStreaming)
     // Passed as a lambda so a latch flip recomposes only the rows that read it.
@@ -942,13 +953,13 @@ fun AidenChatDetailScreen(
                 }
 
                 // When streaming, active generation is the latest item (index 0 in reverse layout)
-                if (isStreaming) {
-                    item(key = "live_stream") {
-                        // Per-token state is collected inside the item so each
+                if (showsLiveCard) {
+                    item(key = LIVE_STREAM_ITEM_KEY) {
+                        // Per-token state is read inside the item so each
                         // update recomposes only this card, not the screen.
-                        val liveText by viewModel.liveText.collectAsStateWithLifecycle()
-                        val reasoning by viewModel.reasoning.collectAsStateWithLifecycle()
-                        val tools by viewModel.tools.collectAsStateWithLifecycle()
+                        val liveText by liveTextState
+                        val reasoning by liveReasoningState
+                        val tools by liveToolsState
                         val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
                         val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
                         val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
@@ -961,7 +972,8 @@ fun AidenChatDetailScreen(
                             palette = palette,
                             liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
                             isWaitingForNetwork = isWaitingForNetwork,
-                            pendingApprovalToolName = livePendingApproval?.toolName
+                            pendingApprovalToolName = livePendingApproval?.toolName,
+                            isActive = isStreaming
                         )
                         AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
                     }
@@ -1626,7 +1638,9 @@ internal fun ActiveStreamingCard(
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     liveStart: java.time.Instant? = null,
     isWaitingForNetwork: Boolean = false,
-    pendingApprovalToolName: String? = null
+    pendingApprovalToolName: String? = null,
+    // False once the run ended and the card waits for the final message to replace it.
+    isActive: Boolean = true
 ) {
     val reasoningActive = reasoning.isNotEmpty() && (
         AidenAgentActivityPresentation.hasActiveThinkingStep(activityTimeline) ||
@@ -1651,8 +1665,9 @@ internal fun ActiveStreamingCard(
             if (chronologicalRows != null) {
                 AidenChronologicalTranscript(
                     rows = chronologicalRows,
-                    active = true,
+                    active = isActive,
                     palette = palette,
+                    live = true,
                     onCopy = {},
                     onOpenUrl = {}
                 )
@@ -1750,15 +1765,13 @@ internal fun ActiveStreamingCard(
 
                 val textToShow = projection?.progressText?.ifEmpty { liveText } ?: liveText
 
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = textToShow,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = palette.foreground,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    AidenStreamingCursor(palette = palette)
-                }
+                AidenStreamingRichText(
+                    text = textToShow,
+                    palette = palette,
+                    showCursor = isActive,
+                    onCopy = {},
+                    onOpenUrl = {}
+                )
             }
             if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1815,6 +1828,8 @@ private fun AidenChronologicalTranscript(
     rows: List<AidenChronologicalRow>,
     active: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    // The live card renders its text in streaming chunks; a settled one is one message.
+    live: Boolean = active,
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     renderVisual: @Composable (AidenChatVisual) -> Unit = {}
@@ -1825,16 +1840,14 @@ private fun AidenChronologicalTranscript(
             key(row.id) {
                 when (row.kind) {
                     AidenChronologicalRow.Kind.TEXT -> {
-                        if (active) {
-                            Row(verticalAlignment = Alignment.Bottom) {
-                                Text(
-                                    text = row.text,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = palette.foreground,
-                                    modifier = Modifier.weight(1f, fill = false)
-                                )
-                                if (row.id == lastTextId) AidenStreamingCursor(palette = palette)
-                            }
+                        if (live) {
+                            AidenStreamingRichText(
+                                text = row.text,
+                                palette = palette,
+                                showCursor = active && row.id == lastTextId,
+                                onCopy = onCopy,
+                                onOpenUrl = onOpenUrl
+                            )
                         } else {
                             RichFormattedMessage(row.text, palette, onCopy, onOpenUrl)
                         }
@@ -2090,14 +2103,18 @@ private fun AidenTimelineCollapsibleCard(
     }
 }
 
+/** The transcript item that holds the live card; the final message replaces it. */
+internal const val LIVE_STREAM_ITEM_KEY = "live_stream"
+
 private val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
 
 @Composable
-private fun RichFormattedMessage(
+internal fun RichFormattedMessage(
     text: String,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
     onCopy: (String) -> Unit,
-    onOpenUrl: (String) -> Unit
+    onOpenUrl: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val matches = remember(text) { CODE_BLOCK_REGEX.findAll(text).toList() }
 
@@ -2105,7 +2122,8 @@ private fun RichFormattedMessage(
         val formatted = buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
         ClickableText(
             text = formatted,
-            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = 22.sp),
+            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
+            modifier = modifier,
             onClick = { offset ->
                 formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
                     .firstOrNull()?.let { onOpenUrl(it.item) }
@@ -2113,7 +2131,7 @@ private fun RichFormattedMessage(
         )
     } else {
         var lastIndex = 0
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (match in matches) {
                 val start = match.range.first
                 val end = match.range.last + 1
@@ -2124,7 +2142,7 @@ private fun RichFormattedMessage(
                         val formatted = buildAidenFormattedMessage(text = leading, palette = palette, isUser = false)
                         ClickableText(
                             text = formatted,
-                            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = 22.sp),
+                            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
                             onClick = { offset ->
                                 formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
                                     .firstOrNull()?.let { onOpenUrl(it.item) }
@@ -2152,7 +2170,7 @@ private fun RichFormattedMessage(
                     val formatted = buildAidenFormattedMessage(text = trailing, palette = palette, isUser = false)
                     ClickableText(
                         text = formatted,
-                        style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = 22.sp),
+                        style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
                         onClick = { offset ->
                             formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
                                 .firstOrNull()?.let { onOpenUrl(it.item) }

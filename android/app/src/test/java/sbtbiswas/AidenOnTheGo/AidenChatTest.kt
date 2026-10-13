@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -1137,6 +1138,24 @@ class AidenChatTest {
                 }
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
                 viewModels.put("chat", model)
+                // Sample between every task on the main thread, where Compose
+                // reads state for a frame: the reply must always be on screen
+                // exactly once, as the live card or as the final message.
+                // With an independent owner holding the first read, this
+                // model's own initial load is served the final transcript while
+                // the stream is still replaying, so only the variants where the
+                // reply can arrive solely through completion are checked.
+                val handoffViolations = mutableListOf<String>()
+                val handoffSampler = launch {
+                    while (isActive) {
+                        val hasFinal = model.chat.value?.messages?.any { it.id == "final-reply" } == true
+                        val hasLiveCard = model.liveText.value.isNotEmpty()
+                        val ended = model.streamState.value?.isTerminal == true
+                        if (hasFinal && hasLiveCard) handoffViolations += "both"
+                        if (ended && !hasFinal && !hasLiveCard) handoffViolations += "neither"
+                        yield()
+                    }
+                }
                 withTimeout(8_000) { model.streamState.first { it == AidenStreamState.DONE } }
                 if (holdInitialLoad) {
                     withTimeout(5_000) { model.hasActiveStream.first { !it } }
@@ -1166,6 +1185,8 @@ class AidenChatTest {
                 assertTrue(eventPaths[1].endsWith("after=1"))
                 assertEquals(if (holdInitialLoad) null else 27, AidenChatCache(directory).loadActiveStream("instance-recovery", initial.id)?.lastSequence)
                 assertEquals(AidenStreamState.DONE, model.streamState.value)
+                handoffSampler.cancel()
+                if (!independentOwner) assertEquals(emptyList<String>(), handoffViolations.distinct())
                 model.updateDraft("Next turn")
                 assertEquals(holdInitialLoad, model.canSend)
                 assertTrue(requests.none { it.endsWith("/turns") })
