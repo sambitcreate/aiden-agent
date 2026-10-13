@@ -150,7 +150,11 @@ struct AidenChatScrollObserver: UIViewRepresentable {
         // MARK: Follow latch events
 
         @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
-            switch gesture.state {
+            panGestureChanged(to: gesture.state)
+        }
+
+        func panGestureChanged(to state: UIGestureRecognizer.State) {
+            switch state {
             case .began:
                 cancelSettle()
                 isUserScrollSessionActive = true
@@ -183,9 +187,16 @@ struct AidenChatScrollObserver: UIViewRepresentable {
 
         private func finishUserScrollSessionIfSettled() {
             guard isUserScrollSessionActive, let scrollView else { return }
-            // A finger back on the glass either becomes a new drag (pan .began)
-            // or lifts without one (pan .failed); both paths re-enter above.
-            if scrollView.isDragging || scrollView.isTracking { return }
+            if scrollView.isDragging { return }
+            // A tap that stops momentum leaves the finger tracking without a
+            // pan, so no gesture event will report the lift. Keep checking
+            // until it lifts; a drag that begins replaces this check.
+            if scrollView.isTracking {
+                scheduleSettle(after: AidenChatScrollPolicy.momentumSettleDelay) { [weak self] in
+                    self?.finishUserScrollSessionIfSettled()
+                }
+                return
+            }
             if scrollView.isDecelerating {
                 scheduleSettle(after: AidenChatScrollPolicy.momentumSettleDelay) { [weak self] in
                     self?.finishUserScrollSessionIfSettled()

@@ -9360,7 +9360,11 @@ extension AidenChatViewModel {
         guard foreignRunIsLive else {
             return projection.isEnded ? .endedBeforeAttach(runId: projection.runId) : .keepObserving
         }
-        publishForeignRun(context: context)
+        var flushesText = true
+        if case let .content(content) = event.kind {
+            flushesText = content.type != .textDelta && content.type != .heartbeat
+        }
+        publishForeignRun(context: context, flushingText: flushesText)
         for effect in effects {
             guard isCurrentForeignRun(generation, context: context) else { return .stop }
             if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return .stop }
@@ -9411,9 +9415,12 @@ extension AidenChatViewModel {
         }
     }
 
-    private func publishForeignRun(context: AidenRemoteRequestContext) {
+    private func publishForeignRun(context: AidenRemoteRequestContext, flushingText: Bool = false) {
         guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
         receiveCumulativeLiveText(projection.liveText)
+        // As on an owned stream, text received before a tool, approval or
+        // other structural event shows before it lands.
+        if flushingText { flushPendingStreamingContent() }
         reasoning = projection.reasoning
         tools = projection.tools
         if streamState != projection.state { streamState = projection.state }

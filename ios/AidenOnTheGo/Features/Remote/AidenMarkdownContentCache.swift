@@ -114,7 +114,7 @@ enum AidenMarkdownBlockSplitter {
         return false
     }
 
-    private struct Fence {
+    fileprivate struct Fence {
         let marker: UInt8
         let length: Int
 
@@ -320,7 +320,10 @@ enum AidenMarkdownChunkSpacing {
         let lines = nonBlankLeadingLines(of: chunk)
         guard let first = lines.first else { return 0 }
         if isThematicBreak(first) || isATXHeading(first) { return headingTop }
-        if lines.count > 1, isSetextUnderline(lines[1]) { return headingTop }
+        // Don't treat a line as a Setext underline if the first line opens a
+        // fenced code block (e.g., ```yaml\n--- should not be a heading).
+        if lines.count > 1, AidenMarkdownBlockSplitter.Fence(opening: lines[0].utf8) == nil,
+           isSetextUnderline(lines[1]) { return headingTop }
         if first.hasPrefix(">") {
             for line in lines where line.hasPrefix(">") {
                 let quoted = stripQuoteMarkers(line)
@@ -343,7 +346,16 @@ enum AidenMarkdownChunkSpacing {
             start -= 1
         }
         let block = lines[start...lastIndex].filter { !isBlank($0) }
-        if block.count == 1, isThematicBreak(block[0]) { return thematicBreak }
+        if block.count == 1 {
+            let line = block[0]
+            if isThematicBreak(line) { return thematicBreak }
+            // Quoted thematic breaks inherit the child's margin (24pt), not the
+            // block default (16pt), like topMargin does for quoted blocks.
+            if line.hasPrefix(">") {
+                let quoted = stripQuoteMarkers(line)
+                if isThematicBreak(quoted) { return thematicBreak }
+            }
+        }
         return blockBottom
     }
 

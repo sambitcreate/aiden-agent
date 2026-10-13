@@ -1953,6 +1953,33 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAMacRunsTextWaitsForTheRevealTickUntilAToolStarts() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let fixture = AidenLiveForeignRunFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            streamingRevealTick: { await ticks.tick() }
+        )
+        await model.load(observeProgress: false)
+        try await waitUntil { model.streamState == .running && ticks.pending == 1 }
+        XCTAssertEqual(model.liveText, "", "the Mac's text waits for the next reveal tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(3, "text_delta", #"{"text":"ld, "}"#))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(model.liveText, "", "more text still waits for the tick")
+
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenLiveForeignRunFixture.frame(
+            4, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#
+        ))
+        try await waitUntil { !model.tools.isEmpty }
+        XCTAssertEqual(model.liveText, "Hello world, ", "text received before the tool shows before it")
+    }
+
+    @MainActor
     func testHeldCatalogCannotPublishAfterRemovalOrUnpair() async throws {
         for unpair in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-invalidation-\(UUID())")
@@ -10961,6 +10988,33 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
 /// A Mac whose chat has a run started elsewhere: the phone attaches mid-run,
 /// the run ends on the reconnect, and transcript reads then fail until allowed.
+/// A Mac run that is live when the chat opens; its event response stays open,
+/// so the test pushes each later frame with `pushEvent`.
+private final class AidenLiveForeignRunFixture: @unchecked Sendable {
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe","runs:control"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data(#"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events":
+            return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "", Data((
+                Self.frame(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + Self.frame(2, "text_delta", #"{"text":"Hello wor"}"#)
+            ).utf8))
+        default:
+            return nil
+        }
+    }
+
+    static func frame(_ sequence: Int, _ type: String, _ payload: String) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
+    }
+}
+
 private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var ended = false
@@ -11614,6 +11668,47 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
     }
 }
 
+// MARK: - Markdown content cache margin inference
+
+final class AidenMarkdownContentCacheTests: XCTestCase {
+    private typealias Cache = AidenMarkdownChunkSpacing
+
+    func testFencedCodeBlockStartingWithDashesIsNotASetextHeading() {
+        // A fenced YAML block whose first content line is `---` (the YAML
+        // document separator) was being misclassified as a Setext heading,
+        // causing an 8pt margin jump from 16pt to 24pt in rendered content.
+        let yaml = """
+        ```yaml
+        ---
+        foo: bar
+        ```
+        """
+        let topMargin = Cache.topMargin(ofFirstBlockIn: yaml)
+        XCTAssertEqual(topMargin, 0, "fenced code blocks should have zero top margin")
+    }
+
+    func testQuotedThematicBreakHasHeadingMargin() {
+        // Quoted thematic breaks should inherit the heading margin (24pt, the
+        // child's natural margin in MarkdownUI), not the block default (16pt).
+        // This matches topMargin behavior for quoted ATX headings and thematic
+        // breaks.
+        let quoted = "> ---"
+        let bottomMargin = Cache.bottomMargin(ofLastBlockIn: quoted)
+        // thematicBreak is 24.0
+        XCTAssertEqual(bottomMargin, 24.0, "quoted thematic breaks should use heading margin")
+    }
+
+    func testFencedBackticksAndTildesAreRecognized() {
+        // Sanity check: both ``` and ~~~ are valid fence markers, and both
+        // starting with `---` should not be treated as Setext headings.
+        for fence in ["```", "~~~"] {
+            let code = "\(fence)\n---\ncontent\n\(fence)"
+            let topMargin = Cache.topMargin(ofFirstBlockIn: code)
+            XCTAssertEqual(topMargin, 0)
+        }
+    }
+}
+
 // MARK: - Transcript follow latch (cases ported from Hermex ChatScrollPolicyTests)
 
 final class AidenChatScrollFollowTests: XCTestCase {
@@ -11773,6 +11868,19 @@ final class AidenChatScrollFollowTests: XCTestCase {
         XCTAssertFalse(Policy.isScrollingAwayFromBottom(
             previous: atBottom, current: Geometry(offsetY: 4700, contentHeight: 5400, visibleHeight: 700)))
     }
+
+    func testContentGrowthAtUnchangedOffsetDoesNotTriggerMovedAway() {
+        // Streaming or reply growth that doesn't move the reader's offset
+        // should not opt out of following. Only actual offset movement upward
+        // counts as a scroll away.
+        let atBottom = Geometry(offsetY: 4300, contentHeight: 5000, visibleHeight: 700)
+        let grewLargeReplyWithoutScroll = Geometry(offsetY: 4300, contentHeight: 5200, visibleHeight: 700)
+        // Distance grew from 700 to 900, past streaming threshold, but offset unchanged.
+        XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: atBottom, current: grewLargeReplyWithoutScroll))
+        // The same content scrolled up toward older messages is the reader leaving.
+        let scrolledUp = Geometry(offsetY: 3200, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertTrue(Policy.isScrollingAwayFromBottom(previous: atBottom, current: scrolledUp))
+    }
 }
 
 /// Releases `AidenTranscriptFollowController` pauses one at a time.
@@ -11827,6 +11935,56 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertEqual(performed, 0)
     }
 
+    func testANewDragInvalidatesPendingFollowAndCorrectionTasks() async {
+        // A user-initiated scroll that is waiting in followPause, or a
+        // corrective snap scheduled after an animated jump, must be cancelled
+        // if the user starts a new drag before the pause releases.
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed: [String] = []
+
+        // Schedule a user-initiated jump (like "Jump to latest").
+        let jumpTask = controller.scheduleFollowScroll(isUserInitiated: true, animated: false) { _ in
+            performed.append("jump")
+        }
+        await pauses.waitForPending(1)
+        // User starts dragging before the jump pause releases.
+        controller.handle(.userScrollBegin)
+        pauses.releaseAll()
+        await jumpTask?.value
+        // The jump must not execute because the new drag invalidated it.
+        XCTAssertEqual(performed, [])
+    }
+
+    func testADragInvalidatesTheCorrectiveSnapEvenAfterFollowReArms() async {
+        let pauses = AidenManualPauses()
+        let settles = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(
+            followPause: { await pauses.pause() },
+            jumpButtonDelay: {},
+            animationSettle: { await settles.pause() }
+        )
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            // Estimated row heights: the animation stops 300pt short.
+            if animated { controller.updateMetrics(self.metrics(300)) }
+        }
+        await pauses.waitForPending(1)
+        pauses.releaseAll()
+        await settles.waitForPending(1)
+        XCTAssertEqual(animatedValues, [true])
+
+        // A drag that ends at the bottom re-arms follow while the jump is still
+        // settling, so only the drag itself can retire the stale corrective snap.
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: true))
+        XCTAssertTrue(controller.isFollowing)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
+    }
+
     func testAutomaticFollowDoesNothingWhileTheReaderIsAway() {
         let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
         controller.handle(.userScrollBegin)
@@ -11848,6 +12006,39 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         controller.setStreaming(false)
         await controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animatedValues.append($0) }?.value
         XCTAssertEqual(animatedValues, [false, true])
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingEnds() {
+        // When streaming ends, the bottom proximity threshold changes from 160pt
+        // to 80pt. A distance that was "near" while streaming (e.g., 120pt) may
+        // become "away" once streaming stops, and isNearBottom must recompute
+        // immediately so the Jump button appears without waiting for the next
+        // geometry report.
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Streaming: 120pt is near (within 160pt threshold).
+        controller.setStreaming(true)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertTrue(controller.isNearBottom)
+
+        // Streaming ends: 120pt becomes away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        XCTAssertFalse(controller.isNearBottom)
+    }
+
+    func testIsNearBottomRecomputesWhenStreamingStarts() {
+        // Conversely, when streaming starts, the threshold loosens and a
+        // distance that was "away" (e.g., 120pt) becomes "near".
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+
+        // Not streaming: 120pt is away (exceeds 80pt threshold).
+        controller.setStreaming(false)
+        controller.updateMetrics(metrics(120, interacting: false))
+        XCTAssertFalse(controller.isNearBottom)
+
+        // Streaming starts: 120pt becomes near (within 160pt threshold).
+        controller.setStreaming(true)
+        XCTAssertTrue(controller.isNearBottom)
     }
 
     func testJumpButtonAppearsAfterTheDelayAndHidesImmediately() async {
@@ -12015,6 +12206,51 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertFalse(controller.isFollowing)
     }
 
+    func testATapThatStopsMomentumAtTheBottomReArmsFollowWhenTheFingerLifts() {
+        let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        scrollView.contentSize = CGSize(width: 320, height: 2_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        var ends: [Bool] = []
+        let coordinator = AidenChatScrollObserver.Coordinator(
+            onFollowEvent: { event in
+                if case .userScrollEnd(let isAtBottom) = event { ends.append(isAtBottom) }
+                controller.handle(event)
+            },
+            onMetrics: { controller.updateMetrics($0) }
+        )
+        let content = UIView()
+        scrollView.addSubview(content)
+        coordinator.attachIfNeeded(from: content)
+        defer { coordinator.detach() }
+        drainMainQueue()
+
+        // A fling toward the bottom: the drag starts a session, then momentum carries on.
+        coordinator.panGestureChanged(to: .began)
+        scrollView.touchIsTracking = true
+        scrollView.touchIsDragging = true
+        scrollView.contentOffset.y = 1_200
+        scrollView.touchIsTracking = false
+        scrollView.touchIsDragging = false
+        scrollView.touchIsDecelerating = true
+        coordinator.panGestureChanged(to: .ended)
+        scrollView.contentOffset.y = 1_400
+        XCTAssertFalse(controller.isFollowing)
+
+        // A tap stops the momentum 8pt from the bottom. The finger stays down,
+        // and lifting it sends no pan event at all.
+        scrollView.touchIsDecelerating = false
+        scrollView.touchIsTracking = true
+        scrollView.contentOffset.y = 2_000 - 480 - 8
+        RunLoop.main.run(until: Date().addingTimeInterval(AidenChatScrollPolicy.dragSettleDelay * 2))
+        XCTAssertEqual(ends, [], "the session must not settle while the finger is still down")
+
+        scrollView.touchIsTracking = false
+        XCTAssertTrue(runMainLoop(until: { !ends.isEmpty }, timeout: 1))
+        XCTAssertEqual(ends, [true])
+        XCTAssertTrue(controller.isFollowing)
+    }
+
     func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
         let probe = AidenFollowTriggerProbe()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
@@ -12057,7 +12293,8 @@ private final class AidenTouchableScrollView: UIScrollView {
     var touchIsDragging = false
     override var isTracking: Bool { touchIsTracking }
     override var isDragging: Bool { touchIsDragging }
-    override var isDecelerating: Bool { false }
+    var touchIsDecelerating = false
+    override var isDecelerating: Bool { touchIsDecelerating }
 }
 
 @Observable
