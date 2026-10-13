@@ -26,9 +26,16 @@ export type Fetch = typeof fetch;
 
 export const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60_000;
 export const MAX_PROVIDER_JSON_BYTES = 1024 * 1024;
-const MAX_ERROR_DETAIL = 300;
+/** Longest error message shown to the user, applied only after credentials are redacted. */
+export const MAX_ERROR_MESSAGE = 360;
+/** Shortest trailing credential fragment a truncated message may not end with. */
+const MIN_SECRET_FRAGMENT = 4;
+const REDACTED = "[redacted]";
 
-/** An error whose message is safe to show the user (never carries a key). */
+/**
+ * An adapter error. Its message may carry untruncated provider text and is
+ * shown only through `failureResult`, which redacts credentials and then bounds it.
+ */
 export class ImageAdapterError extends Error {
   constructor(
     message: string,
@@ -177,7 +184,11 @@ export function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** A short, single-line provider detail, safe to show. */
+/**
+ * A single-line provider detail. It is deliberately not truncated here: a cut
+ * before redaction could split a credential, so `failureResult` redacts the
+ * whole text first and only then bounds its length.
+ */
 export function providerDetail(value: unknown): string | undefined {
   let text: string | undefined;
   if (typeof value === "string") text = value;
@@ -195,7 +206,7 @@ export function providerDetail(value: unknown): string | undefined {
   if (!text) return undefined;
   // eslint-disable-next-line no-control-regex
   const clean = text.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
-  return clean ? clean.slice(0, MAX_ERROR_DETAIL) : undefined;
+  return clean || undefined;
 }
 
 /** Friendly status mapping; never includes request headers or keys. */
@@ -329,6 +340,42 @@ export function durationLabel(ms: number): string {
   return seconds === 1 ? "1 second" : `${seconds} seconds`;
 }
 
+/**
+ * Redact every occurrence of each secret (and its URL-encoded form) from the
+ * full text, then bound it to `max` characters. The cut can never leave a
+ * partial secret behind: a trailing fragment that starts a secret is dropped.
+ */
+export function redactAndTruncate(
+  text: string,
+  secrets: readonly (string | undefined)[],
+  max = MAX_ERROR_MESSAGE,
+): string {
+  const forms = new Set<string>();
+  for (const secret of secrets) {
+    if (!secret || secret.length < MIN_SECRET_FRAGMENT) continue;
+    forms.add(secret);
+    forms.add(encodeURIComponent(secret));
+  }
+  const ordered = [...forms].sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const secret of ordered) out = out.split(secret).join(REDACTED);
+  if (out.length <= max) return out;
+  out = out.slice(0, max);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const secret of ordered) {
+      for (let length = Math.min(secret.length - 1, out.length); length >= MIN_SECRET_FRAGMENT; length -= 1) {
+        if (out.endsWith(secret.slice(0, length))) {
+          out = out.slice(0, out.length - length);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return `${out.trimEnd()}…`;
+}
+
 /** Turn any failure into the never-reject error shape. */
 export function failureResult(
   result: AssistantImages,
@@ -347,8 +394,8 @@ export function failureResult(
   if (scope?.signal.aborted) {
     result.errorMessage = `${provider} took longer than ${durationLabel(scope.limitMs)}.`;
   } else if (error instanceof ImageAdapterError) {
-    // Provider details are echoed only after the key is scrubbed from them.
-    result.errorMessage = key && key.length >= 4 ? error.message.split(key).join("[redacted]") : error.message;
+    // Provider details are echoed only after the key is scrubbed from the full text.
+    result.errorMessage = redactAndTruncate(error.message, [key]);
   } else {
     result.errorMessage = `Aiden couldn't reach ${provider}.`;
   }

@@ -9,12 +9,14 @@ import {
   isImageGenerationProviderId,
   MAX_IMAGE_REFERENCES,
   REPLICATE_REFERENCE_FIELDS,
+  REPLICATE_REFERENCE_MODES,
   type FalReferenceField,
   type ImageCatalogEntry,
   type ImageGenerationProviderId,
   type ImageModelAdapter,
   type ImageModelRef,
   type ReplicateReferenceField,
+  type ReplicateReferenceMode,
 } from "../../../renderer/shared/image-generation/types.js";
 import {
   isImageAspectRatio,
@@ -108,6 +110,8 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
   if (provider === "replicate") {
     const field = adapter.referenceField;
     if (field !== undefined && (typeof field !== "string" || !Object.prototype.hasOwnProperty.call(REPLICATE_REFERENCE_FIELDS, field))) fail();
+    const mode = adapter.referenceMode;
+    if (mode !== undefined && (!field || !(REPLICATE_REFERENCE_MODES as readonly unknown[]).includes(mode))) fail();
     let input: Record<string, string | number | boolean> | undefined;
     if (adapter.input !== undefined) {
       const raw = record(adapter.input);
@@ -127,7 +131,13 @@ function parseAdapter(provider: ImageGenerationProviderId, id: string, value: un
     const ratios = aspectRatios(adapter.aspectRatios);
     return {
       kind: "replicate",
-      ...(field ? { referenceField: field as ReplicateReferenceField, ...(max ? { maxReferences: max } : {}) } : {}),
+      ...(field
+        ? {
+            referenceField: field as ReplicateReferenceField,
+            ...(mode ? { referenceMode: mode as ReplicateReferenceMode } : {}),
+            ...(max ? { maxReferences: max } : {}),
+          }
+        : {}),
       ...(input ? { input } : {}),
       ...(typeof version === "string" ? { version } : {}),
       ...(ratios ? { aspectRatios: ratios } : {}),

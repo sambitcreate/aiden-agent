@@ -3,7 +3,17 @@ import test from "node:test";
 import type { ImageContent, ImagesContext } from "@earendil-works/pi-ai";
 import type { ImageModelAdapter } from "../../../renderer/shared/image-generation/types.js";
 import { REPLICATE_INLINE_REFERENCE_BYTES, replicateImagesApi } from "./replicate-images.js";
-import { bytes, fakeFetch, imageModel, json, png, pngBase64, type RecordedRequest } from "./test-support.js";
+import {
+  bytes,
+  fakeFetch,
+  imageModel,
+  json,
+  png,
+  pngBase64,
+  secretFragmentIn,
+  straddlingPads,
+  type RecordedRequest,
+} from "./test-support.js";
 
 const KEY = "r8_secret_token_value";
 const DELIVERY = "https://replicate.delivery/xezq/abc/out.png";
@@ -227,6 +237,39 @@ test("errors never carry the key, even when Replicate echoes it", async () => {
     apiKey: KEY,
   });
   assert.equal(result.errorMessage, "The Replicate image key was rejected.");
+});
+
+test("a key straddling the error-length cutoff leaks no fragment of itself", async () => {
+  const key = "r8_Zq7Xk2Pv9Lm4Tw6Yb3Nc";
+  assert.equal(key.length, 23);
+  const sources: [string, (detail: string) => (request: RecordedRequest) => Response][] = [
+    ["HTTP 422", (detail) => () => json({ detail }, 422)],
+    [
+      "failed prediction",
+      (detail) => (request) =>
+        isCreate(request) ? json({ id: "f1", status: "failed", error: detail }) : json({}, 500),
+    ],
+    [
+      "failed upload",
+      (detail) => (request) =>
+        request.url.endsWith("/v1/files") ? json({ detail }, 422) : json({}, 500),
+    ],
+  ];
+  for (const [label, respond] of sources) {
+    for (const pad of straddlingPads(key.length)) {
+      const { fetch } = fakeFetch(respond(`${"x".repeat(pad)}${key} tail`));
+      const references = label === "failed upload" ? [largeRef()] : [];
+      const result = await api(fetch).generateImages(model("google/nano-banana-2.1"), context("x", references), {
+        apiKey: key,
+      });
+      assert.equal(result.stopReason, "error", `${label} pad ${pad}`);
+      assert.equal(
+        secretFragmentIn(result.errorMessage ?? "", key),
+        undefined,
+        `${label} pad ${pad}: ${result.errorMessage}`,
+      );
+    }
+  }
 });
 
 test("a missing key fails without a request", async () => {

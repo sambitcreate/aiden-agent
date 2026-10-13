@@ -9,11 +9,13 @@ import {
 } from "../../../renderer/shared/image-generation/catalog.js";
 import {
   IMAGE_GENERATION_LIMITS,
+  MAX_IMAGE_REFERENCES,
   REPLICATE_REFERENCE_FIELDS,
   type ImageCatalogEntry,
   type ImageGenerationErrorCode,
   type ImageGenerationProviderId,
   type ReplicateReferenceField,
+  type ReplicateReferenceMode,
 } from "../../../renderer/shared/image-generation/types.js";
 import {
   supportedImageAspectRatios,
@@ -305,26 +307,59 @@ const REFERENCE_FIELD_PREFERENCE: readonly ReplicateReferenceField[] = [
   "subject_reference",
 ];
 
-/** Read the reference-image field from a Replicate OpenAPI Input schema. */
+/**
+ * The schema node for an Input property with `$ref` and single-item
+ * `allOf`/`anyOf`/`oneOf` wrappers followed, the way Cog writes them.
+ */
+function resolvedSchemaNode(
+  value: unknown,
+  schemas: Record<string, unknown> | undefined,
+  depth = 0,
+): Record<string, unknown> | undefined {
+  const node = record(value);
+  if (!node || depth > 3) return undefined;
+  if (typeof node.type === "string") return node;
+  const ref = node.$ref;
+  if (typeof ref === "string" && ref.startsWith("#/components/schemas/")) {
+    const name = ref.slice("#/components/schemas/".length);
+    return Object.prototype.hasOwnProperty.call(schemas ?? {}, name)
+      ? resolvedSchemaNode(schemas![name], schemas, depth + 1)
+      : undefined;
+  }
+  for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+    const list = node[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const found = resolvedSchemaNode(item, schemas, depth + 1);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Read the reference-image field from a Replicate OpenAPI Input schema. The
+ * property's own type decides whether it takes a list or one image, so a
+ * model whose `image` input is an array is sent an array.
+ */
 export function replicateReferenceField(
   schema: unknown,
-): { field: ReplicateReferenceField; max: number } | undefined {
-  const properties = record(
-    record(record(record(record(schema)?.components)?.schemas)?.Input)?.properties,
-  );
+): { field: ReplicateReferenceField; max: number; mode: ReplicateReferenceMode } | undefined {
+  const schemas = record(record(record(schema)?.components)?.schemas);
+  const properties = record(record(schemas?.Input)?.properties);
   if (!properties) return undefined;
   for (const field of REFERENCE_FIELD_PREFERENCE) {
-    const property = record(properties[field]);
+    const property = resolvedSchemaNode(properties[field], schemas);
     if (!property) continue;
-    const mode = REPLICATE_REFERENCE_FIELDS[field];
-    if (mode === "array" && property.type === "array") {
+    if (property.type === "array") {
       const max = property.maxItems;
       return {
         field,
-        max: typeof max === "number" && Number.isSafeInteger(max) && max >= 1 ? Math.min(max, 14) : 4,
+        mode: "array",
+        max: typeof max === "number" && Number.isSafeInteger(max) && max >= 1 ? Math.min(max, MAX_IMAGE_REFERENCES) : 4,
       };
     }
-    if (mode === "single" && property.type === "string") return { field, max: 1 };
+    if (property.type === "string") return { field, mode: "single", max: 1 };
   }
   return undefined;
 }
@@ -390,7 +425,14 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
       acceptsReferenceImages: reference !== undefined,
       adapter: {
         kind: "replicate",
-        ...(reference ? { referenceField: reference.field, maxReferences: reference.max } : {}),
+        ...(reference
+          ? {
+              referenceField: reference.field,
+              // Stored only when the schema disagrees with the field name's usual shape.
+              ...(reference.mode !== REPLICATE_REFERENCE_FIELDS[reference.field] ? { referenceMode: reference.mode } : {}),
+              maxReferences: reference.max,
+            }
+          : {}),
         // Community models only run by version, so keep the one the schema came from.
         ...(version ? { version } : {}),
         ...(aspectRatios ? { aspectRatios } : {}),

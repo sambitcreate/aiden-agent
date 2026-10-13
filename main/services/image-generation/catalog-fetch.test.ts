@@ -155,13 +155,31 @@ test("Replicate's reference field comes from the OpenAPI input schema", () => {
   const schema = (properties: Record<string, unknown>) => ({ components: { schemas: { Input: { properties } } } });
   assert.deepEqual(replicateReferenceField(schema({ prompt: {}, image_input: { type: "array", maxItems: 14 } })), {
     field: "image_input",
+    mode: "array",
     max: 14,
   });
   assert.deepEqual(replicateReferenceField(schema({ prompt: {}, input_image: { type: "string" } })), {
     field: "input_image",
+    mode: "single",
     max: 1,
   });
-  assert.equal(replicateReferenceField(schema({ prompt: {}, image: { type: "array" } })), undefined);
+  // The property's type decides the shape, not the field's name.
+  assert.deepEqual(replicateReferenceField(schema({ prompt: {}, image: { type: "array" } })), {
+    field: "image",
+    mode: "array",
+    max: 4,
+  });
+  assert.deepEqual(
+    replicateReferenceField({
+      components: {
+        schemas: {
+          Input: { properties: { image: { allOf: [{ $ref: "#/components/schemas/images" }] } } },
+          images: { type: "array", maxItems: 3 },
+        },
+      },
+    }),
+    { field: "image", mode: "array", max: 3 },
+  );
   assert.equal(replicateReferenceField(schema({ prompt: {}, mask: { type: "string" } })), undefined);
   assert.equal(replicateReferenceField(undefined), undefined);
 });

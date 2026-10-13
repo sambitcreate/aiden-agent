@@ -438,6 +438,36 @@ test("bulk enable choices land in one write and leave untouched providers' regis
   assert.ok(runtime.models.getModelOfType("image", "fal", "fal-ai/flux/schnell"));
 });
 
+test("a default chosen while the same model is being toggled off ends with every view agreeing", async (t) => {
+  const id = "fal-ai/flux/schnell";
+  type Race = (runtime: ImageGenerationRuntime) => Promise<unknown>[];
+  const toggleOff: Race = (runtime) => [runtime.setModelEnabled("fal", id, false)];
+  const bulkOff: Race = (runtime) => [runtime.setModelsEnabled([{ provider: "fal", id, enabled: false }])];
+  const chooseDefault: Race = (runtime) => [runtime.setDefaultModel({ provider: "fal", id })];
+  const races: [string, Race][] = [
+    ["toggle, then default", (runtime) => [...toggleOff(runtime), ...chooseDefault(runtime)]],
+    ["default, then toggle", (runtime) => [...chooseDefault(runtime), ...toggleOff(runtime)]],
+    ["bulk, then default", (runtime) => [...bulkOff(runtime), ...chooseDefault(runtime)]],
+    ["default, then bulk", (runtime) => [...chooseDefault(runtime), ...bulkOff(runtime)]],
+  ];
+  for (const [label, race] of races) {
+    const { runtime, root } = await setup(t, { env: { AIDEN_IMAGE_FAL_KEY: "fal-env-key-123" } });
+    await runtime.ready();
+    await Promise.all(race(runtime));
+
+    const saved = JSON.parse(await fs.readFile(path.join(root, IMAGE_GENERATION_SETTINGS_FILE), "utf8"));
+    const stored = saved.enabled.fal[id] as boolean;
+    const state = await runtime.getState();
+    const listed = state.models.find((model) => model.provider === "fal" && model.id === id)?.enabled;
+    const registered = runtime.models.getModelOfType("image", "fal", id) !== undefined;
+    const snapshotDefault = (await runtime.snapshot()).defaultModel;
+    assert.deepEqual(saved.defaultModel, { provider: "fal", id }, label);
+    assert.equal(listed, stored, label);
+    assert.equal(registered, stored, label);
+    assert.equal(snapshotDefault?.provider === "fal" && snapshotDefault.id === id, stored, label);
+  }
+});
+
 test("a bulk request naming an unlisted model is rejected without writing any choice", async (t) => {
   const { runtime, root } = await setup(t);
   const before = await runtime.getState();
@@ -558,6 +588,60 @@ test("a fetched Replicate model keeps the ratios its schema lists and sends them
   };
   assert.equal((await send("16:9")).aspect_ratio, "16:9");
   assert.equal((await send("4:3")).aspect_ratio, undefined, "a ratio missing from the schema enum is omitted");
+});
+
+test("a Replicate reference field's cardinality comes from the model, curated or fetched", async (t) => {
+  const delivery = "https://replicate.delivery/out.png";
+  const schema = {
+    components: {
+      schemas: {
+        Input: { properties: { prompt: { type: "string" }, image: { type: "array", items: { type: "string" }, maxItems: 3 } } },
+      },
+    },
+  };
+  const { fetch, requests } = fakeFetch((request) => {
+    if (request.url.includes("/collections/"))
+      return json({ models: [{ owner: "acme", name: "editor", latest_version: { id: "b".repeat(64), openapi_schema: schema } }] });
+    if (request.url === delivery) return bytes(png(2));
+    return json({ id: "p1", status: "succeeded", output: delivery });
+  });
+  const env = { AIDEN_IMAGE_REPLICATE_API_TOKEN: "r8_env_image_key" };
+  const first = await setup(t, { env, fetch });
+  await first.runtime.fetchModels("replicate");
+  await first.runtime.setModelEnabled("replicate", "acme/editor", true);
+
+  // A fresh runtime over the same settings file reads the stored adapter back.
+  const runtime = new ImageGenerationRuntime({
+    credentials: first.credentials,
+    settings: createImageGenerationSettingsStore(() => first.root),
+    openRouterModels: bundledOpenRouter,
+    authContext: { env: async (name) => env[name as keyof typeof env], fileExists: async () => false },
+    pollIntervalMs: 1,
+    fetch,
+  });
+  await runtime.ready();
+  const reference = { type: "image" as const, mimeType: "image/png", data: Buffer.from(png(5)).toString("base64") };
+  const send = async (id: string) => {
+    const model = runtime.models.getModelOfType("image", "replicate", id);
+    assert.ok(model, id);
+    const before = requests.length;
+    const result = await runtime.models.generateImages(model, { input: [{ type: "text", text: "edit" }, reference] });
+    assert.equal(result.stopReason, "stop", result.errorMessage);
+    return { model, input: (requests.slice(before).find((request) => request.method === "POST")!.body as { input: Record<string, unknown> }).input };
+  };
+  const uri = `data:image/png;base64,${reference.data}`;
+
+  const qwen = await send("qwen/qwen-image-edit-2511");
+  assert.deepEqual(qwen.input.image, [uri], "the curated Qwen edit model takes an array");
+  assert.ok((qwen.model.inputLimits?.images?.maxPerRequest ?? 0) > 1);
+
+  const fetched = await send("acme/editor");
+  assert.deepEqual(fetched.input.image, [uri], "a fetched array schema survives a settings reload");
+  assert.equal(fetched.model.inputLimits?.images?.maxPerRequest, 3);
+
+  const kontext = await send("black-forest-labs/flux-kontext-max");
+  assert.equal(kontext.input.input_image, uri, "a single-image model still gets one string");
+  assert.equal(kontext.model.inputLimits?.images?.maxPerRequest, 1);
 });
 
 test("an OpenRouter rejection of the requested aspect ratio reads as a clear error", () => {

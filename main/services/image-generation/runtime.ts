@@ -39,6 +39,7 @@ import {
   type ImageModelOrigin,
   type ImageModelRef,
   type ReplicateReferenceField,
+  replicateReferenceMode,
 } from "../../../renderer/shared/image-generation/types.js";
 import { DEFAULT_IMAGE_MODEL } from "../../../renderer/shared/images/schema.js";
 import { requestedAspectRatio } from "./adapter-core.js";
@@ -154,8 +155,9 @@ export function openRouterEntry(model: ImageModel<ImageApi>): ImageCatalogEntry 
 
 function maxReferences(adapter: ImageModelAdapter): number | undefined {
   if (adapter.kind === "replicate") {
-    if (!adapter.referenceField) return undefined;
-    return REPLICATE_REFERENCE_FIELDS[adapter.referenceField] === "single" ? 1 : adapter.maxReferences ?? 4;
+    const mode = replicateReferenceMode(adapter);
+    if (!mode) return undefined;
+    return mode === "single" ? 1 : adapter.maxReferences ?? 4;
   }
   if (adapter.kind === "fal") {
     if (!adapter.editEndpoint) return undefined;
@@ -448,17 +450,33 @@ export class ImageGenerationRuntime {
     return rows;
   }
 
+  /** What a provider would register under `settings`: its rows, their origin and enable state. */
+  private providerSignature(provider: ImageGenerationProviderId, settings: ImageGenerationSettings): string {
+    return JSON.stringify(
+      this.buildRows(provider, settings).map(({ entry, origin, enabled }) => [entry, origin, enabled]),
+    );
+  }
+
+  /** Providers whose registered rows differ between two committed settings documents. */
+  private changedProviders(
+    before: ImageGenerationSettings,
+    after: ImageGenerationSettings,
+  ): ImageGenerationProviderId[] {
+    return IMAGE_GENERATION_PROVIDER_IDS.filter(
+      (provider) => this.providerSignature(provider, before) !== this.providerSignature(provider, after),
+    );
+  }
+
   /**
    * Rebuild the rows of `providers` and re-register only those providers;
-   * every other provider keeps its registration. `known` skips a re-read when
-   * the caller already holds the freshly written settings.
+   * every other provider keeps its registration. Each run reads the latest
+   * committed settings when it starts, so a registration that runs after a
+   * later commit still applies that commit, and overlapping mutations can't
+   * leave a provider registered from an older document.
    */
-  private register(
-    providers: readonly ImageGenerationProviderId[] = IMAGE_GENERATION_PROVIDER_IDS,
-    known?: ImageGenerationSettings,
-  ): Promise<void> {
+  private register(providers: readonly ImageGenerationProviderId[] = IMAGE_GENERATION_PROVIDER_IDS): Promise<void> {
     const run = this.registration.then(async () => {
-      const settings = known ?? (await this.deps.settings.read());
+      const settings = await this.deps.settings.read();
       const rows: CatalogRow[] = [];
       for (const provider of IMAGE_GENERATION_PROVIDER_IDS) {
         if (!providers.includes(provider)) {
@@ -589,17 +607,22 @@ export class ImageGenerationRuntime {
     return { providers, models, defaultModel: settings.defaultModel };
   }
 
-  /** Apply a settings change, then re-register only `providers`. */
-  private async mutate(
-    providers: readonly ImageGenerationProviderId[],
-    mutation: (draft: ImageGenerationSettings) => void,
-  ): Promise<ImageGenerationState> {
+  /**
+   * Apply a settings change, then re-register each provider whose rows the
+   * committed change altered. Which providers changed is decided from the
+   * document the serialized store actually held before and after this
+   * mutation, never from rows cached before it, so overlapping mutations
+   * can't skip a provider they changed.
+   */
+  private async mutate(mutation: (draft: ImageGenerationSettings) => void): Promise<ImageGenerationState> {
     await this.ready();
-    const settings = await this.deps.settings.update((draft) => {
+    let before: ImageGenerationSettings | undefined;
+    const after = await this.deps.settings.update((draft) => {
+      before = structuredClone(draft);
       mutation(draft);
       this.pruneEnabled(draft);
     });
-    await this.register(providers, settings);
+    await this.register(before ? this.changedProviders(before, after) : IMAGE_GENERATION_PROVIDER_IDS);
     return this.getState();
   }
 
@@ -633,7 +656,7 @@ export class ImageGenerationRuntime {
   async setModelEnabled(provider: ImageGenerationProviderId, id: string, enabled: boolean): Promise<ImageGenerationState> {
     await this.ready();
     this.requireRow(provider, id);
-    return this.mutate([provider], (draft) => {
+    return this.mutate((draft) => {
       draft.enabled[provider] = { ...(draft.enabled[provider] ?? {}), [id]: enabled };
     });
   }
@@ -659,7 +682,7 @@ export class ImageGenerationRuntime {
     const providers = IMAGE_GENERATION_PROVIDER_IDS.filter((provider) =>
       changes.some((change) => change.provider === provider),
     );
-    return this.mutate(providers, (draft) => {
+    return this.mutate((draft) => {
       for (const provider of providers) draft.enabled[provider] = { ...(draft.enabled[provider] ?? {}) };
       for (const { provider, id, enabled } of changes) draft.enabled[provider]![id] = enabled;
     });
@@ -667,9 +690,8 @@ export class ImageGenerationRuntime {
 
   async setDefaultModel(ref: ImageModelRef | null): Promise<ImageGenerationState> {
     await this.ready();
-    // Only turning on a previously disabled model changes what is registered.
-    const turnsOn = ref ? !this.requireRow(ref.provider, ref.id).enabled : false;
-    return this.mutate(ref && turnsOn ? [ref.provider] : [], (draft) => {
+    if (ref) this.requireRow(ref.provider, ref.id);
+    return this.mutate((draft) => {
       draft.defaultModel = ref ? { provider: ref.provider, id: ref.id } : null;
       // Choosing a default turns that model on.
       if (ref) draft.enabled[ref.provider] = { ...(draft.enabled[ref.provider] ?? {}), [ref.id]: true };
@@ -683,7 +705,7 @@ export class ImageGenerationRuntime {
     if (existing && existing.origin !== "fetched") {
       throw new ImageGenerationError("invalid_request", "That model is already in the list.");
     }
-    return this.mutate([entry.provider], (draft) => {
+    return this.mutate((draft) => {
       const custom = draft.custom[entry.provider] ?? [];
       if (custom.length >= IMAGE_GENERATION_LIMITS.maxCustomModelsPerProvider) {
         throw new ImageGenerationError("invalid_request", "You've reached the limit of custom models for this provider.");
@@ -697,7 +719,7 @@ export class ImageGenerationRuntime {
     await this.ready();
     const row = this.requireRow(ref.provider, ref.id);
     if (row.origin !== "custom") throw new ImageGenerationError("invalid_request", "Only models you added can be removed.");
-    return this.mutate([ref.provider], (draft) => {
+    return this.mutate((draft) => {
       draft.custom[ref.provider] = (draft.custom[ref.provider] ?? []).filter((entry) => entry.id !== ref.id);
       const choices = { ...(draft.enabled[ref.provider] ?? {}) };
       delete choices[ref.id];
@@ -720,7 +742,7 @@ export class ImageGenerationRuntime {
       if (error instanceof CatalogFetchError) throw new ImageGenerationError(error.code, error.message);
       throw new ImageGenerationError("network_error", `Aiden couldn't fetch ${IMAGE_GENERATION_PROVIDER_NAMES[provider]} models.`);
     }
-    return this.mutate([provider], (draft) => {
+    return this.mutate((draft) => {
       draft.fetched[provider] = { fetchedAt: Date.now(), models };
     });
   }

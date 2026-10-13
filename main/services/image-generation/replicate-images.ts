@@ -3,7 +3,7 @@
 
 import type { ImageContent, ProviderImages } from "@earendil-works/pi-ai";
 import {
-  REPLICATE_REFERENCE_FIELDS,
+  replicateReferenceMode,
   type ImageModelAdapter,
 } from "../../../renderer/shared/image-generation/types.js";
 import {
@@ -168,7 +168,7 @@ export function replicateImagesApi(deps: ReplicateImagesDeps): ProviderImages {
         if (references.length > 0) {
           const field = meta.referenceField;
           if (!field) throw new ImageAdapterError(NO_REFERENCES);
-          const single = REPLICATE_REFERENCE_FIELDS[field] === "single";
+          const single = replicateReferenceMode(meta) === "single";
           const max = single ? 1 : Math.max(1, meta.maxReferences ?? 4);
           if (references.length > max) throw referenceLimitError(max);
           const values: string[] = [];

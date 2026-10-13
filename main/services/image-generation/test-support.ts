@@ -95,3 +95,21 @@ export function imageModel(provider: string, id: string, api: ImageApi, input: (
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
 }
+
+/** The first fragment of `secret` at least `min` characters long that `text` contains. */
+export function secretFragmentIn(text: string, secret: string, min = 4): string | undefined {
+  for (let length = secret.length; length >= min; length -= 1) {
+    for (let start = 0; start + length <= secret.length; start += 1) {
+      const fragment = secret.slice(start, start + length);
+      if (text.includes(fragment)) return fragment;
+    }
+  }
+  return undefined;
+}
+
+/** Padding lengths that put a secret across every plausible truncation boundary. */
+export function straddlingPads(secretLength: number, from = 200, to = 520): number[] {
+  const pads: number[] = [];
+  for (let pad = from - secretLength; pad <= to; pad += 1) pads.push(pad);
+  return pads;
+}

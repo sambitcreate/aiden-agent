@@ -3,7 +3,17 @@ import test from "node:test";
 import type { ImageContent, ImagesContext } from "@earendil-works/pi-ai";
 import type { ImageModelAdapter } from "../../../renderer/shared/image-generation/types.js";
 import { FAL_INLINE_REFERENCE_BYTES, falImagesApi } from "./fal-images.js";
-import { bytes, fakeFetch, imageModel, json, png, pngBase64, type RecordedRequest } from "./test-support.js";
+import {
+  bytes,
+  fakeFetch,
+  imageModel,
+  json,
+  png,
+  pngBase64,
+  secretFragmentIn,
+  straddlingPads,
+  type RecordedRequest,
+} from "./test-support.js";
 
 const KEY = "fal-key-1234:secret";
 type Meta = Extract<ImageModelAdapter, { kind: "fal" }>;
@@ -172,6 +182,35 @@ test("a rejected key maps to a friendly message without the key", async () => {
   assert.equal(rejected.stopReason, "error");
   assert.equal(rejected.errorMessage!.includes(KEY), false);
   assert.match(rejected.errorMessage!, /bad prompt/u);
+});
+
+test("a key straddling the error-length cutoff leaks no fragment of itself", async () => {
+  const key = "fal_Zq7Xk2Pv9Lm4Tw6Yb3N";
+  assert.equal(key.length, 23);
+  const info = queue("fal-ai/flux/schnell");
+  const sources: [string, (detail: string) => (request: RecordedRequest) => Response][] = [
+    ["submit 422", (detail) => () => json({ detail: [{ msg: detail }] }, 422)],
+    [
+      "result 422",
+      (detail) => (request) => {
+        if (request.method === "POST") return json(info);
+        if (request.url === info.status_url) return json({ status: "COMPLETED" });
+        return json({ detail }, 422);
+      },
+    ],
+  ];
+  for (const [label, respond] of sources) {
+    for (const pad of straddlingPads(key.length)) {
+      const { fetch } = fakeFetch(respond(`${"x".repeat(pad)}${key} tail`));
+      const result = await api(fetch).generateImages(model("fal-ai/flux/schnell"), context("x"), { apiKey: key });
+      assert.equal(result.stopReason, "error", `${label} pad ${pad}`);
+      assert.equal(
+        secretFragmentIn(result.errorMessage ?? "", key),
+        undefined,
+        `${label} pad ${pad}: ${result.errorMessage}`,
+      );
+    }
+  }
 });
 
 test("references over fal's inline budget fail clearly before anything is sent", async () => {

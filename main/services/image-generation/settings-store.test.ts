@@ -94,6 +94,19 @@ test("validation enforces per-provider id shapes, adapter fields and size bounds
   assert.throws(() =>
     valid({ version: 1, custom: { fal: Array.from({ length: 51 }, (_, index) => ({ ...fetchedEntry, id: `a/m${index}`, adapter: { kind: "fal", textEndpoint: `a/m${index}` } })) } }),
   );
+  // A reference mode is only "array" or "single", and only alongside a reference field.
+  const replicateEntry = (adapter: Record<string, unknown>) => ({
+    version: 1,
+    custom: { replicate: [{ provider: "replicate", id: "a/b", name: "A", acceptsReferenceImages: true, adapter }] },
+  });
+  assert.throws(() => valid(replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "many" })));
+  assert.throws(() => valid(replicateEntry({ kind: "replicate", referenceMode: "array" })));
+  const arrayMode = valid(replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "array" }));
+  assert.deepEqual(arrayMode.custom.replicate?.[0]?.adapter, {
+    kind: "replicate",
+    referenceField: "image",
+    referenceMode: "array",
+  });
   // Reference support is derived from the adapter, never trusted from the file.
   const derived = valid({
     version: 1,

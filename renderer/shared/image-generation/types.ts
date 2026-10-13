@@ -26,6 +26,8 @@ export const REPLICATE_REFERENCE_FIELDS = {
   subject_reference: "single",
 } as const satisfies Record<string, "array" | "single">;
 export type ReplicateReferenceField = keyof typeof REPLICATE_REFERENCE_FIELDS;
+export type ReplicateReferenceMode = "array" | "single";
+export const REPLICATE_REFERENCE_MODES: readonly ReplicateReferenceMode[] = ["array", "single"];
 
 export const FAL_REFERENCE_FIELDS = ["image_urls", "image_url"] as const;
 export type FalReferenceField = (typeof FAL_REFERENCE_FIELDS)[number];
@@ -47,6 +49,11 @@ export type ImageModelAdapter =
   | {
       kind: "replicate";
       referenceField?: ReplicateReferenceField;
+      /**
+       * Whether `referenceField` takes a list or one image, when the model
+       * differs from the field name's usual shape (`REPLICATE_REFERENCE_FIELDS`).
+       */
+      referenceMode?: ReplicateReferenceMode;
       maxReferences?: number;
       /** Extra fixed inputs sent with every prediction. */
       input?: Readonly<Record<string, string | number | boolean>>;
@@ -70,6 +77,14 @@ export type ImageModelAdapter =
       /** How the model takes a requested shape; absent means it is never sent. */
       aspectRatio?: FalAspectRatioSupport;
     };
+
+/** How a Replicate model's reference field takes images: its own mode, else the field's usual one. */
+export function replicateReferenceMode(
+  adapter: Extract<ImageModelAdapter, { kind: "replicate" }>,
+): ReplicateReferenceMode | undefined {
+  if (!adapter.referenceField) return undefined;
+  return adapter.referenceMode ?? REPLICATE_REFERENCE_FIELDS[adapter.referenceField];
+}
 
 /** One curated, fetched or custom image model. */
 export interface ImageCatalogEntry {

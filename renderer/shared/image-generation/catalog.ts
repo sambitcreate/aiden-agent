@@ -18,13 +18,14 @@ import type {
   ImageCatalogEntry,
   ImageGenerationProviderId,
   ReplicateReferenceField,
+  ReplicateReferenceMode,
 } from "./types.js";
 
 function replicate(
   id: string,
   name: string,
   maker: string,
-  reference?: { field: ReplicateReferenceField; max?: number },
+  reference?: { field: ReplicateReferenceField; max?: number; mode?: ReplicateReferenceMode },
   aspectRatios?: readonly ImageAspectRatio[],
 ): ImageCatalogEntry {
   return {
@@ -35,7 +36,13 @@ function replicate(
     acceptsReferenceImages: reference !== undefined,
     adapter: {
       kind: "replicate",
-      ...(reference ? { referenceField: reference.field, maxReferences: reference.max ?? 4 } : {}),
+      ...(reference
+        ? {
+            referenceField: reference.field,
+            ...(reference.mode ? { referenceMode: reference.mode } : {}),
+            maxReferences: reference.max ?? 4,
+          }
+        : {}),
       ...(aspectRatios ? { aspectRatios } : {}),
     },
   };
@@ -103,7 +110,8 @@ export const CURATED_REPLICATE_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
   replicate("ideogram-ai/ideogram-v4-turbo", "Ideogram 4 Turbo", "ideogram", undefined, ALL),
   replicate("recraft-ai/recraft-v4.1-pro", "Recraft 4.1 Pro", "recraft", undefined, ALL),
   replicate("qwen/qwen-image-2-pro", "Qwen Image 2 Pro", "qwen"),
-  replicate("qwen/qwen-image-edit-2511", "Qwen Image Edit 2511", "qwen", { field: "image" }),
+  // Its `image` input is a list; Qwen documents 1–3 input images for multi-image edits.
+  replicate("qwen/qwen-image-edit-2511", "Qwen Image Edit 2511", "qwen", { field: "image", mode: "array", max: 3 }),
   replicate("tencent/hunyuan-image-3", "Hunyuan Image 3", "tencent-hunyuan"),
   replicate("luma/photon", "Luma Photon", "luma"),
   replicate("minimax/image-01", "MiniMax Image 01", "minimax", { field: "subject_reference" }),
