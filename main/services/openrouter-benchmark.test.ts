@@ -196,19 +196,25 @@ test("a stored cache with an invalid skipped-row count is rejected", () => {
   }
 });
 
-test("model_count must cover every returned row, including ambiguous rows that were dropped", () => {
+test("model_count counts unique models, so a duplicate group plus an unrelated row is accepted", () => {
   const payload = responsePayload([
     benchmarkRow("openai/gpt", "GPT", 1),
     benchmarkRow("OPENAI/GPT", "GPT duplicate", 2),
     benchmarkRow("openai/gpt-5.4", "GPT-5.4", 81.4),
   ]);
-  // model_count is the source's total, so it can never be below the rows actually returned.
+  // OpenRouter documents model_count as the number of unique models in the response.
   payload.meta.model_count = 2;
-  assert.throws(() => buildOpenRouterBenchmarkCache(payload), /model count/u);
-  payload.meta.model_count = 3;
   const cache = buildOpenRouterBenchmarkCache(payload);
-  assert.equal(cache.models.length, 1);
+  assert.deepEqual(
+    cache.models.map((model) => model.modelPermaslug),
+    ["openai/gpt-5.4"],
+  );
   assert.equal(cache.source.skippedAmbiguous, 2);
+  assert.equal(openRouterBenchmarkForModel(cache, "openai", "gpt"), undefined);
+  assert.equal(openRouterBenchmarkForModel(cache, "openai", "gpt-5.4")?.coding, 81.4);
+
+  payload.meta.model_count = 1;
+  assert.throws(() => buildOpenRouterBenchmarkCache(payload), /model count/u);
 });
 
 test("a cache stored before skipped rows were recorded reports none skipped", async () => {

@@ -147,6 +147,7 @@ function permaslugOccurrences(models: readonly OpenRouterBenchmarkModel[]): Map<
 function parseResponseModels(value: unknown): {
   models: OpenRouterBenchmarkModel[];
   skippedAmbiguous: number;
+  uniqueModels: number;
 } {
   const parsed = parseRows(value);
   const occurrences = permaslugOccurrences(parsed);
@@ -154,7 +155,11 @@ function parseResponseModels(value: unknown): {
     (model) => occurrences.get(model.modelPermaslug.toLowerCase()) === 1,
   );
   if (models.length === 0) throw new Error(MODEL_COUNT_ERROR);
-  return { models, skippedAmbiguous: parsed.length - models.length };
+  return {
+    models,
+    skippedAmbiguous: parsed.length - models.length,
+    uniqueModels: occurrences.size,
+  };
 }
 
 /** A cache Aiden wrote already dropped ambiguous rows, so a duplicate means it is corrupt. */
@@ -191,13 +196,13 @@ export function buildOpenRouterBenchmarkCache(
   if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark response has an invalid citation.");
   }
-  const { models, skippedAmbiguous } = parseResponseModels(response.data);
-  // model_count is the source's total, so it must cover every returned row,
-  // including ambiguous rows that were dropped above.
+  const { models, skippedAmbiguous, uniqueModels } = parseResponseModels(response.data);
+  // OpenRouter documents model_count as the number of unique models, so it must
+  // cover every distinct permaslug returned, counting each ambiguous group once.
   if (
     typeof meta.model_count !== "number" ||
     !Number.isSafeInteger(meta.model_count) ||
-    meta.model_count < models.length + skippedAmbiguous
+    meta.model_count < uniqueModels
   ) {
     throw new Error("OpenRouter benchmark response model count is invalid.");
   }
