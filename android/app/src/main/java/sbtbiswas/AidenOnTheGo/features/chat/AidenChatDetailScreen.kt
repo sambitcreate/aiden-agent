@@ -970,6 +970,8 @@ fun AidenChatDetailScreen(
                             activityTimeline = activityTimeline,
                             isBotChat = isBotChat,
                             palette = palette,
+                            onCopyMessage = onCopyMessage,
+                            onOpenMessageUrl = onOpenMessageUrl,
                             liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
                             isWaitingForNetwork = isWaitingForNetwork,
                             pendingApprovalToolName = livePendingApproval?.toolName,
@@ -1636,6 +1638,8 @@ internal fun ActiveStreamingCard(
     activityTimeline: AidenGenerationTimeline?,
     isBotChat: Boolean,
     palette: sbtbiswas.AidenOnTheGo.config.AidenPalette,
+    onCopyMessage: (String) -> Unit,
+    onOpenMessageUrl: (String) -> Unit,
     liveStart: java.time.Instant? = null,
     isWaitingForNetwork: Boolean = false,
     pendingApprovalToolName: String? = null,
@@ -1668,8 +1672,8 @@ internal fun ActiveStreamingCard(
                     active = isActive,
                     palette = palette,
                     live = true,
-                    onCopy = {},
-                    onOpenUrl = {}
+                    onCopy = onCopyMessage,
+                    onOpenUrl = onOpenMessageUrl
                 )
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
@@ -1769,8 +1773,8 @@ internal fun ActiveStreamingCard(
                     text = textToShow,
                     palette = palette,
                     showCursor = isActive,
-                    onCopy = {},
-                    onOpenUrl = {}
+                    onCopy = onCopyMessage,
+                    onOpenUrl = onOpenMessageUrl
                 )
             }
             if (!isWaitingForNetwork && liveText.isEmpty() && reasoning.isEmpty() && tools.isEmpty() && visualizingLabel == null) {

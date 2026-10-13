@@ -11,7 +11,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
@@ -57,6 +62,8 @@ class AidenLiveHandoffUiTest {
                                     activityTimeline = null,
                                     isBotChat = true,
                                     palette = AidenTheme.palette,
+                                    onCopyMessage = {},
+                                    onOpenMessageUrl = {},
                                     isActive = state?.isTerminal == false
                                 )
                             }
@@ -119,5 +126,48 @@ class AidenLiveHandoffUiTest {
         stepFramesRecording(2)
 
         assertEquals(false to false, visible())
+    }
+
+    @Test
+    fun aStreamingReplysCopyAndLinkActionsReachTheScreen() {
+        val link = "https://example.com/docs"
+        val streaming = "Run this first:\n\n```kotlin\nval answer = 42\n```\n$link"
+        val bot = MutableStateFlow(true)
+        val copied = ArrayList<String>()
+        val opened = ArrayList<String>()
+        compose.setContent {
+            AidenTheme {
+                // Bot chats use the plain live renderer; other chats the chronological rows.
+                val isBotChat by bot.collectAsState()
+                ActiveStreamingCard(
+                    liveText = streaming,
+                    reasoning = "",
+                    tools = emptyList(),
+                    activityTimeline = null,
+                    isBotChat = isBotChat,
+                    palette = AidenTheme.palette,
+                    onCopyMessage = { copied += it },
+                    onOpenMessageUrl = { opened += it },
+                    isActive = true
+                )
+            }
+        }
+
+        for (isBotChat in listOf(true, false)) {
+            compose.runOnUiThread { bot.value = isBotChat }
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithContentDescription("Copy code").fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithText(link).fetchSemanticsNodes().isNotEmpty()
+            }
+            copied.clear()
+            opened.clear()
+
+            compose.onNodeWithContentDescription("Copy code").performClick()
+            compose.onNodeWithText(link).performClick()
+            compose.waitForIdle()
+
+            assertEquals("bot chat $isBotChat", listOf("val answer = 42"), copied)
+            assertEquals("bot chat $isBotChat", listOf(link), opened)
+        }
     }
 }

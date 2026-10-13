@@ -9,7 +9,10 @@ package sbtbiswas.AidenOnTheGo.features.chat
  *
  * Code blocks pair their ``` runs exactly as the message renderer does (each
  * run toggles a block, wherever it sits on the line), so a chunk never splits
- * a block the finished message would show whole.
+ * a block the finished message would show whole. Prose seams also wait while
+ * an inline span the renderer styles (such as `**bold**`, which may run across
+ * lines) crosses them, or could once a closing delimiter streams in, so every
+ * chunk formats exactly as the finished message would.
  *
  * The chunks plus the tail always reproduce the reply exactly, and a growing
  * reply keeps every chunk it already sealed, with the same id and text.
@@ -62,6 +65,10 @@ object AidenStreamingMarkdownSplitter {
         var chunkBytes = 0
         var inCodeBlock = false
         var fenceSearchFrom = from
+        // Where the renderer's current prose piece starts, and the inline
+        // spans it holds, found once a seam first needs them.
+        var proseStart = from
+        var spans: List<IntRange>? = null
 
         while (lineStart < text.length) {
             val lineEnd = lineEnd(text, lineStart)
@@ -77,6 +84,10 @@ object AidenStreamingMarkdownSplitter {
                 inCodeBlock = !inCodeBlock
                 fenceRuns++
                 searchFrom = run + FENCE.length
+                if (!inCodeBlock) {
+                    proseStart = searchFrom
+                    spans = null
+                }
             }
             fenceSearchFrom = searchFrom
 
@@ -89,13 +100,17 @@ object AidenStreamingMarkdownSplitter {
                 else -> null
             }
 
-            if (seam != null && nextLineStart < text.length && chunkBytes >= STABLE_CHUNK_TARGET_UTF8_BYTES) {
+            if (seam != null && nextLineStart < text.length && chunkBytes >= STABLE_CHUNK_TARGET_UTF8_BYTES &&
+                (spans ?: inlineSpans(text, proseStart).also { spans = it }).none { nextLineStart in (it.first + 1)..it.last }
+            ) {
                 val chunkText = text.substring(chunkStart, nextLineStart)
                 if (chunkText.isNotBlank()) {
                     stableChunks += Chunk(stableChunks.size, chunkStart, chunkText, seam)
                 }
                 chunkStart = nextLineStart
                 chunkBytes = 0
+                proseStart = nextLineStart
+                spans = null
             }
 
             lineStart = nextLineStart
@@ -105,6 +120,24 @@ object AidenStreamingMarkdownSplitter {
     }
 
     private const val FENCE = "```"
+
+    /** Closers that complete any inline span still open at the end of the streamed text. */
+    private val SPAN_CLOSERS = listOf("", "**", "*", "_", "~")
+
+    /**
+     * The inline spans of the prose piece starting at [start], as offsets in
+     * [text]. A piece a closed code block ends is final; an unfinished piece
+     * also counts every span a closing delimiter streaming in next would form.
+     */
+    private fun inlineSpans(text: String, start: Int): List<IntRange> {
+        val fence = text.indexOf(FENCE, start)
+        val finished = fence >= 0 && text.indexOf(FENCE, fence + FENCE.length) >= 0
+        val prose = if (finished) text.substring(start, fence) else text.substring(start)
+        val closers = if (finished) SPAN_CLOSERS.take(1) else SPAN_CLOSERS
+        return closers.flatMap { closer ->
+            aidenInlineMarkdownPattern.findAll(prose + closer).map { (it.range.first + start)..(it.range.last + start) }.toList()
+        }
+    }
 
     /** The first ``` run starting in [from, end) that also ends by [end], or -1. */
     private fun fenceRunIndex(text: String, from: Int, end: Int): Int {

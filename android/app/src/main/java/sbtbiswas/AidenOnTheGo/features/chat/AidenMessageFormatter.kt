@@ -16,7 +16,8 @@ enum class AidenAnnotationTag {
     LINK, CODE_INLINE, MENTION
 }
 
-private val markdownPattern by lazy {
+/** The inline spans the message renderer styles; the streaming splitter never seals inside one. */
+internal val aidenInlineMarkdownPattern by lazy {
     Regex("""(\[[^\]\n]+\]\(\./[^)\n]+\))|(https?://[^\s\t\n]+)|(`[^`\n]+`)|(@\w+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)|(~[^~]+~)""")
 }
 
@@ -28,7 +29,7 @@ fun buildAidenFormattedMessage(
     palette: AidenPalette,
     isUser: Boolean
 ): AnnotatedString {
-    val tokens = markdownPattern.findAll(text)
+    val tokens = aidenInlineMarkdownPattern.findAll(text)
     val inlineCodeBg = if (isUser) palette.onAccent.copy(alpha = 0.2f) else palette.canvas
     val linkColor = if (isUser) palette.onAccent else palette.accent
 

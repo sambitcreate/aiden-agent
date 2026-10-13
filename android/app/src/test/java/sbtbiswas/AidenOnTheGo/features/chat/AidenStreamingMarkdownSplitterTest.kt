@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
+import sbtbiswas.AidenOnTheGo.config.AidenThemePresetID
 import sbtbiswas.AidenOnTheGo.features.chat.AidenStreamingMarkdownSplitter.Seam
 
 class AidenStreamingMarkdownSplitterTest {
@@ -60,12 +62,15 @@ class AidenStreamingMarkdownSplitterTest {
 
     @Test
     fun tildeLinesAreProseToTheRendererSoABlankLineInsideThemSeals() {
-        val text = "~~~text\n" + "Line of prose.\n".repeat(450) + "\n~~~\ntail"
+        // The opening line closes its own ~strike~ span, so none crosses the blank line.
+        val text = "~~~ text ~\n" + "Line of prose.\n".repeat(450) + "\n~~~\ntail"
 
         val segments = split(text)
 
         assertEquals(Seam.BLANK_LINE, segments.stableChunks.single().seam)
         assertEquals("~~~\ntail", segments.activeMarkdown)
+        // A bare opener strikes through to the closing tildes in the renderer, so it holds the seal.
+        assertTrue(split("~~~text\n" + "Line of prose.\n".repeat(450) + "\n~~~\ntail").stableChunks.isEmpty())
     }
 
     @Test
@@ -230,5 +235,58 @@ class AidenStreamingMarkdownSplitterTest {
         }
 
         assertFalse(previous.isEmpty())
+    }
+
+    /** Each visible character with the inline styles the message renderer gives it, as one rendered document would show it. */
+    private fun rendered(markdown: String): List<Pair<Char, Set<Any>>> {
+        val palette = AidenThemeCatalog.palettes.getValue(AidenThemePresetID.AIDEN).first()
+        var cursor = 0
+        val pieces = ArrayList<String>()
+        for (block in CODE_BLOCK_REGEX.findAll(markdown)) {
+            pieces += markdown.substring(cursor, block.range.first)
+            pieces += block.value
+            cursor = block.range.last + 1
+        }
+        pieces += markdown.substring(cursor)
+        return pieces.filter { it.isNotBlank() }.flatMap { piece ->
+            if (piece.startsWith("```")) return@flatMap piece.filterNot { it.isWhitespace() }.map { it to emptySet<Any>() }
+            val formatted = buildAidenFormattedMessage(piece.trim(), palette, false)
+            formatted.text.indices.filterNot { formatted.text[it].isWhitespace() }.map { index ->
+                formatted.text[index] to formatted.spanStyles.filter { index >= it.start && index < it.end }.map { it.item }.toSet()
+            }
+        }
+    }
+
+    private fun AidenStreamingMarkdownSplitter.Segments.renderedLive() =
+        stableChunks.flatMap { rendered(it.text) } + rendered(activeMarkdown)
+
+    @Test
+    fun chunksRenderEveryInlineSpanAsTheWholeReplyWould() {
+        val sentence = "Long emphasized paragraph. ".repeat(250)
+        val replies = listOf(
+            "**$sentence\n\nSecond emphasized paragraph.**\n\n$sentence",
+            "Starts _$sentence\n\n## Heading inside\n\nends here_ and goes on.\n\n$sentence",
+            "A lone ~ $sentence\n\n$sentence\n\n```\ncode ~ here\n```\n$sentence\n\n*tail $sentence\n\nclosed*"
+        )
+        for (reply in replies) {
+            val session = AidenStreamingMarkdownSplitter.Session()
+            var length = 0
+            while (length < reply.length) {
+                length = minOf(reply.length, length + 613)
+                val segments = session.split(reply.take(length))
+                assertEquals(reply.take(length), segments.reconstructed())
+                assertEquals("live and whole renders differ at $length", rendered(reply.take(length)), segments.renderedLive())
+            }
+        }
+    }
+
+    @Test
+    fun aClosedSpanStillLetsALaterBlankLineSeal() {
+        val reply = "**Bold lead.** " + "Plain prose sentence. ".repeat(300) + "\n\nMore prose."
+
+        val segments = split(reply)
+
+        assertEquals(listOf(Seam.BLANK_LINE), segments.stableChunks.map { it.seam })
+        assertEquals("More prose.", segments.activeMarkdown)
     }
 }
