@@ -1261,10 +1261,25 @@ final class AidenChatViewModel {
     /// The live stream lost its transport while the device is offline and is
     /// parked until the path returns. No error is shown in this state.
     var isWaitingForNetwork: Bool { networkWaitStreamID != nil && networkWaitStreamID == activeStreamID }
-    private(set) var liveText = ""
-    private(set) var reasoning = ""
-    private(set) var tools: [AidenLiveTool] = []
-    private(set) var activityTimeline: AidenGenerationTimeline?
+    private(set) var liveText = "" {
+        didSet { if liveText != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var reasoning = "" {
+        didSet { if reasoning != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var tools: [AidenLiveTool] = [] {
+        didSet { if tools != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    private(set) var activityTimeline: AidenGenerationTimeline? {
+        didSet { if activityTimeline != oldValue { scheduleStreamingScrollTrigger() } }
+    }
+    /// Bumped at most once per 16ms while the live reply grows. Only the
+    /// transcript's `AidenStreamingFollowTrigger` leaf reads it, so a bump
+    /// re-snaps a following reader without re-running the chat screen.
+    private(set) var streamingScrollTrigger = 0
+    @ObservationIgnored private var pendingStreamingScrollTriggerTask: Task<Void, Never>?
+    /// Bumped when the reader sends, so the transcript jumps to the new turn.
+    private(set) var explicitSendCount = 0
     /// Generations whose image this phone watched being generated; their
     /// settled image plays the arrival reveal once.
     private(set) var imageArrivalRevealGenerationIDs: Set<String> = []
@@ -1427,6 +1442,7 @@ final class AidenChatViewModel {
 #endif
 
     deinit {
+        pendingStreamingScrollTriggerTask?.cancel()
         streamTask?.cancel()
         progressTask?.cancel()
         titleRefreshTask?.cancel()
@@ -1480,6 +1496,16 @@ final class AidenChatViewModel {
         clearRecoveryWarning()
         if let removedStreamID {
             Task { await liveActivities.updateStatus(instanceID: instanceId, streamID: removedStreamID, state: .cancelled) }
+        }
+    }
+
+    private func scheduleStreamingScrollTrigger() {
+        guard pendingStreamingScrollTriggerTask == nil else { return }
+        pendingStreamingScrollTriggerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard let self else { return }
+            self.pendingStreamingScrollTriggerTask = nil
+            self.streamingScrollTrigger &+= 1
         }
     }
 
@@ -2628,6 +2654,7 @@ final class AidenChatViewModel {
         titleRefreshTask = nil
         titleRefreshID = nil
         stopVisualSnapshotRefresh()
+        explicitSendCount &+= 1
         isStarting = true
         defer {
             isStarting = false
@@ -4803,7 +4830,7 @@ struct AidenChatDetailView: View {
     @State private var workspaceFileReference: String?
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
-    @State private var isScrolledAwayFromLatest = false
+    @State private var follow = AidenTranscriptFollowController()
     @State private var attachmentPicker = AidenAttachmentPickerState()
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
@@ -5066,57 +5093,56 @@ struct AidenChatDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 messageList(proxy)
+                    .background {
+                        AidenChatScrollObserver(
+                            onFollowEvent: { follow.handle($0) },
+                            onMetrics: { follow.updateMetrics($0) }
+                        )
+                    }
             }
             .defaultScrollAnchor(
                 AidenChatScrollPolicy.initialTranscriptAnchor,
                 for: .initialOffset
             )
             .defaultScrollAnchor(
-                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: !isScrolledAwayFromLatest),
+                AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: follow.isFollowing),
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .onScrollGeometryChange(for: AidenScrollFollowGeometry.self) { geometry in
-                AidenScrollFollowGeometry(
-                    isAwayFromLatest: aidenChatIsScrolledAwayFromLatest(
-                        contentOffsetY: geometry.contentOffset.y,
-                        containerHeight: geometry.containerSize.height,
-                        contentHeight: geometry.contentSize.height,
-                        bottomInset: geometry.contentInsets.bottom
-                    ),
-                    contentHeight: geometry.contentSize.height
-                )
-            } action: { previous, next in
-                isScrolledAwayFromLatest = AidenChatScrollPolicy.shouldTreatAsScrolledAway(
-                    wasScrolledAway: isScrolledAwayFromLatest,
-                    isAwayFromLatest: next.isAwayFromLatest,
-                    contentGrew: next.contentHeight > previous.contentHeight
-                )
-            }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
             )
+            .background {
+                // A leaf reads the per-tick trigger, so a reveal tick re-snaps
+                // a following reader without re-running this screen.
+                AidenStreamingFollowTrigger(trigger: { model.streamingScrollTrigger }) {
+                    followLatest(proxy, animated: false)
+                }
+            }
             .overlay(alignment: .bottom) {
-                if isScrolledAwayFromLatest {
+                if follow.showsJumpButton {
                     AidenChatJumpToLatestButton {
-                        isScrolledAwayFromLatest = false
-                        scrollToBottom(proxy)
+                        jumpToLatest(proxy)
                     }
                     .padding(.bottom, composerHeight + 10)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isScrolledAwayFromLatest)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: follow.showsJumpButton)
+            .onAppear { follow.setStreaming(model.isStreaming) }
+            .onChange(of: model.isStreaming) { _, streaming in
+                follow.setStreaming(streaming)
+            }
+            .onChange(of: model.explicitSendCount) { _, _ in
+                jumpToLatest(proxy)
+            }
             .onChange(of: model.chat.messages.count) { _, _ in
-                guard !isScrolledAwayFromLatest else { return }
-                scrollToBottom(proxy, animated: false)
+                followLatest(proxy, animated: false)
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
                 composerIsFocused = false
-                if !isScrolledAwayFromLatest {
-                    scrollToBottom(proxy)
-                }
+                followLatest(proxy, animated: true)
             }
         }
     }
@@ -5503,12 +5529,27 @@ struct AidenChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+    /// Jump to latest or a send: re-arms follow, then snaps (while
+    /// streaming) or animates (when idle) to the bottom sentinel.
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        follow.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            scrollToBottom(proxy, animated: animated)
+        }
+    }
+
+    /// An automatic follow; it does nothing unless follow is latched on.
+    private func followLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        follow.scheduleFollowScroll(isUserInitiated: false, animated: animated) { animated in
+            scrollToBottom(proxy, animated: animated)
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
         let scroll = {
             proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
         }
-        if animated {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2), scroll)
+        if animated, !reduceMotion {
+            withAnimation(.easeOut(duration: 0.2), scroll)
         } else {
             scroll()
         }

@@ -110,6 +110,7 @@
 		A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */; };
 		A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */; };
 		A713739233F64F4FA4C2B700 /* AidenChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */; };
+		A717739233F64F4FA4C2B700 /* AidenChatScrollObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A717739233F64F4FA4C2B710 /* AidenChatScrollObserver.swift */; };
 		A714739233F64F4FA4C2B700 /* AidenTranscriptPolish.swift in Sources */ = {isa = PBXBuildFile; fileRef = A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */; };
 		A715739233F64F4FA4C2B700 /* AidenChatFork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A715739233F64F4FA4C2B710 /* AidenChatFork.swift */; };
 		A716739233F64F4FA4C2B700 /* AidenImageGenerationPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A716739233F64F4FA4C2B710 /* AidenImageGenerationPlaceholder.swift */; };
@@ -230,6 +231,7 @@
 		A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentPicker.swift; sourceTree = "<group>"; };
 		A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentCamera.swift; sourceTree = "<group>"; };
 		A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatScrollPolicy.swift; sourceTree = "<group>"; };
+		A717739233F64F4FA4C2B710 /* AidenChatScrollObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatScrollObserver.swift; sourceTree = "<group>"; };
 		A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenTranscriptPolish.swift; sourceTree = "<group>"; };
 		A715739233F64F4FA4C2B710 /* AidenChatFork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatFork.swift; sourceTree = "<group>"; };
 		A716739233F64F4FA4C2B710 /* AidenImageGenerationPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenImageGenerationPlaceholder.swift; sourceTree = "<group>"; };
@@ -526,6 +528,7 @@
 				A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */,
 				A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */,
 				A713739233F64F4FA4C2B710 /* AidenChatScrollPolicy.swift */,
+				A717739233F64F4FA4C2B710 /* AidenChatScrollObserver.swift */,
 				A714739233F64F4FA4C2B710 /* AidenTranscriptPolish.swift */,
 				A715739233F64F4FA4C2B710 /* AidenChatFork.swift */,
 				A716739233F64F4FA4C2B710 /* AidenImageGenerationPlaceholder.swift */,
@@ -816,6 +819,7 @@
 				A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */,
 				A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */,
 				A713739233F64F4FA4C2B700 /* AidenChatScrollPolicy.swift in Sources */,
+				A717739233F64F4FA4C2B700 /* AidenChatScrollObserver.swift in Sources */,
 				A714739233F64F4FA4C2B700 /* AidenTranscriptPolish.swift in Sources */,
 				A715739233F64F4FA4C2B700 /* AidenChatFork.swift in Sources */,
 				A716739233F64F4FA4C2B700 /* AidenImageGenerationPlaceholder.swift in Sources */,
