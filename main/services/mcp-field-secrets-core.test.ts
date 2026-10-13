@@ -357,3 +357,39 @@ test("moving plain-text values into the keychain survives the config snapshot li
     setPortableCredentialSnapshotListener(async () => undefined);
   }
 });
+
+test("an outside edit that drops a stored header prunes its value, so restoring the marker later resolves nothing", async () => {
+  const { createLastSafeSnapshotReload } = await import("./portable-config-watch-core.js");
+  const { mcpFieldSecretReferencesChanged } = await import("./mcp-field-secrets-core.js");
+  const saved = planMcpFieldSecrets(remote, counter());
+  let record: McpFieldSecretRecord | undefined = stored(saved);
+  let servers: McpServer[] = [saved.server];
+  const cleanups: string[] = [];
+  // The production rule (reconcileExternalMcpCredentialChanges): sign-in
+  // cleanup and stored-value pruning are decided independently.
+  const reload = createLastSafeSnapshotReload(
+    async () => true,
+    async () => structuredClone(servers),
+    async () => true,
+    async (previous, next) => {
+      for (const before of previous) {
+        const after = next.find(({ id }) => id === before.id);
+        const kind = externalMcpCredentialCleanupKind(before, after);
+        if (kind) cleanups.push(kind);
+        if (mcpFieldSecretReferencesChanged(before, after)) record = record && pruneMcpFieldSecretRecord(record, after);
+      }
+    },
+  );
+  await reload.syncCurrent();
+  const team = saved.server.headers!["X-Team"]!;
+  // config.json is edited by hand: X-Team is removed.
+  servers = [{ ...saved.server, headers: { Authorization: saved.server.headers!.Authorization! } }];
+  await reload();
+  assert.deepEqual(cleanups, [], "no sign-in is cleared for a header edit");
+  assert.equal(resolveMcpFieldSecrets(servers[0]!, record).headers!.Authorization, "Bearer secret-token");
+  // Later the old marker is typed back in under the same name: it is gone.
+  servers = [saved.server];
+  await reload();
+  assert.throws(() => resolveMcpFieldSecrets(saved.server, record), (error: unknown) => error instanceof McpFieldSecretMissingError && /“X-Team”/u.test(error.message));
+  assert.ok(team);
+});

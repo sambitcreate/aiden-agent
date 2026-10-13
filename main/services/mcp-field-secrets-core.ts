@@ -383,3 +383,14 @@ export function mcpStdioLaunchFingerprint(server: McpServer): string {
     .map(([name, value]) => [name, sha256(value)]);
   return sha256(JSON.stringify({ v: 1, id: server.id, command: server.command ?? "", args: server.args ?? [], env }));
 }
+
+/**
+ * Whether an observed config transition changed which env/header markers a
+ * server references (or removed it), so its stored values must be pruned
+ * against the new config even though no sign-in credential changed.
+ */
+export function mcpFieldSecretReferencesChanged(before: McpServer, after: McpServer | undefined): boolean {
+  if (!after) return true;
+  return KINDS.some((kind) => JSON.stringify(before[kind] ?? {}) !== JSON.stringify(after[kind] ?? {})) ||
+    mcpFieldSecretDestination(before) !== mcpFieldSecretDestination(after);
+}

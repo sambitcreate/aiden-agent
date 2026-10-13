@@ -199,3 +199,30 @@ test("changing OAuth metadata authority rotates the credential identity and surv
   assert.equal(sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(server), mcpRuntimeConnectionSnapshot(target)), false);
   assert.deepEqual(mcpCredentialCleanupAfterConfig(pending!, target), { resolved: true, clearOAuth: true, clearPresetKey: true });
 });
+
+test("a journal written before credentials stopped covering env/header values recovers an uncommitted edit without clearing anything", () => {
+  const configured = {
+    id: "docs",
+    name: "Docs",
+    transport: "http" as const,
+    url: "https://docs.example.test/mcp",
+    headers: { Authorization: "Bearer secret" },
+    env: undefined,
+    oauth: true,
+    enabled: true,
+  };
+  // The previous writer stored full snapshots, env/header hashes included.
+  const persisted = JSON.parse(JSON.stringify({
+    version: 1,
+    kind: "replace",
+    serverId: "docs",
+    previous: mcpCredentialConnectionSnapshot(configured),
+    target: mcpCredentialConnectionSnapshot({ ...configured, url: "https://moved.example.test/mcp" }),
+  }));
+  assert.match(JSON.stringify(persisted.previous), /headersHash/u);
+  // The edit never committed: config still matches the journal's previous server.
+  const pending = parsePendingMcpCredentialCleanup(persisted);
+  assert.deepEqual(mcpCredentialCleanupAfterConfig(pending, configured), { resolved: true, clearOAuth: false, clearPresetKey: false });
+  // Had the edit committed, the old credentials would still be cleared.
+  assert.equal(mcpCredentialCleanupAfterConfig(pending, { ...configured, url: "https://moved.example.test/mcp" }).clearOAuth, true);
+});

@@ -18,6 +18,7 @@ import { clearOAuth, invalidateMcpOAuthOperation, suspendMcpOAuthOperations } fr
 import { presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import { pruneStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { mcpFieldSecretReferencesChanged } from "./mcp-field-secrets-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
@@ -274,6 +275,15 @@ export function reconcileExternalMcpCredentialChanges(
             target: targetSnapshot,
           });
           await reconcileNow(() => true, false);
+        }
+        // Independently of sign-in cleanup: an edit that drops or renames a
+        // stored env/header field (or removes the server) prunes its values
+        // against this authoritative config, so restoring the old marker later
+        // finds nothing.
+        if (mcpFieldSecretReferencesChanged(before, after)) {
+          await pruneStoredMcpFieldSecrets(before.id, after).catch((error: unknown) =>
+            logger.warn("mcp", "Could not prune stored MCP env and header values after a config change.", error),
+          );
         }
       } finally {
         release();
