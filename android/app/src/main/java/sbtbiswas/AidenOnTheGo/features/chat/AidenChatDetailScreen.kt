@@ -1410,9 +1410,18 @@ private fun AssistantMessageRow(
         }
         // Step Timeline items if present
         message.timeline?.let { timeline ->
-            if (timeline.steps.isNotEmpty()) {
-                AidenTimelineCollapsibleCard(timeline = timeline, palette = palette)
+            val activity = AidenAgentActivityPresentation.activityTimeline(timeline)
+            if (activity.steps.isNotEmpty()) {
+                AidenTimelineCollapsibleCard(timeline = activity, palette = palette)
                 Spacer(modifier = Modifier.height(4.dp))
+            }
+            timeline.steps.forEach { step ->
+                step.questionnaireRecap?.let { recap ->
+                    key(step.id) {
+                        AidenQuestionnaireRecapStack(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
             }
         }
 
@@ -1911,6 +1920,11 @@ private fun AidenChronologicalTranscript(
                                     )
                                 }
                             }
+                        }
+                    }
+                    AidenChronologicalRow.Kind.QUESTIONNAIRE -> {
+                        row.questionnaire?.let { recap ->
+                            AidenQuestionnaireRecapStack(recap = recap, palette = palette)
                         }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }

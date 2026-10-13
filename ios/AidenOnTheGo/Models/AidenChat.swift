@@ -368,6 +368,125 @@ struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let deletions: Int
 }
 
+/// What the owner chose in a settled `ask_user_question` card, carried on its
+/// completed timeline step so the transcript can show the questions and
+/// answers in place of the generic activity line. Decoding throws for any
+/// recap the desktop would reject; `AidenAgentStep` then drops only the recap.
+struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
+    static let toolName = "ask_user_question"
+    static let maxItems = 4
+    static let maxOptions = 5
+    static let maxQuestionLength = 1_000
+    static let maxHeaderLength = 16
+    static let maxLabelLength = 60
+    static let maxCustomLength = 1_000
+
+    enum Outcome: String, Codable, Sendable {
+        case answered
+        case dismissed
+        case expired
+    }
+
+    struct Item: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case option
+            case multi
+            case custom
+            case skipped
+        }
+
+        /// How the answer line under a question reads.
+        enum Answer: Equatable, Sendable {
+            /// One option label, or a multi-select's labels joined with ", ".
+            case chosen(String)
+            /// The owner's own words, quoted.
+            case custom(String)
+            /// A question left without an answer.
+            case unanswered(String)
+        }
+
+        let question: String
+        let header: String
+        let kind: Kind
+        let answers: [String]
+
+        func answer(for outcome: Outcome) -> Answer {
+            switch kind {
+            case .skipped:
+                switch outcome {
+                case .answered: return .unanswered("Skipped")
+                case .dismissed: return .unanswered("Dismissed")
+                case .expired: return .unanswered("No answer")
+                }
+            case .custom:
+                return .custom("\u{201C}\(answers.first ?? "")\u{201D}")
+            case .option, .multi:
+                return .chosen(answers.joined(separator: ", "))
+            }
+        }
+    }
+
+    let version: Int
+    let outcome: Outcome
+    let items: [Item]
+
+    init(version: Int = 1, outcome: Outcome, items: [Item]) {
+        self.version = version
+        self.outcome = outcome
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        outcome = try values.decode(Outcome.self, forKey: .outcome)
+        items = try values.decode([Item].self, forKey: .items)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid ask_user_question recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, outcome, items
+    }
+
+    var isValid: Bool {
+        guard version == 1, (1...Self.maxItems).contains(items.count) else { return false }
+        return items.allSatisfy { item in
+            guard Self.isSafeText(item.question, maximum: Self.maxQuestionLength),
+                  Self.isSafeText(item.header, maximum: Self.maxHeaderLength) else { return false }
+            switch item.kind {
+            case .skipped:
+                return item.answers.isEmpty
+            case .option:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxLabelLength)
+            case .multi:
+                return outcome == .answered
+                    && (1...Self.maxOptions).contains(item.answers.count)
+                    && Set(item.answers).count == item.answers.count
+                    && item.answers.allSatisfy { Self.isSafeText($0, maximum: Self.maxLabelLength) }
+            case .custom:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxCustomLength)
+            }
+        }
+    }
+
+    /// Non-blank, within `maximum` code points, and free of C0 controls other
+    /// than tab and newline, and of DEL.
+    private static func isSafeText(_ value: String, maximum: Int) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && value.unicodeScalars.count <= maximum
+            && !value.unicodeScalars.contains { scalar in
+                (scalar.value < 32 && scalar.value != 9 && scalar.value != 10) || scalar.value == 127
+            }
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -392,6 +511,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let detail: String?
     let lineChanges: AidenAgentLineChanges?
     let producedFile: AidenProducedFile?
+    /// Present only on a completed `ask_user_question` step.
+    let questionnaire: AidenQuestionnaireRecap?
 
     init(
         id: String,
@@ -411,7 +532,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         target: String?,
         detail: String?,
         lineChanges: AidenAgentLineChanges?,
-        producedFile: AidenProducedFile? = nil
+        producedFile: AidenProducedFile? = nil,
+        questionnaire: AidenQuestionnaireRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -431,6 +553,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.detail = detail
         self.lineChanges = lineChanges
         self.producedFile = producedFile
+        self.questionnaire = questionnaire
     }
 
     init(from decoder: Decoder) throws {
@@ -465,21 +588,38 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .lineChanges
         )
+        // A malformed or misplaced recap is dropped; the step itself still
+        // renders as an ordinary activity line.
+        if kind == .tool, toolName == AidenQuestionnaireRecap.toolName, status == .completed {
+            questionnaire = try? aidenDecodeOptionalNonNull(
+                AidenQuestionnaireRecap.self,
+                from: values,
+                forKey: .questionnaire
+            )
+        } else {
+            questionnaire = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire
     }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
     }
+
+    /// A settled questionnaire reads as its recap, not as an activity line, so
+    /// it leaves activity groups and their tool-call tally.
+    var isQuestionnaire: Bool {
+        questionnaire != nil
+    }
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool, visual(AidenChatVisual) }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -537,9 +677,13 @@ enum AidenChronologicalProjection {
                 let slice = start.map { reasoningValue.substring(with: NSRange(location: $0, length: end - $0)) } ?? ""
                 result.append(.init(id: "reasoning-\(step.id)", kind: .reasoning, text: slice, steps: [step]))
                 index += 1
+            } else if step.isQuestionnaire {
+                result.append(.init(id: "questionnaire-\(step.id)", kind: .questionnaire, text: "", steps: [step]))
+                index += 1
             } else {
                 var group: [AidenAgentStep] = []
-                while index < steps.count && steps[index].kind == .tool && steps[index].contentOffset == offset {
+                while index < steps.count && steps[index].kind == .tool && !steps[index].isQuestionnaire
+                        && steps[index].contentOffset == offset {
                     let groupedStep = steps[index]
                     group.append(groupedStep)
                     index += 1
@@ -867,7 +1011,29 @@ enum AidenAgentActivityPresentation {
         _ timeline: AidenGenerationTimeline,
         reasoningVisible: Bool
     ) -> [AidenAgentStep] {
-        reasoningVisible ? timeline.steps.filter { $0.kind == .tool } : timeline.steps
+        timeline.steps.filter { step in
+            !step.isQuestionnaire && (!reasoningVisible || step.kind == .tool)
+        }
+    }
+
+    /// Settled questionnaires, in timeline order, for transcripts that show
+    /// their recap after the activity feed instead of in chronological rows.
+    static func questionnaireSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter(\.isQuestionnaire) ?? []
+    }
+
+    /// Whether a fallback transcript lists the stream's live tool rows. Once
+    /// the timeline has a tool step, the activity feed or a recap card already
+    /// shows each call, so the live rows would only repeat them.
+    static func showsLiveToolRows(
+        _ tools: [AidenLiveTool],
+        timeline: AidenGenerationTimeline?,
+        reasoningVisible: Bool
+    ) -> Bool {
+        guard !tools.isEmpty else { return false }
+        guard let timeline else { return true }
+        return activitySteps(timeline, reasoningVisible: reasoningVisible).isEmpty
+            && questionnaireSteps(timeline).isEmpty
     }
 
     static func line(for step: AidenAgentStep) -> String {
@@ -906,7 +1072,7 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool }
+        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
         guard !tools.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }

@@ -23,8 +23,10 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
+import { AskUserQuestionRecap } from "./ask-user-question-recap";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -260,11 +262,17 @@ function AssistantResponse({
   const showReasoning = Boolean(reasoning);
   if (!rows || !timeline) {
     const activityTimeline = timeline
-      ? activityTimelineFragment(timeline, timeline.steps.filter(isToolStep))
+      ? activityTimelineFragment(
+          timeline,
+          timeline.steps.filter((step) => isToolStep(step) && !isQuestionnaireStep(step)),
+        )
       : null;
     return (
       <>
         <ActivityFeed timeline={activityTimeline} animate={streaming} />
+        {timeline?.steps.filter(isQuestionnaireStep).map((step) => (
+          <AskUserQuestionRecap key={step.id} recap={step.questionnaire} />
+        ))}
         {subagentChips}
         {showReasoning ? (
           <ReasoningBlock
@@ -320,6 +328,9 @@ function AssistantResponse({
               label={reasoningActivityLabel(activityTimelineFragment(timeline, [row.step]), stepActive)}
             />
           );
+        }
+        if (row.kind === "questionnaire") {
+          return <AskUserQuestionRecap key={row.key} recap={row.step.questionnaire} />;
         }
         if (row.kind === "activity") {
           return (

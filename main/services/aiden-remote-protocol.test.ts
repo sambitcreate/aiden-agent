@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
+import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import {
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
@@ -136,8 +137,16 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 28);
+  assert.equal(fixture.contractRevision, 29);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
+  const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
+  const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
+  const recapStep = parsedTimeline?.steps.find((step) => step.kind === "tool" && step.questionnaire);
+  assert.ok(recapStep?.kind === "tool", "the fixture timeline carries a questionnaire recap");
+  assert.equal(recapStep.toolName, "ask_user_question");
+  assert.equal(recapStep.status, "completed");
+  assert.equal(recapStep.questionnaire?.outcome, "answered");
+  assert.deepEqual(recapStep.questionnaire?.items.map((item) => [item.kind, item.answers]), [["option", ["Plain text"]], ["skipped", []]]);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
@@ -1938,6 +1947,82 @@ test("produced-file OpenAPI constraints agree with runtime path and provenance v
   assert.equal(validate({ ...base, producedFile, toolName: "mcp_write" }), false);
   assert.equal(validate({ ...base, producedFile, toolName: "edit_file" }), false);
   assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
+});
+
+test("questionnaire recap OpenAPI constraints agree with the runtime timeline parser", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const ajv = new Ajv2020({ strict: false });
+  const validateTimeline = ajv.compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
+  const step = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "ask_user_question", label: "Ask a question", status: "completed", startedAt: 1, updatedAt: 1, finishedAt: 1, contentOffset: 0 };
+  const timeline = (questionnaire: unknown, overrides: Record<string, unknown> = {}) => ({
+    version: 3,
+    generationId: "gen-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 1,
+    steps: [{ ...step, ...overrides, questionnaire }],
+  });
+  const item = (kind: string, answers: string[], question = "Which format?", header = "Format") => ({ question, header, kind, answers });
+  const answered = (...items: unknown[]) => ({ version: 1, outcome: "answered", items });
+  const cases: Array<[name: string, candidate: Record<string, unknown>, expected: boolean]> = [
+    ["option and skipped", timeline(answered(item("option", ["Plain text"]), item("skipped", []))), true],
+    ["multi and multi-line custom", timeline(answered(item("multi", ["A", "B"]), item("custom", ["line one\n\tline two"]))), true],
+    ["dismissed, all skipped", timeline({ version: 1, outcome: "dismissed", items: [item("skipped", [])] }), true],
+    ["expired, all skipped", timeline({ version: 1, outcome: "expired", items: [item("skipped", []), item("skipped", [])] }), true],
+    ["four items", timeline(answered(...Array.from({ length: 4 }, () => item("skipped", [])))), true],
+    ["60 astral code points in a label", timeline(answered(item("option", ["😀".repeat(60)]))), true],
+    ["61 code points in a label", timeline(answered(item("option", ["x".repeat(61)]))), false],
+    ["1000 astral code points of custom text", timeline(answered(item("custom", ["😀".repeat(1000)]))), true],
+    ["1001 code points of custom text", timeline(answered(item("custom", ["x".repeat(1001)]))), false],
+    ["16 astral code points in a header", timeline(answered(item("skipped", [], "Which?", "😀".repeat(16)))), true],
+    ["17 code points in a header", timeline(answered(item("skipped", [], "Which?", "x".repeat(17)))), false],
+    ["line separator in a question", timeline(answered(item("skipped", [], "a b"))), true],
+    ["duplicate multi labels", timeline(answered(item("multi", ["A", "A"]))), false],
+    ["six multi labels", timeline(answered(item("multi", ["A", "B", "C", "D", "E", "F"]))), false],
+    ["empty multi", timeline(answered(item("multi", []))), false],
+    ["two option labels", timeline(answered(item("option", ["A", "B"]))), false],
+    ["two custom answers", timeline(answered(item("custom", ["A", "B"]))), false],
+    ["skipped with an answer", timeline(answered(item("skipped", ["A"]))), false],
+    ["dismissed with an option answer", timeline({ version: 1, outcome: "dismissed", items: [item("option", ["A"])] }), false],
+    ["expired with a custom answer", timeline({ version: 1, outcome: "expired", items: [item("custom", ["A"])] }), false],
+    ["bell in a question", timeline(answered(item("skipped", [], "ring\u0007"))), false],
+    ["carriage return in an answer", timeline(answered(item("custom", ["a\rb"]))), false],
+    ["DEL in a header", timeline(answered(item("skipped", [], "Which?", "Fo\u007Frmat"))), false],
+    ["blank question", timeline(answered(item("skipped", [], " \n\t "))), false],
+    ["no-break-space header", timeline(answered(item("skipped", [], "Which?", " ﻿"))), false],
+    ["blank option label", timeline(answered(item("option", ["  "]))), false],
+    ["five items", timeline(answered(...Array.from({ length: 5 }, () => item("skipped", [])))), false],
+    ["no items", timeline(answered()), false],
+    ["unknown recap version", timeline({ version: 2, outcome: "answered", items: [item("skipped", [])] }), false],
+    ["unknown outcome", timeline({ version: 1, outcome: "cancelled", items: [item("skipped", [])] }), false],
+    ["unknown kind", timeline(answered(item("text", ["A"]))), false],
+    ["wrong tool", timeline(answered(item("option", ["A"])), { toolName: "read_file", label: "Read file" }), false],
+    ["failed step", timeline(answered(item("option", ["A"])), { status: "failed" }), false],
+    ["running step", timeline(answered(item("option", ["A"])), { status: "running", finishedAt: undefined }), false],
+  ];
+  const { contentOffset: _offset, ...versionTwoStep } = step;
+  cases.push([
+    "version 2 timeline",
+    { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [{ ...versionTwoStep, questionnaire: answered(item("option", ["A"])) }] },
+    false,
+  ]);
+  for (const [name, candidate, expected] of cases) {
+    const wire = JSON.parse(JSON.stringify(candidate)) as Record<string, unknown>;
+    assert.equal(validateTimeline(wire), expected, `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`);
+    assert.equal(Boolean(parseGenerationTimeline(wire)), expected, `runtime: ${name}`);
+  }
+  // Without the recap, the base step is valid on both sides, so each rejection
+  // above comes from the questionnaire rule rather than the surrounding step.
+  const { questionnaire: _q, ...bare } = record((timeline(undefined).steps as unknown[])[0], "step");
+  for (const overrides of [{}, { toolName: "read_file", label: "Read file" }, { status: "failed" }]) {
+    const plain = { ...timeline(undefined), steps: [{ ...bare, ...overrides }] };
+    assert.equal(validateTimeline(plain), true, JSON.stringify(overrides));
+    assert.ok(parseGenerationTimeline(plain), JSON.stringify(overrides));
+  }
+  const versionTwo = { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [versionTwoStep] };
+  assert.equal(validateTimeline(versionTwo), true);
+  assert.ok(parseGenerationTimeline(versionTwo));
 });
 
 test("approval scope schemas accept the shared fixture and only allow-with-scope requests", async () => {

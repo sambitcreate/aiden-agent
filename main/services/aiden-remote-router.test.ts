@@ -4187,7 +4187,7 @@ test("the opt-in health descriptor identifies the host; the default body is unch
       instanceId: "instance-1",
       displayName: "Studio Mac",
       platform: "mac",
-      contractRevision: 28,
+      contractRevision: 29,
       // No request service is wired in this fixture, so requests are off.
       pairingRequests: false,
     });

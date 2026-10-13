@@ -19,6 +19,10 @@ import {
 import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { isImageGenerationProviderId } from "../../renderer/shared/image-generation/types.js";
 import { parseProducedFile } from "../../renderer/shared/produced-file.js";
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  parseAskUserQuestionRecap,
+} from "../../renderer/shared/ask-user-question.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -733,6 +737,10 @@ export class GenerationTimelineProjector {
         if (step.toolName === "form_fill") {
           const outcome = safeFormFillOutcome(resultDetails);
           if (outcome) step.detail = outcome;
+        }
+        if (step.toolName === ASK_USER_QUESTION_TOOL_NAME) {
+          const questionnaire = parseAskUserQuestionRecap(resultDetails);
+          if (questionnaire) step.questionnaire = questionnaire;
         }
       } else {
         const issue = safeToolIssue(resultDetails);

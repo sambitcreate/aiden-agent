@@ -2,9 +2,23 @@ import { isActiveStep } from "./agent-steps";
 import {
   isToolStep,
   type AgentStep,
+  type AgentToolStep,
   type GenerationClaimCheck,
   type GenerationTimeline,
 } from "../shared/generation-timeline";
+
+/** A settled `ask_user_question` step that carries the owner's choices. */
+export type QuestionnaireStep = AgentToolStep & {
+  questionnaire: NonNullable<AgentToolStep["questionnaire"]>;
+};
+
+/**
+ * Answered questionnaires read as their recap, not as an activity line, so
+ * they leave the activity group and its tool-call tally.
+ */
+export function isQuestionnaireStep(step: AgentStep): step is QuestionnaireStep {
+  return isToolStep(step) && step.questionnaire !== undefined;
+}
 
 export type AssistantPresentationRow =
   | {
@@ -25,6 +39,11 @@ export type AssistantPresentationRow =
       kind: "reasoning";
       content: string;
       step: Extract<AgentStep, { kind: "thinking" }>;
+    }
+  | {
+      key: string;
+      kind: "questionnaire";
+      step: QuestionnaireStep;
     };
 
 function textRow(
@@ -130,10 +149,17 @@ export function assistantPresentationRows(
       cursor = offset;
       continue;
     }
+    if (isQuestionnaireStep(step)) {
+      rows.push({ key: `questionnaire-${step.id}`, kind: "questionnaire", step });
+      stepIndex += 1;
+      cursor = offset;
+      continue;
+    }
     const steps: AgentStep[] = [];
     while (
       stepIndex < visibleSteps.length &&
       isToolStep(visibleSteps[stepIndex]!) &&
+      !isQuestionnaireStep(visibleSteps[stepIndex]!) &&
       visibleSteps[stepIndex]!.contentOffset === offset
     ) steps.push(visibleSteps[stepIndex++]!);
     rows.push({

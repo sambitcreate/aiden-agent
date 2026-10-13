@@ -33,8 +33,12 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
 /**
  * Contract revision of the v1 wire contract. Additive revisions keep protocol
  * version 1; the revision is published on `/health` and in the shared fixture.
+ *
+ * Contract revision 29: completed `ask_user_question` tool steps on a version 3
+ * generation timeline may carry a display-only `questionnaire` recap of the
+ * questions and what the owner chose; older clients ignore it.
  */
-export const AIDEN_REMOTE_CONTRACT_REVISION = 28 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = 29 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
