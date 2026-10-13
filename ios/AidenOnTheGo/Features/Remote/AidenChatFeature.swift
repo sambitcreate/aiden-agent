@@ -1200,8 +1200,12 @@ final class AidenChatViewModel {
     }
     private var activeStreamID: String? {
         didSet {
+            guard let activeStreamID else { return }
+            // This device's own run is accounted for, so the roster announcing
+            // its turn later never re-reads the transcript for it.
+            foreignRunAccountedRunId = activeStreamID
             // An owned stream supersedes observation of a foreign run.
-            if activeStreamID != nil, foreignRunTask != nil || foreignRun != nil {
+            if foreignRunTask != nil || foreignRun != nil {
                 stopForeignRunObservation()
             }
         }
@@ -1220,12 +1224,18 @@ final class AidenChatViewModel {
     @ObservationIgnored private var foreignRunsShownLive = 0
     /// The newest turn the agent roster has reported for this chat.
     @ObservationIgnored private var lastRosterTurnId: String?
-    /// A new turn was announced while another attach was still in flight.
-    @ObservationIgnored private var announcedTurnAwaitingAttach = false
+    /// A turn the roster announced while another lookup was in flight. That
+    /// lookup may have been answered before the turn's run registered, so the
+    /// turn is looked up once it ends.
+    @ObservationIgnored private var turnAwaitingLookup: ForeignRunAttachReason?
     @ObservationIgnored private var foreignRunProbeTask: Task<Void, Never>?
     @ObservationIgnored private var foreignRunProbeGeneration: UInt64 = 0
     /// Waits between foreground probes for a foreign run; tests shorten it.
     @ObservationIgnored var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
+    /// Waits before looking again for an announced run; tests shorten it.
+    @ObservationIgnored var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void = {
         try await Task.sleep(for: $0)
     }
     private var isRestoringStream = false
@@ -1897,7 +1907,11 @@ final class AidenChatViewModel {
         }
         guard !isRemoved, coordinator.isCurrent(context) else { return }
         startForeignRunObservationIfNeeded(context: context)
-        if observeProgress { startForeignRunProbeIfNeeded() }
+        // Progress observation stopped while this load was suspended (the chat
+        // left the foreground) must not have its probe restarted.
+        if observeProgress, observationGeneration == progressObservationGeneration, !Task.isCancelled {
+            startForeignRunProbeIfNeeded()
+        }
         guard observeProgress,
               isCurrentProgressObservation(observationGeneration, context: context) else { return }
         // A running observer already owns a live progress channel whose
@@ -2534,15 +2548,8 @@ final class AidenChatViewModel {
             }
             guard let snapshot = event.agentRoster,
                   snapshot.chatId == chat.id else { return }
-            let previousTurnId = lastRosterTurnId
             if acceptAgentRoster(snapshot) {
                 isAgentRosterStale = false
-                // A new turn announced live may be a run started on the Mac,
-                // in Telegram or by the scheduler: attach to it now rather
-                // than waiting for the chat to be reopened.
-                if let turnId = snapshot.turnId, turnId != previousTurnId {
-                    attachToAnnouncedTurn()
-                }
             }
         case .heartbeat:
             break
@@ -2567,8 +2574,19 @@ final class AidenChatViewModel {
     @discardableResult
     private func acceptAgentRoster(_ snapshot: AidenRemoteChatAgentRoster) -> Bool {
         guard snapshot.chatId == chat.id else { return false }
+        let previousTurnId = lastRosterTurnId
         let accepted = applyAgentRoster(snapshot)
-        if accepted, let turnId = snapshot.turnId { lastRosterTurnId = turnId }
+        if accepted, let turnId = snapshot.turnId {
+            lastRosterTurnId = turnId
+            // A new turn, live or in a snapshot read on (re)connect, may be a
+            // run started on the Mac, in Telegram or by the scheduler: attach
+            // to it now rather than when the chat is reopened. The first turn
+            // this chat sees is looked up too, because its run may have
+            // registered after the opening lookup was answered.
+            if turnId != previousTurnId {
+                attachToAnnouncedTurn(reason: previousTurnId == nil ? .firstRosterTurn : .announcedTurn)
+            }
+        }
         return accepted
     }
 
@@ -9074,6 +9092,9 @@ extension AidenChatViewModel {
         case load
         /// The agent roster reported a new turn.
         case announcedTurn
+        /// The first roster this chat received named a turn. It is usually the
+        /// last finished one, so a missing run is not looked for again.
+        case firstRosterTurn
         /// A foreground check on a device that cannot read the agent roster.
         case probe
     }
@@ -9085,6 +9106,9 @@ extension AidenChatViewModel {
     }
 
     var isObservingForeignRun: Bool { foreignRun != nil && foreignRunIsLive }
+
+    /// Whether a lookup for, or observation of, a foreign run is in flight.
+    var isLookingForForeignRun: Bool { foreignRunTask != nil }
 
     func startForeignRunObservationIfNeeded(
         context: AidenRemoteRequestContext,
@@ -9107,22 +9131,25 @@ extension AidenChatViewModel {
     }
 
     /// The roster reported a new turn: attach to its run unless a reply is
-    /// already live here. An attach still in flight picks the turn up when it
-    /// ends.
-    private func attachToAnnouncedTurn() {
+    /// already live here. A lookup still in flight may have been answered
+    /// before this turn's run registered, so the turn waits for it to end and
+    /// is looked up then. A run that lookup already showed or read is
+    /// recognised by `foreignRunAccountedRunId` and not replayed or read again.
+    private func attachToAnnouncedTurn(reason: ForeignRunAttachReason) {
         guard !isReadOnlyFixture, !isRemoved, activeStreamID == nil, !isStarting,
               let context = try? coordinator.requestContext(for: instanceId) else { return }
         if foreignRunTask != nil {
-            announcedTurnAwaitingAttach = true
+            // A newer announced turn keeps the not-found retry.
+            if turnAwaitingLookup != .announcedTurn { turnAwaitingLookup = reason }
             return
         }
-        startForeignRunObservationIfNeeded(context: context, reason: .announcedTurn)
+        startForeignRunObservationIfNeeded(context: context, reason: reason)
     }
 
     private func attachToTurnAnnouncedDuringObservation() {
-        guard announcedTurnAwaitingAttach, foreignRunTask == nil else { return }
-        announcedTurnAwaitingAttach = false
-        attachToAnnouncedTurn()
+        guard let reason = turnAwaitingLookup, foreignRunTask == nil else { return }
+        turnAwaitingLookup = nil
+        attachToAnnouncedTurn(reason: reason)
     }
 
     /// Starts the foreground check for runs started elsewhere on a device
@@ -9218,7 +9245,7 @@ extension AidenChatViewModel {
         func retryAnnouncedRun() async -> Bool {
             guard reason == .announcedTurn, !retriedAnnouncedRun else { return false }
             retriedAnnouncedRun = true
-            try? await Task.sleep(for: Self.announcedRunRetryDelay)
+            try? await announcedRunRetrySleep(Self.announcedRunRetryDelay)
             return true
         }
         attach: while isCurrentForeignRun(generation, context: context) {
@@ -9250,8 +9277,9 @@ extension AidenChatViewModel {
                         foreignRunAccountedRunId = runId
                         // The run finished before it could be shown live, so
                         // its reply is only in the transcript. A load has just
-                        // read it; an announced or newly found run reads it once.
-                        if reason == .announcedTurn || (reason == .probe && isNewRun),
+                        // read it, and a run already accounted for was read or
+                        // shown before; a newly found run reads it once.
+                        if reason != .load, isNewRun,
                            isCurrentForeignRun(generation, context: context) {
                             await reconcileChat(context: context)
                         }

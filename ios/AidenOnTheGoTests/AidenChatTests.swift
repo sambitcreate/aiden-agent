@@ -1638,9 +1638,13 @@ final class AidenChatTests: XCTestCase {
             responseOverride: { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
+        model.announcedRunRetrySleep = { _ in try await Task.sleep(for: .milliseconds(10)) }
         await model.load(observeProgress: true)
         try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
-        try await waitForCondition("attach on load") { fixture.currentRunRequests == 1 }
+        // The opening lookup, then one for the first roster's turn, whose run
+        // could have registered after the opening lookup was answered.
+        try await waitForCondition("attach on load") { fixture.currentRunRequests == 2 && !model.isLookingForForeignRun }
+        XCTAssertEqual(fixture.chatReads, 1, "Finding nothing new reads no transcript.")
         XCTAssertEqual(model.currentAgentTurnId, "turn-old")
         XCTAssertTrue(model.liveText.isEmpty)
         XCTAssertFalse(model.isObservingForeignRun)
@@ -1669,7 +1673,7 @@ final class AidenChatTests: XCTestCase {
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
         XCTAssertTrue(model.isObservingForeignRun)
         XCTAssertEqual(model.currentAgentTurnId, "turn-new")
-        XCTAssertEqual(fixture.currentRunRequests, 2, "One attach for the announced turn.")
+        XCTAssertEqual(fixture.currentRunRequests, 3, "One attach for the announced turn.")
         XCTAssertEqual(fixture.chatReads, 1, "Showing a live run reads no transcript.")
     }
 
@@ -1683,7 +1687,7 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
 
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
-        XCTAssertEqual(fixture.currentRunRequests, 3, "The announced run answered 404 once, then attached.")
+        XCTAssertEqual(fixture.currentRunRequests, 4, "The announced run answered 404 once, then attached.")
     }
 
     @MainActor
@@ -1697,14 +1701,126 @@ final class AidenChatTests: XCTestCase {
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
 
         try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
-        // Later roster revisions of the same turn do not attach or read again.
+        try await waitForCondition("attach finished") { !model.isLookingForForeignRun }
+        // A later roster revision of the same turn neither attaches nor reads again.
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 3))
-        try await Task.sleep(for: .milliseconds(800))
-
+        try await waitForCondition("revision applied") { model.agentRoster?.revision == 3 }
+        XCTAssertFalse(model.isLookingForForeignRun)
         XCTAssertEqual(fixture.chatReads, 2, "Exactly one transcript read follows the finished run.")
-        XCTAssertEqual(fixture.currentRunRequests, 2)
+        XCTAssertEqual(fixture.currentRunRequests, 3)
         XCTAssertTrue(model.liveText.isEmpty, "A run that finished before the attach is never replayed live.")
         XCTAssertFalse(model.isObservingForeignRun)
+
+        // A newer turn whose run has not registered finds only the run already
+        // read: it is looked for once more, then neither replayed nor read again.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-newer", revision: 4))
+        try await waitForCondition("newer turn looked up") { fixture.currentRunRequests == 5 && !model.isLookingForForeignRun }
+        XCTAssertEqual(fixture.chatReads, 2)
+        XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testARunRegisteredAfterTheOpeningLookupIsAttachedWhenTheFirstRosterArrives() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        // The opening lookup is answered before the run registers on the Mac,
+        // and the run registers before the first roster arrives.
+        try await waitForCondition("opening lookup answered") {
+            fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
+        }
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "The first roster's turn is looked up once.")
+        XCTAssertEqual(fixture.chatReads, 1)
+    }
+
+    @MainActor
+    func testTurnsAnnouncedDuringAnInFlightLookupAreLookedUpOnceItFindsNothing() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        // The opening lookup is answered "no run" but held in flight.
+        let lookupHeld = expectation(description: "opening lookup held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/runs/current/events") { lookupHeld.fulfill() }
+        await model.load(observeProgress: true)
+        await fulfillment(of: [lookupHeld], timeout: 3)
+        try await waitForCondition("open progress stream") { AidenChatProgressLifecycleURLProtocol.hasOpenEventStream }
+        XCTAssertTrue(model.isLookingForForeignRun)
+
+        // Meanwhile the first roster arrived and a new turn starts on the Mac.
+        fixture.startRun()
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-new", revision: 2))
+        try await waitForCondition("turn announced") { model.currentAgentTurnId == "turn-new" }
+        XCTAssertEqual(fixture.currentRunRequests, 1, "No second lookup runs alongside the first.")
+
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
+        XCTAssertTrue(model.isObservingForeignRun)
+        XCTAssertEqual(fixture.currentRunRequests, 2, "Both announcements are looked up once, together.")
+    }
+
+    @MainActor
+    func testThisPhonesOwnRunAnnouncedAfterItEndedIsNotReadAgain() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .endedBeforeAttach)
+        let model = try await makeAnnouncedRunModel(fixture)
+
+        // This phone sends a turn; its run streams here and finishes.
+        model.draft = "Hello"
+        await model.send()
+        try await waitForCondition("own reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
+        model.draft = "Next"
+        try await waitForCondition("own stream finished") { model.canSend }
+        let reads = fixture.chatReads
+
+        // The roster announces this phone's turn only after its stream ended.
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenAnnouncedRunFixture.rosterFrame(turnId: "turn-own", revision: 2))
+        try await waitForCondition("own turn looked up") {
+            fixture.currentRunRequests == 4 && !model.isLookingForForeignRun
+        }
+        XCTAssertEqual(fixture.chatReads, reads, "The phone's own run is not read from the transcript again.")
+        XCTAssertTrue(model.liveText.isEmpty)
+        XCTAssertFalse(model.isObservingForeignRun)
+    }
+
+    @MainActor
+    func testStoppingProgressWhileLoadIsSuspendedKeepsTheProbeStopped() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, rosterReadable: false)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        let readHeld = expectation(description: "transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/chat-progress-lifecycle") { readHeld.fulfill() }
+        let loading = Task { await model.load(observeProgress: true) }
+        await fulfillment(of: [readHeld], timeout: 3)
+        // The chat leaves the foreground while its load waits on the network.
+        model.stopProgressObservation()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await loading.value
+
+        XCTAssertFalse(model.isProbingForForeignRuns, "A load resumed in the background does not start the probe.")
+        XCTAssertFalse(model.isProgressObservationRunning)
     }
 
     @MainActor
@@ -11995,6 +12111,14 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
                 return (200, "application/json", Data("""
                 {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":\(messages),"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-\(reads)"}
                 """.utf8))
+            case "/api/aiden/v1/chats/chat-progress-lifecycle/turns":
+                // This phone starts the run itself.
+                started = true
+                return (202, "application/json", Data(
+                    #"{"turnId":"turn-own","streamId":"run-mac","status":"queued","message":{"id":"own-message","role":"user","text":"Hello","createdAt":"2026-10-13T10:00:00Z"}}"#.utf8
+                ))
+            case "/api/aiden/v1/streams/run-mac/events":
+                return (200, "text/event-stream", Data(finishedRun.utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle/agents":
                 return (200, "application/json", Data(Self.roster(turnId: "turn-old", revision: 1).utf8))
             case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
@@ -12012,16 +12136,19 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
                     guard runRequestsSinceStart > 1 else { return Self.runGone }
                     return (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data(running.utf8))
                 case .endedBeforeAttach:
-                    return (200, "text/event-stream", Data((
-                        running
-                            + event(3, "done", #"{"messageId":"reply-mac"}"#, terminal: true)
-                            + event(3, "run.ended", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
-                    ).utf8))
+                    return (200, "text/event-stream", Data(finishedRun.utf8))
                 }
             default:
                 return nil
             }
         }
+    }
+
+    private var finishedRun: String {
+        event(1, "run.started", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+            + event(2, "text_delta", #"{"text":"Hello from the Mac"}"#)
+            + event(3, "done", #"{"messageId":"reply-mac"}"#, terminal: true)
+            + event(3, "run.ended", #"{"runId":"run-mac","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
     }
 
     private static let runGone = (404, "application/json", Data(
