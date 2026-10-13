@@ -49,6 +49,7 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
+import { chatReadinessMessage as chatReadinessMessageFor } from "../lib/composer-placeholder";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -349,17 +350,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     return undefined;
   }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
-  const chatReadinessMessage = chat.isLoading
-    ? "Loading chat…"
-    : chat.isError
-      ? "This chat could not be loaded. Try again."
-      : !chat.data
-        ? "This chat is no longer available. Start a new agent."
-      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
-        ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining && !visibleDetachedProjection
-          ? "Response continues in the background…"
-          : undefined;
+  const chatReadinessMessage = chatReadinessMessageFor({
+    loading: chat.isLoading,
+    failed: chat.isError,
+    missing: !chat.data,
+    appendReconciliationRequired:
+      documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId),
+    drainingWithoutProjection: detachedGenerationDraining && !visibleDetachedProjection,
+  });
   const ready = modelReady && !chatReadinessMessage;
   const readinessMessage = chatReadinessMessage ?? modelReadinessMessage;
 

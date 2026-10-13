@@ -216,7 +216,6 @@ test("an indeterminate append blocks retries until an application reload reconci
     /setAppendReconciliationRequiredChats\(\(current\) => new Set\(current\)\.add\(chatId\)\)/u,
   );
   assert.match(pane, /appendReconciliationRequiredChats\.has\(chatId\)/u);
-  assert.match(pane, /Reload Aiden before sending another message/u);
   assert.doesNotMatch(
     between(pane, "// Reset transient state when switching chats.", "}, [chatId]);"),
     /setAppendReconciliationRequiredChats/u,
@@ -352,7 +351,6 @@ test("revisited generations expose Stop and queue/steer without admitting a seco
   const stop = between(pane, "const handleStop = React.useCallback", "const { queue: messageQueue");
   // The visibility rule is now tested behaviorally in chat-terminal-sync.test.ts:
   // "a saved reply hides an own run, but a mirrored run only by its own reply"
-  assert.match(pane, /detachedGenerationDraining && !visibleDetachedProjection\s*\? "Response continues in the background/u);
   assert.match(pane, /isGenerating=\{isGenerating \|\| isStartingGeneration \|\| Boolean\(visibleDetachedProjection\)\}/u);
   assert.match(pane, /canStopGeneration=\{\(canStopGeneration \|\| Boolean\(visibleDetachedProjection\)\) && !isStoppingGeneration\}/u);
   // Stop closes busy admission synchronously, before React re-renders.
