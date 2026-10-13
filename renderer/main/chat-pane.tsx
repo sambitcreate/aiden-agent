@@ -38,6 +38,8 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
+import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
+import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,6 +49,7 @@ import {
   createAgentsInstructionNoticeLog,
 } from "../shared/agents-instructions-notice";
 import { CONNECT_PROVIDER_ACTION, PROVIDER_SETTINGS_LABEL } from "../lib/provider-setup-copy";
+import { chatReadinessMessage as chatReadinessMessageFor } from "../lib/composer-placeholder";
 import { GitFork, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { useReadAloud } from "../lib/tts-client";
@@ -62,6 +65,7 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
+import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
@@ -175,8 +179,10 @@ import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
   detachedTextStreamingRemaining,
   detachedLifecycleChatProjection,
+  detachedProjectionStreamComplete,
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
+  visibleDetachedLifecycleProjection,
 } from "../lib/chat-terminal-sync";
 import {
   ASSISTANT_WORKSPACE_ID,
@@ -273,11 +279,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => detachedLifecycleChatProjection(chatId, effectiveWorkspaceId),
     () => null,
   );
-  // A durable terminal message can reach the cache before detached ownership is
-  // cleared. During that handoff there is no longer a response to stop or steer.
-  const cachedMessages = chat.data?.messages;
-  const visibleDetachedProjection =
-    cachedMessages?.[cachedMessages.length - 1]?.role === "assistant" ? null : detachedProjection;
+  const visibleDetachedProjection = visibleDetachedLifecycleProjection(detachedProjection, chat.data?.messages);
+  // Run input is admitted only for the document that owns the run, so a
+  // mirrored run (a phone's turn) offers Stop and queueing but not Steer.
+  const observedRunVisible = visibleDetachedProjection?.observed === true;
+  const steerableDetachedProjection = observedRunVisible ? null : visibleDetachedProjection;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -345,17 +351,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     return undefined;
   }, [agentBlockedSurface, hasMessages, model, providerId, providers.isLoading, selectedProvider, settings.data]);
-  const chatReadinessMessage = chat.isLoading
-    ? "Loading chat…"
-    : chat.isError
-      ? "This chat could not be loaded. Try again."
-      : !chat.data
-        ? "This chat is no longer available. Start a new agent."
-      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
-        ? "Message save status is unknown. Reload Aiden before sending another message."
-        : detachedGenerationDraining && !visibleDetachedProjection
-          ? "Response continues in the background…"
-          : undefined;
+  const chatReadinessMessage = chatReadinessMessageFor({
+    loading: chat.isLoading,
+    failed: chat.isError,
+    missing: !chat.data,
+    appendReconciliationRequired:
+      documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId),
+    drainingWithoutProjection: detachedGenerationDraining && !visibleDetachedProjection,
+  });
   const ready = modelReady && !chatReadinessMessage;
   const readinessMessage = chatReadinessMessage ?? modelReadinessMessage;
 
@@ -829,6 +832,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // A run this pane did not start (a paired phone's turn) streams in live
+  // once main reports the chat busy, and stays until its saved reply lands.
+  // A draft or this pane's own turn stops it; an idle chat holds nothing.
+  const activeChatIds = useActiveChatIds();
+  useObservedLocalRun(
+    draft || isGenerating || isStartingGeneration ? null : chatId,
+    effectiveWorkspaceId,
+    activeChatIds.has(chatId),
+  );
   const thinkingDisabledReason =
     isStartingGeneration || isGenerating
       ? "Available after this response"
@@ -1880,7 +1892,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
       }
-      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
       if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         throw new Error("The current response has ended. Send your message normally.");
       }
@@ -1903,17 +1915,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error(steerRejectionMessage(receipt.reason));
       }
     },
-    [admitSteer, isStoppingGeneration, visibleDetachedProjection],
+    [admitSteer, isStoppingGeneration, steerableDetachedProjection],
   );
 
   const canSteerQueued =
     !draft &&
-    (canStopGeneration || Boolean(visibleDetachedProjection)) &&
+    (canStopGeneration || Boolean(steerableDetachedProjection)) &&
     !isStoppingGeneration;
 
   const steerQueued = React.useCallback(
     async (id: string) => {
-      const streamId = generationRef.current?.streamId ?? visibleDetachedProjection?.streamId;
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
       if (!streamId || isStoppingGeneration || stopRequestedRef.current) {
         toast.error("The current response has ended. The message stays queued.");
         return;
@@ -1935,7 +1947,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
       }
     },
-    [admitSteer, isStoppingGeneration, messageQueue, visibleDetachedProjection],
+    [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -2609,6 +2621,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
   if (botChatId) return null;
 
+  const chatTitleMenu = (
+    <ChatTitleMenu
+      title={chat.data?.title ?? "New agent"}
+      persisted={!draft && Boolean(persistedChat.data)}
+      onRename={renameChat}
+      onDuplicate={() => copyChat()}
+      duplicateDisabledReason={forkDisabledReason}
+    />
+  );
+
   return (
     <>
       <ScrollArea
@@ -2617,7 +2639,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         title={
           forkSourceLabel ? (
             <span className="block min-w-0" data-chat-fork-lineage>
-              <span className="block truncate">{chat.data?.title ?? "New agent"}</span>
+              {chatTitleMenu}
               <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
                 <GitFork aria-hidden="true" className="size-3 shrink-0" />
                 {forkSource ? (
@@ -2636,32 +2658,57 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </span>
             </span>
           ) : (
-            (chat.data?.title ?? "New agent")
+            chatTitleMenu
           )
         }
-        actions={
-          <>
-            <OpenInEditorPicker
-              workspaceId={effectiveWorkspace?.id}
-              folderPath={effectiveWorkspace?.folderPath}
+        titleAccessory={
+          effectiveWorkspace ? (
+            <WorkspaceChip
+              workspace={effectiveWorkspace}
+              git={effectiveWorkspace.folderPath ? git.data : undefined}
+              canOpenTerminal={Boolean(effectiveWorkspace.folderPath && terminal.canOpen)}
+              onOpenTerminal={() => {
+                if (!terminal.open) terminal.toggle();
+              }}
             />
-            <EnvironmentPanelToggle />
-            <QuickViewToggle disabled={!effectiveWorkspace} />
-            <Button
-              iconOnly
-              variant="toolbar"
-              size="large"
-              onClick={terminal.toggle}
-              disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-              aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-              aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-              aria-pressed={terminal.open}
-              title={`Toggle terminal (${terminalShortcut})`}
-              data-terminal-toggle
-            >
-              <TerminalSquare />
-            </Button>
-          </>
+          ) : null
+        }
+        actions={
+          <WorkspaceToolButtons
+            hasWorkspace={Boolean(effectiveWorkspace)}
+            hasFolder={Boolean(effectiveWorkspace?.folderPath)}
+            hasFolderAccess={Boolean(
+              effectiveWorkspace?.folderPath && effectiveWorkspace.permission !== "none",
+            )}
+            // A cached repository read must not outlive access being switched off.
+            isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
+            terminalButton={
+              <Button
+                iconOnly
+                variant="bar"
+                size="small"
+                onClick={terminal.toggle}
+                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                aria-pressed={terminal.open}
+                title={`Toggle terminal (${terminalShortcut})`}
+                data-terminal-toggle
+              >
+                <TerminalSquare />
+              </Button>
+            }
+            trailing={
+              <>
+                <QuickViewToggle disabled={!effectiveWorkspace} />
+                <EnvironmentPanelToggle />
+                <OpenInEditorPicker
+                  workspaceId={effectiveWorkspace?.id}
+                  folderPath={effectiveWorkspace?.folderPath}
+                />
+              </>
+            }
+          />
         }
         autoScrollToBottom
         autoScrollResetKey={chatId}
@@ -2779,7 +2826,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 freezeWhileSending={Boolean(draft)}
                 firstMessageSaving={draft?.sending === true}
                 onQueue={draft ? undefined : queueMessage}
-                onSteer={draft ? undefined : steerMessage}
+                onSteer={draft || observedRunVisible ? undefined : steerMessage}
                 hasQueuedMessages={queuedState.messages.length > 0}
                 compactionHeld={queuedState.holdReason === "compaction"}
                 forkSummaryHold={
@@ -3063,7 +3110,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             streamingVisualDrafts={visualDrafts}
             streamingUiVisuals={displayedStreamingUiVisuals}
             streamingUiDrafts={uiDrafts}
-            streamComplete={streamComplete || visibleDetachedProjection !== null}
+            streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
             persistedHandoffMessageId={persistedHandoffMessageId}
             onStreamHandoffComplete={() => streamHandoffRef.current?.()}
             timeline={displayedGenerationTimeline}

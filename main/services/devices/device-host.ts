@@ -37,7 +37,7 @@ export interface DeviceCommandResult {
 export interface DeviceCommandOptions {
   timeoutMs?: number;
   stdin?: string;
-  /** Added to the host environment, e.g. `ELECTRON_RUN_AS_NODE` for a bundled Node script. */
+  /** Added to the host environment for this command. */
   env?: Record<string, string>;
 }
 

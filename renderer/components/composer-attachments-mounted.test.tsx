@@ -21,6 +21,7 @@ import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../lib/hosts/chat-session-control.js";
 import { remoteComposerActions } from "../main/remote-chat-view.js";
 import { hostResourceKey } from "../shared/peer-host.js";
+import { BACKGROUND_RESPONSE_READINESS_MESSAGE } from "../lib/composer-placeholder.js";
 
 // Mount the production Composer and its send/restore/attachment logic. Replace only
 // peripheral UI, device hooks, and IPC; no lifecycle logic is copied into this fixture.
@@ -30,7 +31,7 @@ async function loadComposer() {
   const stubs: Record<string, string> = {
     "./ui": `import React from 'react';
       const primitive = tag => ({children, ...props}) => React.createElement(tag,
-        Object.fromEntries(Object.entries(props).filter(([key]) => /^(aria-|data-|on)/.test(key) || ['ref','value','disabled','readOnly','className','role'].includes(key))), children);
+        Object.fromEntries(Object.entries(props).filter(([key]) => /^(aria-|data-|on)/.test(key) || ['ref','value','disabled','readOnly','className','role','placeholder'].includes(key))), children);
       export const Button=primitive('button'), Textarea=primitive('textarea'), Input=primitive('input'), Text=primitive('span');
       export const Dialog=()=>null, AlertDialog=()=>null, DropdownMenu=()=>null, DropdownMenuContent=()=>null, DropdownMenuItem=()=>null, DropdownMenuTrigger=()=>null;
       export const toast={info:()=>{},error:()=>{},success:()=>{}};`,
@@ -646,6 +647,59 @@ test("a reopened remote chat's composer gets a message back only when the host r
       } else {
         assert.equal(host.turns.length, 1);
       }
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("a blocked Composer shows its readiness message exactly once", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  // Everything a reader or screen reader is offered: visible text plus the
+  // textarea placeholder.
+  const occurrences = (needle: string) => {
+    const placeholder = mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder") ?? "";
+    const surface = `${mounted.container.textContent ?? ""}\n${placeholder}`;
+    return surface.split(needle).length - 1;
+  };
+  try {
+    for (const readinessMessage of [BACKGROUND_RESPONSE_READINESS_MESSAGE, "Loading chat…"]) {
+      await React.act(async () =>
+        root.render(
+          <loaded.Composer
+            key={readinessMessage}
+            chatId="blocked-chat"
+            ready={false}
+            readinessMessage={readinessMessage}
+            hasMessages
+            inputRef={React.createRef<HTMLTextAreaElement>()}
+            isGenerating={false}
+            onStop={() => {}}
+            onSend={async () => {}}
+          />,
+        ),
+      );
+      assert.equal(occurrences(readinessMessage), 1, `${readinessMessage} should appear once`);
+      const status = Array.from(mounted.container.getElementsByTagName("span")).find(
+        (element) => element.getAttribute("role") === "status" && element.textContent?.includes(readinessMessage),
+      );
+      assert.ok(status, "the readiness message stays in the status region");
+      assert.ok(mounted.container.getElementsByTagName("textarea")[0]?.getAttribute("placeholder"));
     }
   } finally {
     await React.act(async () => root.unmount());

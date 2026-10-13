@@ -383,7 +383,11 @@ test("a Bot open in another Aiden window says so in plain words", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({ state: { kind: "unavailable", reason: "held_by_live_process" } }),
   });
-  assert.ok(await screen.findByPlaceholderText("Bots are open in another Aiden window."));
+  // The reason is said once, in the composer's status line; the field itself only says it can't send.
+  const reason = await screen.findByText("Bots are open in another Aiden window.");
+  assert.ok(reason.closest('[role="status"]'));
+  assert.equal(screen.getAllByText("Bots are open in another Aiden window.").length, 1);
+  assert.ok(screen.getByPlaceholderText("Can’t send yet"));
   assert.equal(screen.queryByText(/held_by_live_process/u), null);
   assert.equal(screen.queryByPlaceholderText(/held_by_live_process/u), null);
 });

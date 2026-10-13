@@ -87,7 +87,7 @@ test("a chat forks from a reply or edits a prompt in a fork", async ({ aiden }) 
   await expect(page.locator('[data-forked="true"]')).toHaveCount(2);
 
   // Editing the very first prompt opens a prefilled draft and persists nothing until sent.
-  await page.locator("[data-chat-fork-lineage]").getByRole("button").click();
+  await page.locator("[data-chat-fork-lineage]").getByRole("button", { name: /^Forked from/u }).click();
   await expect(page.getByRole("button", { name: "Edit in fork" })).toHaveCount(2);
   await page.getByRole("button", { name: "Edit in fork" }).first().click();
   await expect(composer).toHaveValue(firstPrompt.content);
