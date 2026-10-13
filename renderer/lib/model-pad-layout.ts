@@ -43,17 +43,41 @@ export const MODEL_PAD_METRIC_LABELS: Record<ModelPadMetric, string> = {
   agentic: "Agentic",
 };
 
+/** The score behind the Pad's benchmark heights: one metric, or "mixed" when they differ. */
+export type ModelPadHeightMetric = ModelPadMetric | "mixed";
+
 /** The caption that names the score behind benchmark-assisted heights. */
-export function modelPadHeightCaption(metric: ModelPadMetric): string {
-  return `Height: ${MODEL_PAD_METRIC_LABELS[metric]}`;
+export function modelPadHeightCaption(metric: ModelPadHeightMetric): string {
+  return `Height: ${metric === "mixed" ? "mixed" : MODEL_PAD_METRIC_LABELS[metric]}`;
 }
 
-/** Whether any placed, visible model takes its height from a benchmark score. */
-export function modelPadHasBenchmarkHeight(
+/** The score a benchmark height came from; one saved before it was recorded reads as `fallback`. */
+export function modelPadPlacementMetric(
+  placement: Pick<ModelPadPlacement, "ySource" | "yMetric">,
+  fallback: ModelPadMetric,
+): ModelPadMetric | undefined {
+  return placement.ySource === "benchmark" ? (placement.yMetric ?? fallback) : undefined;
+}
+
+/**
+ * The score behind every placed, visible benchmark height (plus `extra`, such
+ * as previewed suggestions): that metric when they all share one, "mixed"
+ * when they differ, undefined when no height comes from a benchmark.
+ */
+export function modelPadHeightMetric(
   placements: Readonly<Record<string, ModelPadPlacement>>,
   visibleValues: readonly string[],
-): boolean {
-  return visibleValues.some((value) => placements[value]?.ySource === "benchmark");
+  fallback: ModelPadMetric,
+  extra: readonly ModelPadMetric[] = [],
+): ModelPadHeightMetric | undefined {
+  const metrics = new Set(extra);
+  for (const value of visibleValues) {
+    const placement = placements[value];
+    const metric = placement ? modelPadPlacementMetric(placement, fallback) : undefined;
+    if (metric) metrics.add(metric);
+  }
+  if (metrics.size > 1) return "mixed";
+  return metrics.values().next().value;
 }
 
 /** Where a marker or knob label sits so it stays inside the Pad square. */
@@ -536,4 +560,124 @@ export function addModelPadPlacement(
     placedValues.map((candidate) => [candidate, reflowed[candidate]] as const),
   );
   return { ...reflowed, [value]: nextModelPadPlacement(visiblePlacements, placedCount) };
+}
+
+/**
+ * Give targets (in order, so non-decreasing) distinct slots from `free`
+ * (ascending), keeping their order, with the least total distance. Equal-cost
+ * choices lean to the higher slot. `free` always has at least as many slots as targets.
+ */
+export function orderedModelPadSlots(targets: readonly number[], free: readonly number[]): number[] {
+  const count = targets.length;
+  const slots = free.length;
+  // cost[i][j]: best total for the first i targets using only the first j free slots.
+  const cost = Array.from({ length: count + 1 }, (_, i) =>
+    Array.from({ length: slots + 1 }, () => (i === 0 ? 0 : Number.POSITIVE_INFINITY)),
+  );
+  for (let i = 1; i <= count; i += 1) {
+    for (let j = i; j <= slots; j += 1) {
+      cost[i][j] = Math.min(
+        cost[i][j - 1],
+        cost[i - 1][j - 1] + Math.abs(free[j - 1] - targets[i - 1]),
+      );
+    }
+  }
+  const chosen: number[] = [];
+  for (let i = count, j = slots; i > 0; j -= 1) {
+    if (cost[i][j] === cost[i - 1][j - 1] + Math.abs(free[j - 1] - targets[i - 1])) {
+      chosen[i - 1] = free[j - 1];
+      i -= 1;
+    }
+  }
+  return chosen;
+}
+
+export interface ModelPadHeightRerank {
+  /** The new layout; the very same object as the input when nothing changes. */
+  placements: Record<string, ModelPadPlacement>;
+  /** Placed, visible benchmark heights now set from the new metric. */
+  updated: string[];
+  /** Placed, visible benchmark heights with no score for it; left where they were. */
+  kept: string[];
+}
+
+/**
+ * Re-rank benchmark heights for a new metric. Every placed, visible model whose
+ * height came from a benchmark and that has a `percentiles` entry for `metric`
+ * moves to that percentile's row and records `metric`; it keeps its column, and
+ * models sharing a column take its free rows nearest their targets in
+ * percentile order, so the result is collision-free on the Pad's grid. Heights
+ * without a score for `metric` stay, recording `previousMetric` when they had no
+ * metric of their own (so a later global change cannot relabel them). The
+ * user's heights, hidden placements and every X stay as they are.
+ */
+export function rerankModelPadBenchmarkHeights(
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+  visibleValues: readonly string[],
+  {
+    percentiles,
+    metric,
+    previousMetric,
+  }: {
+    percentiles: ReadonlyMap<string, number>;
+    metric: ModelPadMetric;
+    previousMetric: ModelPadMetric;
+  },
+): ModelPadHeightRerank {
+  const placed = placedVisibleModelPadValues(placements, visibleValues);
+  const benchmarkHeights = placed.filter((value) => placements[value].ySource === "benchmark");
+  const updated = benchmarkHeights
+    .filter((value) => percentiles.has(value))
+    .sort(
+      (left, right) =>
+        (percentiles.get(left) ?? 0) - (percentiles.get(right) ?? 0) ||
+        (left < right ? -1 : left > right ? 1 : 0),
+    );
+  const kept = benchmarkHeights.filter((value) => !percentiles.has(value));
+  const unstamped = kept.filter((value) => !placements[value].yMetric);
+  const stamp = (layout: Record<string, ModelPadPlacement>) => {
+    for (const value of unstamped) layout[value] = { ...layout[value], yMetric: previousMetric };
+    return layout;
+  };
+  if (updated.length === 0) {
+    return {
+      placements:
+        unstamped.length === 0
+          ? (placements as Record<string, ModelPadPlacement>)
+          : stamp({ ...placements }),
+      updated,
+      kept,
+    };
+  }
+
+  const gridSize = modelPadGridSizeForPlacements(placements, visibleValues);
+  const divisions = gridSize - 1;
+  const reflowed = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
+  const columnOf = (value: string) => Math.round(reflowed[value].x * divisions);
+  const rowOf = (value: string) => Math.round(reflowed[value].y * divisions);
+  const moving = new Set(updated);
+  // Every other visible model holds its dot; re-ranked models give theirs up.
+  const heldByColumn = new Map<number, Set<number>>();
+  for (const value of placed) {
+    if (moving.has(value)) continue;
+    const held = heldByColumn.get(columnOf(value)) ?? new Set<number>();
+    held.add(rowOf(value));
+    heldByColumn.set(columnOf(value), held);
+  }
+  const movingByColumn = new Map<number, string[]>();
+  for (const value of updated) {
+    movingByColumn.set(columnOf(value), [...(movingByColumn.get(columnOf(value)) ?? []), value]);
+  }
+
+  const next: Record<string, ModelPadPlacement> = { ...reflowed };
+  for (const [column, values] of movingByColumn) {
+    const held = heldByColumn.get(column);
+    const free = Array.from({ length: gridSize }, (_, row) => row).filter((row) => !held?.has(row));
+    const targets = values.map((value) => Math.round((percentiles.get(value) ?? 0.5) * divisions));
+    orderedModelPadSlots(targets, free).forEach((row, index) => {
+      const value = values[index];
+      next[value] = { ...reflowed[value], y: row / divisions, yMetric: metric };
+    });
+  }
+  return { placements: stamp(next), updated, kept };
 }

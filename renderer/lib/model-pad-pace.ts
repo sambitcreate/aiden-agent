@@ -2,6 +2,7 @@ import type { ModelPaceSummary } from "../shared/model-pace";
 import type { ModelPadPlacements } from "../shared/model-pad-preferences";
 import {
   modelPadGridSizeForPlacements,
+  orderedModelPadSlots,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
 } from "./model-pad-layout";
@@ -50,36 +51,6 @@ function scorePercentiles(scores: ReadonlyArray<{ value: string; score: number }
     start = end + 1;
   }
   return result;
-}
-
-/**
- * Give targets (in pace order, so non-decreasing) distinct columns from `free`
- * (ascending), keeping their order, with the least total distance. Equal-cost
- * choices lean right. `free` always has at least as many columns as targets.
- */
-function orderedColumns(targets: readonly number[], free: readonly number[]): number[] {
-  const count = targets.length;
-  const slots = free.length;
-  // cost[i][j]: best total for the first i targets using only the first j free columns.
-  const cost = Array.from({ length: count + 1 }, (_, i) =>
-    Array.from({ length: slots + 1 }, () => (i === 0 ? 0 : Number.POSITIVE_INFINITY)),
-  );
-  for (let i = 1; i <= count; i += 1) {
-    for (let j = i; j <= slots; j += 1) {
-      cost[i][j] = Math.min(
-        cost[i][j - 1],
-        cost[i - 1][j - 1] + Math.abs(free[j - 1] - targets[i - 1]),
-      );
-    }
-  }
-  const columns: number[] = [];
-  for (let i = count, j = slots; i > 0; j -= 1) {
-    if (cost[i][j] === cost[i - 1][j - 1] + Math.abs(free[j - 1] - targets[i - 1])) {
-      columns[i - 1] = free[j - 1];
-      i -= 1;
-    }
-  }
-  return columns;
 }
 
 export interface MeasuredPaceResult {
@@ -170,7 +141,7 @@ export function measuredPacePlacements(
       (column) => !held?.has(column),
     );
     const targets = values.map((value) => Math.round((percentiles.get(value) ?? 0.5) * divisions));
-    orderedColumns(targets, free).forEach((column, index) => {
+    orderedModelPadSlots(targets, free).forEach((column, index) => {
       const value = values[index];
       next[value] = { ...reflowed[value], x: column / divisions, xSource: "measured" };
     });

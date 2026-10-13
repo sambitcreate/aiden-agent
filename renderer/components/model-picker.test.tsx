@@ -699,6 +699,38 @@ test("the Pad names the height metric only while a benchmark-height model is on 
   assert.match(padHelp(pad), /Agentic/u);
 });
 
+test("the Pad names each saved height's own metric, or says mixed when they differ", async () => {
+  const server = settingsServer({
+    modelPadPlacements: {
+      ...placedSettings.modelPadPlacements,
+      "acme::current-model": {
+        x: 0.5,
+        y: 0.5,
+        xSource: "neutral",
+        ySource: "benchmark",
+        yMetric: "intelligence",
+      },
+    },
+    modelPadMetric: "agentic",
+  });
+  const pad = await openPicker(server);
+  // The stored height came from General, whatever the current setting.
+  assert.match(pad.textContent ?? "", /Height: General/u);
+  assert.match(padHelp(pad), /General/u);
+  cleanup();
+
+  const mixed = settingsServer({
+    modelPadPlacements: {
+      "acme::placed-one": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+      "acme::placed-two": { x: 1, y: 0, xSource: "neutral", ySource: "benchmark" },
+    },
+    modelPadMetric: "agentic",
+  });
+  const mixedPad = await openPicker(mixed);
+  assert.match(mixedPad.textContent ?? "", /Height: mixed/u);
+  assert.match(padHelp(mixedPad), /mixed scores/u);
+});
+
 test("the Pad names no metric when every height is the user's own", async () => {
   const server = settingsServer({ ...placedSettings, modelPadMetric: "agentic" });
   const pad = await openPicker(server);

@@ -19,6 +19,7 @@ import {
   nextModelPadPlacement,
   parseModelPadLayout,
   reflowVisibleModelPadPlacements,
+  rerankModelPadBenchmarkHeights,
   snapToModelPadGrid,
   type ModelPadPlacement,
 } from "./model-pad-layout.js";
@@ -389,4 +390,81 @@ test("edge-aligned knob tags line up with the knob's outer edge when there is ro
   assert.equal(start.x, knobLeft - 12);
   assert.equal(end.align, "end");
   assert.equal(end.x, knobRight + 12);
+});
+
+test("switching the height metric re-ranks benchmark heights in their own columns and keeps the rest", () => {
+  const benchmark = (x: number, y: number, yMetric?: ModelPadPlacement["yMetric"]): ModelPadPlacement => ({
+    x,
+    y,
+    xSource: "neutral",
+    ySource: "benchmark",
+    ...(yMetric ? { yMetric } : {}),
+  });
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::a": benchmark(0, 0, "coding"),
+    "p::b": benchmark(0.5, 0.5, "coding"),
+    "p::c": benchmark(1, 1, "coding"),
+    "p::user": { x: 1, y: 0, xSource: "user", ySource: "user" },
+    "p::no-general": benchmark(0.5, 1 / 6, "coding"),
+    "p::unstamped": benchmark(0, 0.5),
+    "p::hidden": benchmark(0.3, 0.3, "coding"),
+  };
+  const visible = ["p::a", "p::b", "p::c", "p::user", "p::no-general", "p::unstamped"];
+  assert.equal(modelPadGridSizeForPlacements(placements, visible), 7);
+  // General ranks run the other way from Coding.
+  const general = new Map([
+    ["p::a", 1],
+    ["p::b", 0.5],
+    ["p::c", 0],
+  ]);
+
+  const result = rerankModelPadBenchmarkHeights(placements, visible, {
+    percentiles: general,
+    metric: "intelligence",
+    previousMetric: "coding",
+  });
+
+  assert.deepEqual(result.updated.sort(), ["p::a", "p::b", "p::c"]);
+  assert.deepEqual(result.kept.sort(), ["p::no-general", "p::unstamped"]);
+  const next = result.placements;
+  // Vertical order flips; every model keeps its column.
+  assert.ok(next["p::a"].y > next["p::b"].y && next["p::b"].y > next["p::c"].y);
+  for (const value of visible) assert.equal(next[value].x, placements[value].x, value);
+  assert.deepEqual(next["p::a"], benchmark(0, 1, "intelligence"));
+  assert.deepEqual(next["p::b"], benchmark(0.5, 0.5, "intelligence"));
+  // The bottom dot of its column is the user's, so it takes the nearest free one.
+  assert.deepEqual(next["p::c"], benchmark(1, 1 / 6, "intelligence"));
+  // The user's own spot and axes stay.
+  assert.deepEqual(next["p::user"], placements["p::user"]);
+  // No General score: same spot, and it keeps naming the score it came from.
+  assert.deepEqual(next["p::no-general"], placements["p::no-general"]);
+  assert.deepEqual(next["p::unstamped"], benchmark(0, 0.5, "coding"));
+  assert.deepEqual(next["p::hidden"], placements["p::hidden"]);
+  const spots = visible.map((value) => modelPadPointKey(next[value], 7));
+  assert.equal(new Set(spots).size, spots.length);
+});
+
+test("re-ranking returns the same layout when no benchmark height has a score for the metric", () => {
+  const placements: Record<string, ModelPadPlacement> = {
+    "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+    "p::user": { x: 1, y: 0, xSource: "user", ySource: "user" },
+  };
+  const result = rerankModelPadBenchmarkHeights(placements, Object.keys(placements), {
+    percentiles: new Map([["p::user", 1]]),
+    metric: "agentic",
+    previousMetric: "coding",
+  });
+  assert.equal(result.placements, placements);
+  assert.deepEqual(result.updated, []);
+
+  // A height saved before its metric was recorded is stamped with the old one,
+  // so the new global metric does not relabel it.
+  const unstamped = rerankModelPadBenchmarkHeights(
+    { "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark" } },
+    ["p::a"],
+    { percentiles: new Map(), metric: "agentic", previousMetric: "coding" },
+  );
+  assert.deepEqual(unstamped.placements, {
+    "p::a": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+  });
 });

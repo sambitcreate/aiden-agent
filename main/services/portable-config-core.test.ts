@@ -1375,7 +1375,7 @@ test("settings persistence preserves future assistant fields and values", async 
 
 test("Model Pad placements, pins, recent models and metric survive a settings.json load and reload into a fresh store with invalid entries dropped", async (t) => {
   const r = await roots(t);
-  const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark" };
+  const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark", yMetric: "intelligence" };
   const measured = { x: 0, y: 0.5, xSource: "measured", ySource: "user" };
   await fs.writeFile(
     r.settingsFile,

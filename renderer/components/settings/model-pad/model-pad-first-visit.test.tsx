@@ -55,6 +55,8 @@ function editorServer(
     scored?: boolean;
     /** Score only these models instead of all of them. */
     scoredModels?: readonly string[];
+    /** These models have a Coding score but no General one. */
+    withoutGeneral?: readonly string[];
     /** Add a loopback provider (label "Ollama") serving these unscored models. */
     localModels?: readonly string[];
     skippedAmbiguousCount?: number;
@@ -85,6 +87,8 @@ function editorServer(
     ? Object.fromEntries(
         MODELS.flatMap((model, index): Array<[string, ModelInfo]> => {
           if (options.scoredModels && !options.scoredModels.includes(model)) return [];
+          const scores = benchmark(10 + index, 50 - index);
+          if (options.withoutGeneral?.includes(model)) delete scores.intelligence;
           return [
             [
               model,
@@ -92,7 +96,7 @@ function editorServer(
                 id: model,
                 metadataSource: "fallback",
                 matched: false,
-                benchmark: benchmark(10 + index, 50 - index),
+                benchmark: scores,
               },
             ],
           ];
@@ -449,6 +453,10 @@ test("Keep all places every suggestion where it was previewed", async () => {
 
   await screen.findByText("Added 8 suggestions");
   assert.equal(Object.keys(server.stored()).length, 9);
+  // Kept suggestions record the score their height came from; the user's own height has none.
+  for (const [value, placement] of Object.entries(server.stored())) {
+    assert.equal(placement.yMetric, value === "test::m0" ? undefined : "coding", value);
+  }
   await waitFor(() => assert.equal(markerCount(), 9));
   assert.equal(suggestions().length, 0);
   for (const [model, spot] of previewed) assert.equal(position(marker(model)), spot, model);
@@ -534,15 +542,98 @@ test("Start from benchmarks uses the saved metric and the header chip names it",
     Object.keys(server.stored()).sort(),
     ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"].map((model) => `test::${model}`),
   );
+  // Every height it placed records the score it came from.
+  for (const placement of Object.values(server.stored())) {
+    assert.equal(placement.ySource, "benchmark");
+    assert.equal(placement.yMetric, "intelligence");
+  }
   const chip = await screen.findByRole("button", { name: /^Height: General score/u });
   assert.equal(chip.textContent, "Height: General");
   // It sits in the Pad header, never over a marker in the square.
   assert.ok(!pad().contains(chip), "the chip is outside the square");
-  // The chip switches the score too.
+  // The chip switches the score too. No model has an Agentic score, so every
+  // height stays a General one and the chip keeps saying so.
+  const before = structuredClone(server.stored());
   fireEvent.keyDown(chip, { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "Agentic" }));
   await waitFor(() => assert.equal(server.settings().modelPadMetric, "agentic"));
-  await screen.findByRole("button", { name: /^Height: Agentic score/u });
+  assert.deepEqual(server.stored(), before);
+  assert.equal(screen.getByRole("button", { name: /^Height: / }).textContent, "Height: General");
+});
+
+/** Three accepted Coding heights: m0 lowest, m9 highest; General ranks them the other way. */
+const codingHeights: ModelPadPlacements = {
+  "test::m0": { x: 0, y: 0, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+  "test::m5": { x: 0.5, y: 0.5, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+  "test::m9": { x: 1, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+};
+
+function topPercent(model: string): number {
+  return Number.parseFloat(marker(model).style.top);
+}
+
+async function chooseMetric(name: string) {
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+  await waitFor(() => assert.ok(!screen.queryByRole("menu")));
+}
+
+test("switching the score re-ranks saved benchmark heights, and Undo puts them back", async () => {
+  const server = editorServer({ insightsReady: true, placements: codingHeights });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 3));
+  // Higher on the Pad is a smaller top offset.
+  assert.ok(topPercent("M9") < topPercent("M5") && topPercent("M5") < topPercent("M0"));
+
+  await chooseMetric("General");
+
+  await screen.findByText("Heights now use General scores");
+  assert.equal(server.settings().modelPadMetric, "intelligence");
+  const stored = server.stored();
+  for (const value of Object.keys(codingHeights)) {
+    assert.equal(stored[value].yMetric, "intelligence", value);
+    // Pace (X) is never touched by a height change.
+    assert.equal(stored[value].x, codingHeights[value].x, value);
+  }
+  await waitFor(() =>
+    assert.ok(topPercent("M0") < topPercent("M5") && topPercent("M5") < topPercent("M9")),
+  );
+  assert.equal(screen.getByRole("button", { name: /^Height: / }).textContent, "Height: General");
+  assert.match(marker("M0").getAttribute("aria-label") ?? "", /, General score 50[,.]/u);
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await waitFor(() => assert.deepEqual(server.stored(), codingHeights));
+  assert.equal(server.settings().modelPadMetric, "coding");
+  await waitFor(() =>
+    assert.ok(topPercent("M9") < topPercent("M5") && topPercent("M5") < topPercent("M0")),
+  );
+});
+
+test("a height with no score for the new metric stays put, keeps its own score, and the chip says mixed", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: codingHeights,
+    withoutGeneral: ["m5"],
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 3));
+
+  await chooseMetric("General");
+
+  await screen.findByText("Heights now use General scores");
+  const stored = server.stored();
+  assert.deepEqual(stored["test::m5"], codingHeights["test::m5"]);
+  assert.equal(stored["test::m0"].yMetric, "intelligence");
+  assert.equal(stored["test::m9"].yMetric, "intelligence");
+  await waitFor(() =>
+    assert.equal(screen.getByRole("button", { name: /^Height: / }).textContent, "Height: mixed"),
+  );
+  // Each dot names the score its own height came from.
+  assert.match(marker("M5").getAttribute("aria-label") ?? "", /, Coding score 15[,.]/u);
+  assert.match(tagText(marker("M5")), /Coding score 15/u);
+  assert.match(marker("M9").getAttribute("aria-label") ?? "", /, General score 41[,.]/u);
 });
 
 test("the Pad names no metric while every height is the user's own", async () => {

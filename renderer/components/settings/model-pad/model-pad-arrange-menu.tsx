@@ -15,6 +15,7 @@ import {
 import {
   MODEL_PAD_METRIC_LABELS,
   modelPadHeightCaption,
+  type ModelPadHeightMetric,
   type ModelPadMetric,
 } from "../../../lib/model-pad-layout";
 import { MODEL_PAD_METRICS } from "../../../shared/model-pad-preferences";
@@ -195,10 +196,14 @@ export function ModelPadMoreMenu({
  */
 export function ModelPadMetricChip({
   metric,
+  heightMetric,
   onMetricChange,
   onRemovedWithFocus,
 }: {
+  /** The chosen score: new suggestions and the next re-rank use it. */
   metric: ModelPadMetric;
+  /** The score the shown heights came from, or "mixed" when they differ. */
+  heightMetric: ModelPadHeightMetric;
   onMetricChange: (metric: ModelPadMetric) => void;
   /** The chip is leaving the page while it or its menu holds focus. */
   onRemovedWithFocus: () => void;
@@ -242,10 +247,10 @@ export function ModelPadMetricChip({
           ref={triggerRef}
           type="button"
           {...trackFocus}
-          aria-label={`${modelPadHeightCaption(metric)} score. Change the benchmark score`}
+          aria-label={`${modelPadHeightCaption(heightMetric)} score${heightMetric === "mixed" ? "s" : ""}. Change the benchmark score`}
           className="model-pad-metric-chip"
         >
-          {modelPadHeightCaption(metric)}
+          {modelPadHeightCaption(heightMetric)}
           <ChevronDown aria-hidden="true" className="size-3" />
         </button>
       </DropdownMenuTrigger>

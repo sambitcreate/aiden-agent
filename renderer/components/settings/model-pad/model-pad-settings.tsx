@@ -24,8 +24,9 @@ import {
   measureModelPadAvailableSize,
   modelPadGridSize,
   modelPadGridSizeForPlacements,
-  modelPadHasBenchmarkHeight,
+  modelPadHeightMetric,
   modelPadPlacementKind,
+  modelPadPlacementMetric,
   modelPadPlacementSourceLabel,
   modelPadPointFromPointer,
   modelPadPointKey,
@@ -33,6 +34,7 @@ import {
   nearestAvailableModelPadPoint,
   placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
+  rerankModelPadBenchmarkHeights,
   snapToModelPadGrid,
   MODEL_PAD_METRIC_LABELS,
   type ModelPadCapabilitySuggestion,
@@ -112,10 +114,21 @@ interface PendingModelPadMove {
   visibleValues: readonly string[];
 }
 
-/** One persisted editor action: the layout it produces and its toast. */
+/**
+ * One persisted editor action: the layout it produces, the benchmark metric
+ * when it changes that too, and its toast. An action without a message saves
+ * quietly and offers no Undo (a metric switch that moves no height).
+ */
 interface ModelPadAction {
   placements: ModelPadPlacements;
-  message: string;
+  metric?: ModelPadMetric;
+  message?: string;
+}
+
+/** What an Undo restores, and what the Pad must still hold for it to be safe. */
+interface ModelPadUndo {
+  before: { placements: ModelPadPlacements; metric: ModelPadMetric };
+  after: { placements: ModelPadPlacements; metric?: ModelPadMetric };
 }
 
 const QUICK_START_LOADING_REASON = "Loading your models…";
@@ -143,12 +156,14 @@ function measuredPaceMessage({ updated, lacking, unscored }: MeasuredPaceResult)
  * Pad has once the suggestions join it, and the suggestions packed into its
  * free dots by capability. OpenRouter's benchmark feed measures capability, not
  * pace, so the horizontal spread is for legibility and X provenance stays
- * neutral; the spread is never mistaken for speed data.
+ * neutral; the spread is never mistaken for speed data. Each height records
+ * the `metric` it came from.
  */
 function layoutBenchmarkSuggestions(
   current: ModelPadPlacements,
   visibleValues: readonly string[],
   suggestions: readonly ModelPadCapabilitySuggestion[],
+  metric: ModelPadMetric,
 ): { gridSize: number; placements: ModelPadPlacements; added: ModelPadPlacements } | null {
   if (suggestions.length === 0) return null;
   const gridSize = modelPadGridSize(
@@ -158,7 +173,11 @@ function layoutBenchmarkSuggestions(
   const occupied: ModelPadPoint[] = placedVisibleModelPadValues(placements, visibleValues).map(
     (value) => placements[value],
   );
-  const added = distributeCapabilityOnlyModelPadSuggestions(suggestions, gridSize, occupied);
+  const added: ModelPadPlacements = Object.fromEntries(
+    Object.entries(distributeCapabilityOnlyModelPadSuggestions(suggestions, gridSize, occupied)).map(
+      ([value, placement]) => [value, { ...placement, yMetric: metric }],
+    ),
+  );
   return Object.keys(added).length > 0 ? { gridSize, placements, added } : null;
 }
 
@@ -372,12 +391,20 @@ export function ModelPadSettings() {
     [occupiedCells, shownSuggestions, gridSize],
   );
   const previewActive = previewFits && shownSuggestions.length > 0;
-  const hasBenchmarkHeight = React.useMemo(
-    () => modelPadHasBenchmarkHeight(placements, visibleValues),
-    [placements, visibleValues],
+  // The score behind the visible heights, ghosts included: one metric, or mixed.
+  const previewMetricForHeights = previewActive ? suggestionPreview?.metric : undefined;
+  const heightMetric = React.useMemo(
+    () =>
+      modelPadHeightMetric(
+        placements,
+        visibleValues,
+        benchmarkMetric,
+        previewMetricForHeights ? [previewMetricForHeights] : [],
+      ),
+    [placements, visibleValues, benchmarkMetric, previewMetricForHeights],
   );
   // The header chip names the score while any visible height comes from it.
-  const showMetricChip = previewActive || (placedCount > 0 && hasBenchmarkHeight);
+  const showMetricChip = previewActive || (placedCount > 0 && heightMetric !== undefined);
   React.useEffect(() => {
     if (!suggestionPreview) return;
     // The Pad outgrew the preview grid, or every suggestion is on the Pad and
@@ -470,7 +497,7 @@ export function ModelPadSettings() {
    * it would silently erase that edit, so nothing is saved then.
    */
   const restorePlacements = React.useCallback(
-    (snapshot: ModelPadPlacements, after: ModelPadPlacements) => {
+    ({ before, after }: ModelPadUndo) => {
       // Undo supersedes a nudge burst that has not been saved yet.
       clearTimeout(nudgeTimerRef.current);
       pendingMoveRef.current = undefined;
@@ -478,8 +505,14 @@ export function ModelPadSettings() {
       saveGenerationRef.current += 1;
       let stale = false;
       savePadPreferences((current) => {
-        stale = !sameModelPadPlacements(current.placements, after);
-        return stale ? {} : { modelPadPlacements: snapshot };
+        stale =
+          !sameModelPadPlacements(current.placements, after.placements) ||
+          (after.metric !== undefined && current.metric !== after.metric);
+        if (stale) return {};
+        return {
+          modelPadPlacements: before.placements,
+          ...(after.metric === undefined ? {} : { modelPadMetric: before.metric }),
+        };
       }).then(
         () => {
           // Replaces the action toast; its Undo must not carry over.
@@ -500,24 +533,38 @@ export function ModelPadSettings() {
    * true when the action changed and saved the layout.
    */
   const persistAction = React.useCallback(
-    (compute: (current: ModelPadPlacements) => ModelPadAction | null) => {
-      let snapshot: ModelPadPlacements | undefined;
-      let after: ModelPadPlacements = {};
-      let message = "";
+    (
+      compute: (current: ModelPadPlacements, metric: ModelPadMetric) => ModelPadAction | null,
+    ) => {
+      let undo: ModelPadUndo | undefined;
+      let saved = false;
+      let message: string | undefined;
       let generation = 0;
       return savePadPreferences((current) => {
-        const action = compute(current.placements);
+        const action = compute(current.placements, current.metric);
         // A no-op writes nothing and leaves the latest toast undoable.
         if (!action) return {};
-        generation = ++saveGenerationRef.current;
-        snapshot = current.placements;
-        after = action.placements;
+        saved = true;
         message = action.message;
-        return { modelPadPlacements: action.placements };
+        const placementsChanged = action.placements !== current.placements;
+        const patch = {
+          ...(placementsChanged ? { modelPadPlacements: action.placements } : {}),
+          ...(action.metric === undefined ? {} : { modelPadMetric: action.metric }),
+        };
+        // A quiet action offers no Undo of its own; the latest toast's Undo
+        // stays, guarded by the Pad still matching what that action saved.
+        if (message === undefined) return patch;
+        generation = ++saveGenerationRef.current;
+        undo = {
+          before: { placements: current.placements, metric: current.metric },
+          after: { placements: action.placements, metric: action.metric },
+        };
+        return patch;
       }).then(
         () => {
-          const before = snapshot;
-          if (!before) return false;
+          if (!saved) return false;
+          const pending = undo;
+          if (!pending || message === undefined) return true;
           // A later action or Undo owns the toast now; undoing this one
           // would silently revert everything after it.
           if (generation !== saveGenerationRef.current || !mountedRef.current) return true;
@@ -526,7 +573,7 @@ export function ModelPadSettings() {
             action: {
               label: "Undo",
               onClick: () => {
-                if (generation === saveGenerationRef.current) restorePlacements(before, after);
+                if (generation === saveGenerationRef.current) restorePlacements(pending);
               },
             },
           });
@@ -623,15 +670,15 @@ export function ModelPadSettings() {
     ];
     const point = moveModelPadPoint(placement, direction, steps, gridSize, occupied);
     if (modelPadPointKey(point, gridSize) === modelPadPointKey(placement, gridSize)) return;
+    const vertical = direction === "up" || direction === "down";
+    // A height the user sets is theirs; it no longer names a benchmark score.
+    const { yMetric: _yMetric, ...withoutMetric } = placement;
     showPendingMove({
       value,
       label: modelPlacementLabel(entry),
-      placement: {
-        ...placement,
-        ...point,
-        xSource: direction === "up" || direction === "down" ? placement.xSource : "user",
-        ySource: direction === "left" || direction === "right" ? placement.ySource : "user",
-      },
+      placement: vertical
+        ? { ...withoutMetric, ...point, ySource: "user" }
+        : { ...placement, ...point, xSource: "user" },
       gridSize,
       visibleValues,
     });
@@ -733,6 +780,7 @@ export function ModelPadSettings() {
         current,
         visibleValues,
         topBenchmarkSuggestions(entries, benchmarkPercentiles, { placements: current }),
+        benchmarkMetric,
       );
       if (!layout) return null;
       return {
@@ -758,7 +806,7 @@ export function ModelPadSettings() {
       pinned: pinnedModels,
       recent: recentModels,
     });
-    const layout = layoutBenchmarkSuggestions(placements, visibleValues, chosen);
+    const layout = layoutBenchmarkSuggestions(placements, visibleValues, chosen, metric);
     const suggestions = layout
       ? chosen.flatMap(({ value }) =>
           layout.added[value] ? [{ value, placement: layout.added[value] }] : [],
@@ -796,12 +844,33 @@ export function ModelPadSettings() {
     });
   };
 
+  /**
+   * Switch the benchmark score. Saved benchmark heights with a score for it
+   * move to that score's rank (one undoable action); heights without one stay
+   * and keep naming their own score.
+   */
   const changeMetric = (metric: ModelPadMetric) => {
     if (metric === benchmarkMetric) return;
-    savePadPreferences({ modelPadMetric: metric }).catch(() => {
-      toast.error(SAVE_ERROR_MESSAGE);
+    flushPendingMove();
+    const percentiles = modelBenchmarkPercentiles(entries, metric);
+    void persistAction((current, currentMetric) => {
+      if (currentMetric === metric) return null;
+      const result = rerankModelPadBenchmarkHeights(current, visibleValues, {
+        percentiles,
+        metric,
+        previousMetric: currentMetric,
+      });
+      return {
+        placements: result.placements,
+        metric,
+        message:
+          result.updated.length > 0
+            ? `Heights now use ${MODEL_PAD_METRIC_LABELS[metric]} scores`
+            : undefined,
+      };
+    }).then((saved) => {
       // The ghosts were laid out for the score that didn't save.
-      setSuggestionPreview(undefined);
+      if (!saved) setSuggestionPreview(undefined);
     });
     // An open preview follows the new score; focus stays where it is.
     if (suggestionPreview) previewSuggestions({ metric, focus: false });
@@ -926,11 +995,13 @@ export function ModelPadSettings() {
     const measuredSpeed =
       paceSummary && paceSummary.sampleCount > 0 ? formatModelPace(paceSummary) : undefined;
     const alsoVia = alsoViaLabel(siblingsByValue.get(entry.value));
-    const score = benchmarkScore(entry, benchmarkMetric);
+    // A benchmark height names the score it came from; any other the current one.
+    const markerMetric = modelPadPlacementMetric(sourcePlacement, benchmarkMetric) ?? benchmarkMetric;
+    const score = benchmarkScore(entry, markerMetric);
     const scoreLabel =
       score === undefined
         ? undefined
-        : `${MODEL_PAD_METRIC_LABELS[benchmarkMetric]} score ${formatScore(score)}`;
+        : `${MODEL_PAD_METRIC_LABELS[markerMetric]} score ${formatScore(score)}`;
     // The tag has room for one detail: measured speed wins over the score.
     const detail = measuredSpeed ?? scoreLabel;
     return [
@@ -1103,6 +1174,7 @@ export function ModelPadSettings() {
           {showMetricChip ? (
             <ModelPadMetricChip
               metric={benchmarkMetric}
+              heightMetric={heightMetric ?? benchmarkMetric}
               onMetricChange={changeMetric}
               onRemovedWithFocus={focusArrangeForGoneChip}
             />

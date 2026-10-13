@@ -20,7 +20,7 @@ import {
   modelPadPointFromPointer,
   modelPadPointKey,
   modelPadTopPercent,
-  type ModelPadMetric,
+  type ModelPadHeightMetric,
 } from "../lib/model-pad-layout";
 import { ModelPadLattice } from "./model-pad-lattice";
 import { ProviderIcon } from "./provider-icon";
@@ -146,7 +146,7 @@ interface ModelPickerPadProps {
   /** Called with a printable character typed on the Pad, so the picker can search for it. */
   onTypeToSearch?: (character: string) => void;
   /** The benchmark score behind benchmark-assisted heights, when any is on the Pad. */
-  heightMetric?: ModelPadMetric;
+  heightMetric?: ModelPadHeightMetric;
   /** Other visible routes to the same model, by entry value (see `modelSiblings`). */
   siblingsByValue?: ReadonlyMap<string, readonly ModelEntry[]>;
 }
@@ -448,7 +448,9 @@ export function ModelPickerPad({
         Drag or point to preview the nearest model. Use the arrow keys to move between models, then
         press Enter or Space to select. Type to search the list.
         {heightMetric
-          ? ` Benchmark-assisted heights follow the ${MODEL_PAD_METRIC_LABELS[heightMetric]} score.`
+          ? heightMetric === "mixed"
+            ? " Benchmark-assisted heights follow mixed scores."
+            : ` Benchmark-assisted heights follow the ${MODEL_PAD_METRIC_LABELS[heightMetric]} score.`
           : ""}
       </p>
     </>

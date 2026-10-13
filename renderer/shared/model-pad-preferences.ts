@@ -16,6 +16,12 @@ export interface ModelPadPlacement {
   y: number;
   xSource: ModelPadPaceSource;
   ySource: ModelPadPlacementSource;
+  /**
+   * The benchmark score a benchmark height (Y) came from. Kept only when
+   * `ySource` is "benchmark"; a benchmark height without it reads as the
+   * current global metric.
+   */
+  yMetric?: ModelPadMetric;
 }
 
 export type ModelPadPlacements = Record<string, ModelPadPlacement>;
@@ -70,7 +76,8 @@ function placement(value: unknown): ModelPadPlacement | null {
   if (x === null || y === null || !isPaceSource(value.xSource) || !isSource(value.ySource)) {
     return null;
   }
-  return { x, y, xSource: value.xSource, ySource: value.ySource };
+  const yMetric = value.ySource === "benchmark" ? normalizeModelPadMetric(value.yMetric) : undefined;
+  return { x, y, xSource: value.xSource, ySource: value.ySource, ...(yMetric ? { yMetric } : {}) };
 }
 
 /** Keep valid placements only, capped at {@link MAX_MODEL_PAD_PLACEMENTS}. */
@@ -102,7 +109,8 @@ export function sameModelPadPlacements(left: unknown, right: unknown): boolean {
       mine.x === other.x &&
       mine.y === other.y &&
       mine.xSource === other.xSource &&
-      mine.ySource === other.ySource
+      mine.ySource === other.ySource &&
+      mine.yMetric === other.yMetric
     );
   });
 }

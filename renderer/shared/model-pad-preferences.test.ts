@@ -48,6 +48,40 @@ test("placements keep only bounded provider::model keys with in-range coordinate
   );
 });
 
+test("a benchmark height keeps the metric it came from; other heights carry none", () => {
+  assert.deepEqual(
+    normalizeModelPadPlacements({
+      "a::coding": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+      // Read as the current global metric by the Pad.
+      "a::unstamped": { x: 0, y: 0.5, xSource: "neutral", ySource: "benchmark" },
+      "a::unknown-metric": { x: 0, y: 0, xSource: "neutral", ySource: "benchmark", yMetric: "speed" },
+      "a::user-height": { x: 1, y: 1, ...user, yMetric: "agentic" },
+    }),
+    {
+      "a::coding": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "coding" },
+      "a::unstamped": { x: 0, y: 0.5, xSource: "neutral", ySource: "benchmark" },
+      "a::unknown-metric": { x: 0, y: 0, xSource: "neutral", ySource: "benchmark" },
+      "a::user-height": { x: 1, y: 1, ...user },
+    },
+  );
+  assert.deepEqual(
+    parseModelPadPreferencesPatch({
+      modelPadPlacements: {
+        "a::m": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "agentic" },
+      },
+    }).modelPadPlacements,
+    { "a::m": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "agentic" } },
+  );
+  assert.deepEqual(
+    remapModelPadPlacementsProvider(
+      { "old::m": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "agentic" } },
+      "old",
+      "new",
+    ),
+    { "new::m": { x: 0, y: 1, xSource: "neutral", ySource: "benchmark", yMetric: "agentic" } },
+  );
+});
+
 test("placements are capped at the documented entry limit", () => {
   const raw = Object.fromEntries(
     Array.from({ length: MAX_MODEL_PAD_PLACEMENTS + 5 }, (_, index) => [

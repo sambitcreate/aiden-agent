@@ -46,7 +46,7 @@ import {
   BASE_MODEL_PAD_GRID_SIZE,
   addModelPadPlacement,
   modelPadGridSizeForPlacements,
-  modelPadHasBenchmarkHeight,
+  modelPadHeightMetric,
   type ModelPadPlacement,
 } from "../lib/model-pad-layout";
 import { useModelPadPreferences } from "../lib/model-pad-preferences";
@@ -544,15 +544,15 @@ export function ModelPicker({
     };
   }, [open, search, entries, recentModels, selectedValue, pinned, orderedEntries]);
   const hasPadModels = positioned.length > 0;
-  // Named only while some model on the Pad takes its height from a benchmark.
+  // Named only while some model on the Pad takes its height from a benchmark:
+  // the score those heights came from, or "mixed" when they differ.
   const heightMetric = React.useMemo(
     () =>
-      modelPadHasBenchmarkHeight(
+      modelPadHeightMetric(
         modelPadPlacements,
         positioned.map((entry) => entry.value),
-      )
-        ? modelPadMetric
-        : undefined,
+        modelPadMetric,
+      ),
     [modelPadPlacements, positioned, modelPadMetric],
   );
   // Same sizing as positionSavedModels and the settings editor: placed, visible
