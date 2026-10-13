@@ -150,7 +150,11 @@ struct AidenChatScrollObserver: UIViewRepresentable {
         // MARK: Follow latch events
 
         @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
-            switch gesture.state {
+            panGestureChanged(to: gesture.state)
+        }
+
+        func panGestureChanged(to state: UIGestureRecognizer.State) {
+            switch state {
             case .began:
                 cancelSettle()
                 isUserScrollSessionActive = true
@@ -184,10 +188,9 @@ struct AidenChatScrollObserver: UIViewRepresentable {
         private func finishUserScrollSessionIfSettled() {
             guard isUserScrollSessionActive, let scrollView else { return }
             if scrollView.isDragging { return }
-            // A finger resting on the glass (tracking but not dragging) may not
-            // produce a pan .failed event, so reschedule the settle check instead
-            // of returning. Once the finger lifts or movement starts, UIKit will
-            // send pan .ended/.began to cancel/replace this check.
+            // A tap that stops momentum leaves the finger tracking without a
+            // pan, so no gesture event will report the lift. Keep checking
+            // until it lifts; a drag that begins replaces this check.
             if scrollView.isTracking {
                 scheduleSettle(after: AidenChatScrollPolicy.momentumSettleDelay) { [weak self] in
                     self?.finishUserScrollSessionIfSettled()

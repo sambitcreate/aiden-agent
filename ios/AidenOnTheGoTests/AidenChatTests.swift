@@ -11294,6 +11294,9 @@ final class AidenChatScrollFollowTests: XCTestCase {
         let grewLargeReplyWithoutScroll = Geometry(offsetY: 4300, contentHeight: 5200, visibleHeight: 700)
         // Distance grew from 700 to 900, past streaming threshold, but offset unchanged.
         XCTAssertFalse(Policy.isScrollingAwayFromBottom(previous: atBottom, current: grewLargeReplyWithoutScroll))
+        // The same content scrolled up toward older messages is the reader leaving.
+        let scrolledUp = Geometry(offsetY: 3200, contentHeight: 5000, visibleHeight: 700)
+        XCTAssertTrue(Policy.isScrollingAwayFromBottom(previous: atBottom, current: scrolledUp))
     }
 }
 
@@ -11370,31 +11373,33 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertEqual(performed, [])
     }
 
-    func testDragAfterResetInvalidatesTheOlderDragCorrection() async {
-        // After an explicit reset (jump), a later corrective snap must be
-        // invalidated by a newer drag, not resurrected by the old momentum.
-        let settles = AidenManualPauses()
+    func testADragInvalidatesTheCorrectiveSnapEvenAfterFollowReArms() async {
         let pauses = AidenManualPauses()
+        let settles = AidenManualPauses()
         let controller = AidenTranscriptFollowController(
             followPause: { await pauses.pause() },
             jumpButtonDelay: {},
             animationSettle: { await settles.pause() }
         )
-        var performed: [String] = []
-
-        // Jump (animate), land short (schedule corrective snap).
-        let jumpTask = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
-            performed.append(animated ? "jump-animated" : "jump-correct")
+        var animatedValues: [Bool] = []
+        let task = controller.scheduleFollowScroll(isUserInitiated: true, animated: true) { animated in
+            animatedValues.append(animated)
+            // Estimated row heights: the animation stops 300pt short.
             if animated { controller.updateMetrics(self.metrics(300)) }
         }
+        await pauses.waitForPending(1)
+        pauses.releaseAll()
         await settles.waitForPending(1)
-        // User drags while the corrective snap is settling.
-        controller.handle(.userScrollBegin)
-        settles.releaseAll()
-        await jumpTask?.value
+        XCTAssertEqual(animatedValues, [true])
 
-        // The corrective snap must not execute (only the animated jump did).
-        XCTAssertEqual(performed, ["jump-animated"])
+        // A drag that ends at the bottom re-arms follow while the jump is still
+        // settling, so only the drag itself can retire the stale corrective snap.
+        controller.handle(.userScrollBegin)
+        controller.handle(.userScrollEnd(isAtBottom: true))
+        XCTAssertTrue(controller.isFollowing)
+        settles.releaseAll()
+        await task?.value
+        XCTAssertEqual(animatedValues, [true])
     }
 
     func testAutomaticFollowDoesNothingWhileTheReaderIsAway() {
@@ -11618,18 +11623,18 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertFalse(controller.isFollowing)
     }
 
-    func testScrollObserverFinishesSessionWhenFingerLiftsWhileTracking() {
-        // Fling toward the bottom + tap to stop within re-arm distance: the
-        // settle check must eventually run even if UIKit never sends a pan
-        // .failed event for the tracking-without-dragging state.
+    func testATapThatStopsMomentumAtTheBottomReArmsFollowWhenTheFingerLifts() {
         let scrollView = AidenTouchableScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
         scrollView.contentSize = CGSize(width: 320, height: 2_000)
-        scrollView.contentOffset = CGPoint(x: 0, y: 1_480)
-
-        var followEvents: [AidenChatScrollPolicy.FollowEvent] = []
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        let controller = AidenTranscriptFollowController(followPause: {}, jumpButtonDelay: {})
+        var ends: [Bool] = []
         let coordinator = AidenChatScrollObserver.Coordinator(
-            onFollowEvent: { followEvents.append($0) },
-            onMetrics: { _ in }
+            onFollowEvent: { event in
+                if case .userScrollEnd(let isAtBottom) = event { ends.append(isAtBottom) }
+                controller.handle(event)
+            },
+            onMetrics: { controller.updateMetrics($0) }
         )
         let content = UIView()
         scrollView.addSubview(content)
@@ -11637,22 +11642,30 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         defer { coordinator.detach() }
         drainMainQueue()
 
-        // Start a fling (pan began, then momentum).
+        // A fling toward the bottom: the drag starts a session, then momentum carries on.
+        coordinator.panGestureChanged(to: .began)
         scrollView.touchIsTracking = true
-        followEvents.removeAll()
-        // (observer reports pan .began as userScrollBegin via handlePanGesture)
-
-        // User taps to stop within re-arm distance (12pt).
-        scrollView.touchIsTracking = true
+        scrollView.touchIsDragging = true
+        scrollView.contentOffset.y = 1_200
+        scrollView.touchIsTracking = false
         scrollView.touchIsDragging = false
-        let stopPosition = scrollView.contentOffset.y + 8 // 8pt from bottom
-        scrollView.contentOffset.y = stopPosition
-        drainMainQueue()
+        scrollView.touchIsDecelerating = true
+        coordinator.panGestureChanged(to: .ended)
+        scrollView.contentOffset.y = 1_400
+        XCTAssertFalse(controller.isFollowing)
 
-        // Settle eventually fires userScrollEnd (it reschedules while tracking).
-        XCTAssertTrue(runMainLoop(until: {
-            followEvents.contains { if case .userScrollEnd = $0 { return true }; return false }
-        }, timeout: 1))
+        // A tap stops the momentum 8pt from the bottom. The finger stays down,
+        // and lifting it sends no pan event at all.
+        scrollView.touchIsDecelerating = false
+        scrollView.touchIsTracking = true
+        scrollView.contentOffset.y = 2_000 - 480 - 8
+        RunLoop.main.run(until: Date().addingTimeInterval(AidenChatScrollPolicy.dragSettleDelay * 2))
+        XCTAssertEqual(ends, [], "the session must not settle while the finger is still down")
+
+        scrollView.touchIsTracking = false
+        XCTAssertTrue(runMainLoop(until: { !ends.isEmpty }, timeout: 1))
+        XCTAssertEqual(ends, [true])
+        XCTAssertTrue(controller.isFollowing)
     }
 
     func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
@@ -11697,7 +11710,8 @@ private final class AidenTouchableScrollView: UIScrollView {
     var touchIsDragging = false
     override var isTracking: Bool { touchIsTracking }
     override var isDragging: Bool { touchIsDragging }
-    override var isDecelerating: Bool { false }
+    var touchIsDecelerating = false
+    override var isDecelerating: Bool { touchIsDecelerating }
 }
 
 @Observable
