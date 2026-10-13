@@ -160,19 +160,23 @@ test("Model Pad and its tray fit resized settings and keep models usable at nati
     // it otherwise (a container query on the card, not the window).
     const layout = await pad.evaluate((element) => {
       const padBounds = element.getBoundingClientRect();
-      const trayBounds = document
-        .querySelector('aside[aria-label="On your Pad"]')!
-        .getBoundingClientRect();
+      const trayElement = document.querySelector('aside[aria-label="On your Pad"]')!;
+      const trayBounds = trayElement.getBoundingClientRect();
+      // However many models it lists, the tray beside the square scrolls
+      // inside a box no taller than the square.
+      const trayMaxHeight = Number.parseFloat(getComputedStyle(trayElement).maxHeight);
       return {
         wide: element.closest(".model-pad-fieldset")!.getBoundingClientRect().width > 640,
         beside: trayBounds.left >= padBounds.right - 1 && trayBounds.top < padBounds.bottom,
         below: trayBounds.top >= padBounds.bottom - 1,
+        trayCappedAtSquare: trayMaxHeight <= padBounds.height + 1,
       };
     });
     expect(layout, `tray placement at ${state}`).toEqual(
       layout.wide
-        ? { wide: true, beside: true, below: false }
-        : { wide: false, beside: false, below: true },
+        ? { wide: true, beside: true, below: false, trayCappedAtSquare: true }
+        : // Stacked under the square, the tray grows with the page instead.
+          { wide: false, beside: false, below: true, trayCappedAtSquare: false },
     );
   }
 
