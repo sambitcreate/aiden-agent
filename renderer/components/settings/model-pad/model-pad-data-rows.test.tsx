@@ -303,3 +303,54 @@ test("the benchmark hint explains when scores are fetched and names their licenc
   assert.match(hint.textContent ?? "", /only when you choose Connect & fetch or Fetch latest/u);
   await waitFor(() => assert.match(hint.textContent ?? "", /Scores: Artificial Analysis, CC BY 4\.0\./u));
 });
+
+test("Fetch latest caches new scores, says so, and updates the row", async () => {
+  const old = { ...ready, fetchedAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1_000).toISOString() };
+  const server = insightsServer({ status: old });
+  mount();
+  await within(benchmarkRow()).findByText("Out of date");
+
+  fireEvent.click(within(benchmarkRow()).getByRole("button", { name: "Fetch latest" }));
+
+  await screen.findByText("Latest benchmark scores are cached.");
+  assert.equal(server.calls("modelInsights:refresh").length, 1);
+  await waitFor(() => assert.ok(!within(benchmarkRow()).queryByText("Out of date")));
+  within(benchmarkRow()).getByText(/^Artificial Analysis via OpenRouter · /u);
+});
+
+for (const [name, action, settle] of [
+  [
+    "Fetch latest",
+    async () => fireEvent.click(await within(benchmarkRow()).findByRole("button", { name: "Fetch latest" })),
+    "refresh",
+  ],
+  [
+    "Disconnect",
+    async () => {
+      fireEvent.click(await within(await openOptions()).findByRole("menuitem", { name: "Disconnect" }));
+      fireEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disconnect" }),
+      );
+    },
+    "disconnect",
+  ],
+] as const) {
+  test(`a failed ${name} re-reads the connection status and shows the error`, async () => {
+    const failure = (): ModelInsightsActionResult => ({
+      ok: false,
+      code: "network_error",
+      message: "OpenRouter couldn’t be reached.",
+    });
+    const server = insightsServer({ status: ready, [settle]: failure });
+    mount();
+    await within(benchmarkRow()).findByText(/^Artificial Analysis via OpenRouter/u);
+    const statusReads = server.calls("modelInsights:status").length;
+
+    await action();
+
+    await within(benchmarkRow()).findByText("OpenRouter couldn’t be reached.");
+    assert.ok(server.calls("modelInsights:status").length > statusReads, "the status is reconciled");
+    // The stored key is still there: the row keeps offering Fetch latest.
+    within(benchmarkRow()).getByRole("button", { name: "Fetch latest" });
+  });
+}

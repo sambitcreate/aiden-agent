@@ -6,6 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../../main/bots/test-providers";
 import type { AppSettings, ModelBenchmarkScores, ModelInfo, Provider } from "../../../lib/types";
+import type { ModelPaceSummary } from "../../../shared/model-pace";
 import type { ModelPadMetric, ModelPadPlacements } from "../../../shared/model-pad-preferences";
 import { Toaster, toast } from "../../ui";
 import { ModelPadSettings } from "./model-pad-settings";
@@ -69,6 +70,8 @@ function editorServer(
     failWrites?: boolean;
     /** Hold each settings write until the returned `release` is called. */
     holdWrites?: boolean;
+    /** Speeds measured from the user's chats, by model value. */
+    paceSummaries?: Record<string, ModelPaceSummary>;
   } = {},
 ) {
   const held: Array<() => void> = [];
@@ -125,6 +128,7 @@ function editorServer(
       skippedAmbiguousCount: options.skippedAmbiguousCount ?? 0,
       ...(options.fetchedAt ? { fetchedAt: options.fetchedAt } : {}),
     }),
+    "modelPace:summaries": () => structuredClone(options.paceSummaries ?? {}),
     "settings:get": () => structuredClone(current),
     "settings:set": async (patch: unknown) => {
       if (options.holdWrites) await new Promise<void>((resolve) => held.push(resolve));
@@ -856,4 +860,60 @@ test("benchmark heights and suggestions announce their score", async () => {
   );
   await openPreview();
   assert.match(ghost("M8").getAttribute("aria-label") ?? "", /^Keep suggestion: M8 from Test, Coding score 18$/u);
+});
+
+function tagText(element: HTMLElement): string {
+  return element.querySelector(".model-pad-marker-label")?.textContent ?? "";
+}
+
+test("a benchmark height's tag names its score, and measured speed takes its place", async () => {
+  const benchmarkHeight = { ...userPlacement, ySource: "benchmark" } as const;
+  editorServer({
+    insightsReady: true,
+    placements: { "test::m9": benchmarkHeight, "test::m3": { ...benchmarkHeight, x: 0 } },
+    paceSummaries: {
+      "test::m3": { medianTtftMs: 300, medianTokensPerSecond: 120, sampleCount: 4, lastSampledAt: 1 },
+    },
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 2));
+  await waitFor(() => assert.match(tagText(marker("M9")), /Coding score 19/u));
+  await waitFor(() => assert.match(tagText(marker("M3")), /0\.3 s first token · 120 tok\/s/u));
+  assert.doesNotMatch(tagText(marker("M3")), /score/u);
+  // The accessible name keeps both.
+  assert.match(marker("M3").getAttribute("aria-label") ?? "", /120 tok\/s, Coding score 13/u);
+});
+
+test("keeping the focused suggestion moves focus to the next one", async () => {
+  editorServer({ insightsReady: true, placements: { "test::m0": userPlacement } });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+  const [first, second] = suggestionNames();
+  await waitFor(() => assert.ok(document.activeElement === ghost(first), "focus is on the first suggestion"));
+
+  fireEvent.click(ghost(first));
+
+  await screen.findByText(`Added ${first} from Test`);
+  await waitFor(() =>
+    assert.ok(document.activeElement === ghost(second), `focus is on ${second}`),
+  );
+});
+
+test("a score change that fails to save says so and clears the preview", async () => {
+  const server = editorServer({
+    insightsReady: true,
+    placements: { "test::m0": userPlacement },
+    failWrites: true,
+  });
+  mountEditor();
+  await waitFor(() => assert.equal(markerCount(), 1));
+  await openPreview();
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "Arrange" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "General" }));
+
+  await screen.findByText("Aiden couldn’t save your Model Pad.");
+  await waitFor(() => assert.equal(suggestions().length, 0));
+  assert.equal(server.settings().modelPadMetric, undefined);
 });

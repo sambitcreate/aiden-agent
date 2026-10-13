@@ -260,3 +260,55 @@ test("releasing the pointer over a marker without dragging it moves nothing", as
   assert.equal(server.writes().length, 0);
   assert.equal(`${marker(pad, "Mine")!.style.left} ${marker(pad, "Mine")!.style.top}`, start);
 });
+
+test("Shift plus an arrow moves a marker three dots", async () => {
+  const server = settingsServer();
+  const pad = await mountEditor();
+  const mine = marker(pad, "Mine")!;
+  act(() => mine.focus());
+  // From the centre of the 7 × 7 grid, three dots right is the right edge.
+  fireEvent.keyDown(mine, { key: "ArrowRight", shiftKey: true });
+  fireEvent.blur(mine);
+
+  await waitFor(() => assert.equal(server.writes().length, 1));
+  assert.deepEqual(server.stored()?.["test::mine"], { x: 1, y: 0.5, xSource: "user", ySource: "user" });
+});
+
+test("pressing another marker saves an open nudge burst first", async () => {
+  const server = settingsServer();
+  const pad = await mountEditor();
+  pad.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+  const mine = marker(pad, "Mine")!;
+  act(() => mine.focus());
+  fireEvent.keyDown(mine, { key: "ArrowDown" });
+  assert.equal(server.writes().length, 0);
+
+  fireEvent.pointerDown(marker(pad, "Other")!, { button: 0, pointerId: 1, clientX: 8, clientY: 8 });
+
+  await waitFor(() => assert.equal(server.writes().length, 1));
+  const moved = server.stored()?.["test::mine"];
+  assert.ok(moved && moved.y < initialPlacements["test::mine"].y, JSON.stringify(moved));
+});
+
+test("an open nudge burst saves before the next action, which owns the only Undo", async () => {
+  const server = settingsServer();
+  const pad = await mountEditor();
+  const mine = marker(pad, "Mine")!;
+  act(() => mine.focus());
+  fireEvent.keyDown(mine, { key: "ArrowLeft" });
+
+  await addExtra();
+
+  await screen.findByText("Added Extra from Test");
+  await waitFor(() => assert.equal(server.writes().length, 2));
+  const moved = server.stored()?.["test::mine"];
+  assert.ok(moved && moved.x < initialPlacements["test::mine"].x, JSON.stringify(moved));
+  const undo = screen.getAllByRole("button", { name: "Undo" });
+  assert.equal(undo.length, 1);
+
+  fireEvent.click(undo[0]);
+  // Undo takes back the add only; the saved move stays.
+  await waitFor(() => assert.equal(server.writes().length, 3));
+  assert.deepEqual(Object.keys(server.stored() ?? {}).sort(), ["test::mine", "test::other"]);
+  assert.deepEqual(server.stored()?.["test::mine"], moved);
+});

@@ -257,3 +257,48 @@ test("Clear measured speeds is not offered before any speed is measured", async 
   await screen.findByText("Nothing measured yet");
   assert.ok(!screen.queryByRole("button", { name: "Clear measured speeds" }));
 });
+
+test("while measured speeds load, Pace from my chats says so", async () => {
+  installBotTestIpc({
+    "providers:list": () => [provider],
+    "models:info": () => ({}),
+    "modelInsights:status": () => ({ connected: false }),
+    "modelPace:summaries": () => new Promise(() => {}),
+    "settings:get": () => ({ modelPadPlacements: initialPlacements, pinnedModels: [] }),
+  });
+  await mountEditor();
+  const action = await openPaceAction();
+  await waitFor(() => assert.match(unavailableReason(action), /Loading measured speeds…/u));
+});
+
+test("on an empty Pad, Pace from my chats asks for models first", async () => {
+  installBotTestIpc({
+    "providers:list": () => [provider],
+    "models:info": () => ({}),
+    "modelInsights:status": () => ({ connected: false }),
+    "modelPace:summaries": () => structuredClone(measured),
+    "settings:get": () => ({ modelPadPlacements: {}, pinnedModels: [] }),
+  });
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <ModelPadSettings />
+      <Toaster />
+    </QueryClientProvider>,
+  );
+  const action = await openPaceAction();
+  await waitFor(() => assert.match(unavailableReason(action), /Add models to the Pad first/u));
+});
+
+test("once speeds are cleared, focus moves from the gone Clear button to Add", async () => {
+  editorServer(measured);
+  await mountEditor();
+  const data = screen.getByRole("group", { name: "Measured speed" });
+  fireEvent.click(await within(data).findByRole("button", { name: "Clear measured speeds" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Clear speeds" }));
+
+  await screen.findByText("Measured speeds cleared.");
+  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));
+  await waitFor(() =>
+    assert.ok(document.activeElement === screen.getByRole("button", { name: "Add" }), "focus is on Add"),
+  );
+});
