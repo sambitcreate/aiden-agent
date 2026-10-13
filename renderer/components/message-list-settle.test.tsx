@@ -7,7 +7,7 @@ import { MessageList } from "./message-list";
 import type { ChatMessage } from "../lib/types";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
-import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS } from "../lib/streaming-reveal";
+import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL_MAX_WAIT_MS } from "../lib/streaming-reveal";
 
 afterEach(() => {
   cleanup();
@@ -305,6 +305,69 @@ test("text closed by a tool step joins whole at the next release", async () => {
   assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval still holds");
   await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
+});
+
+test("tool-closed text stays gated when follow-up prose starts before its release slot", async () => {
+  const first = "Checked the config.\n\nNow reading the file";
+  const second = "The follow-up text.\n\n";
+  const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps,
+  });
+  // Start with first text, not yet closed
+  const view = render(transcript({ messages: [prompt], streamingText: first, timeline: timeline([]) }));
+  assert.ok(view.container.textContent?.includes("Checked the config."));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "tail waits");
+
+  // Close the first text with a tool step
+  view.rerender(transcript({ messages: [prompt], streamingText: first, timeline: timeline([toolStep(first.length)]) }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "release interval holds");
+
+  // Add follow-up text before the first text's release slot completes (around 150ms)
+  await wait(150);
+  view.rerender(transcript({ messages: [prompt], streamingText: first + "\n\n" + second }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "earlier tail still hidden after follow-up added");
+
+  // Wait for the original release slot to complete
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
+  assert.ok(view.container.textContent?.includes("Now reading the file"));
+});
+
+test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
+  // A lone heading with no boundary: should stay hidden until timeout
+  const contentWithHeading = "Intro paragraph.\n\n## Next section";
+  const view = render(transcript({ messages: [prompt], streamingText: contentWithHeading }));
+  assert.ok(view.container.textContent?.includes("Intro paragraph."));
+  assert.equal(view.container.textContent?.includes("Next section"), false, "unfinished heading waits");
+
+  // Wait past the max-wait timeout
+  await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
+  // The heading should now be visible, and the turn is still running (streamComplete not set)
+  assert.ok(view.container.textContent?.includes("Next section"), "heading visible after timeout");
+  assert.equal(view.container.textContent?.includes("Intro paragraph."), true, "intro still present");
+
+  // Verify we're still streaming by checking for the data-streaming attribute
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "still streaming (turn not complete)");
+});
+
+test("max-wait timeout shows unfinished prose sentence while turn still runs", async () => {
+  // Plain prose with no sentence-ending punctuation: should wait for timeout
+  const contentWithProse = "Here is the intro.\n\nShort unfinished sentence";
+  const view = render(transcript({ messages: [prompt], streamingText: contentWithProse }));
+  assert.ok(view.container.textContent?.includes("Here is the intro."));
+  assert.equal(view.container.textContent?.includes("Short unfinished"), false, "incomplete prose waits");
+
+  // Wait past the timeout
+  await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
+  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "prose visible after timeout");
+
+  // Turn is still running
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "turn still running");
 });
 
 test("a streaming reply joins a paragraph at a time and stops fading once settled", async () => {

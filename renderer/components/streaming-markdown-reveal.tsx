@@ -104,6 +104,8 @@ export function StreamingMarkdownReveal({
   // reply settles in place.
   const source = complete
     ? content
+    : released === content
+    ? released  // Everything released by timeout, show it all
     : released.slice(0, streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY));
 
   const handoffNotified = React.useRef(false);
