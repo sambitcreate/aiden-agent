@@ -3,7 +3,7 @@
 // header values, then a preset's API key. Shared by live connections and
 // Settings draft tests; the storage is injected.
 
-import { mcpCredentialConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpPresetKeyBinding } from "./mcp-credential-cleanup-core.js";
 import { mcpFieldSecretMarkers } from "./mcp-field-secrets-core.js";
 import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import { assertMcpPresetServer } from "./mcp-presets.js";
@@ -46,7 +46,7 @@ export async function resolveMcpConnectionCredentials(
     assertCurrent(deps.isCurrent);
   }
   if (!preset || preset.auth.kind !== "apiKey") return server;
-  const key = await deps.presetKey(configured, JSON.stringify(mcpCredentialConnectionSnapshot(configured)));
+  const key = await deps.presetKey(configured, mcpPresetKeyBinding(configured));
   assertCurrent(deps.isCurrent);
   if (!key) throw new Error(deps.missingKey(preset.name));
   return {

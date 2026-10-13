@@ -2,7 +2,7 @@
 // server record. Storage is injected so the redaction contract is testable
 // outside Electron (see subagent-mcp-credential-production.ts).
 
-import { mcpCredentialConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
+import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
 import {
   mcpAuthorizationBinding,
   sessionMatchesMcpBinding,
@@ -51,7 +51,7 @@ export async function resolveSubagentMcpCredentialBoundary(
   const preset = assertMcpPresetServer(server);
   let presetApiKey: string | null = null;
   if (preset?.auth.kind === "apiKey") {
-    presetApiKey = await sources.presetKey(server, JSON.stringify(mcpCredentialConnectionSnapshot(server)));
+    presetApiKey = await sources.presetKey(server, mcpPresetKeyBinding(server));
     assertCurrent(signal);
   }
   let oauthSession: McpOAuthSession | undefined;

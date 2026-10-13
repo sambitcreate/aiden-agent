@@ -3,7 +3,7 @@ import {
   createBotProviderCredentialSignatureCore,
   type BotProviderCredentialSignatureDependencies,
 } from "./bot-capability-credential-signatures-core.js";
-import { mcpCredentialConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpPresetKeyBinding } from "./mcp-credential-cleanup-core.js";
 import { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import { assertMcpPresetServer, presetSecretId } from "./mcp-presets.js";
@@ -42,7 +42,7 @@ export async function botMcpCredentialSignature(
   const presetKey = preset?.auth.kind === "apiKey"
     ? await secrets.getOrBindLegacyProviderKey(
         presetSecretId(server.id),
-        JSON.stringify(mcpCredentialConnectionSnapshot(server)),
+        mcpPresetKeyBinding(server),
       )
     : null;
   // Unreadable credential storage reads as "no grant" for this one server, so
