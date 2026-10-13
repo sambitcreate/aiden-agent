@@ -166,6 +166,7 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
       mimeType: "text/html", size: 1, mediaId: sourceMediaId,
     }],
     htmlArtifactPlacements: [{ mediaId: sourceMediaId, toolCallId: "call_1", layout: "wide" }],
+    imagePlacements: [{ attachmentId: "generated-1", toolCallId: "call_2" }],
   });
   const restarted = createChatStore(async () => directory);
   const source = await restarted.get(chat.id);
@@ -180,6 +181,9 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
   assert.deepEqual(copied?.htmlArtifactPlacements, [
     { mediaId: copiedMediaId, toolCallId: "call_1", layout: "wide" },
   ]);
+  // Generated images keep their row after a restart and in a copy.
+  assert.deepEqual(source?.messages[1]?.imagePlacements, [{ attachmentId: "generated-1", toolCallId: "call_2" }]);
+  assert.deepEqual(copied?.imagePlacements, [{ attachmentId: "generated-1", toolCallId: "call_2" }]);
 });
 
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {

@@ -3,7 +3,7 @@ import type { WorkflowDocV1 } from "../../renderer/shared/images/schema";
 import type { FakeOpenRouter } from "./fake-openrouter";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-const NANO_BANANA_LABEL = "OpenRouter · Google: Nano Banana 2 (Gemini 3.1 Flash Image)";
+const NANO_BANANA_LABEL = "OpenRouter · Nano Banana 2 (Gemini 3.1 Flash Image)";
 const CONSENT_ONE_REQUEST = "Send 1 image request?";
 const IMAGE_ONE = { name: "Generated image 1", exact: true };
 

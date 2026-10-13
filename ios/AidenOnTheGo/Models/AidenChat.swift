@@ -950,6 +950,7 @@ enum AidenAgentActivityPresentation {
         "device_close": ("Closing simulator", "Closed simulator"),
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
+        "generate_image": ("Generating image", "Generated image"),
         // Activity an ACP agent (for example, Google Antigravity) ran itself.
         "delete_file": ("Deleting", "Deleted"),
         "move_file": ("Moving", "Moved"),

@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import {
   EncryptedPiCredentialStore,
+  piCredentialChangeFencesBotAuthority,
   piCredentialGrantIdentity,
   piCredentialWithFreshGrant,
   type CredentialCipher,
@@ -535,4 +536,31 @@ test("an explicit sign-in to a token-only OAuth account is a new grant, and refr
   await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-b")));
   assert.notEqual(await signature(), accountA);
   assert.deepEqual(changes, [true, false, true]);
+});
+
+test("writing an aiden-internal slot keeps running Bot turns, while a provider key change fences them", async () => {
+  const { file } = await fixture();
+  const leases = new BotRuntimeInventoryLeaseRegistry();
+  const fence = (change: PiCredentialWriteChange) => {
+    if (piCredentialChangeFencesBotAuthority(change)) leases.invalidate("provider_credential");
+  };
+  const store = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    beforeWritePublish: fence,
+    afterWritePublish: fence,
+  });
+
+  const turn = leases.acquire();
+  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key" }));
+  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key-2" }));
+  await store.delete("aiden-internal:image-gen:fal");
+  assert.doesNotThrow(() => turn.assertCurrent());
+
+  await store.modify("openrouter", async () => ({ type: "api_key", key: "sk-or-chat-key" }));
+  assert.throws(() => turn.assertCurrent());
+
+  const next = leases.acquire();
+  await store.delete("openrouter");
+  assert.throws(() => next.assertCurrent());
 });

@@ -547,6 +547,7 @@ object AidenAgentActivityPresentation {
         "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
         "compact_context" to Pair("Compacting context", "Compacted context"),
+        "generate_image" to Pair("Generating image", "Generated image"),
         // Activity an ACP agent (for example, Google Antigravity) ran itself.
         "delete_file" to Pair("Deleting", "Deleted"),
         "move_file" to Pair("Moving", "Moved"),
@@ -637,6 +638,27 @@ object AidenAgentActivityPresentation {
         if (timeline.steps.none { it.questionnaireRecap != null }) return timeline
         return timeline.copy(steps = timeline.steps.filter { it.questionnaireRecap == null })
     }
+
+    /**
+     * Tool steps a fallback live transcript lists. The stream's own tool rows
+     * carry `tool_N` ids that never match a step's `toolCallId`, so once the
+     * timeline knows the calls it is the one source. Questionnaires are left
+     * out: they render as their recap.
+     */
+    fun liveToolSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
+
+    /** Settled questionnaires, in timeline order, for a fallback transcript's recap cards. */
+    fun questionnaireSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
+
+    /**
+     * Whether a fallback live transcript lists the stream's own tool rows. Once
+     * the timeline has a tool step, its rows or a recap card already show each
+     * call, so the live rows would only repeat them.
+     */
+    fun showsLiveToolRows(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): Boolean =
+        tools.isNotEmpty() && timeline?.steps.orEmpty().none { it.kind == AidenAgentStep.Kind.TOOL }
 
     fun summary(timeline: AidenGenerationTimeline): String {
         val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }

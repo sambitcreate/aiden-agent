@@ -186,7 +186,10 @@ type AidenE2eOptions = {
   workspaceSeed: boolean;
   /** Extra variables for the app process, such as experimental feature flags. */
   appEnvironment: Record<string, string>;
-  /** Routes OpenRouter to a loopback fake and provides a test-only key via env. */
+  /**
+   * Routes OpenRouter to a loopback fake and provides a test-only image-generation
+   * key via env (the image registry never reads the chat OPENROUTER_API_KEY).
+   */
   fakeOpenRouter: boolean;
 };
 
@@ -890,7 +893,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       const fakeOpenRouterEnvironment: Record<string, string> = openRouter
         ? {
             AIDEN_E2E_OPENROUTER_REDIRECT_ORIGIN: openRouter.origin,
-            OPENROUTER_API_KEY: "sk-or-v1-aiden-e2e-not-a-real-key",
+            AIDEN_IMAGE_OPENROUTER_API_KEY: "sk-or-v1-aiden-e2e-not-a-real-key",
           }
         : {};
       const launch = async (): Promise<Page> => {
@@ -942,7 +945,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           xdgDataDir: testXdgDataDir,
           environment: launchEnvironment,
           runtimeProfile,
-          allowedCredentialKeys: openRouter ? ["OPENROUTER_API_KEY"] : [],
+          allowedCredentialKeys: openRouter ? ["AIDEN_IMAGE_OPENROUTER_API_KEY"] : [],
         });
         const page = await firstAidenWindow(launchedApp);
         if (state) {

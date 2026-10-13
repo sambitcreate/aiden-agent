@@ -50,6 +50,7 @@ import {
 } from "../renderer/shared/appearance.js";
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
+import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
@@ -388,6 +389,12 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  // Settled generations have recorded their last pace samples; persist the
+  // debounced remainder. Never fatal: it is a regenerable measurement cache.
+  await Promise.race([
+    modelPaceRecorder.flush().catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
+  ]);
   const subagentsSettled = await subagentRuntimeRegistry.shutdown();
   if (!subagentsSettled) {
     logger.warn(

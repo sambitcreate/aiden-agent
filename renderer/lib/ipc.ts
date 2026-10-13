@@ -1,4 +1,5 @@
 import type { CompactionEngine } from "../shared/compaction";
+import type { ModelPaceSummary } from "../shared/model-pace";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -166,6 +167,14 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type {
+  ImageGenerationActionResult,
+  ImageGenerationAddCustomModelRequest,
+  ImageGenerationProviderId,
+  ImageGenerationState,
+  ImageModelRef,
+  ImageGenerationSetModelEnabledRequest,
+} from "../shared/image-generation/types";
 import { subscribeGenerationStream } from "./generation-stream";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../shared/todo";
 import type {
@@ -420,6 +429,35 @@ export const modelInsightsApi = {
   connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
   refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
   disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
+};
+
+/** Settings → Image Generation. Keys go in only; state is redacted. */
+export const imageGenerationApi = {
+  state: () => invoke<ImageGenerationState>("imageGeneration:state"),
+  setKey: (provider: ImageGenerationProviderId, key: string) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setKey", { provider, key }),
+  removeKey: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeKey", { provider }),
+  setModelEnabled: (provider: ImageGenerationProviderId, id: string, enabled: boolean) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelEnabled", { provider, id, enabled }),
+  /** One write for many enable choices (Settings' bulk actions). */
+  setModelsEnabled: (changes: ImageGenerationSetModelEnabledRequest[]) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setModelsEnabled", { changes }),
+  setDefaultModel: (model: ImageModelRef | null) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:setDefaultModel", model),
+  addCustomModel: (request: ImageGenerationAddCustomModelRequest) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:addCustomModel", request),
+  removeCustomModel: (model: ImageModelRef) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:removeCustomModel", model),
+  /** User-initiated only: the one network path on this page. */
+  fetchModels: (provider: ImageGenerationProviderId) =>
+    invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
+};
+
+/** Device-local measured pace; reads never touch the network. */
+export const modelPaceApi = {
+  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
+  clear: () => invoke<void>("modelPace:clear"),
 };
 
 export const computerUseApi = {
@@ -1197,6 +1235,13 @@ export const chatsApi = {
   cancelForkSummary: (chatId: string) => invoke<boolean>("chats:cancelForkSummary", { chatId }),
   skipForkSummary: (chatId: string) => invoke<Chat>("chats:skipForkSummary", { chatId }),
   export: (chatId: string) => invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
+  /** Save a stored chat image to Downloads under a new name; returns the saved path. */
+  saveImageToDownloads: (chatId: string, attachmentId: string) =>
+    invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
+  copyImage: (chatId: string, attachmentId: string) =>
+    invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** Reveal a file saved by saveImageToDownloads in Finder. */
+  showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   /** Clear the post-restart "continue Computer Use" callout without resuming. */

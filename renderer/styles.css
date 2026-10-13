@@ -525,6 +525,15 @@ body {
   font-size: var(--code-font-size);
 }
 
+/* Keys named in an InfoHint (ui-info-hint.tsx) read as keycaps in the hint's text. */
+.info-hint-content kbd {
+  padding-inline: 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .code-font-sized,
 .code-font-sized :where(textarea, code, pre) {
   font-family: var(--font-code-family);
@@ -545,8 +554,9 @@ body {
 }
 
 /* Activity marks are excluded: they freeze on their own still pose (see .aiden-mark),
-   and collapsing their tracks to 0.001ms would end them on a last frame instead. */
-:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *),
+   and collapsing their tracks to 0.001ms would end them on a last frame instead.
+   A generated image's arrival keeps its short opacity fade (see .image-scan). */
+:root[data-reduce-motion="true"] *:not(.aiden-mark, .aiden-mark *, .image-scan-result),
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.001ms !important;
@@ -967,10 +977,9 @@ textarea {
 }
 
 /*
- * The model map borrows the tactile grammar of Apple's Photographic Styles
- * pad while keeping Aiden's restrained surfaces and accent palette. The
- * lattice is structural: its highlighted row and column expose both axes at
- * the current model instead of turning the map into an unlabeled mood field.
+ * Settings → Model Pad: the card is a size container so the tray can sit
+ * beside the square or stack under it; the header holds the count, the
+ * metric chip and the Add, Arrange and ⋯ actions.
  */
 .model-pad-fieldset {
   width: 100%;
@@ -978,71 +987,106 @@ textarea {
   container: model-pad-fieldset / inline-size;
 }
 
-.model-pad-field {
-  padding: 1.5rem;
+.model-pad-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.75rem 0.75rem 0 1rem;
 }
 
-.model-pad-field::after {
-  inset-inline: 1.5rem;
-}
-
-.settings-model-pad-grid {
-  grid-template-columns: minmax(0, 1fr);
+.model-pad-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16.25rem;
   align-items: start;
-  justify-content: center;
-  margin-top: 1.25rem;
-}
-
-.settings-model-pad-grid[data-panel-open="true"] {
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
+  gap: 1rem;
+  padding: 0.75rem 1rem 1rem;
 }
 
 .model-pad-canvas {
-  width: min(100%, 40rem);
-  margin-inline: auto;
-  view-transition-name: model-pad-canvas;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.model-pad-browser {
-  position: sticky;
-  top: 1rem;
+/* Beside the square, the tray is never taller than it: the same size the
+   square resolves to (`.model-pad` width), with the list scrolling inside. */
+.model-pad-tray {
+  display: flex;
+  max-height: min(30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  flex-direction: column;
+}
+
+.model-pad-tray-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The tray's source glyph speaks the Pad's marker language at row size. */
+.model-pad-tray-glyph {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex-shrink: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 9999px;
+}
+
+.model-pad-tray-glyph[data-placement-source="personal"] {
+  background: var(--accent);
+}
+
+/* Names the score behind benchmark heights, in the Pad header so it never
+   covers a marker in the square. */
+.model-pad-metric-chip {
+  display: inline-flex;
+  height: 1.25rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
   border: 0;
-  box-shadow: var(--elevation-control);
-  view-transition-name: model-pad-browser;
-}
-
-.model-pad-browser-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.75rem;
-}
-
-.model-pad-browser-count {
-  padding-top: 0.125rem;
-  color: var(--text-tertiary);
-  font-size: var(--text-mini);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--text-mini--line-height);
+  border-radius: var(--radius-pill);
   white-space: nowrap;
-}
-
-.model-pad-panel-below {
-  display: none;
-}
-
-.model-pad-axis-label {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
-  margin-inline: auto;
+  background: var(--surface-control);
   color: var(--text-secondary);
-  font-size: var(--text-strong);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: var(--text-strong--line-height);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  outline: none;
+  transition:
+    background-color var(--motion-duration) var(--ease-standard),
+    color var(--motion-duration) var(--ease-standard);
+}
+
+.model-pad-metric-chip:hover,
+.model-pad-metric-chip[data-state="open"] {
+  background: var(--surface-control-hover);
+  color: var(--text-primary);
+}
+
+.model-pad-metric-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Under the square while suggestions are previewed. */
+.model-pad-preview-bar {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  margin-top: 0.625rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.75rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  font-size: var(--text-small);
 }
 
 .model-pad {
-  width: min(100%, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
+  width: min(100%, 30rem, var(--model-pad-available-size, max(10rem, calc(100dvh - 24rem))));
   min-width: 0;
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
@@ -1099,24 +1143,50 @@ textarea {
 }
 
 .model-pad-marker-visual {
-  border: 0;
+  border: 2px solid transparent;
   box-shadow: var(--elevation-control);
   transition:
     transform 150ms cubic-bezier(0, 0, 0.2, 1),
     box-shadow 120ms ease-out;
 }
 
-.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+/*
+ * One marker language on both Pad surfaces (composer picker, settings editor and tray):
+ * a personal placement is a solid accent dot; any data-assisted placement is a hollow
+ * accent ring; a previewed suggestion (settings only, not saved yet) is a faint dashed
+ * ring. The kinds differ by shape, not only by color.
+ */
+.model-pad-model[data-placement-source="personal"],
+.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
+  border-color: var(--accent);
   background: var(--accent);
 }
 
-.model-pad-marker[data-placement-source="personal"] .model-pad-marker-visual {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
+.model-pad-model[data-placement-source="benchmark"],
+.model-pad-marker[data-placement-source="benchmark"] .model-pad-marker-visual {
+  border-color: var(--accent);
+  background: transparent;
+}
+
+.model-pad-marker[data-placement-source="suggestion"] .model-pad-marker-visual {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+.model-pad-marker[data-placement-source="suggestion"]:hover .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:focus-visible .model-pad-marker-visual,
+.model-pad-marker[data-placement-source="suggestion"]:active .model-pad-marker-visual {
+  box-shadow: none;
+  opacity: 1;
 }
 
 .model-pad-marker:hover,
 .model-pad-marker:focus-visible,
-.model-pad-marker[data-selected="true"] {
+.model-pad-marker[data-selected="true"],
+.model-pad-marker[data-hot="true"] {
   z-index: 30;
 }
 
@@ -1126,7 +1196,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-visual,
 .model-pad-marker:focus-visible .model-pad-marker-visual,
-.model-pad-marker[data-selected="true"] .model-pad-marker-visual {
+.model-pad-marker[data-selected="true"] .model-pad-marker-visual,
+.model-pad-marker[data-hot="true"] .model-pad-marker-visual {
   box-shadow: var(--elevation-control-hover);
   transform: scale(1.08);
 }
@@ -1134,6 +1205,18 @@ textarea {
 .model-pad-marker:active .model-pad-marker-visual {
   box-shadow: var(--elevation-control-pressed);
   transform: scale(1);
+}
+
+/*
+ * Another route to the hovered, focused or selected model (the same model through a
+ * different provider) shares its state with a soft accent halo: no border or outline,
+ * no scale (hover, focus and selection own that), and the button's focus-visible ring
+ * and a selected marker's own styling are untouched.
+ */
+.model-pad-marker[data-linked="true"]:not([data-selected="true"]) .model-pad-marker-visual {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
+    var(--elevation-control);
 }
 
 .model-pad-marker-label {
@@ -1163,7 +1246,8 @@ textarea {
 
 .model-pad-marker:hover .model-pad-marker-label,
 .model-pad-marker:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-hot="true"] .model-pad-marker-label {
   opacity: 1;
   transform: translate(-50%, 0) scale(1);
 }
@@ -1176,7 +1260,8 @@ textarea {
 
 .model-pad-marker[data-label-side="bottom"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-side="bottom"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-hot="true"] .model-pad-marker-label {
   transform: translate(-50%, 0) scale(1);
 }
 
@@ -1188,7 +1273,8 @@ textarea {
 
 .model-pad-marker[data-label-align="start"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="start"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="start"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="start"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
@@ -1201,7 +1287,8 @@ textarea {
 
 .model-pad-marker[data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-align="end"]:focus-visible .model-pad-marker-label,
-.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label {
+.model-pad-marker[data-label-align="end"][data-selected="true"] .model-pad-marker-label,
+.model-pad-marker[data-label-align="end"][data-hot="true"] .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
@@ -1216,186 +1303,112 @@ textarea {
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-selected="true"]
   .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="start"][data-hot="true"]
+  .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:hover .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"]:focus-visible
   .model-pad-marker-label,
 .model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-selected="true"]
+  .model-pad-marker-label,
+.model-pad-marker[data-label-side="bottom"][data-label-align="end"][data-hot="true"]
   .model-pad-marker-label {
   transform: translate(0, 0) scale(1);
 }
 
-.model-pad-legend {
-  min-height: 2.5rem;
-}
-
-.model-pad-legend-marker {
-  display: inline-block;
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 0;
-  border-radius: 9999px;
-  box-shadow: var(--elevation-control);
-}
-
-.model-pad-legend-marker[data-source="benchmark"] {
-  background: var(--accent);
-}
-
-.model-pad-legend-marker[data-source="personal"] {
-  background: color-mix(in srgb, var(--accent) 38%, var(--surface-popover));
-}
-
-.model-pad-catalog {
-  max-height: max(8rem, var(--model-pad-available-size, calc(100dvh - 24rem)));
-}
-
-.model-pad-catalog-shell {
-  position: relative;
-}
-
-.model-pad-catalog-shell[data-more-below="true"]::after {
-  position: absolute;
-  z-index: 10;
-  inset-inline: 0;
-  bottom: 0;
-  height: 4rem;
-  border-radius: 0 0 var(--radius-control) var(--radius-control);
-  background: linear-gradient(to bottom, transparent, var(--surface-background) 78%);
-  content: "";
-  pointer-events: none;
-}
-
-.model-pad-catalog-more {
-  position: absolute;
-  z-index: 20;
-  bottom: 0.5rem;
-  left: 50%;
-  min-width: max-content;
-  border: 0;
-  background: color-mix(in srgb, var(--surface-popover) 94%, transparent);
-  box-shadow: var(--elevation-popover);
-  transform: translateX(-50%);
-  white-space: nowrap;
-  backdrop-filter: blur(12px) saturate(1.08);
-  -webkit-backdrop-filter: blur(12px) saturate(1.08);
-}
-
-.model-pad-catalog-more:hover {
-  background: var(--surface-popover);
-}
-
-.model-pad-disclosure {
-  margin-top: 1.5rem;
-  border: 0;
-  box-shadow: none;
-  view-transition-name: model-pad-insights;
-}
-
-/*
- * Supporting-panel switches use document snapshots so the Pad can move and
- * resize on the compositor instead of transitioning grid width. The root is
- * kept stable; only the named Pad and disclosed panel participate.
- */
-::view-transition-group(root) {
-  animation: none;
-}
-
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-::view-transition-group(model-pad-canvas) {
-  z-index: 2;
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1);
-}
-
-::view-transition-old(model-pad-canvas) {
-  animation: none;
-  opacity: 0;
-}
-
-::view-transition-new(model-pad-canvas) {
-  animation: none;
-  opacity: 1;
-}
-
-::view-transition-group(model-pad-browser),
-::view-transition-group(model-pad-insights) {
-  z-index: 3;
-}
-
-::view-transition-new(model-pad-browser) {
-  animation: model-pad-browser-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-browser) {
-  animation: model-pad-browser-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-new(model-pad-insights) {
-  animation: model-pad-insights-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-::view-transition-old(model-pad-insights) {
-  animation: model-pad-insights-out 110ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-@keyframes model-pad-browser-in {
-  from {
-    opacity: 0;
-    transform: translateX(8px) scale(0.985);
-  }
-}
-
-@keyframes model-pad-browser-out {
-  to {
-    opacity: 0;
-    transform: translateX(4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.99);
-  }
-}
-
-@keyframes model-pad-insights-out {
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.995);
-  }
-}
-
-.model-pad-management {
-  margin-top: 1.5rem;
-}
-
-.model-pad-management > summary::-webkit-details-marker {
-  display: none;
-}
-
-.model-pad-management > summary::after {
-  float: right;
-  color: var(--text-tertiary);
-  content: "›";
-  transform: rotate(90deg);
-  transition: transform 150ms ease-out;
-}
-
-.model-pad-management[open] > summary::after {
-  transform: rotate(-90deg);
-}
-
 .model-pad-model {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1.5px solid transparent;
+  /* Thin popover halo lifts the dot off the grid dots underneath it. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-popover) 55%, transparent);
   transition:
     background-color 120ms ease-out,
     box-shadow 120ms ease-out,
-    opacity 120ms ease-out;
+    scale 120ms ease-out;
+}
+
+/* The current model: the marker grows and gains a detached neutral target ring. */
+.model-pad-model[data-state="selected"] {
+  scale: 1.25;
+  box-shadow:
+    0 0 0 2px var(--surface-popover),
+    0 0 0 3.5px color-mix(in srgb, var(--text-primary) 45%, transparent);
+}
+
+/* The knob's current spot: the marker grows under the knob without the target ring. */
+.model-pad-model[data-state="preview"] {
+  scale: 1.25;
+  box-shadow: 0 0 0 2px var(--surface-popover);
+}
+
+/* Pad axis captions (composer and settings), in the 8% inset margin outside the
+   lattice. They are dropped on a Pad too small for the margin to clear the edge
+   markers. */
+.model-pad-axis-captions {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-axis-captions > span {
+  position: absolute;
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.model-pad-axis-captions > [data-axis="capability"] {
+  top: 2px;
+  left: 50%;
+  translate: -50% 0;
+}
+
+.model-pad-axis-captions > [data-axis="faster"] {
+  bottom: 2px;
+  left: 8%;
+}
+
+.model-pad-axis-captions > [data-axis="deliberate"] {
+  right: 8%;
+  bottom: 2px;
+}
+
+@container (max-width: 255px) {
+  .model-pad-axis-captions > span {
+    display: none;
+  }
+}
+
+/* Settings empty Pad: hint plus quick starts. The hint is dropped on a small
+   Pad so both quick starts stay fully visible down to the 160px minimum. */
+.model-pad-empty-state {
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  pointer-events: none;
+}
+
+.model-pad-empty-state-content {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding-inline: 2.5rem;
+  text-align: center;
+}
+
+@container (max-width: 255px) {
+  .model-pad-empty-state-content {
+    padding-inline: 0.75rem;
+  }
+
+  .model-pad-empty-hint {
+    display: none;
+  }
 }
 
 .model-pad-knob {
@@ -1412,6 +1425,41 @@ textarea {
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
     var(--elevation-control-hover);
+}
+
+/*
+ * The previewed model's name beside the composer knob. It jumps with the knob (no
+ * transform transition) and uses the marker-label surface. Its pixel position and
+ * offsets come from modelPadKnobTagLayout; these rules only anchor the tag on the edge
+ * that position names (left edge, center or right edge; bottom or top edge).
+ */
+.model-pad-knob-tag {
+  --model-pad-knob-tag-x: -50%;
+  --model-pad-knob-tag-y: -100%;
+  width: max-content;
+  padding: 0.25rem 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-popover);
+  background: color-mix(in srgb, var(--surface-popover) 96%, transparent);
+  box-shadow: var(--elevation-popover);
+  pointer-events: none;
+  text-align: left;
+  white-space: nowrap;
+  transform: translate(var(--model-pad-knob-tag-x), var(--model-pad-knob-tag-y));
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.model-pad-knob-tag[data-label-side="bottom"] {
+  --model-pad-knob-tag-y: 0;
+}
+
+.model-pad-knob-tag[data-label-align="start"] {
+  --model-pad-knob-tag-x: 0;
+}
+
+.model-pad-knob-tag[data-label-align="end"] {
+  --model-pad-knob-tag-x: -100%;
 }
 
 [data-toolbar] {
@@ -1614,48 +1662,14 @@ textarea {
   }
 }
 
-/* Short windows share one wrapping row flow for Pad counts and actions. This
- * avoids an otherwise nearly empty counts row pushing the minimum-size Pad
- * and its legend below the Linux content viewport. Keep control sizes intact. */
-@media (max-height: 640px) {
-  .model-pad-toolbar-actions {
-    display: contents;
-  }
-
-  .settings-model-pad-grid {
-    margin-top: 0.75rem;
-  }
-}
-
-@container settings-content (max-width: 620px) {
-  .settings-model-pad-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@container model-pad-fieldset (max-width: 760px) {
-  .settings-model-pad-grid[data-panel-open="true"] {
+/* The tray moves under the Pad when the card itself is narrow. */
+@container model-pad-fieldset (max-width: 640px) {
+  .model-pad-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-pad-browser {
-    position: static;
-    scroll-margin-top: 1rem;
-  }
-
-  .model-pad-panel-below {
-    display: flex;
-    justify-content: center;
-    margin-block: -0.125rem -0.375rem;
-  }
-
-  .model-pad-catalog {
-    max-height: 18rem;
-  }
-
-  .model-pad-legend > :last-child {
-    width: 100%;
-    margin-left: 0;
+  .model-pad-tray {
+    max-height: none;
   }
 }
 
@@ -2688,6 +2702,7 @@ textarea {
   .model-pad-knob,
   .model-pad-marker-label,
   .model-pad-marker-visual,
+  .model-pad-metric-chip,
   .model-pad-model,
   .model-pad-node {
     transition: none;
@@ -2709,6 +2724,8 @@ textarea {
 :root[data-reduce-motion="true"] .model-pad-chip,
 :root[data-reduce-motion="true"] .model-pad-marker-label,
 :root[data-reduce-motion="true"] .model-pad-marker-visual,
+:root[data-reduce-motion="true"] .model-pad-metric-chip,
+:root[data-reduce-motion="true"] .model-pad-model,
 :root[data-reduce-motion="true"] .model-pad-node {
   transition: none;
 }
@@ -3104,3 +3121,165 @@ textarea {
   transform: none;
   transition: none;
 }
+
+/* ---- Generated-image "Lens" placeholder ------------------------------------
+   Shown where a chat's generated image will appear while generate_image runs.
+   Numbers mirror IMAGE_SCAN_SPEC in renderer/shared/image-generation/placeholder-spec.ts
+   (iOS and Android use the same spec). Only transform and opacity animate; the
+   dot fields are tiled gradients drawn once. Without motion (Reduce Motion, or
+   before the animation class applies) the lens rests in its still pose. */
+/* The slot is exactly the requested shape: as wide as the column allows, at
+   most 42rem wide and 32rem tall. A generated image renders at the same size. */
+.image-scan-slot {
+  width: min(100%, 42rem, calc(32rem * var(--image-scan-aspect, 1)));
+}
+.image-scan {
+  --image-scan-period: 2.8s;
+  --image-scan-dot: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --image-scan-dot-lit: color-mix(in srgb, var(--text-primary) 58%, transparent);
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--image-scan-ratio, 1 / 1);
+  overflow: hidden;
+  contain: paint;
+  isolation: isolate;
+}
+.image-scan-result {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Never crop: a provider that ignores the requested ratio letterboxes. */
+  object-fit: contain;
+}
+.image-scan[data-scan-period="long"] { --image-scan-period: 5.2s; }
+.image-scan-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-popover);
+}
+.image-scan-cover > * { position: absolute; inset: 0; }
+.image-scan-fill { background: var(--surface-control); }
+.image-scan-dots {
+  background-image: radial-gradient(var(--image-scan-dot) 1px, transparent 1.3px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+/* Edges sink toward the window background, which is darker than the popover in every theme. */
+.image-scan-vignette {
+  background: radial-gradient(120% 90% at 50% 40%, transparent 55%, color-mix(in srgb, var(--surface-background) 70%, transparent));
+}
+/* The lens: 34% of the height. Its still pose centres it at 40% of the height. */
+.image-scan .image-scan-lens,
+.image-scan .image-scan-edge {
+  inset: 0 0 auto 0;
+  height: 34%;
+  transform: translateY(67.65%);
+  will-change: transform;
+}
+.image-scan-lens {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 70%, #000 96%, transparent 100%);
+}
+.image-scan-lens-glow {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--accent) 7%, transparent) 100%);
+}
+/* Counter-moving bright dots, the placeholder's full height, so lit dots stay put. */
+.image-scan-lens-dots {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 294.12%;
+  transform: translateY(-23%);
+  will-change: transform;
+  background-image: radial-gradient(var(--image-scan-dot-lit) 1.1px, transparent 1.5px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+.image-scan-edge { pointer-events: none; }
+.image-scan-edge::after,
+.image-scan-cover::before {
+  content: "";
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent) 22%, var(--accent) 78%, transparent);
+}
+.image-scan-edge::after {
+  bottom: 0;
+  opacity: 0.85;
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens,
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-edge {
+  animation: image-scan-window var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+:root[data-reduce-motion="false"] .image-scan[data-motion="animate"] .image-scan-lens-dots {
+  animation: image-scan-counter var(--image-scan-period) cubic-bezier(0.55, 0.06, 0.3, 1) infinite;
+}
+/* Travel during the first 78% of each pass, then rest. */
+@keyframes image-scan-window {
+  0% { transform: translateY(-100%); }
+  78%, 100% { transform: translateY(294.12%); }
+}
+@keyframes image-scan-counter {
+  0% { transform: translateY(34%); }
+  78%, 100% { transform: translateY(-100%); }
+}
+/* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
+   pauses the scan but never the arriving image's own fade. */
+.image-scan-slot[data-offscreen] *,
+.image-scan-slot[data-document-hidden] *,
+.image-scan-slot[data-arrival="reveal"] .image-scan-live,
+.image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
+/* Arrival: the cover slides away under a bright edge, revealing the image. */
+.image-scan-cover::before {
+  top: -1px;
+  z-index: 1;
+  opacity: 0;
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover {
+  transform: translateY(100%);
+  transition: transform 720ms cubic-bezier(0.65, 0.05, 0.25, 1);
+}
+.image-scan[data-arrival="reveal"] .image-scan-cover::before {
+  opacity: 0.9;
+  transition: opacity 120ms;
+}
+.image-scan[data-arrival="reveal"] .image-scan-chip {
+  opacity: 0;
+  transition: opacity 200ms;
+}
+:root[data-reduce-motion="true"] .image-scan[data-arrival="reveal"] .image-scan-cover { transition: none; }
+:root[data-reduce-motion="true"] .image-scan-result { animation: image-scan-fade 260ms ease-out both; }
+@keyframes image-scan-fade { from { opacity: 0; } }
+.image-scan-chip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--surface-popover) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-mini);
+  line-height: var(--text-mini--line-height);
+  font-variant-numeric: tabular-nums;
+}
+.image-scan-live {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.9;
+}
+:root[data-reduce-motion="false"] .image-scan-caption[data-motion="animate"] .image-scan-live {
+  animation: image-scan-live 1.4s ease-in-out infinite;
+}
+@keyframes image-scan-live { 50% { opacity: 0.25; } }
