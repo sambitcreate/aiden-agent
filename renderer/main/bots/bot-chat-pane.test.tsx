@@ -623,14 +623,16 @@ test("an interrupted Bot whose access changed opens Advanced, not just the Profi
 function measurableScrollport(scrollHeight: number, clientHeight: number) {
   const viewport = document.querySelector<HTMLElement>("[data-scroll-top]");
   assert.ok(viewport, "the chat scrolls in its own scrollport");
-  let top = 0;
+  // The chat opens pinned to its latest message.
+  let top = scrollHeight - clientHeight;
   Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => scrollHeight });
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => clientHeight });
   Object.defineProperty(viewport, "scrollTop", {
     configurable: true,
     get: () => top,
+    // Like a real scrollport, the offset clamps to the scrollable range.
     set: (value: number) => {
-      top = value;
+      top = Math.max(0, Math.min(value, scrollHeight - clientHeight));
     },
   });
   viewport.scrollTo = ((options: ScrollToOptions) => {
@@ -639,7 +641,10 @@ function measurableScrollport(scrollHeight: number, clientHeight: number) {
   return {
     viewport,
     scrollTop: () => top,
+    // A person reading back scrolls with a gesture (here a wheel turn) and the
+    // scrollport then moves; follow-the-bottom yields only to that intent.
     scrollUserTo: (value: number) => {
+      fireEvent.wheel(viewport, { deltaY: value < top ? -120 : 120 });
       top = value;
       fireEvent.scroll(viewport);
     },

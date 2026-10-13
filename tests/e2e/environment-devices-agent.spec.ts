@@ -116,7 +116,8 @@ test.describe("Simulator agent tools", () => {
       // Without agent access, a generation never sees device tools.
       await page.locator("textarea").fill("Hello before simulators.");
       await page.getByRole("button", { name: "Send message" }).click();
-      await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+      // The reply can fork once it has settled into its saved message.
+      await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
       await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
       const agentRequests = () => lmStudio.requests.filter(({ body }) => toolNamesIn(body).length > 0);
       expect(agentRequests().length).toBeGreaterThan(0);
