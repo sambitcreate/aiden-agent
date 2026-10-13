@@ -412,6 +412,10 @@ test("the same session control drives a chat on this Mac and one on another Mac 
     },
     stop: async (runId) => local.cancel(runId),
     admitRunInput: (streamId, input) => local.admitInput({ streamId, chatId: "chat-1", mode: input.mode, text: input.text }),
+    observeRun: unused,
+    unobserveRun: unused,
+    onRunFrame: () => () => {},
+    stopHostRun: unused,
   });
   localRuns.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   localRuns.publish("run-1", "chat:approval", APPROVAL);

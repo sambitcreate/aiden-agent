@@ -28,7 +28,7 @@ This is sibling C of the devices-parity effort (six parallel implementers). It p
 - **Local updates.** If an older hub is installed and streaming consent is held, `idleStatus` is `stopped` with "X replaces Y when you choose Start". Only `startHost("local")` passes `allowInstall`. The tab's mount and refresh never do. The panel's Start now calls `devices:start-host` instead of `refresh("local")`.
 - **Prune and reclaim.**
   - `pruneOldToolVersions` was deleted.
-  - Prune now goes through `runToolMaintenance`, which runs under Electron-as-Node with `ps` to protect in-use versions.
+  - Prune now goes through `runToolMaintenance`, which runs under standalone Node with `ps` to protect in-use versions.
   - After an update, a reclaim keeps the newest previous version.
   - Maintenance runs through the `runMaintenance` dependency, which is injected in tests.
 - **Quit and revoke are bounded.** Tunnels close immediately. The remote `stop` gets 5 s (`withinBudget`), because `shutdownDevices()` is not otherwise bounded in `main/index.ts`.
@@ -53,3 +53,12 @@ This is sibling C of the devices-parity effort (six parallel implementers). It p
 - There is no Electron E2E for the SSH flow, because it would need a fake `ssh` binary. Real-host acceptance against a second Mac is still pending.
 - Settings has no per-host "Prune" for SSH hosts. The remote side reclaims automatically after a successful start.
 - After a version mismatch, the local daemon from an older Aiden is replaced only via `stopAgent` on an agent update. `startAgentDaemon` still reuses any healthy `daemon.json`, which was pre-existing behaviour.
+
+
+## Packaged local runtime fix (2026-10-12)
+- Production disables Electron RunAsNode. Local helpers now resolve standalone Node 22+ from PATH, the login shell, then Homebrew; never fall back to the app executable. Runtime validation refuses Electron and direct/symlink/hard-link aliases of the app.
+- Discovery is lazy and uncached across failed starts. Retry can recover after installing Node without restarting Aiden. Hub restarts and agent-device use the selected runtime, with its directory first on PATH for nested helpers. Local shims (including SSH targets), maintenance and notification-permission helper calls no longer request Electron Node mode.
+- Existing suites now launch a real HTTP helper while the host executable cannot run scripts; the test reproduces the production early-exit error against the old implementation. Additional cases cover missing Node/retry, old or invalid runtimes, app aliases, spawn errors, and executing the generated agent shim.
+- No protocol, mobile DTO, release fuse, provider, or startup network changes. Packaged runtime smoke and PR validation results are recorded in the PR.
+- Local validation: device suite 598/598; simulator stream + agent Electron E2E 2/2; type-check, E2E type-check, ESLint and production build passed. An isolated ASAR Electron 43.1.1 app with RunAsNode disabled launched the actual installed expo-device-hub 0.12.0 through standalone Node and received readyz HTTP 200. This is runtime smoke evidence, not a notarized Aiden release or physical-device acceptance.
+- PR #447 review follow-up: Node discovery is best effort during daemon shutdown so missing Node cannot block consent revocation, token-config deletion, tool removal or proxy closure. Missing Node uses a recoverable setup error, preserving Settings' existing Retry action. Tests exercise real service removal/revocation and the service-produced Settings error followed by successful Retry. Device suite now passes 600/600.

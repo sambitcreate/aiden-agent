@@ -97,7 +97,9 @@ class AidenQuestionnaireRecapUiTest {
                     tools = emptyList(),
                     activityTimeline = timeline,
                     isBotChat = false,
-                    palette = AidenTheme.palette
+                    palette = AidenTheme.palette,
+                    onCopyMessage = {},
+                    onOpenMessageUrl = {}
                 )
             }
         }

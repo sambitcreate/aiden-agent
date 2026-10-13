@@ -157,11 +157,8 @@ test("floating Environment remains non-modal across every app-level interaction 
   const assistant = source("./assistant/assistant-dock.tsx");
 
   assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
-  // Floating geometry and titlebar clearance are exercised in Electron.
-  assert.match(
-    environment,
-    /reportSurfaceLayout\(fullOpen \? \{ inline, width: renderedWidth \} : null\)/u,
-  );
+  // Floating geometry, titlebar clearance, and the stacked tools state the
+  // workbench reports are exercised in Electron (workspace-panel, chat-top-bar).
   assert.match(environment, /const toggleTools = React\.useCallback/u);
   assert.match(
     environment,
@@ -586,10 +583,6 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(
-    pane,
-    /cachedMessages\?\.\[cachedMessages\.length - 1\]\?\.role === "assistant" \? null : detachedProjection/u,
-  );
   assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(

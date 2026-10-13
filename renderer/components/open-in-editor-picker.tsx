@@ -136,11 +136,11 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     <div
       role="group"
       aria-label="Open workspace in editor"
-      className="open-in-editor-picker squircle-control squircle-action-group glass-surface flex h-9 shrink-0 shadow-control transition-shadow duration-150 ease-out hover:shadow-control-hover"
+      className="open-in-editor-picker squircle-control squircle-action-group flex h-7 shrink-0"
     >
       <Button
-        variant="transparent"
-        size="large"
+        variant="bar"
+        size="small"
         disabled={disabled}
         onClick={() => void openPreferredEditor()}
         aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -149,19 +149,19 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
             ? `Open workspace in ${preferredEditor.label}`
             : "Open workspace in preferred editor"
         }
-        className="h-9 border-0 px-2.5"
+        className="h-7 border-0 px-2 text-small"
       >
         {preferredEditor ? (
-          <EditorIcon editor={preferredEditor} className="size-[18px] shrink-0 rounded-[4px]" />
+          <EditorIcon editor={preferredEditor} className="size-4 shrink-0 rounded-[4px]" />
         ) : (
           <span
             aria-hidden="true"
-            className="size-[18px] shrink-0 animate-pulse rounded-[4px] bg-control"
+            className="size-4 shrink-0 animate-pulse rounded-[4px] bg-control"
           />
         )}
         <span className="open-in-editor-label">Open</span>
       </Button>
-      <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator" />
+      <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator/70" />
       <DropdownMenu
         onOpenChange={(open) => {
           if (open) void refreshEditors(true);
@@ -170,11 +170,11 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         <DropdownMenuTrigger asChild>
           <Button
             iconOnly
-            variant="transparent"
-            size="large"
+            variant="bar"
+            size="small"
             disabled={disabled}
             aria-label="Choose editor"
-            className="h-9 w-8 border-0 [&_svg]:size-4"
+            className="h-7 w-6 border-0 [&_svg]:size-3.5"
           >
             <ChevronDown aria-hidden="true" />
           </Button>

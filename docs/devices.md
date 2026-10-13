@@ -2,7 +2,7 @@
 
 Aiden can show an iOS Simulator in the Environment panel's **Simulator** tab. There you can tap, type and turn the device yourself. You can also let chats drive it with the `device_*` agent tools while you watch. The design is adapted from T3 Code (MIT, commit `1c127066`); see `THIRD_PARTY_NOTICES.md`.
 
-The feature is on by default on macOS and needs Xcode installed. It is never available on other platforms. To turn it off, launch Aiden with `AIDEN_EXPERIMENTAL_DEVICES=0` (any value other than `1` or `true` disables it).
+The feature is on by default on macOS. Local device helpers need Node.js 22 or newer, plus npm for installation. iOS Simulators also need Xcode installed. It is never available on other platforms. To turn it off, launch Aiden with `AIDEN_EXPERIMENTAL_DEVICES=0` (any value other than `1` or `true` disables it).
 
 ## Using it
 
@@ -163,7 +163,7 @@ This section is adapted from T3 Code's `docs/internals/devices.md`.
 
 `expo-device-hub` streams the simulator and `agent-device` drives it. Each one is npm-installed at a pinned version into `userData/devices/tools/<name>/<version>/` after its own consent step. Installs are staged and marked complete with an `.install-complete` sentinel (`main/services/devices/device-toolchain.ts`). Setup installs and starts only the hub. `agent-device` stays absent until agent access is granted.
 
-Both helpers run under Electron's Node (`ELECTRON_RUN_AS_NODE`) rather than `npx`, so opening a device never depends on the registry. The hub is a supervised child process rather than imported middleware, because serve-sim loads private CoreSimulator frameworks through a native addon, and a crash there must not take Aiden down.
+Both helpers run under standalone Node.js rather than `npx`, so opening a device never depends on the registry. Aiden resolves Node from PATH, the user's login shell, or standard Homebrew locations when a device action needs it. It validates Node 22 or newer and refuses Electron itself. The same runtime drives agent-device and helper maintenance; the packaged app keeps its RunAsNode fuse disabled. If Node is missing, install it and choose Retry without relaunching Aiden. The hub is a supervised child process rather than imported middleware, because serve-sim loads private CoreSimulator frameworks through a native addon, and a crash there must not take Aiden down.
 
 Everything host-specific sits behind `DeviceHost` (`device-host.ts`, `local-device-host.ts`). `device-service.ts` holds the device state:
 
