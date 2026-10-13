@@ -113,10 +113,11 @@ test("pi telemetry is removed, not just disabled", () => {
 	// The entry forces PI_TELEMETRY=0, which wins over settings and kills both
 	// the pi.dev report-install ping and pi's attribution headers.
 	assert.match(cliBundle, /PI_TELEMETRY["']?\]?\s*=\s*["']0["']/, "entry must force PI_TELEMETRY=0");
-	// The settings default flips to off so /config reflects reality.
-	// minifySyntax rewrites `?? false` / `?? true` as `??!1` / `??!0`
-	assert.ok(everything.includes("enableInstallTelemetry??!1"), "install telemetry must default off");
-	assert.ok(!everything.includes("enableInstallTelemetry??!0"), "stock default-on telemetry must not survive");
+	// The settings default flips to off so /config reflects reality (the
+	// parity suite checks the real SettingsManager reads it as false).
+	// minifySyntax rewrites `false` / `true` as `!1` / `!0`.
+	assert.ok(everything.includes("enableInstallTelemetry:!1"), "install telemetry must default off");
+	assert.ok(!everything.includes("enableInstallTelemetry:!0"), "stock default-on telemetry must not survive");
 	assert.ok(!everything.includes("reportInstallTelemetry(VERSION)"), "ping call sites must be patched out");
 	assert.ok(!everything.includes("pi.dev/api/report-install"), "the telemetry endpoint must not ship");
 	// The startup wordmark: 5-row solid-block AIDEN banner (oh-my-pi style),

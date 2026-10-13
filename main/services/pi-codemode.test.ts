@@ -10,6 +10,11 @@ import { partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import { codemodeResultSchema, createPiCodemodeTool, MAX_CODEMODE_TOOLS } from "./pi-codemode.js";
 import { executeMcpAgentTool, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_SCRIPT_STRUCTURED_BYTES } from "./mcp-tool-result.js";
 
+/** A text item's own output, without the `==> text N/M <==` line that separates several items. */
+function itemText(block: unknown): string {
+  return (block as { text: string }).text.replace(/^==> text \d+\/\d+ <==\n/u, "");
+}
+
 function fixture() {
   const calls: Array<{ parent: string; name: string; args: unknown }> = [];
   const read: AgentTool = {
@@ -46,7 +51,7 @@ test("codemode sandbox has no ambient Node or network authority and exposes argu
   const { tool } = fixture();
   const result = await tool.execute("parent", { code: 'text([typeof process, typeof require, typeof fetch]); text(await describeTool("read_file"));' });
   assert.equal(result.isError, false);
-  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), ["undefined", "undefined", "undefined"]);
+  assert.deepEqual(JSON.parse(itemText(result.content[0])), ["undefined", "undefined", "undefined"]);
   assert.match((result.content[1] as { text: string }).text, /path: string/u);
 });
 
@@ -113,6 +118,18 @@ test("codemode bounds model-facing output and reports script failures", async ()
   assert.equal((await tool.execute("parent", { code: 'throw new Error("script failed");' })).isError, true);
 });
 
+test("codemode keeps text() items apart and gathers console output after them", async () => {
+  const { tool } = fixture();
+  const result = await tool.execute("parent", { code: 'console.log("log one"); text("first"); console.warn("log two"); text("second");' });
+  assert.equal(result.isError, false);
+  assert.deepEqual(
+    result.content.map((block) => (block as { text: string }).text),
+    ["==> text 1/2 <==\nfirst", "==> text 2/2 <==\nsecond", "<console_output>\nlog one\nlog two\n</console_output>"],
+  );
+  const single = await tool.execute("parent", { code: 'text("only");' });
+  assert.deepEqual(single.content, [{ type: "text", text: "only" }], "one text item carries no separator line");
+});
+
 test("nested operation usage is counted once on the parent tool result", async () => {
   const callable: AgentTool = { name: "read_file", label: "Read", description: "Read", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) };
   const tool = createPiCodemodeTool({
@@ -169,7 +186,7 @@ test("sandbox discovery exposes fresh admitted schemas and treats server instruc
   const tool = createPiCodemodeTool({ tools: () => inventory, executeTool: async () => { throw new Error("Discovery must not dispatch effects"); } });
   const found = await tool.execute("one", { code: 'text(await searchTools("documents", {namespace:"docs"})); text(await describeNamespace("docs"));' });
   assert.equal(found.isError, false);
-  const outputs = found.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  const outputs = found.content.filter((item) => item.type === "text").map((item) => JSON.parse(itemText(item)));
   assert.equal(outputs[0].tools[0].name, "remote_docs");
   assert.deepEqual(outputs[0].tools[0].inputSchema.required, ["query"]);
   assert.equal(outputs[1].instructionsAreUntrusted, true);
@@ -231,8 +248,8 @@ test("a script that searches waits for servers still discovering, then can call 
   setTimeout(arrive, 20);
   const result = await running;
   assert.equal(result.isError, false);
-  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), ["docs__search"]);
-  assert.equal((result.content[1] as { text: string }).text, "docs__search result");
+  assert.deepEqual(JSON.parse(itemText(result.content[0])), ["docs__search"]);
+  assert.equal(itemText(result.content[1]), "docs__search result");
   assert.deepEqual(calls, ["docs__search"]);
 });
 
@@ -305,7 +322,7 @@ test("codemode scripts read whole MCP results from a real server while the model
     const f = await tools.mcp_failing({});
     text({ isError: f.isError, end: f.content[0].text.slice(-10) });` });
   assert.equal(result.isError, false, scriptText(result));
-  const [big, failing] = result.content.map((item) => JSON.parse((item as { text: string }).text));
+  const [big, failing] = result.content.map((item) => JSON.parse(itemText(item)));
   assert.deepEqual(big, { length: text.length, tail: "TAIL", rows: 3_000, last: "row-2999", isError: false });
   assert.deepEqual(failing, { isError: true, end: "at the end" });
   // The model-facing results of the same calls kept their 32K bound.
