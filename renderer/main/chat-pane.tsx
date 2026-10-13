@@ -836,12 +836,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
   // A run this pane did not start (a paired phone's turn) streams in live
-  // while main reports the chat busy; with nobody running it, nothing is held.
+  // once main reports the chat busy, and stays until its saved reply lands.
+  // A draft or this pane's own turn stops it; an idle chat holds nothing.
   const activeChatIds = useActiveChatIds();
   useObservedLocalRun(
-    chatId,
+    draft || isGenerating || isStartingGeneration ? null : chatId,
     effectiveWorkspaceId,
-    !draft && activeChatIds.has(chatId) && !isGenerating && !isStartingGeneration,
+    activeChatIds.has(chatId),
   );
   const thinkingDisabledReason =
     isStartingGeneration || isGenerating

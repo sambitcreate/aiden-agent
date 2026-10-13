@@ -10,7 +10,13 @@ import {
   rememberDetachedLifecycleStream,
 } from "../chat-terminal-sync";
 import { LocalHostAdapter, type LocalChatApis } from "./local-host-adapter";
-import { observeLocalRun } from "./observed-local-run";
+import {
+  createObservedRunLifecycle,
+  observeLocalRun,
+  OBSERVED_READ_RETRY_MS,
+  type ObservedChatRead,
+  type ObservedTranscriptMessage,
+} from "./observed-local-run";
 
 const WORKSPACE = "workspace-1";
 
@@ -73,18 +79,47 @@ function fakeMain(subscription: Omit<PeerRunSubscription, "subscriptionId" | "ke
   };
 }
 
-function deferredRefetches() {
-  const pending: Array<() => void> = [];
+/**
+ * The persisted chat and the pane's cached copy of it. Each read is held until
+ * the test settles it, as a slow or cancelled IPC read would be.
+ */
+function chatReads() {
+  const saved: ObservedTranscriptMessage[] = [{ role: "user" }];
+  let cache: readonly ObservedTranscriptMessage[] = [];
+  const pending: Array<(outcome: ObservedChatRead) => void> = [];
+  let requested = 0;
   return {
+    saved,
+    cache: () => cache,
+    requested: () => requested,
     count: () => pending.length,
-    refetch: () => new Promise<void>((resolve) => pending.push(resolve)),
-    /** Lets every outstanding chat read finish, as the cache update would. */
+    refetch: () => {
+      requested++;
+      return new Promise<ObservedChatRead>((resolve) => pending.push(resolve));
+    },
+    /** Lets every outstanding read finish with what is saved now. */
     finishAll: async () => {
-      while (pending.length > 0) pending.shift()!();
-      await new Promise((settle) => setImmediate(settle));
+      while (pending.length > 0) {
+        cache = [...saved];
+        pending.shift()!({ kind: "read", messages: cache });
+        await tick();
+      }
+    },
+    /** Lets the oldest outstanding read finish with what is saved now. */
+    finishNext: async () => {
+      cache = [...saved];
+      pending.shift()!({ kind: "read", messages: cache });
+      await tick();
+    },
+    /** A competing read cancelled the oldest outstanding one. */
+    failNext: async () => {
+      pending.shift()!({ kind: "failed" });
+      await tick();
     },
   };
 }
+
+const reply = (runId: string): ObservedTranscriptMessage => ({ role: "assistant", timeline: { generationId: runId } });
 
 const tick = () => new Promise((settle) => setImmediate(settle));
 
@@ -96,8 +131,8 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
     state: "streaming",
     events: [runEvent("run-phone", 1, "run.started", { chatId, origin: "remote" }), runEvent("run-phone", 2, "text_delta", { text: "Hel" })],
   });
-  const reads = deferredRefetches();
-  const close = observeLocalRun({
+  const reads = chatReads();
+  const observation = observeLocalRun({
     adapter: main.adapter,
     chatId,
     workspaceId: WORKSPACE,
@@ -137,6 +172,7 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
   // Until the saved reply is read, the streamed one stays rather than flashing away.
   assert.equal(reads.count(), 1);
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Hello there");
+  reads.saved.push(reply("run-phone"));
   await reads.finishAll();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
   assert.equal(isDetachedLifecycleChatDraining(chatId, WORKSPACE), false);
@@ -150,7 +186,7 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
   await reads.finishAll();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.streamId, "run-next");
 
-  close();
+  observation.close();
   await tick();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null, "closing drops the mirror");
   assert.equal(isDetachedLifecycleChatDraining(chatId, WORKSPACE), false);
@@ -162,13 +198,13 @@ test("a phone's turn on this Mac streams into the open chat live and gives way t
 test("a run that had already finished before the chat was opened shows nothing", async () => {
   const chatId = "chat-finished-before";
   const main = fakeMain({ runId: "run-old", chatId, state: "ended", events: [] });
-  const reads = deferredRefetches();
-  const close = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
+  const reads = chatReads();
+  const observation = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
   await tick();
   await reads.finishAll();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
   assert.equal(isDetachedLifecycleChatDraining(chatId, WORKSPACE), false);
-  close();
+  observation.close();
 });
 
 test("a run with undelivered text shows its activity without a partial reply", async () => {
@@ -183,14 +219,14 @@ test("a run with undelivered text shows its activity without a partial reply", a
       runEvent("run-gap", 41, "text_delta", { text: "tail only" }),
     ],
   });
-  const reads = deferredRefetches();
-  const close = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
+  const reads = chatReads();
+  const observation = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
   await tick();
   await reads.finishAll();
   const projection = detachedLifecycleChatProjection(chatId, WORKSPACE);
   assert.equal(projection?.streamId, "run-gap", "Stop stays available");
   assert.equal(projection?.content, "");
-  close();
+  observation.close();
 });
 
 test("this window's own route-detached run keeps its own projection", async () => {
@@ -203,14 +239,154 @@ test("this window's own route-detached run keeps its own projection", async () =
     state: "streaming",
     events: [runEvent("run-own", 1, "run.started", { chatId }), runEvent("run-own", 2, "text_delta", { text: "Mine so far and more" })],
   });
-  const reads = deferredRefetches();
-  const close = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
+  const reads = chatReads();
+  const observation = observeLocalRun({ adapter: main.adapter, chatId, workspaceId: WORKSPACE, refetch: reads.refetch, schedule: (publish) => publish() });
   await tick();
   await reads.finishAll();
   const projection = detachedLifecycleChatProjection(chatId, WORKSPACE);
   assert.equal(projection?.content, "Mine so far");
   assert.equal(projection?.observed, undefined);
-  close();
+  observation.close();
   assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Mine so far", "closing leaves the owner's projection");
   assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);
+});
+
+test("a phone's reply stays on screen when the chat goes idle before the run's end arrives", async () => {
+  const chatId = "chat-idle-first";
+  const target = { chatId, workspaceId: WORKSPACE };
+  const main = fakeMain({
+    runId: "run-idle",
+    chatId,
+    state: "streaming",
+    events: [runEvent("run-idle", 1, "run.started", { chatId, origin: "remote" }), runEvent("run-idle", 2, "text_delta", { text: "All done" })],
+  });
+  const reads = chatReads();
+  const lifecycle = createObservedRunLifecycle((observed) =>
+    observeLocalRun({ adapter: main.adapter, ...observed, refetch: reads.refetch, schedule: (publish) => publish() }),
+  );
+  lifecycle.update({ target, active: true });
+  await tick();
+  await reads.finishAll();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "All done");
+
+  // Main saves the reply, then reports the chat idle before the next frame batch carries the run's end.
+  reads.saved.push(reply("run-idle"));
+  lifecycle.update({ target, active: false });
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "All done", "no flash on idle");
+  assert.equal(main.calls.some(([route]) => route === "unobserveRun"), false);
+
+  main.send(
+    { kind: "event", event: runEvent("run-idle", 3, "done") },
+    { kind: "event", event: runEvent("run-idle", 4, "run.ended", { chatId, state: "done" }) },
+    { kind: "state", runId: "run-idle", state: "ended" },
+  );
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "All done", "kept until the reply is read");
+  await reads.finishAll();
+  assert.ok(reads.cache().some((message) => message.role === "assistant"), "the saved reply is in the cache");
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
+  assert.deepEqual(main.calls[main.calls.length - 1], ["unobserveRun", "sub-1"], "then the observation ends");
+  lifecycle.dispose();
+});
+
+test("leaving the chat or starting a turn in the pane stops the mirror at once", async () => {
+  const chatId = "chat-leave";
+  const main = fakeMain({
+    runId: "run-leave",
+    chatId,
+    state: "streaming",
+    events: [runEvent("run-leave", 1, "run.started", { chatId }), runEvent("run-leave", 2, "text_delta", { text: "Partial" })],
+  });
+  const reads = chatReads();
+  let starts = 0;
+  const lifecycle = createObservedRunLifecycle((observed) => {
+    starts++;
+    return observeLocalRun({ adapter: main.adapter, ...observed, refetch: reads.refetch, schedule: (publish) => publish() });
+  });
+  lifecycle.update({ target: { chatId, workspaceId: WORKSPACE }, active: true });
+  await tick();
+  await reads.finishAll();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Partial");
+
+  // The pane starts its own turn: its own stream takes over the chat.
+  lifecycle.update({ target: null, active: true });
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
+  assert.deepEqual(main.calls[main.calls.length - 1], ["unobserveRun", "sub-1"]);
+
+  // Another busy chat starts a fresh observation; an idle one starts nothing.
+  lifecycle.update({ target: { chatId: "chat-other", workspaceId: WORKSPACE }, active: false });
+  assert.equal(starts, 1);
+  lifecycle.update({ target: { chatId: "chat-other", workspaceId: WORKSPACE }, active: true });
+  assert.equal(starts, 2);
+  lifecycle.dispose();
+  await tick();
+});
+
+test("a finished run is replaced only by a read that holds its saved reply", async () => {
+  const chatId = "chat-competing-read";
+  const main = fakeMain({
+    runId: "run-race",
+    chatId,
+    state: "streaming",
+    events: [runEvent("run-race", 1, "run.started", { chatId }), runEvent("run-race", 2, "text_delta", { text: "Answer" })],
+  });
+  const reads = chatReads();
+  const observation = observeLocalRun({
+    adapter: main.adapter,
+    chatId,
+    workspaceId: WORKSPACE,
+    refetch: reads.refetch,
+    schedule: (publish) => publish(),
+    delay: async () => {},
+  });
+  await tick();
+  await reads.finishAll();
+  main.send(
+    { kind: "event", event: runEvent("run-race", 3, "done") },
+    { kind: "state", runId: "run-race", state: "ended" },
+  );
+  // Another refresh of the same chat cancels this read.
+  await reads.failNext();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Answer");
+  // The retry lands before the reply was saved.
+  await reads.finishNext();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Answer", "an older transcript is not the reply");
+  reads.saved.push(reply("run-race"));
+  await reads.finishAll();
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE), null);
+  assert.equal(reads.count(), 0, "no further reads once the reply is in");
+  observation.close();
+});
+
+test("a failed read of a phone's new turn is retried until its message lands", async () => {
+  const chatId = "chat-started-read";
+  const main = fakeMain({
+    runId: "run-start",
+    chatId,
+    state: "streaming",
+    events: [runEvent("run-start", 1, "run.started", { chatId, origin: "remote" })],
+  });
+  const reads = chatReads();
+  const observation = observeLocalRun({
+    adapter: main.adapter,
+    chatId,
+    workspaceId: WORKSPACE,
+    refetch: reads.refetch,
+    schedule: (publish) => publish(),
+    delay: async () => {},
+  });
+  await tick();
+  // Every scheduled attempt fails: the first read and each retry.
+  for (let attempt = 0; attempt <= OBSERVED_READ_RETRY_MS.length; attempt++) await reads.failNext();
+  assert.equal(reads.count(), 0, "retries are bounded");
+  assert.deepEqual(reads.cache(), []);
+
+  // The next frame from the run asks again, and that read brings in the phone's message.
+  main.send({ kind: "event", event: runEvent("run-start", 2, "text_delta", { text: "Hi" }) });
+  assert.equal(reads.count(), 1);
+  await reads.finishAll();
+  assert.deepEqual(reads.cache(), [{ role: "user" }]);
+  main.send({ kind: "event", event: runEvent("run-start", 3, "text_delta", { text: " there" }) });
+  assert.equal(reads.count(), 0, "a completed read is not repeated");
+  assert.equal(detachedLifecycleChatProjection(chatId, WORKSPACE)?.content, "Hi there");
+  observation.close();
 });

@@ -357,14 +357,17 @@ test("the watching window shows a phone's reply as it streams, stops it, and let
   let reads = 0;
   let settledReads = 0;
   const chatId = "chat-phone";
-  const close = observeLocalRun({
+  const observation = observeLocalRun({
     adapter,
     chatId,
     workspaceId: "workspace-1",
     refetch: async () => {
       reads++;
       const state = registry.summary("run-phone")?.state;
-      if (state === "cancelled" || state === "done") settledReads++;
+      if (state !== "cancelled" && state !== "done") return { kind: "read", messages: [{ role: "user" }] };
+      settledReads++;
+      // The stopped reply was saved before the run settled.
+      return { kind: "read", messages: [{ role: "user" }, { role: "assistant", timeline: { generationId: "run-phone" } }] };
     },
     schedule: (publish) => publish(),
   });
@@ -392,7 +395,7 @@ test("the watching window shows a phone's reply as it streams, stops it, and let
   assert.equal(detachedLifecycleChatProjection(chatId, "workspace-1"), null);
   assert.equal(isDetachedLifecycleChatDraining(chatId, "workspace-1"), false);
 
-  close();
+  observation.close();
   await new Promise((settle) => setImmediate(settle));
   assert.equal(observers.size, 0, "closing the pane releases its observation in main");
   assert.equal(timers.size, 0);
