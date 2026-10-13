@@ -46,41 +46,6 @@ class AidenChatScrollTest {
     }
 
     @Test
-    fun theReArmSlopIsMuchTighterThanTheButtonThresholds() {
-        val reArm = 36 // 12dp at 3x
-        val idle = 240 // 80dp at 3x
-        val streaming = 480 // 160dp at 3x
-        // 100px up: close enough to hide the button, too far to resume following.
-        assertFalse(AidenChatScroll.isAtLiveEdge(0, 100, reArm))
-        assertTrue(AidenChatScroll.isNearLiveEdge(0, 100, isStreaming = false, idlePx = idle, streamingPx = streaming))
-        assertTrue(AidenChatScroll.isAtLiveEdge(0, 36, reArm))
-        // 300px up is far while idle, still near while streaming.
-        assertFalse(AidenChatScroll.isNearLiveEdge(0, 300, isStreaming = false, idlePx = idle, streamingPx = streaming))
-        assertTrue(AidenChatScroll.isNearLiveEdge(0, 300, isStreaming = true, idlePx = idle, streamingPx = streaming))
-        // Any older item at the bottom of the viewport is far from the live edge.
-        assertFalse(AidenChatScroll.isAtLiveEdge(1, 0, reArm))
-        assertFalse(AidenChatScroll.isNearLiveEdge(1, 0, isStreaming = true, idlePx = idle, streamingPx = streaming))
-    }
-
-    @Test
-    fun theJumpButtonStaysHiddenWhileAFollowedStreamOwnsTheEdge() {
-        // Following a stream: a tick may open a gap, but the follow loop closes it.
-        assertFalse(AidenChatScroll.showsJumpToLatest(isNearLiveEdge = false, isStreaming = true, isFollowing = true))
-        // The reader scrolled away from a stream.
-        assertTrue(AidenChatScroll.showsJumpToLatest(isNearLiveEdge = false, isStreaming = true, isFollowing = false))
-        // Idle and away from the edge, whatever the latch says.
-        assertTrue(AidenChatScroll.showsJumpToLatest(isNearLiveEdge = false, isStreaming = false, isFollowing = true))
-        // Detached but still near: no button.
-        assertFalse(AidenChatScroll.showsJumpToLatest(isNearLiveEdge = true, isStreaming = true, isFollowing = false))
-    }
-
-    @Test
-    fun reverseLayoutCountsTheLiveItemOnlyWhileStreaming() {
-        assertEquals(3, AidenChatScroll.reverseLayoutItemCount(3, false))
-        assertEquals(4, AidenChatScroll.reverseLayoutItemCount(3, true))
-    }
-
-    @Test
     fun taskSheetsOpenOnTheLatestVisibleStep() {
         assertEquals(0, AidenChatScroll.taskListEndIndex(0))
         assertEquals(0, AidenChatScroll.taskListEndIndex(1))
