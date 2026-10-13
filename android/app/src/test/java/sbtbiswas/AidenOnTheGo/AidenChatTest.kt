@@ -46,6 +46,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkEligibility
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatScroll
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkSource
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
@@ -2727,6 +2728,99 @@ class AidenChatTest {
                 }
             }
         } finally { Dispatchers.resetMain(); dispatcher.close() }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aTitleRefreshHoldingTheEndedRunsReplyRetiresTheLiveCard() {
+        val directory = kotlin.io.path.createTempDirectory("ended-reply-").toFile()
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val owners = ViewModelStore()
+        val releaseEvents = CountDownLatch(1)
+        val releaseRetries = CountDownLatch(1)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val initial = AidenChat(id = "chat-ended", workspaceId = "workspace-ended", title = "Ended", messages = emptyList(),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1", titlePending = true)
+        val reply = "The final reply"
+        val final = initial.copy(revision = "r2", titlePending = null, messages = listOf(
+            AidenChatMessage("final-reply", AidenChatRole.ASSISTANT, reply, createdAt = Instant.EPOCH)))
+        val wire = Json { explicitNulls = false; encodeDefaults = true }
+        fun event(sequence: Int, type: String, payload: String, terminal: Boolean = false) =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-ended\",\"sequence\":$sequence," +
+                "\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"$type\",\"terminal\":$terminal,\"payload\":$payload}\n\n"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.requestUrl!!.encodedPath.endsWith("/streams/stream-ended/events") -> {
+                    releaseEvents.await(5, TimeUnit.SECONDS)
+                    MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                        event(1, "tool_started", "{\"toolId\":\"tool-1\",\"name\":\"read_file\"}") +
+                            event(2, "tool_finished", "{\"toolId\":\"tool-1\",\"status\":\"succeeded\"}") +
+                            event(3, "text_delta", "{\"text\":\"$reply\"}") +
+                            event(4, "done", "{\"messageId\":\"final-reply\"}", terminal = true))
+                }
+                request.requestUrl!!.encodedPath.endsWith("/chats/chat-ended") -> when (reads.incrementAndGet()) {
+                    1 -> MockResponse().setBody(wire.encodeToString(initial))
+                    // The terminal read fails, so terminal recovery stays pending.
+                    2 -> MockResponse().setResponseCode(503).setBody(
+                        """{"error":{"code":"internal_error","message":"Held settlement","requestId":"r","retryable":true}}""")
+                    // The title refresh reads the chat with the run's reply in it.
+                    3 -> MockResponse().setBody(wire.encodeToString(final))
+                    else -> {
+                        releaseRetries.await(10, TimeUnit.SECONDS)
+                        MockResponse().setBody(wire.encodeToString(final))
+                    }
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(main)
+        var model: AidenChatViewModel? = null
+        try {
+            runBlocking(main) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(instanceId = "instance-ended", deviceId = "device-ended",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                    capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+                val cache = AidenChatCache(directory)
+                cache.saveChat(initial, "instance-ended")
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
+                    scope = CoroutineScope(main + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                cache.saveActiveStream(AidenChatCache.ActiveStream("device-ended", "stream-ended", "turn-ended", 0),
+                    "instance-ended", initial.id)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                model = vm
+                owners.put("chat", vm)
+                withTimeout(5_000) { vm.isLoading.first { !it } }
+                releaseEvents.countDown()
+                withTimeout(5_000) { vm.presentedError.first { it == "Held settlement" } }
+                assertEquals("the ended run keeps its card while its transcript is unread", reply, vm.liveText.value)
+                assertEquals(listOf("tool-1"), vm.tools.value.map { it.id })
+
+                withTimeout(5_000) { vm.chat.first { it?.revision == "r2" } }
+                assertEquals(listOf("final-reply"), vm.chat.value?.messages?.map { it.id })
+                // The screen keeps the card while any live output remains, tool rows included.
+                val hasLiveOutput = vm.liveText.value.isNotEmpty() || vm.reasoning.value.isNotEmpty() || vm.tools.value.isNotEmpty()
+                assertFalse("the reply must not show twice", AidenChatScroll.showsLiveCard(vm.streamState.value, hasLiveOutput))
+                assertFalse(vm.hasActiveStream.value)
+                assertNull("the settled run clears its recovery warning", vm.presentedError.value)
+            }
+        } finally {
+            releaseEvents.countDown()
+            releaseRetries.countDown()
+            runBlocking(main) {
+                val job = model?.viewModelScope?.coroutineContext?.get(Job)
+                owners.clear()
+                job?.join()
+            }
+            Dispatchers.resetMain()
+            main.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
     }
 
     @Test

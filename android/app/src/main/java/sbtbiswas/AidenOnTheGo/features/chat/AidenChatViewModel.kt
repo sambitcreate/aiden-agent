@@ -201,6 +201,9 @@ class AidenChatViewModel(
             field = value
             _hasActiveStream.value = value != null
         }
+    /** The reply a finished stream's done event named, until that stream clears. */
+    private data class EndedReply(val streamId: String, val messageId: String)
+    private var endedReply: EndedReply? = null
     private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
     private var streamJob: Job? = null
@@ -1507,6 +1510,7 @@ class AidenChatViewModel(
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
+        endedReply = null
         if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
         terminalReconciliationJob?.cancel()
         terminalReconciliationJob = null
@@ -1689,6 +1693,7 @@ class AidenChatViewModel(
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.DONE
+                endedReply = event.payload?.messageId?.let { EndedReply(event.streamId, it) }
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.HEARTBEAT -> {}
@@ -2865,17 +2870,14 @@ class AidenChatViewModel(
         // A send or newer reconcile may have started while the cache was on disk.
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
         val presented = beforePublishing(admitted)
-
-        // Retire the live output if this transcript contains the ended run's replacement reply.
-        // When an accepted transcript contains a new message and we have an active terminal stream,
-        // the new message is the stream's result, so retire the live presentation immediately.
-        val previousMessageCount = _chat.value?.messages?.size ?: 0
-        if (activeStreamId != null && _streamState.value?.isTerminal == true &&
-            presented.messages.size > previousMessageCount) {
-            liveTranscript.reset()
-        }
-
         _chat.value = presented
+        // Any accepted read that already holds the ended run's reply, such as
+        // a title refresh, retires its live card in this same step.
+        val ended = endedReply
+        if (ended != null && ended.streamId == activeStreamId && presented.messages.any { it.id == ended.messageId }) {
+            clearRecoveryWarning()
+            clearFinishedStream(ended.streamId)
+        }
         resolveModelSelection()
         if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
@@ -3001,6 +3003,7 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
+            endedReply = null
             networkWaitStreamId = null
             _isWaitingForNetwork.value = false
             liveTranscript.reset()
