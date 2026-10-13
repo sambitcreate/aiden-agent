@@ -183,9 +183,17 @@ struct AidenChatScrollObserver: UIViewRepresentable {
 
         private func finishUserScrollSessionIfSettled() {
             guard isUserScrollSessionActive, let scrollView else { return }
-            // A finger back on the glass either becomes a new drag (pan .began)
-            // or lifts without one (pan .failed); both paths re-enter above.
-            if scrollView.isDragging || scrollView.isTracking { return }
+            if scrollView.isDragging { return }
+            // A finger resting on the glass (tracking but not dragging) may not
+            // produce a pan .failed event, so reschedule the settle check instead
+            // of returning. Once the finger lifts or movement starts, UIKit will
+            // send pan .ended/.began to cancel/replace this check.
+            if scrollView.isTracking {
+                scheduleSettle(after: AidenChatScrollPolicy.momentumSettleDelay) { [weak self] in
+                    self?.finishUserScrollSessionIfSettled()
+                }
+                return
+            }
             if scrollView.isDecelerating {
                 scheduleSettle(after: AidenChatScrollPolicy.momentumSettleDelay) { [weak self] in
                     self?.finishUserScrollSessionIfSettled()
