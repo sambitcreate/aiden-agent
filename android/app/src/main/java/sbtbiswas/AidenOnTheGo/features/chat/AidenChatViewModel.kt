@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.FlowPreview
@@ -102,8 +103,14 @@ class AidenChatViewModel(
     private val _reasoning = MutableStateFlow("")
     val reasoning: StateFlow<String> = _reasoning.asStateFlow()
 
-    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+    // Reply text passes through the word gate before it is shown, so a word
+    // never appears half-typed; reasoning is shown as it arrives.
+    private val liveReveal = AidenStreamingRevealGate(viewModelScope) { text ->
         _liveText.value = text
+    }
+
+    private val liveTranscript = AidenLiveTranscriptBuffer(viewModelScope) { text, reasoning ->
+        liveReveal.submit(text)
         _reasoning.value = reasoning
     }
 
@@ -199,6 +206,27 @@ class AidenChatViewModel(
             field = value
             _hasActiveStream.value = value != null
         }
+    /**
+     * The persisted reply of a finished stream, until that stream clears. A done
+     * event names it; cancelled and error events do not, so their reply is the
+     * newest message carrying that outcome that was not already in the chat.
+     */
+    private data class EndedReply(
+        val streamId: String,
+        val messageId: String? = null,
+        val outcome: AidenMessageOutcomeStatus? = null,
+        val earlierIds: Set<String> = emptySet()
+    ) {
+        fun isIn(messages: List<AidenChatMessage>): Boolean {
+            if (messageId != null) return messages.any { it.id == messageId }
+            val last = messages.lastOrNull() ?: return false
+            return last.role == AidenChatRole.ASSISTANT && last.outcome?.status == outcome && last.id !in earlierIds
+        }
+    }
+    private fun endedWith(streamId: String, outcome: AidenMessageOutcomeStatus) = EndedReply(
+        streamId, outcome = outcome, earlierIds = streamStartMessageIds)
+    private var endedReply: EndedReply? = null
+    private var streamStartMessageIds: Set<String> = emptySet()
     private var transcriptGeneration = 0L
     private var recoveryWarning: String? = null
     private var streamJob: Job? = null
@@ -1509,6 +1537,8 @@ class AidenChatViewModel(
     private fun startStreaming(originalStream: AidenChatCache.ActiveStream) {
         val client = activeClient() ?: return
         activeStreamId = originalStream.streamId
+        streamStartMessageIds = _chat.value?.messages.orEmpty().mapTo(HashSet()) { it.id }
+        endedReply = null
         if (_streamState.value == null) _streamState.value = AidenStreamState.RECONCILING
         terminalReconciliationJob?.cancel()
         terminalReconciliationJob = null
@@ -1602,8 +1632,12 @@ class AidenChatViewModel(
     private suspend fun apply(event: AidenRemoteStreamEvent) {
         if (activeStreamId != event.streamId) return
         val isDelta = event.type == AidenRemoteEventType.TEXT_DELTA || event.type == AidenRemoteEventType.REASONING_DELTA
-        // Timeline offsets and terminal states describe the text received so far.
-        if (!isDelta) liveTranscript.flush()
+        // Timeline offsets and terminal states describe the text received so far,
+        // so everything received is shown first, including a held word.
+        if (!isDelta) {
+            liveTranscript.flush()
+            liveReveal.flush()
+        }
         when (event.type) {
             AidenRemoteEventType.SNAPSHOT -> {
                 _streamState.value = AidenStreamState.RECONCILING
@@ -1678,18 +1712,21 @@ class AidenChatViewModel(
                 _pendingQuestion.value = null
                 _presentedError.value = null
                 _streamState.value = AidenStreamState.ERROR
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.FAILED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.CANCELLED -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.CANCELLED
+                endedReply = endedWith(event.streamId, AidenMessageOutcomeStatus.CANCELLED)
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.DONE -> {
                 _pendingApproval.value = null
                 _pendingQuestion.value = null
                 _streamState.value = AidenStreamState.DONE
+                endedReply = event.payload?.messageId?.let { EndedReply(event.streamId, it) }
                 finishStream(event.streamId)
             }
             AidenRemoteEventType.HEARTBEAT -> {}
@@ -2193,6 +2230,8 @@ class AidenChatViewModel(
     private var foreignSettleRunId: String? = null
     /** Bounded transcript recovery after a foreign run ended but its re-read failed. */
     private var foreignReconcileJob: Job? = null
+    /** Transcript reads reserved after this write token were issued once the foreign run had ended. */
+    private var foreignRunEndedWriteToken = 0L
 
     private fun foreignRunAccess(capability: AidenRemoteCapability): Boolean {
         val installation = installationForProgress() ?: return false
@@ -2336,7 +2375,7 @@ class AidenChatViewModel(
         val canControl = foreignRunAccess(AidenRemoteCapability.RUNS_CONTROL)
         val capabilities = approvalCapabilities()
         _streamState.value = projection.state
-        _liveText.value = projection.liveText
+        liveReveal.submit(projection.liveText)
         _reasoning.value = projection.reasoning
         _tools.value = projection.tools
         _pendingApproval.value = projection.pendingApproval?.let { approval ->
@@ -2370,9 +2409,12 @@ class AidenChatViewModel(
     private suspend fun finishForeignRun() {
         foreignSettleJob?.cancel()
         val projection = foreignProjection ?: return
+        // The run is over, so a word the gate was holding back is complete.
+        liveReveal.flush()
         foreignRunId = null
         foreignProjection = null
         val client = activeClient()
+        foreignRunEndedWriteToken = chatCache.reserveChatWrite()
         val reconciled = reconcileChat()
         if (activeStreamId != null || _isStarting.value) return
         _pendingApproval.value = null
@@ -2388,7 +2430,7 @@ class AidenChatViewModel(
     }
 
     private fun clearForeignLiveOutput() {
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
     }
@@ -2421,7 +2463,7 @@ class AidenChatViewModel(
         foreignRunId = null
         foreignProjection = null
         if (!wasPresented || activeStreamId != null) return
-        _liveText.value = ""
+        liveReveal.reset()
         _reasoning.value = ""
         _tools.value = emptyList()
         _pendingApproval.value = null
@@ -2865,6 +2907,24 @@ class AidenChatViewModel(
         if (_isStarting.value || generation != transcriptGeneration || activeClient() !== client) return false
         val presented = beforePublishing(admitted)
         _chat.value = presented
+        // Any accepted read that already holds the ended run's reply, such as
+        // a title refresh, retires its live card in this same step.
+        val ended = endedReply
+        if (ended != null && ended.streamId == activeStreamId && ended.isIn(presented.messages)) {
+            clearRecoveryWarning()
+            clearFinishedStream(ended.streamId)
+        }
+        // Likewise a read issued after a foreign run ended holds its reply, so
+        // the recovery keeping that run's response on screen can stand down.
+        val recovery = foreignReconcileJob
+        if (recovery?.isActive == true && writeToken > foreignRunEndedWriteToken &&
+            foreignRunId == null && activeStreamId == null
+        ) {
+            if (recovery !== currentCoroutineContext()[Job]) recovery.cancel()
+            foreignReconcileJob = null
+            clearRecoveryWarning()
+            clearForeignLiveOutput()
+        }
         resolveModelSelection()
         if (scheduleTitleRefresh && presented.isTitlePending) {
             schedulePendingTitleRefresh()
@@ -2990,6 +3050,8 @@ class AidenChatViewModel(
         if (activeStreamId == expectedStreamId) {
             transcriptGeneration++
             activeStreamId = null
+            endedReply = null
+            streamStartMessageIds = emptySet()
             networkWaitStreamId = null
             _isWaitingForNetwork.value = false
             liveTranscript.reset()

@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.features.chat
 
 import sbtbiswas.AidenOnTheGo.models.AidenChatTask
 import sbtbiswas.AidenOnTheGo.models.AidenChatTaskStatus
+import sbtbiswas.AidenOnTheGo.models.AidenStreamState
 
 /** Reverse-layout transcripts keep the latest item at index 0. */
 object AidenChatScroll {
@@ -13,6 +14,17 @@ object AidenChatScroll {
      */
     fun shouldPinLatestAfterContentChange(wasFollowingLatest: Boolean): Boolean {
         return wasFollowingLatest
+    }
+
+    /**
+     * The live card stays until the final message replaces it. A run that
+     * ended still shows its card while it has output, because the transcript
+     * holding that output is read afterwards; the view model clears the output
+     * in the same main-thread step that publishes the transcript.
+     */
+    fun showsLiveCard(streamState: AidenStreamState?, hasLiveOutput: Boolean): Boolean {
+        if (streamState == null) return false
+        return !streamState.isTerminal || hasLiveOutput
     }
 
     fun reverseLayoutItemCount(messageCount: Int, streaming: Boolean): Int {
