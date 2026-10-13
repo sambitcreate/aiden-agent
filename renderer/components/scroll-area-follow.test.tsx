@@ -137,6 +137,28 @@ test("a smooth jump that lands short of content added mid-animation is corrected
   assert.equal(port.following(), true);
 });
 
+test("a smooth jump still corrects when the content added mid-animation is within the re-arm band", async () => {
+  const view = render(<Transcript chunks={1} streaming={false} />);
+  const port = scrollport();
+  fireEvent.wheel(port.viewport, { deltaY: -120 });
+  port.moveTo(200);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
+  const bottomWhenClicked = port.bottom();
+
+  // A single short line arrives, so the animation's last frames already sit
+  // close to the new bottom before it stops at the old one.
+  port.grow(30);
+  view.rerender(<Transcript chunks={2} streaming={false} />);
+  port.moveTo(bottomWhenClicked - 10);
+  port.moveTo(bottomWhenClicked);
+  assert.ok(port.top() < port.bottom());
+  fireEvent(port.viewport, new Event("scrollend"));
+
+  assert.equal(port.top(), port.bottom(), "the view does not rest a line short while following");
+  assert.equal(port.following(), true);
+});
+
 test("with Reduce Motion the jump lands at the bottom at once", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   try {

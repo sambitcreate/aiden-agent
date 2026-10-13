@@ -185,7 +185,6 @@ export function followReducer(state: FollowState, event: FollowEvent): FollowSta
       const towardEnd = event.distance < state.distance;
       const nearEnd = event.distance <= FOLLOW_REARM_DISTANCE_PX;
       const rearm = !state.following && !state.scrollbarHeld && towardEnd && nearEnd;
-      const landed = nearEnd && towardEnd;
       const draggedAway = state.scrollbarHeld && !nearEnd;
       const displaced =
         state.following &&
@@ -199,7 +198,7 @@ export function followReducer(state: FollowState, event: FollowEvent): FollowSta
           ...state,
           distance: event.distance,
           following: (state.following || rearm) && !draggedAway && !displaced,
-          jumpPending: state.jumpPending && !event.ended && !landed,
+          jumpPending: state.jumpPending && !event.ended,
         },
         event.scrollTop,
       );
