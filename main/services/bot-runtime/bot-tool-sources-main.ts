@@ -15,12 +15,12 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import { connectionSuggestionFor, type ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { createSuggestConnectionTool } from "../bot-runtime-tools/suggest-connection.js";
+import { createSuggestConnectionTool, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -31,7 +31,10 @@ import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { logger } from "../../platform.js";
 import { createMcpInstructionCollector } from "../mcp-server-instructions.js";
-import { presetServerId } from "../mcp-presets.js";
+import { mcpCredentialConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
+import { hasOAuthTokens } from "../mcp-oauth.js";
+import { presetSecretId } from "../mcp-presets.js";
+import { secrets } from "../secrets.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profile.js";
@@ -92,12 +95,25 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
   return locations;
 }
 
-/** Whether a suggested plugin's preset server is enabled (the connect card's "Connected" state). */
-export async function isConnected(pluginId: string): Promise<boolean> {
-  const suggestion = connectionSuggestionFor(pluginId);
-  if (!suggestion) return false;
-  const serverId = presetServerId(suggestion.setupEntry.presetId);
-  return (await configStore.listMcpServers()).some((server) => server.id === serverId && server.enabled);
+/** Whether a suggested plugin is set up, switched on, and signed in (the connect card's "Connected" state). */
+export function isConnected(pluginId: string): Promise<boolean> {
+  return isBotConnectionReady(pluginId, {
+    listServers: () => configStore.listMcpServers(),
+    hasPresetKey: async (server) =>
+      Boolean(
+        await secrets.getOrBindLegacyProviderKey(
+          presetSecretId(server.id),
+          JSON.stringify(mcpCredentialConnectionSnapshot(server)),
+        ),
+      ),
+    hasOAuthTokens: (server, preset) =>
+      hasOAuthTokens(
+        server.id,
+        server.url ?? preset.url,
+        server.authServerMetadataUrl,
+        server.oauthClientName,
+      ),
+  });
 }
 
 // Routine services load lazily: they import the scheduler, which must not

@@ -107,6 +107,16 @@ export function sameMcpCredentialConnection(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+/**
+ * Connection identity for approvals that outlive a session (Bot grants and
+ * schedule bindings). Unlike the runtime snapshot it leaves out the display
+ * name, description, and enabled flag, so renaming or re-describing a server
+ * keeps its approvals. Every caller checks enablement separately.
+ */
+export function mcpAuthorityConnectionSnapshot(server: McpServer): McpCredentialConnectionSnapshot {
+  return mcpCredentialConnectionSnapshot(server);
+}
+
 export function mcpRuntimeConnectionSnapshot(server: McpServer): McpRuntimeConnectionSnapshot {
   return {
     ...mcpCredentialConnectionSnapshot(server),

@@ -9,7 +9,7 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { homedir } from "node:os";
 import { open } from "node:fs/promises";
-import { resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
+import { createBotMcpScopeCache, resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
 import { resolveBotCapabilitySkills } from "../../../main/services/bot-skill-inventory.js";
 import { exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
@@ -106,6 +106,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       },
     });
   }
+  const mcpScopeCache = createBotMcpScopeCache({ generation: () => inventoryLeases.revision() });
   const catalog = createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => keyStore.load(), loadNoticeStatus: (id) => capabilities.noticeStatus(id),
     listProviders: () => listCliProviders(agentDir),
@@ -115,7 +116,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     })).digest("hex"),
     listMcpServers: mcp.listServers,
     inspectMcpScopes: (signal) => resolveBotMcpInventory(signal, { listServers: mcp.listServers, inspectTools: mcp.inspectTools,
-      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations }),
+      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations, scopeCache: mcpScopeCache }),
     listSkills: (target) => skills(target?.botId),
     listApprovedLocations: async () => approvedRoots().map((item) => ({ sourceId: item.id, label: item.label, available: true,
       scopeFingerprint: botCapabilityFactsFingerprint({ device: item.device, inode: item.inode, policyRevision: item.policyRevision }) })),

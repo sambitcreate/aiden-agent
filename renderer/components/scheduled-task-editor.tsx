@@ -72,6 +72,31 @@ const WEEKDAYS = [
 const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
 
 /** The soft inline warning under the Provider select when an LLM task may not be able to run. */
+/**
+ * The connections the editor lists: every enabled server plus each selected
+ * one, including selections whose server is missing. A missing server is
+ * named by its id so the person can tell which approval needs repair.
+ */
+export function scheduledTaskMcpServerChoices(
+  mcpServers: readonly Pick<McpServer, "id" | "name" | "enabled">[],
+  selectedMcpIds: readonly string[],
+): {
+  unavailableMcpIds: string[];
+  visibleMcpServers: Array<Pick<McpServer, "id" | "name" | "enabled">>;
+} {
+  const enabledMcpIds = new Set(
+    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+  );
+  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
+  const visibleMcpServers = [
+    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
+    ...unavailableMcpIds
+      .filter((id) => !mcpServers.some((server) => server.id === id))
+      .map((id) => ({ id, name: `Unavailable MCP server (${id})`, enabled: false })),
+  ];
+  return { unavailableMcpIds, visibleMcpServers };
+}
+
 export function ScheduledTaskProviderWarning({ message }: { message: string | undefined }) {
   if (!message) return null;
   return (
@@ -203,16 +228,10 @@ export function ScheduledTaskEditor({
     }));
   };
   const selectedMcpIds = draft.mcpServerIds ?? [];
-  const enabledMcpIds = new Set(
-    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    mcpServers,
+    selectedMcpIds,
   );
-  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
-  const visibleMcpServers = [
-    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
-    ...unavailableMcpIds
-      .filter((id) => !mcpServers.some((server) => server.id === id))
-      .map((id) => ({ id, name: "Unavailable MCP server", enabled: false })),
-  ];
   const toggleMcpServer = (id: string, enabled: boolean) => {
     setDraft((current) => {
       const ids = new Set(current.mcpServerIds ?? []);

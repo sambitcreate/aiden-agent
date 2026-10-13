@@ -29,7 +29,12 @@ import {
   summarizeScheduleToolCall,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
-import { scheduledMcpServerBinding } from "./schedule-mcp-binding.js";
+import { createHash } from "node:crypto";
+import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import {
+  assertScheduledMcpServerBindings,
+  scheduledMcpServerBinding,
+} from "./schedule-mcp-binding.js";
 
 const ASSISTANT_MODEL_SELECTION = {
   providerId: "local-provider",
@@ -1276,6 +1281,32 @@ test("Assistant approval resolution binds exact enabled MCP names", async () => 
       async () => [{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }],
       [GMAIL_BINDING],
     ),
+    /changed after this automation was confirmed/iu,
+  );
+});
+
+test("an approved schedule survives renaming its MCP server but not a connection change", () => {
+  const renamed = { ...GMAIL_SERVER, name: "Work mail", description: "Inbox for the team" };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([renamed], [GMAIL_BINDING]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, headers: { authorization: "Bearer other" } }], [GMAIL_BINDING]),
+    /changed after this automation was confirmed/iu,
+  );
+  // Schedules approved before display fields left the binding keep running
+  // until the server changes; then they need approval again.
+  const legacy = {
+    id: GMAIL_SERVER.id,
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(mcpRuntimeConnectionSnapshot(GMAIL_SERVER)))
+      .digest("hex"),
+  };
+  assert.doesNotThrow(() => assertScheduledMcpServerBindings([GMAIL_SERVER], [legacy]));
+  assert.throws(
+    () => assertScheduledMcpServerBindings([{ ...GMAIL_SERVER, url: "https://replacement.test/mcp" }], [legacy]),
     /changed after this automation was confirmed/iu,
   );
 });

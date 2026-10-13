@@ -10,10 +10,55 @@ import {
   type ConnectCardEntry,
 } from "../../../renderer/shared/bot-connections.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
+import {
+  assertMcpPresetServer,
+  getMcpPreset,
+  presetServerId,
+  type McpPreset,
+} from "../mcp-presets.js";
+import type { McpServer } from "../types.js";
 
 export const SUGGEST_CONNECTION_TOOL_NAME = "suggest_connection";
 
 type MaybePromise<T> = T | Promise<T>;
+
+export interface BotConnectionReadinessDeps {
+  listServers(): Promise<readonly McpServer[]>;
+  /** The preset's API key is saved for this exact server configuration. */
+  hasPresetKey(server: McpServer): Promise<boolean>;
+  /** OAuth tokens are saved for this server's current authorization binding. */
+  hasOAuthTokens(server: McpServer, preset: McpPreset): Promise<boolean>;
+}
+
+/**
+ * Whether a suggested plugin is usable now: its own preset is saved, valid,
+ * switched on, and signed in. This is the renderer's connect-card rule, so the
+ * Bot, the desktop card, and Remote agree. Apps reached through Composio are
+ * never reported connected: Aiden cannot see which apps Composio has linked.
+ */
+export async function isBotConnectionReady(
+  pluginId: string,
+  deps: BotConnectionReadinessDeps,
+): Promise<boolean> {
+  const suggestion = connectionSuggestionFor(pluginId);
+  if (suggestion?.setupEntry.kind !== "mcp-preset") return false;
+  const presetId = suggestion.setupEntry.presetId;
+  const preset = getMcpPreset(presetId);
+  if (!preset) return false;
+  const serverId = presetServerId(presetId);
+  const server = (await deps.listServers()).find(
+    (entry) => entry.id === serverId && entry.presetId === presetId,
+  );
+  if (!server?.enabled) return false;
+  try {
+    assertMcpPresetServer(server);
+  } catch {
+    return false;
+  }
+  return preset.auth.kind === "apiKey"
+    ? deps.hasPresetKey(server)
+    : deps.hasOAuthTokens(server, preset);
+}
 
 export interface SuggestConnectionDeps {
   /** True when the plugin (or the preset that covers it) is already set up. */

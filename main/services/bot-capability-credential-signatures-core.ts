@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { Credential } from "@earendil-works/pi-ai";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
+import { mcpAuthorityConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import { mcpOAuthGrantIdentity, type McpOAuthSession } from "./mcp-oauth-session.js";
 import { piCredentialGrantIdentity } from "./pi-credential-store-core.js";
 import type { McpServer, Provider } from "./types.js";
@@ -81,7 +82,8 @@ export function botMcpCredentialSignatureCore(
   },
 ): string {
   return botCredentialSignature(key, "mcp", {
-    server: input.server,
+    // Display fields are not credentials: a rename keeps the incarnation.
+    server: mcpAuthorityConnectionSnapshot(input.server),
     presetKey: input.presetKey,
     oauthSession: input.oauthSession ? mcpOAuthGrantIdentity(input.oauthSession) : null,
   });

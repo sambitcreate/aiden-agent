@@ -4,6 +4,7 @@ import {
   type BotProviderCredentialSignatureDependencies,
 } from "./bot-capability-credential-signatures-core.js";
 import { mcpCredentialConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import { assertMcpPresetServer, presetSecretId } from "./mcp-presets.js";
 import { piCredentialStore } from "./pi-credential-store.js";
@@ -44,6 +45,13 @@ export async function botMcpCredentialSignature(
         JSON.stringify(mcpCredentialConnectionSnapshot(server)),
       )
     : null;
-  const oauthSession = server.oauth ? await mcpOAuthStore.get(server.id) : null;
+  // Unreadable credential storage reads as "no grant" for this one server, so
+  // it cannot take every other server out of the Bot catalog with it.
+  const oauthSession = server.oauth
+    ? await mcpOAuthStore.get(server.id).catch((error: unknown) => {
+        if (error instanceof McpOAuthCredentialStorageError) return {};
+        throw error;
+      })
+    : null;
   return botMcpCredentialSignatureCore(key, { server, presetKey, oauthSession });
 }

@@ -319,9 +319,11 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
     ...(input.unattended && hasRuntimeMcpTools
       ? [
           "",
-          "This scheduled run has exact MCP tools the user approved when saving it. Use those",
-          "tools to fulfill the external-service request. Never claim data was read or an action",
-          "was completed unless the corresponding MCP tool call succeeded.",
+          "This scheduled run can use the MCP servers the user approved when saving it; the",
+          "tools listed for them are what those servers offer now, which may differ from when",
+          "the task was approved. Use them to fulfill the external-service request.",
+          "Never claim data was read or an action was completed unless the",
+          "corresponding MCP tool call succeeded.",
         ]
       : []),
     telegram

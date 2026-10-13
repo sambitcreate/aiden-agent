@@ -2,6 +2,7 @@ import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js
 import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
 import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
 import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
+import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
 import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -67,8 +68,23 @@ export function mcpCredentialId(server: McpServer): string {
     ? `\0${JSON.stringify([server.authServerMetadataUrl ?? null, server.oauthClientName?.trim() ?? null])}` : "";
   return `mcp-${createHash("sha256").update(`${server.id}\0${server.url}${override}`).digest("hex")}`;
 }
+/**
+ * Bot capability credential input: the connection's authority (no display
+ * name or description; env and headers only as hashes) plus the OAuth sign-in
+ * incarnation. Token values never enter it, so a refresh keeps Bot grants;
+ * sign-in, sign-out, and client re-registration change it.
+ */
 export async function mcpCredentialSignature(agentDir: string, server: McpServer) {
-  return createHash("sha256").update(JSON.stringify({ server, oauth: await insightCredentials(agentDir).read(mcpCredentialId(server)) })).digest("hex");
+  let oauth: unknown = null;
+  if (server.oauth) {
+    const serialized = await insightCredentials(agentDir).read(mcpCredentialId(server));
+    const state: OAuthState | undefined = serialized ? JSON.parse(serialized) : undefined;
+    oauth = !state ? "absent" : {
+      signedIn: Boolean(state.tokens),
+      incarnation: state.incarnation ?? createHash("sha256").update(JSON.stringify(state.client ?? null)).digest("hex"),
+    };
+  }
+  return createHash("sha256").update(JSON.stringify({ connection: mcpAuthorityConnectionSnapshot(server), oauth })).digest("hex");
 }
 
 /** `incarnation` is minted per interactive sign-in and survives token refreshes. */
