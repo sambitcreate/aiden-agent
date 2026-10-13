@@ -79,6 +79,8 @@ const IMAGEN: readonly ImageAspectRatio[] = ["1:1", "16:9", "9:16", "4:3", "3:4"
 const GPT_IMAGE: readonly ImageAspectRatio[] = ["1:1", "3:2", "2:3"];
 const FAL_ASPECT: FalAspectRatioSupport = { field: "aspect_ratio", values: ALL };
 const FAL_SIZE: FalAspectRatioSupport = { field: "image_size" };
+/** fal's FLUX endpoints also take a custom `{ width, height }` image_size. */
+const FAL_FLUX_SIZE: FalAspectRatioSupport = { field: "image_size", customSizes: true };
 
 export const CURATED_REPLICATE_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
   replicate("black-forest-labs/flux-3-image", "FLUX.3", BFL, { field: "images", max: 10 }),
@@ -112,14 +114,14 @@ export const CURATED_REPLICATE_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
 
 export const CURATED_FAL_IMAGE_MODELS: readonly ImageCatalogEntry[] = [
   fal("blackforestlabs/flux-3/text-to-image", "FLUX.3", BFL, { endpoint: "blackforestlabs/flux-3/edit-image" }),
-  fal("fal-ai/flux-2-max", "FLUX.2 Max", BFL, undefined, FAL_SIZE),
-  fal("fal-ai/flux-2-pro", "FLUX.2 Pro", BFL, undefined, FAL_SIZE),
-  fal("fal-ai/flux-2/klein/9b", "FLUX.2 Klein 9B", BFL, undefined, FAL_SIZE),
+  fal("fal-ai/flux-2-max", "FLUX.2 Max", BFL, undefined, FAL_FLUX_SIZE),
+  fal("fal-ai/flux-2-pro", "FLUX.2 Pro", BFL, undefined, FAL_FLUX_SIZE),
+  fal("fal-ai/flux-2/klein/9b", "FLUX.2 Klein 9B", BFL, undefined, FAL_FLUX_SIZE),
   fal("fal-ai/flux-pro/kontext/max/text-to-image", "FLUX Kontext Max", BFL, {
     endpoint: "fal-ai/flux-pro/kontext/max",
     field: "image_url",
   }, FAL_ASPECT),
-  fal("fal-ai/flux/schnell", "FLUX Schnell", BFL, undefined, FAL_SIZE),
+  fal("fal-ai/flux/schnell", "FLUX Schnell", BFL, undefined, FAL_FLUX_SIZE),
   fal("google/nano-banana-2.1", "Nano Banana 2.1", "google", { endpoint: "google/nano-banana-2.1/edit" }, FAL_ASPECT),
   fal("fal-ai/nano-banana-pro", "Nano Banana Pro", "google", { endpoint: "fal-ai/nano-banana-pro/edit" }, FAL_ASPECT),
   fal("openai/gpt-image-2", "GPT Image 2", "openai", { endpoint: "openai/gpt-image-2/edit" }),

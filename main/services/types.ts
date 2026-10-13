@@ -15,7 +15,7 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
@@ -328,6 +328,8 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Producing generate_image call per generated image attachment. */
+  imagePlacements?: ChatImagePlacementV1[];
   /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
   uiVisuals?: ChatUiVisualV1[];
   /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */

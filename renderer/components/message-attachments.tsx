@@ -1,7 +1,8 @@
 import * as React from "react";
-import { Download, Expand, FileImage, FileText, Maximize2 } from "lucide-react";
+import { Copy, Download, Expand, FileImage, FileText, Maximize2 } from "lucide-react";
 import type { Attachment } from "../lib/types";
 import { cn } from "../lib/ui-utils";
+import { imagePixelSize } from "../lib/image-dimensions";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
 import { chatsApi } from "../lib/ipc";
 import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Dialog, toast } from "./ui";
@@ -119,14 +120,18 @@ export function MessageAttachmentPreviewProvider({ children }: React.PropsWithCh
         returnFocus={returnFocus}
       >
         {previewSource ? (
-          <img
-            src={previewSource}
-            alt={preview?.name ?? "Image preview"}
-            onError={() => {
-              if (preview) markDecodeFailed(preview);
-            }}
-            className="mx-auto block h-full w-full rounded-card object-contain"
-          />
+          // Natural size up to the viewport: a small image is never upscaled.
+          <div className="flex size-full min-h-0 min-w-0 items-center justify-center">
+            <img
+              src={previewSource}
+              alt={preview?.name ?? "Image preview"}
+              data-attachment-full-view=""
+              onError={() => {
+                if (preview) markDecodeFailed(preview);
+              }}
+              className="block h-auto max-h-full w-auto max-w-full rounded-card object-contain"
+            />
+          </div>
         ) : null}
       </Dialog>
     </MessageAttachmentPreviewContext.Provider>
@@ -212,6 +217,18 @@ function AssistantImage({
     if (triggerRef.current) controller.openPreview(attachment, triggerRef.current);
   };
   const chatId = imageActions?.chatId;
+  // Reserve the box from the header so a long history never shifts as images
+  // decode lazily: natural size, at most the column width and 32rem tall.
+  const size = React.useMemo(
+    () => (attachment.data ? imagePixelSize(attachment.mimeType, attachment.data) : undefined),
+    [attachment.data, attachment.mimeType],
+  );
+  const box: React.CSSProperties | undefined = size
+    ? {
+        width: `min(100%, ${size.width}px, calc(32rem * ${size.width / size.height}))`,
+        aspectRatio: `${size.width} / ${size.height}`,
+      }
+    : undefined;
   return (
     <figure className="m-0 flex w-fit min-w-0 max-w-[min(100%,42rem)] flex-col" data-assistant-image={attachment.id}>
       <ContextMenu>
@@ -221,15 +238,22 @@ function AssistantImage({
             type="button"
             data-attachment-preview-id={attachment.id}
             aria-label={`Open ${attachment.name} preview`}
-            className="block w-fit max-w-full overflow-hidden rounded-card text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className={cn(
+              "block max-w-full overflow-hidden rounded-card text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
+              size ? "bg-control" : "w-fit min-h-24 min-w-24",
+            )}
+            style={box}
             onClick={open}
           >
             <img
               src={source}
               alt={attachment.name}
+              loading="lazy"
               decoding="async"
+              width={size?.width}
+              height={size?.height}
               onError={() => controller.markDecodeFailed(attachment)}
-              className="block h-auto max-h-[32rem] w-auto max-w-full"
+              className={size ? "block size-full object-contain" : "block h-auto max-h-[32rem] w-auto max-w-full"}
             />
           </button>
         </ContextMenuTrigger>
@@ -249,20 +273,36 @@ function AssistantImage({
         <span className="min-w-0 flex-1 truncate text-mini text-tertiary">
           {attachment.name} · {fileSize(attachment.size)}
         </span>
-        <Button size="small" variant="transparent" className="px-2" onClick={open}>
+        <Button
+          size="small"
+          variant="transparent"
+          className="px-2"
+          onClick={open}
+        >
           <Expand aria-hidden="true" className="size-3.5" />
           Expand
         </Button>
         {chatId ? (
-          <Button
-            size="small"
-            variant="transparent"
-            className="px-2"
-            onClick={() => void saveImageToDownloads(chatId, attachment)}
-          >
-            <Download aria-hidden="true" className="size-3.5" />
-            Save
-          </Button>
+          <>
+            <Button
+              size="small"
+              variant="transparent"
+              className="px-2"
+              onClick={() => void copyImage(chatId, attachment)}
+            >
+              <Copy aria-hidden="true" className="size-3.5" />
+              Copy
+            </Button>
+            <Button
+              size="small"
+              variant="transparent"
+              className="px-2"
+              onClick={() => void saveImageToDownloads(chatId, attachment)}
+            >
+              <Download aria-hidden="true" className="size-3.5" />
+              Save
+            </Button>
+          </>
         ) : null}
       </figcaption>
     </figure>

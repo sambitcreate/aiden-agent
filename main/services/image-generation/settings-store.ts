@@ -91,7 +91,8 @@ function aspectRatios(value: unknown): readonly ImageAspectRatio[] | undefined {
 function falAspectRatio(value: unknown): FalAspectRatioSupport | undefined {
   if (value === undefined) return undefined;
   const support = record(value);
-  if (support.field === "image_size") return { field: "image_size" };
+  if (support.field === "image_size")
+    return support.customSizes === true ? { field: "image_size", customSizes: true } : { field: "image_size" };
   if (support.field !== "aspect_ratio") fail();
   return { field: "aspect_ratio", values: aspectRatios(support.values) ?? fail() };
 }

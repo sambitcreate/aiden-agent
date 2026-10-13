@@ -624,6 +624,7 @@ export interface ChatMessage {
   attachments?: Attachment[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
+  imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;

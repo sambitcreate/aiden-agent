@@ -58,6 +58,31 @@ test("a settled generated image stands alone with its name, size and actions bel
   assert.ok(within(dialog).getByRole("img", { name: "Generated image.png" }));
 });
 
+test("the caption's Copy button copies the stored image without a pointer menu", async () => {
+  const calls = installBotTestIpc({ "chats:copyImage": () => true });
+  render(list(settled()));
+  const figure = document.querySelector("[data-assistant-image='img-1']") as HTMLElement;
+  const buttons = within(figure).getAllByRole("button").map((button) => button.textContent);
+  assert.deepEqual(buttons.slice(1), ["Expand", "Copy", "Save"]);
+  fireEvent.click(within(figure).getByRole("button", { name: "Copy" }));
+  await flush();
+  assert.deepEqual(
+    calls.filter((call) => call.channel.startsWith("chats:")),
+    [{ channel: "chats:copyImage", args: [{ chatId: "chat-1", attachmentId: "img-1" }] }],
+  );
+});
+
+test("a history image loads lazily into a box reserved from its header size", () => {
+  installBotTestIpc();
+  render(list(settled()));
+  const img = screen.getByRole("img", { name: "Generated image.png" });
+  assert.equal(img.getAttribute("loading"), "lazy");
+  assert.equal(img.getAttribute("decoding"), "async");
+  assert.deepEqual([img.getAttribute("width"), img.getAttribute("height")], ["1", "1"]);
+  const box = screen.getByRole("button", { name: "Open Generated image.png preview" });
+  assert.equal(box.style.aspectRatio.replace(/\s/gu, ""), "1/1");
+});
+
 test("right-click offers save, copy and the full view", async () => {
   const calls = installBotTestIpc({ "chats:copyImage": () => true });
   render(list(settled()));
@@ -81,4 +106,5 @@ test("an image still streaming in can be expanded but not yet saved", () => {
   const figure = document.querySelector("[data-assistant-image='img-1']") as HTMLElement;
   assert.ok(within(figure).getByRole("button", { name: "Expand" }));
   assert.equal(within(figure).queryByRole("button", { name: "Save" }), null);
+  assert.equal(within(figure).queryByRole("button", { name: "Copy" }), null);
 });

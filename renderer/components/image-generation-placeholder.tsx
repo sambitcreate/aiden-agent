@@ -79,9 +79,9 @@ export interface ImageScanPlaceholderProps {
 }
 
 export function ImageScanPlaceholder({ slot, onRevealed }: ImageScanPlaceholderProps) {
-  const frameRef = React.useRef<HTMLDivElement>(null);
+  const slotRef = React.useRef<HTMLElement>(null);
   const reduceMotion = useReduceMotion();
-  usePauseWhenUnseen(frameRef);
+  usePauseWhenUnseen(slotRef);
   const arriving = slot.arrived !== undefined;
   const elapsed = useElapsed(slot.startedAt, !arriving);
   const source = React.useMemo(
@@ -103,12 +103,13 @@ export function ImageScanPlaceholder({ slot, onRevealed }: ImageScanPlaceholderP
   const ratio = slot.aspectRatio;
   return (
     <figure
+      ref={slotRef}
       className="image-scan-slot m-0 flex min-w-0 flex-col"
       style={{ "--image-scan-aspect": imageAspectRatioValue(ratio) } as React.CSSProperties}
       data-image-scan-slot={slot.stepId}
+      data-arrival={arriving ? "reveal" : "pending"}
     >
       <div
-        ref={frameRef}
         className="image-scan rounded-card"
         style={{ "--image-scan-ratio": ratio.replace(":", " / ") } as React.CSSProperties}
         role="img"
@@ -153,6 +154,7 @@ export function ImageScanPlaceholder({ slot, onRevealed }: ImageScanPlaceholderP
 export function useImageGenerationSlots(
   timeline: GenerationTimeline | null | undefined,
   attachments: readonly Attachment[] | undefined,
+  placements: ReadonlyMap<string, string>,
   active: boolean,
 ): {
   slots: ImageGenerationSlot[];
@@ -164,6 +166,7 @@ export function useImageGenerationSlots(
   const result = reconcileImageGenerationSlots(entriesRef.current, {
     timeline,
     attachments,
+    placements,
     active,
     revealed,
     now: Date.now(),

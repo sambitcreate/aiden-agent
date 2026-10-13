@@ -42,6 +42,7 @@ import {
 } from "../lib/ui-visual-transcript";
 import { chatsApi } from "../lib/ipc";
 import { ImageScanPlaceholder, useImageGenerationSlots } from "./image-generation-placeholder";
+import { imageGenerationRowSlots, type ImageGenerationSlot } from "../lib/image-generation-slots";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -74,7 +75,10 @@ interface MessageListProps {
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
   streamingArtifacts?: readonly ChatArtifactV1[];
-  /** mediaId → producing render_artifact toolCallId for the live response. */
+  /**
+   * Producing toolCallId per live artifact: HTML visuals by mediaId
+   * (render_artifact) and generated images by attachment id (generate_image).
+   */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
   /** mediaIds of live visuals the model asked to span the chat pane. */
   streamingWideVisuals?: ReadonlySet<string>;
@@ -134,6 +138,8 @@ interface AssistantResponseProps {
   fork?: MessageForkAction;
   /** Save and copy actions for images stored in this (settled) response. */
   imageActions?: MessageImageActions;
+  /** Generated image attachment id → the generate_image toolCallId that produced it. */
+  imagePlacements?: ReadonlyMap<string, string>;
   /** HTML visuals this response owns, placed after their producing tool row. */
   visuals?: readonly ChatHtmlArtifactV1[];
   /** mediaId → render_artifact toolCallId. */
@@ -179,6 +185,7 @@ function AssistantResponse({
   footer,
   fork,
   imageActions,
+  imagePlacements = EMPTY_PLACEMENTS,
   visuals = EMPTY_VISUALS,
   visualPlacements = EMPTY_PLACEMENTS,
   wideVisuals = EMPTY_WIDE_VISUALS,
@@ -188,30 +195,40 @@ function AssistantResponse({
   uiDrafts = EMPTY_UI_DRAFTS,
   renderUiVisual,
 }: AssistantResponseProps) {
-  const imageGeneration = useImageGenerationSlots(timeline, attachments, streaming);
+  const imageGeneration = useImageGenerationSlots(timeline, attachments, imagePlacements, streaming);
   const shownAttachments = React.useMemo(
     () =>
       imageGeneration.hiddenAttachmentIds.size && attachments
         ? attachments.filter((attachment) => !imageGeneration.hiddenAttachmentIds.has(attachment.id))
-        : attachments,
+        : (attachments ?? []),
     [attachments, imageGeneration.hiddenAttachmentIds],
-  );
-  // In-flight generate_image calls hold the image's place where it will appear.
-  const media = (
-    <>
-      {imageGeneration.slots.map((slot) => (
-        <ImageScanPlaceholder key={slot.stepId} slot={slot} onRevealed={imageGeneration.onRevealed} />
-      ))}
-      {shownAttachments?.length ? (
-        <MessageAttachments attachments={shownAttachments} role="assistant" imageActions={imageActions} />
-      ) : null}
-    </>
   );
   const rows = assistantPresentationRows(
     content,
     streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
     reasoning ?? "",
   );
+  // Generated images and their placeholders sit at their generate_image row.
+  const imageSlots = imageGenerationRowSlots(
+    timeline ? rows : null,
+    imageGeneration.slots,
+    shownAttachments,
+    imagePlacements,
+  );
+  const mediaNodes = (
+    placeholders: readonly ImageGenerationSlot[] | undefined,
+    images: readonly Attachment[] | undefined,
+  ) => (
+    <>
+      {placeholders?.map((slot) => (
+        <ImageScanPlaceholder key={slot.stepId} slot={slot} onRevealed={imageGeneration.onRevealed} />
+      ))}
+      {images?.length ? (
+        <MessageAttachments attachments={images} role="assistant" imageActions={imageActions} />
+      ) : null}
+    </>
+  );
+  const media = mediaNodes(imageSlots.trailingSlots, imageSlots.trailingAttachments);
   const slots = htmlArtifactSlots(timeline ? rows : null, visuals, visualPlacements, visualDrafts);
   const uiSlots = uiVisualSlots(timeline ? rows : null, uiVisuals, uiDrafts);
   const uiNodes = (list: readonly ChatUiVisualV1[] | undefined, draft: boolean) =>
@@ -313,6 +330,9 @@ function AssistantResponse({
               />
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
+              {imageSlots.byRowKey.has(row.key)
+                ? mediaNodes(imageSlots.byRowKey.get(row.key)?.slots, imageSlots.byRowKey.get(row.key)?.attachments)
+                : null}
               {uiNodes(uiSlots.byRowKey.get(row.key), false)}
               {uiNodes(uiSlots.draftsByRowKey.get(row.key), true)}
               {subagentActivityKey === row.key ? subagentChips : null}
@@ -430,6 +450,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     };
   }, [forkDisabledReason, message.id, message.role, onFork, onForkWithSummary]);
   const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
+  const imagePlacements = React.useMemo(
+    () => new Map((message.imagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
+    [message.imagePlacements],
+  );
   const row = (
     <div className="flex min-w-0 flex-col gap-3">
       {message.role === "assistant" ? (
@@ -445,6 +469,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             footer={settledTurnFooter(message)}
             fork={fork}
             imageActions={imageActions}
+            imagePlacements={imagePlacements}
             subagentChips={
               subagentsEnabled && message.subagents ? (
                 <SubagentChips reference={message.subagents} onOpen={onOpenSubagent} />
@@ -809,6 +834,7 @@ export function MessageList({
           onStreamHandoffComplete={onStreamHandoffComplete}
           visuals={htmlArtifactsByAnchor.get("streaming")}
           visualPlacements={streamingArtifactPlacements}
+          imagePlacements={streamingArtifactPlacements}
           wideVisuals={streamingWideVisuals}
           visualDrafts={streamingVisualDrafts}
           renderVisual={renderVisual}

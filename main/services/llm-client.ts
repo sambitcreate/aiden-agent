@@ -418,7 +418,7 @@ import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
-import { createArtifactPlacementLedger } from "./generative-ui-placements.js";
+import { createArtifactPlacementLedger, imageAttachmentPlacements } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -853,6 +853,8 @@ async function prepareGeneration(
   const displayedUiVisuals: ChatUiVisualV1[] = [];
   /** visual id → the render_ui call it renders after. */
   const uiVisualPlacements = createArtifactPlacementLedger();
+  /** generated image attachment id → the generate_image call it renders after. */
+  const imagePlacements = createArtifactPlacementLedger();
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
@@ -912,6 +914,7 @@ async function prepareGeneration(
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      imagePlacements,
       displayedUiVisuals,
       uiVisualPlacements,
       supportsImages: runtimeSupportsImages(designModel),
@@ -1723,7 +1726,7 @@ async function prepareGeneration(
       existingChatImageBytes: existingUsage.bytes + pendingUsage.bytes,
       existingChatImageCount: existingUsage.count + pendingUsage.count,
       existingChatImagePixels: existingUsage.pixels + pendingUsage.pixels,
-      onArtifact: async (artifact, dimensions) => {
+      onArtifact: async (artifact, dimensions, source) => {
         const existing = responseImages();
         if (
           existing.some(
@@ -1750,12 +1753,16 @@ async function prepareGeneration(
         if (displayedImageIds.has(artifact.attachment.id)) return false;
         displayedImageIds.add(artifact.attachment.id);
         displayedImages.push(artifact.attachment);
+        // Only generated images claim their call's row (and its Lens placeholder).
+        if (source.tool === "generate_image") imagePlacements.record(artifact.attachment.id, source.toolCallId);
+        const placedToolCallId = imagePlacements.publicIdFor(artifact.attachment.id);
         sendGeneration(streamId, "chat:artifact", {
           streamId,
           event: {
             version: CHAT_ARTIFACT_EVENT_VERSION,
             operation: "present",
             artifact,
+            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
           },
         });
         return true;
@@ -1940,6 +1947,7 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     htmlArtifactPlacements,
+    imagePlacements,
     displayedUiVisuals,
     uiVisualPlacements,
     supportsImages,
@@ -2305,6 +2313,7 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
+      imagePlacements,
       displayedUiVisuals,
       uiVisualPlacements,
       supportsImages,
@@ -2381,6 +2390,7 @@ export const llmClient = {
     // Visuals are placed by the timeline's public call ids, not Pi's raw ones.
     htmlArtifactPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     uiVisualPlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
+    imagePlacements.setResolver((rawToolCallId) => timeline.publicToolCallId(rawToolCallId));
     // Drafts only stream when render_artifact is really registered this turn
     // (not when visuals are Off, or for surfaces that never get the tool).
     const visualsRegistered = generationExtensions.some(
@@ -2473,6 +2483,7 @@ export const llmClient = {
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
             htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
+            imagePlacements: imageAttachmentPlacements(imagePlacements, assistantAttachments),
             uiVisuals: displayedUiVisuals.length
               ? displayedUiVisuals.map((visual) => {
                   const toolCallId = uiVisualPlacements.publicIdFor(visual.id);

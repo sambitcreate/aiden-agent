@@ -273,6 +273,26 @@ export function customEntry(request: ImageGenerationAddCustomModelRequest): Imag
 }
 
 /**
+ * OpenRouter documents `image_config.aspect_ratio` as a request-level option
+ * and Aiden sends it for every model (accepted risk: there is no per-model
+ * gate). If an upstream model rejects it, say so plainly instead of passing on
+ * a raw 400, and suggest retrying without a ratio.
+ */
+export function explainAspectRatioRejection(
+  provider: string,
+  options: ImagesOptions | undefined,
+  result: AssistantImages,
+): AssistantImages {
+  const aspectRatio = requestedAspectRatio(options);
+  if (provider !== "openrouter" || !aspectRatio || result.stopReason !== "error") return result;
+  if (!/aspect[\s_-]*ratio|image_config/iu.test(result.errorMessage ?? "")) return result;
+  return {
+    ...result,
+    errorMessage: `This OpenRouter model doesn't accept the ${aspectRatio} aspect ratio. Try again without an aspect ratio, or pick another model.`,
+  };
+}
+
+/**
  * Translate Aiden's provider-neutral `metadata.aspectRatio` for the provider.
  * Replicate and fal adapters read the metadata themselves (and send it only
  * where the model supports it). OpenRouter's Pi adapter has no option for it,
@@ -344,7 +364,8 @@ export class ImageGenerationRuntime {
             timestamp: Date.now(),
           };
         }
-        return native.generateImages(registered, context, imageRequestOptions(registered.provider, options));
+        const result = await native.generateImages(registered, context, imageRequestOptions(registered.provider, options));
+        return explainAspectRatioRejection(registered.provider, options, result);
       },
     };
   }

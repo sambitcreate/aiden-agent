@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { AuthContext, ImageApi, ImageModel } from "@earendil-works/pi-ai";
-import { ImageGenerationError, ImageGenerationRuntime } from "./runtime.js";
+import { explainAspectRatioRejection, ImageGenerationError, ImageGenerationRuntime } from "./runtime.js";
 import {
   createImageGenerationSettingsStore,
   IMAGE_GENERATION_SETTINGS_FILE,
@@ -488,7 +488,12 @@ test("a requested aspect ratio reaches each provider only in a field that model 
   assert.deepEqual([banana.aspect_ratio, banana.image_size], ["9:16", undefined]);
   const schnell = await generate("fal", "fal-ai/flux/schnell", "16:9");
   assert.deepEqual([schnell.aspect_ratio, schnell.image_size], [undefined, "landscape_16_9"]);
-  const noPreset = await generate("fal", "fal-ai/flux/schnell", "3:2");
+  // 3:2 and 2:3 have no preset: FLUX takes a custom size, others keep their default.
+  const custom = await generate("fal", "fal-ai/flux/schnell", "3:2");
+  assert.deepEqual([custom.aspect_ratio, custom.image_size], [undefined, { width: 1536, height: 1024 }]);
+  const portrait = await generate("fal", "fal-ai/flux-2-pro", "2:3");
+  assert.deepEqual(portrait.image_size, { width: 1024, height: 1536 });
+  const noPreset = await generate("fal", "bytedance/seedream/v5/flash/text-to-image", "3:2");
   assert.deepEqual([noPreset.aspect_ratio, noPreset.image_size], [undefined, undefined]);
   // OpenRouter: `image_config.aspect_ratio` in the chat-completions body.
   const routed = await generate("openrouter", "google/gemini-3.1-flash-image", "4:3");
@@ -538,4 +543,26 @@ test("a fetched Replicate model keeps the ratios its schema lists and sends them
   };
   assert.equal((await send("16:9")).aspect_ratio, "16:9");
   assert.equal((await send("4:3")).aspect_ratio, undefined, "a ratio missing from the schema enum is omitted");
+});
+
+test("an OpenRouter rejection of the requested aspect ratio reads as a clear error", () => {
+  const failed = (errorMessage: string) => ({
+    api: "openrouter-images",
+    provider: "openrouter",
+    model: "some/model",
+    output: [],
+    stopReason: "error" as const,
+    errorMessage,
+    timestamp: 1,
+  }) as unknown as Parameters<typeof explainAspectRatioRejection>[2];
+  const withRatio = { metadata: { aspectRatio: "16:9" } } as Parameters<typeof explainAspectRatioRejection>[1];
+  const raw = '400 {"error":{"message":"Invalid image_config.aspect_ratio for this model"}}';
+  assert.match(
+    explainAspectRatioRejection("openrouter", withRatio, failed(raw)).errorMessage ?? "",
+    /doesn't accept the 16:9 aspect ratio\. Try again without an aspect ratio/u,
+  );
+  // Other errors, other providers and ratio-less requests pass through unchanged.
+  assert.equal(explainAspectRatioRejection("openrouter", withRatio, failed("401 bad key")).errorMessage, "401 bad key");
+  assert.equal(explainAspectRatioRejection("fal", withRatio, failed(raw)).errorMessage, raw);
+  assert.equal(explainAspectRatioRejection("openrouter", undefined, failed(raw)).errorMessage, raw);
 });

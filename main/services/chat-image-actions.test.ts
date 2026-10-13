@@ -79,3 +79,51 @@ test("file names lose separators, control characters and leading dots", () => {
   assert.equal(safeImageFileStem("..."), "Image");
   assert.equal(safeImageFileStem("x".repeat(400)).length, 120);
 });
+
+test("bidi overrides, isolates and C1 controls cannot disguise a saved file's name", () => {
+  // "photo<RLO>gnp.exe" would render in Finder as "photoexe.png".
+  assert.equal(safeImageFileStem("photo‮gnp.exe"), "photo gnp");
+  assert.equal(safeImageFileStem("a⁦b⁩c‏d\u0085e\u009Bf.png"), "a b c d e f");
+  assert.equal(safeImageFileStem("‭‬.png"), "Image");
+});
+
+test("a saved image keeps the extension of its stored type", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-ext-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const types = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+    "image/heic": "heic",
+    "image/heif": "heif",
+  } as const;
+  const attachments = Object.keys(types).map((mimeType, index) => ({
+    id: `img-${index}`,
+    // The stored name's own extension never decides the saved one.
+    name: `Picture ${index}.png`,
+    mimeType,
+    kind: "image",
+    size: 68,
+    data: PNG,
+  }));
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  registerChatImageActionHandlers(
+    { handle: (channel, fn) => void handlers.set(channel, fn) },
+    {
+      getChat: async () => ({ messages: [{ id: "m", role: "assistant", content: "", createdAt: 1, attachments }] }) as never,
+      downloadsDir: () => dir,
+      writeClipboardImage: () => undefined,
+      showItemInFolder: () => undefined,
+    },
+  );
+  const saved: string[] = [];
+  for (const attachment of attachments) {
+    const result = (await handlers.get("chats:saveImageToDownloads")!({}, { chatId: "c", attachmentId: attachment.id })) as {
+      path: string;
+    };
+    saved.push(path.basename(result.path));
+  }
+  assert.deepEqual(saved, Object.values(types).map((extension, index) => `Picture ${index}.${extension}`));
+});

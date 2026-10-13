@@ -5,17 +5,23 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isCanonicalRasterImageMimeType } from "../../renderer/shared/attachment-contract.js";
+import {
+  isCanonicalRasterImageMimeType,
+  type CanonicalRasterImageMimeType,
+} from "../../renderer/shared/attachment-contract.js";
 import type { Chat } from "./types.js";
 
 const MAX_ID_LENGTH = 256;
 const MAX_FILE_STEM = 120;
 const MAX_UNIQUE_ATTEMPTS = 1000;
-const EXTENSIONS: Readonly<Record<string, string>> = {
+const EXTENSIONS: Readonly<Record<CanonicalRasterImageMimeType, string>> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
+  "image/bmp": "bmp",
+  "image/heic": "heic",
+  "image/heif": "heif",
 };
 
 export interface ChatImageActionDeps {
@@ -42,12 +48,16 @@ function parseImageRef(input: unknown): ImageRef {
   return { chatId: value.chatId as string, attachmentId: value.attachmentId as string };
 }
 
-/** A file name safe for any folder: no separators, control characters or leading dots. */
+/**
+ * A file name safe for any folder: no separators, C0/C1 control characters,
+ * bidirectional overrides or isolates (which can disguise an extension in
+ * Finder), or leading dots.
+ */
 export function safeImageFileStem(name: string): string {
   const withoutExtension = name.replace(/\.[a-z0-9]{1,5}$/iu, "");
   const cleaned = withoutExtension
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]+/gu, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim()
     .replace(/^[.\s]+/u, "")
@@ -68,7 +78,7 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
       if (!attachment) continue;
       if (attachment.kind !== "image" || !attachment.data || !isCanonicalRasterImageMimeType(attachment.mimeType))
         break;
-      return { attachment, bytes: Buffer.from(attachment.data, "base64") };
+      return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(attachment.data, "base64") };
     }
     throw new Error("This image isn't saved in the chat yet. Try again when the response finishes.");
   }
@@ -76,10 +86,10 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
   return {
     /** Writes a new file in Downloads (never overwriting) and returns its path. */
     async saveToDownloads(input: unknown): Promise<{ path: string }> {
-      const { attachment, bytes } = await image(input);
+      const { attachment, mimeType, bytes } = await image(input);
       const dir = deps.downloadsDir();
       const stem = safeImageFileStem(attachment.name);
-      const extension = EXTENSIONS[attachment.mimeType] ?? "png";
+      const extension = EXTENSIONS[mimeType];
       for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
         const filePath = path.join(dir, `${attempt === 0 ? stem : `${stem} (${attempt})`}.${extension}`);
         let handle: fs.FileHandle;

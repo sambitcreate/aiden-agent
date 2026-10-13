@@ -181,9 +181,20 @@ Shared rules:
    radius; efficiency), then fixes.
 5. **Verify.** Narrow suites, typecheck, lint, then launch the app.
 
+## Accepted risks
+
+- **OpenRouter `image_config.aspect_ratio` (2026-10-12).** OpenRouter documents
+  it as a request-level option, so Aiden sends it whenever a call names a ratio,
+  for every OpenRouter image model, with no per-model gate. A model that
+  rejects it fails the call; `explainAspectRatioRejection` (runtime.ts) turns an
+  upstream error that mentions the aspect ratio or `image_config` into "This
+  OpenRouter model doesn't accept the 16:9 aspect ratio. Try again without an
+  aspect ratio, or pick another model."
+
 ## Out of scope
 
-- Size and aspect-ratio controls on `generate_image`.
+- Size controls on `generate_image` (an optional `aspectRatio` shipped later;
+  see `.memory/image-generation.md`).
 - Pricing display.
 - Mobile clients. The transcript contract is unchanged, and conversation images
   use the existing attachment path.

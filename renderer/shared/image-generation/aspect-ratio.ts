@@ -20,8 +20,9 @@ export function imageAspectRatioValue(ratio: ImageAspectRatio): number {
 }
 
 /**
- * fal's `image_size` presets. 3:2 and 2:3 have no preset, so a model that
- * only takes `image_size` keeps its default shape for those.
+ * fal's `image_size` presets. 3:2 and 2:3 have no preset; a model that takes
+ * custom sizes gets FAL_CUSTOM_IMAGE_SIZES for those, any other keeps its
+ * default shape.
  */
 export const FAL_IMAGE_SIZE_PRESETS: Readonly<Partial<Record<ImageAspectRatio, string>>> = {
   "1:1": "square_hd",
@@ -31,13 +32,21 @@ export const FAL_IMAGE_SIZE_PRESETS: Readonly<Partial<Record<ImageAspectRatio, s
   "3:4": "portrait_4_3",
 };
 
+/** `image_size: { width, height }` for ratios fal has no preset for. */
+export const FAL_CUSTOM_IMAGE_SIZES: Readonly<Partial<Record<ImageAspectRatio, { width: number; height: number }>>> = {
+  "3:2": { width: 1536, height: 1024 },
+  "2:3": { width: 1024, height: 1536 },
+};
+
 /**
  * How a fal model takes a shape: an `aspect_ratio` string from a known set,
- * or an `image_size` preset (see FAL_IMAGE_SIZE_PRESETS).
+ * or an `image_size` preset (see FAL_IMAGE_SIZE_PRESETS). `customSizes` marks
+ * a model whose `image_size` also accepts a `{ width, height }` object; set it
+ * only where fal documents that (the FLUX family), never as a guess.
  */
 export type FalAspectRatioSupport =
   | { field: "aspect_ratio"; values: readonly ImageAspectRatio[] }
-  | { field: "image_size" };
+  | { field: "image_size"; customSizes?: true };
 
 /**
  * The request field and value that ask a fal model for `ratio`, or undefined
@@ -46,12 +55,17 @@ export type FalAspectRatioSupport =
 export function falAspectRatioInput(
   support: FalAspectRatioSupport | undefined,
   ratio: ImageAspectRatio | undefined,
-): { field: "aspect_ratio" | "image_size"; value: string } | undefined {
+):
+  | { field: "aspect_ratio" | "image_size"; value: string }
+  | { field: "image_size"; value: { width: number; height: number } }
+  | undefined {
   if (!support || !ratio) return undefined;
   if (support.field === "aspect_ratio")
     return support.values.includes(ratio) ? { field: "aspect_ratio", value: ratio } : undefined;
   const preset = FAL_IMAGE_SIZE_PRESETS[ratio];
-  return preset ? { field: "image_size", value: preset } : undefined;
+  if (preset) return { field: "image_size", value: preset };
+  const custom = support.customSizes ? FAL_CUSTOM_IMAGE_SIZES[ratio] : undefined;
+  return custom ? { field: "image_size", value: { ...custom } } : undefined;
 }
 
 /** The ratios in a provider's enum that Aiden can request, in Aiden's order. */

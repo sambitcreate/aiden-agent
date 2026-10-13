@@ -1,3 +1,4 @@
+import { imageGenerationModelName } from "./image-generation-slots";
 import {
   isToolStep,
   type AgentStep,
@@ -102,7 +103,12 @@ export function reasoningActivityLabel(
 function stepObject(step: AgentToolStep): string | undefined {
   // While an image generates its placeholder already shows the requested
   // ratio; the trail names it once the call settles.
-  if (step.toolName === "generate_image" && step.status === "running") return undefined;
+  if (step.toolName === "generate_image") {
+    if (step.status === "running") return undefined;
+    // `target` is `<provider>/<model id>`; the row names only the model.
+    const parts = [step.detail, imageGenerationModelName(step.target)].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
+  }
   if (step.toolName === "grep" && step.detail && step.target) {
     return `${step.detail} in ${step.target}`;
   }

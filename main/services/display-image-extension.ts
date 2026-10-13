@@ -47,6 +47,7 @@ export interface DisplayImageExtensionOptions {
   onArtifact: (
     artifact: ChatImageArtifactV1,
     presentation: Readonly<ImageDimensions>,
+    source: ImageArtifactSource,
   ) => boolean | void | Promise<boolean | void>;
   /** Test seam for deterministic cancellation immediately before presentation. */
   beforeArtifact?: () => void | Promise<void>;
@@ -56,6 +57,12 @@ export interface DisplayImageExtensionRuntime {
   /** The `display_image` contribution; absent without a workspace root. */
   extension: PiAgentRuntimeExtension | undefined;
   presentGeneratedImage(toolCallId: string, image: ImageContent, signal?: AbortSignal): Promise<void>;
+}
+
+/** Which tool call presented an image; the call id is Pi's raw provider id. */
+export interface ImageArtifactSource {
+  tool: "display_image" | "generate_image";
+  toolCallId: string;
 }
 
 interface ImageDimensions {
@@ -513,7 +520,12 @@ export function createDisplayImageExtensionRuntime(
   let displayedPixels = 0;
   let serial = Promise.resolve();
 
-  const present = async (artifact: ChatImageArtifactV1, dimensions: ImageDimensions, signal?: AbortSignal) => {
+  const present = async (
+    artifact: ChatImageArtifactV1,
+    dimensions: ImageDimensions,
+    source: ImageArtifactSource,
+    signal?: AbortSignal,
+  ) => {
     signal?.throwIfAborted();
     const pixels = dimensions.width * dimensions.height;
     if (displayedCount >= MAX_ATTACHMENTS_PER_MESSAGE || existingChatImageCount + displayedCount >= MAX_DISPLAY_IMAGES_PER_CHAT) {
@@ -527,7 +539,7 @@ export function createDisplayImageExtensionRuntime(
         existingChatImagePixels + displayedPixels + pixels > MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT) {
       throw new Error("Inline images reached this response or chat's decoded-pixel limit.");
     }
-    const presented = (await options.onArtifact(artifact, dimensions)) !== false;
+    const presented = (await options.onArtifact(artifact, dimensions, source)) !== false;
     if (presented) {
       displayedCount += 1;
       displayedBytes += artifact.attachment.size;
@@ -636,7 +648,7 @@ export function createDisplayImageExtensionRuntime(
                 data: attachment.data,
               },
             };
-            await present(artifact, dimensions, signal);
+            await present(artifact, dimensions, { tool: "display_image", toolCallId }, signal);
             return {
               content: [
                 {
@@ -678,7 +690,7 @@ export function createDisplayImageExtensionRuntime(
             name: `Generated image.${extension}`,
             kind: "image", mimeType: image.mimeType, size: bytes.length, data: image.data,
           },
-        }, dimensions, signal);
+        }, dimensions, { tool: "generate_image", toolCallId }, signal);
       } finally { release(); }
     },
     extension: workspace

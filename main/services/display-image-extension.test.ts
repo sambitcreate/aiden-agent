@@ -123,10 +123,12 @@ test("the first-party Pi extension emits a bounded structured image artifact", a
   await fs.mkdir(path.join(root, "previews"));
   await fs.writeFile(path.join(root, "previews", "page.png"), ONE_PIXEL_PNG);
   const artifacts: ChatImageArtifactV1[] = [];
+  const sources: unknown[] = [];
   const extension = createDisplayImageExtension({
     workspaceRoot: root,
-    onArtifact: (artifact) => {
+    onArtifact: (artifact, _dimensions, source) => {
       artifacts.push(artifact);
+      sources.push(source);
     },
   });
   const tool = extension.tools?.[0];
@@ -138,6 +140,7 @@ test("the first-party Pi extension emits a bounded structured image artifact", a
 
   const result = await tool.execute("call-1", { path: "previews/page.png" });
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /1×1/u);
+  assert.deepEqual(sources, [{ tool: "display_image", toolCallId: "call-1" }]);
   assert.equal(artifacts.length, 1);
   assert.deepEqual(artifacts[0], {
     version: 1,
@@ -404,16 +407,20 @@ test("a chat turn's model-operations plan keeps folderless chats image-only and 
 
 test("a runtime without a workspace presents generated images but offers no display_image tool", async () => {
   const artifacts: ChatImageArtifactV1[] = [];
+  const sources: unknown[] = [];
   const runtime = createDisplayImageExtensionRuntime({
     artifactNamespace: "folderless",
     existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1,
-    onArtifact: (artifact) => {
+    onArtifact: (artifact, _dimensions, source) => {
       artifacts.push(artifact);
+      sources.push(source);
     },
   });
   assert.equal(runtime.extension, undefined);
   await runtime.presentGeneratedImage("generated", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") });
   assert.equal(artifacts.length, 1);
+  // The producing call travels with the image so its placeholder can claim it.
+  assert.deepEqual(sources, [{ tool: "generate_image", toolCallId: "generated" }]);
   assert.equal(artifacts[0]!.attachment.name, "Generated image.png");
   assert.equal(artifacts[0]!.attachment.data, ONE_PIXEL_PNG.toString("base64"));
   await assert.rejects(

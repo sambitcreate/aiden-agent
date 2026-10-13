@@ -3105,7 +3105,8 @@ textarea {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Never crop: a provider that ignores the requested ratio letterboxes. */
+  object-fit: contain;
 }
 .image-scan[data-scan-period="long"] { --image-scan-period: 5.2s; }
 .image-scan-cover {
@@ -3185,9 +3186,12 @@ textarea {
   0% { transform: translateY(34%); }
   78%, 100% { transform: translateY(-100%); }
 }
-.image-scan[data-offscreen] *,
-.image-scan[data-document-hidden] *,
-.image-scan[data-arrival="reveal"] * { animation-play-state: paused !important; }
+/* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
+   pauses the scan but never the arriving image's own fade. */
+.image-scan-slot[data-offscreen] *,
+.image-scan-slot[data-document-hidden] *,
+.image-scan-slot[data-arrival="reveal"] .image-scan-live,
+.image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
 /* Arrival: the cover slides away under a bright edge, revealing the image. */
 .image-scan-cover::before {
   top: -1px;

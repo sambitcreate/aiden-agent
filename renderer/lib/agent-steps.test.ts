@@ -433,4 +433,15 @@ test("an image generation row reads naturally and names its ratio once settled",
   assert.equal(activityLineText({ ...base, status: "running" }), "Generating image");
   assert.equal(activityLineText({ ...base, status: "completed" }), "Generated image 16:9");
   assert.equal(activityLineText({ ...base, status: "failed" }), "Generate image failed 16:9");
+  // The model id never shows raw: a curated name, else the id's last segment.
+  assert.equal(
+    activityLineText({ ...base, status: "completed", target: "fal/fal-ai/nano-banana-pro" }),
+    "Generated image 16:9 · Nano Banana Pro",
+  );
+  const { detail: _ratio, ...unshaped } = base;
+  assert.equal(
+    activityLineText({ ...unshaped, status: "completed", target: "openrouter/google/gemini-2.5-flash-image" }),
+    "Generated image gemini-2.5-flash-image",
+  );
+  assert.equal(activityLineText({ ...unshaped, status: "completed", target: "unknown/model" }), "Generated image");
 });

@@ -10,12 +10,19 @@
 // - Its shape comes from the step's `detail`, which carries the call's
 //   `aspectRatio` argument when it is one of IMAGE_ASPECT_RATIOS; anything else
 //   (or none) is 1:1.
-// - The first image attachment that arrives after the placeholder appeared is
-//   revealed inside it, then shown as an ordinary attachment. A step that
-//   fails, is cancelled, or completes without an image drops its placeholder.
+// - A placeholder claims only images placed on its own call: the host sends
+//   each generated image with the public `call-N` id of the generate_image call
+//   that produced it (`placements`, attachment id → toolCallId). display_image
+//   results carry no placement and are never claimed. The first such image is
+//   revealed inside the placeholder; the call's other images stay hidden until
+//   the reveal ends, then all show as ordinary attachments at the call's row.
+// - Once an image arrived the placeholder never returns to scanning, even if
+//   the attachment list briefly drops it during the stream handoff. A step
+//   that fails, is cancelled, or completes without an image drops it.
 // - Settled (persisted) responses never show placeholders.
 
 import type { Attachment } from "./types";
+import type { AssistantPresentationRow } from "./assistant-message-presentation";
 import { isToolStep, type AgentToolStep, type GenerationTimeline } from "../shared/generation-timeline";
 import { placeholderAspectRatio, type ImageAspectRatio } from "../shared/image-generation/placeholder-spec";
 import { CURATED_FAL_IMAGE_MODELS, CURATED_REPLICATE_IMAGE_MODELS } from "../shared/image-generation/catalog";
@@ -27,15 +34,16 @@ import {
 export const GENERATE_IMAGE_TOOL_NAME = "generate_image";
 
 export interface ImageGenerationSlotEntry {
-  /** When this transcript first saw the step running (local clock). */
+  /** When this transcript first saw the step running (local clock); a fallback start. */
   firstSeenAt: number;
-  /** Image attachments already present then; they are never this call's result. */
-  baseline: readonly string[];
-  arrivedId?: string;
+  /** The image being revealed. Kept so a handoff gap never resumes scanning. */
+  arrived?: Attachment;
 }
 
 export interface ImageGenerationSlot {
   stepId: string;
+  /** The timeline's public call id, which anchors the slot at its activity row. */
+  toolCallId: string;
   aspectRatio: ImageAspectRatio;
   /** "fal · Nano Banana Pro" when the step names its model. */
   modelLabel?: string;
@@ -47,9 +55,11 @@ export interface ImageGenerationSlot {
 export interface ImageGenerationSlotsInput {
   timeline: GenerationTimeline | null | undefined;
   attachments: readonly Attachment[] | undefined;
+  /** Generated image attachment id → the public id of the call that produced it. */
+  placements: ReadonlyMap<string, string>;
   /** True only for the live, still-streaming response. */
   active: boolean;
-  /** Steps whose reveal finished; their image now shows as an attachment. */
+  /** Steps whose reveal finished; their images now show as attachments. */
   revealed: ReadonlySet<string>;
   now: number;
 }
@@ -57,7 +67,7 @@ export interface ImageGenerationSlotsInput {
 export interface ImageGenerationSlots {
   entries: Map<string, ImageGenerationSlotEntry>;
   slots: ImageGenerationSlot[];
-  /** Attachments shown inside a placeholder rather than in the attachment grid. */
+  /** Attachments shown inside, or held back by, a placeholder rather than in the grid. */
   hiddenAttachmentIds: ReadonlySet<string>;
 }
 
@@ -81,18 +91,28 @@ const CURATED_NAMES = new Map(
   ]),
 );
 
-/**
- * "Provider · Model" for a step whose `target` is `<provider>/<model id>` with
- * a known image provider; undefined otherwise.
- */
-export function imageGenerationModelLabel(target: string | undefined): string | undefined {
+function imageModelParts(target: string | undefined): { provider: string; name: string } | undefined {
   if (!target) return undefined;
   const slash = target.indexOf("/");
   const provider = target.slice(0, slash);
   const id = target.slice(slash + 1);
   if (slash <= 0 || !id || !isImageGenerationProviderId(provider)) return undefined;
   const name = CURATED_NAMES.get(target) ?? id.split("/").pop() ?? id;
-  return `${IMAGE_GENERATION_PROVIDER_NAMES[provider]} · ${name}`;
+  return { provider: IMAGE_GENERATION_PROVIDER_NAMES[provider], name };
+}
+
+/**
+ * "Provider · Model" for a step whose `target` is `<provider>/<model id>` with
+ * a known image provider; undefined otherwise.
+ */
+export function imageGenerationModelLabel(target: string | undefined): string | undefined {
+  const parts = imageModelParts(target);
+  return parts ? `${parts.provider} · ${parts.name}` : undefined;
+}
+
+/** Just the model's display name (curated name or the id's last segment). */
+export function imageGenerationModelName(target: string | undefined): string | undefined {
+  return imageModelParts(target)?.name;
 }
 
 export function reconcileImageGenerationSlots(
@@ -103,43 +123,102 @@ export function reconcileImageGenerationSlots(
   const steps = generateImageSteps(input.timeline);
   if (steps.length === 0) return EMPTY;
   const images = (input.attachments ?? []).filter((attachment) => attachment.kind === "image");
-  const imageIds = images.map((attachment) => attachment.id);
   const entries = new Map<string, ImageGenerationSlotEntry>();
-  const claimed = new Set<string>();
-  for (const entry of previous.values()) if (entry.arrivedId) claimed.add(entry.arrivedId);
+  // An image a step already revealed (or is revealing) stays that step's.
+  const claimedBy = new Map<string, string>();
+  for (const [stepId, entry] of previous) if (entry.arrived) claimedBy.set(entry.arrived.id, stepId);
 
   const slots: ImageGenerationSlot[] = [];
   const hidden = new Set<string>();
   for (const step of steps) {
-    if (input.revealed.has(step.id)) continue;
     let entry = previous.get(step.id);
+    if (input.revealed.has(step.id)) {
+      // Keep the claim so no later placeholder can take this image.
+      if (entry) entries.set(step.id, entry);
+      continue;
+    }
     if (!entry) {
       // Only a running call opens a placeholder; one first seen already
       // finished (a reload, a fast provider) shows its image as usual.
       if (step.status !== "running") continue;
-      entry = { firstSeenAt: input.now, baseline: imageIds };
+      entry = { firstSeenAt: input.now };
     }
-    if (!entry.arrivedId) {
-      const baseline = new Set(entry.baseline);
-      const arrived = imageIds.find((id) => !baseline.has(id) && !claimed.has(id));
-      if (arrived) {
-        claimed.add(arrived);
-        entry = { ...entry, arrivedId: arrived };
-      }
+    const own = images.filter((image) => {
+      if (input.placements.get(image.id) !== step.toolCallId) return false;
+      const owner = claimedBy.get(image.id);
+      return owner === undefined || owner === step.id;
+    });
+    if (!entry.arrived && own[0]) {
+      entry = { ...entry, arrived: own[0] };
+      claimedBy.set(own[0].id, step.id);
     }
-    const keep = step.status === "running" || (entry.arrivedId !== undefined && step.status === "completed");
+    const arrived = entry.arrived;
+    const keep = step.status === "running" || (arrived !== undefined && step.status === "completed");
     if (!keep) continue;
     entries.set(step.id, entry);
-    const arrived = entry.arrivedId ? images.find((image) => image.id === entry.arrivedId) : undefined;
-    if (arrived) hidden.add(arrived.id);
+    if (arrived) {
+      hidden.add(arrived.id);
+      // A call's other images wait for the reveal, so none shows above it.
+      for (const image of own) hidden.add(image.id);
+    }
     const modelLabel = imageGenerationModelLabel(step.target);
     slots.push({
       stepId: step.id,
+      toolCallId: step.toolCallId,
       aspectRatio: placeholderAspectRatio(step.detail),
-      startedAt: entry.firstSeenAt,
+      startedAt: Number.isFinite(step.startedAt) && step.startedAt > 0 ? step.startedAt : entry.firstSeenAt,
       ...(modelLabel ? { modelLabel } : {}),
       ...(arrived ? { arrived } : {}),
     });
   }
   return { entries, slots, hiddenAttachmentIds: hidden };
+}
+
+export interface ImageGenerationRowSlots<Slot> {
+  /** Placeholders and generated images after the activity row that holds their call. */
+  byRowKey: Map<string, { slots: Slot[]; attachments: Attachment[] }>;
+  trailingSlots: Slot[];
+  trailingAttachments: Attachment[];
+}
+
+/**
+ * Anchor each placeholder and each placed generated image at the activity row
+ * holding its generate_image call, the way visuals anchor at their call's row.
+ * Anything without a matching row (no timeline, display_image results,
+ * uploads) keeps the trailing position after all rows.
+ */
+export function imageGenerationRowSlots<Slot extends { toolCallId: string }>(
+  rows: readonly AssistantPresentationRow[] | null,
+  slots: readonly Slot[],
+  attachments: readonly Attachment[],
+  placements: ReadonlyMap<string, string>,
+): ImageGenerationRowSlots<Slot> {
+  const rowKeyByCall = new Map<string, string>();
+  for (const row of rows ?? []) {
+    if (row.kind !== "activity") continue;
+    for (const step of row.steps) if (isToolStep(step)) rowKeyByCall.set(step.toolCallId, row.key);
+  }
+  const byRowKey = new Map<string, { slots: Slot[]; attachments: Attachment[] }>();
+  const at = (rowKey: string) => {
+    let bucket = byRowKey.get(rowKey);
+    if (!bucket) {
+      bucket = { slots: [], attachments: [] };
+      byRowKey.set(rowKey, bucket);
+    }
+    return bucket;
+  };
+  const trailingSlots: Slot[] = [];
+  const trailingAttachments: Attachment[] = [];
+  for (const slot of slots) {
+    const rowKey = rowKeyByCall.get(slot.toolCallId);
+    if (rowKey) at(rowKey).slots.push(slot);
+    else trailingSlots.push(slot);
+  }
+  for (const attachment of attachments) {
+    const call = placements.get(attachment.id);
+    const rowKey = call ? rowKeyByCall.get(call) : undefined;
+    if (rowKey) at(rowKey).attachments.push(attachment);
+    else trailingAttachments.push(attachment);
+  }
+  return { byRowKey, trailingSlots, trailingAttachments };
 }
