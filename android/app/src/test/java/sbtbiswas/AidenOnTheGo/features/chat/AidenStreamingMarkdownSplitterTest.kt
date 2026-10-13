@@ -45,15 +45,98 @@ class AidenStreamingMarkdownSplitterTest {
     }
 
     @Test
-    fun aNestedFenceSealsOnlyAfterItsOwnClosingRun() {
-        val prose = "Line of prose.\n".repeat(400)
-        for ((open, close) in listOf("````markdown" to "````", "~~~markdown" to "~~~")) {
-            val fence = "$open\n```swift\nlet a = 1\n\nlet b = 2\n```\n$close\n"
-            val segments = split(prose + fence + "After\n")
+    fun aStrayRunHoldsTheSealUntilTheNextRunClosesIt() {
+        val prose = "Line of prose.\n".repeat(450)
+        val stray = "Type ``` to start a fence.\n\n"
+        val held = split(prose + stray + "More prose.\n\n".repeat(50) + "tail")
 
-            assertEquals(open, listOf(prose + fence), segments.stableChunks.map { it.text })
-            assertEquals(open, "After\n", segments.activeMarkdown)
+        // The renderer pairs the stray run with the next one, so nothing after it may seal.
+        assertTrue(held.stableChunks.isEmpty())
+
+        val closed = split(prose + stray + "More prose.\n\nThen ``` closes it.\nAfter\n\ntail")
+        assertEquals(Seam.CODE_FENCE, closed.stableChunks.single().seam)
+        assertEquals("After\n\ntail", closed.activeMarkdown)
+    }
+
+    @Test
+    fun tildeLinesAreProseToTheRendererSoABlankLineInsideThemSeals() {
+        val text = "~~~text\n" + "Line of prose.\n".repeat(450) + "\n~~~\ntail"
+
+        val segments = split(text)
+
+        assertEquals(Seam.BLANK_LINE, segments.stableChunks.single().seam)
+        assertEquals("~~~\ntail", segments.activeMarkdown)
+    }
+
+    @Test
+    fun everySealFallsBetweenTheCodeBlocksTheRendererFinds() {
+        val prose = "Aiden reads the file and explains the change in a sentence.\n".repeat(40)
+        val snippets = listOf(
+            "```kotlin\nval a = 1\n\nval b = 2\n```\n\n",
+            "````markdown\n```swift\nlet a = 1\n\nlet b = 2\n```\n````\n\n",
+            "Inline ```x``` code, then a blank line.\n\n",
+            "A stray ``` run\n\nthat the next block closes.\n\n```\nclosing\n```\n\n",
+            "~~~\nnot a fence\n\n~~~\n\n",
+            "## Heading\n",
+        )
+        val reply = buildString {
+            var index = 0
+            while (length < 60_000) {
+                append(prose)
+                append(snippets[index++ % snippets.size])
+            }
         }
+        val finalBlocks = CODE_BLOCK_REGEX.findAll(reply).map { it.range }.toList()
+        val session = AidenStreamingMarkdownSplitter.Session()
+        var sealed = 0
+
+        for (length in 500..reply.length step 1_337) {
+            val shown = reply.take(length)
+            val segments = session.split(shown)
+            val pieces = segments.stableChunks.map { it.text } + segments.activeMarkdown
+            sealed = segments.stableChunks.size
+
+            // Each piece renders the same code blocks as the whole text so far.
+            var offset = 0
+            val pieceBlocks = pieces.flatMap { piece ->
+                CODE_BLOCK_REGEX.findAll(piece).map { (it.range.first + offset)..(it.range.last + offset) }.toList()
+                    .also { offset += piece.length }
+            }
+            assertEquals(CODE_BLOCK_REGEX.findAll(shown).map { it.range }.toList(), pieceBlocks)
+
+            // No seal sealed so far ever lands inside a block of the finished reply.
+            for (chunk in segments.stableChunks.drop(1)) {
+                assertTrue(finalBlocks.none { chunk.start > it.first && chunk.start <= it.last })
+            }
+        }
+        assertTrue("only $sealed chunks sealed", sealed >= 3)
+    }
+
+    @Test
+    fun aSessionAgreesWithAFreshSplitAtEveryTick() {
+        val reply = ("Aiden inspects the workspace before choosing the next step.\n\n" +
+            "```\nnpm test\n```\n").repeat(800)
+        val session = AidenStreamingMarkdownSplitter.Session()
+        var length = 0
+        var step = 1
+
+        while (length < reply.length) {
+            length = minOf(reply.length, length + step)
+            step = step * 3 % 997 + 1
+            assertEquals(split(reply.take(length)), session.split(reply.take(length)))
+        }
+        assertTrue(session.split(reply).stableChunks.size > 5)
+    }
+
+    @Test
+    fun aSessionStartsOverWhenTheReplyIsReplaced() {
+        val session = AidenStreamingMarkdownSplitter.Session()
+        val first = "First reply line.\n\n".repeat(800)
+        assertFalse(session.split(first).stableChunks.isEmpty())
+
+        val second = "Second reply line.\n\n".repeat(800)
+        assertEquals(split(second), session.split(second))
+        assertEquals(split("Short."), session.split("Short."))
     }
 
     @Test

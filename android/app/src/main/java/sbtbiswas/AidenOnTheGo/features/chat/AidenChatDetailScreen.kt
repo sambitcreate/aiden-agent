@@ -2106,7 +2106,12 @@ private fun AidenTimelineCollapsibleCard(
 /** The transcript item that holds the live card; the final message replaces it. */
 internal const val LIVE_STREAM_ITEM_KEY = "live_stream"
 
-private val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
+/** The reply body's text style, shared by finished messages and the live card. */
+@Composable
+internal fun aidenMessageBodyStyle(palette: sbtbiswas.AidenOnTheGo.config.AidenPalette): TextStyle =
+    MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT)
+
+internal val CODE_BLOCK_REGEX = Regex("```([a-zA-Z0-9_-]*)\\n?([\\s\\S]*?)```")
 
 @Composable
 internal fun RichFormattedMessage(
@@ -2122,7 +2127,7 @@ internal fun RichFormattedMessage(
         val formatted = buildAidenFormattedMessage(text = text, palette = palette, isUser = false)
         ClickableText(
             text = formatted,
-            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
+            style = aidenMessageBodyStyle(palette),
             modifier = modifier,
             onClick = { offset ->
                 formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
@@ -2142,7 +2147,7 @@ internal fun RichFormattedMessage(
                         val formatted = buildAidenFormattedMessage(text = leading, palette = palette, isUser = false)
                         ClickableText(
                             text = formatted,
-                            style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
+                            style = aidenMessageBodyStyle(palette),
                             onClick = { offset ->
                                 formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
                                     .firstOrNull()?.let { onOpenUrl(it.item) }
@@ -2170,7 +2175,7 @@ internal fun RichFormattedMessage(
                     val formatted = buildAidenFormattedMessage(text = trailing, palette = palette, isUser = false)
                     ClickableText(
                         text = formatted,
-                        style = MaterialTheme.typography.bodyLarge.copy(color = palette.foreground, lineHeight = MESSAGE_LINE_HEIGHT),
+                        style = aidenMessageBodyStyle(palette),
                         onClick = { offset ->
                             formatted.getStringAnnotations(tag = AidenAnnotationTag.LINK.name, start = offset, end = offset)
                                 .firstOrNull()?.let { onOpenUrl(it.item) }

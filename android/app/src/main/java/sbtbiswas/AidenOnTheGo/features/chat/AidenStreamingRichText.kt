@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +15,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
-
-/** How long a chunk that arrives already sealed takes to fade in. */
-internal const val AIDEN_SEALED_CHUNK_FADE_MILLIS = 180
 
 /**
  * A streaming reply rendered with the same formatting as the finished
@@ -42,45 +41,87 @@ internal fun AidenStreamingRichText(
     onOpenUrl: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val segments = remember(text) { AidenStreamingMarkdownSplitter.split(text) }
+    val splitter = remember { AidenStreamingMarkdownSplitter.Session() }
+    val segments = remember(text) { splitter.split(text) }
     val reduceMotion = aidenReduceMotion()
     // The text length on screen after the previous composition; -1 before the
     // first, when the card itself is appearing and nothing should fade.
     val previouslyShown = remember { intArrayOf(-1) }
     val shownBefore = previouslyShown[0]
     SideEffect { previouslyShown[0] = text.length }
-    val blankLineGap = with(LocalDensity.current) { MESSAGE_LINE_HEIGHT.toDp() }
+    val bodyStyle = aidenMessageBodyStyle(palette)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    // In one text a blank line adds a full line, but each separate text trims
+    // the space above its first line and below its last, so the gap between
+    // two chunks gives that trimmed space back as well.
+    val blankLineGap = remember(bodyStyle, density) {
+        with(density) {
+            val oneLine = measurer.measure("A", bodyStyle).size.height
+            (MESSAGE_LINE_HEIGHT.toPx() * 2 - oneLine).toDp()
+        }
+    }
+    val chunks = segments.stableChunks
+    val tail = segments.activeMarkdown
 
     Column(modifier = modifier) {
-        for (chunk in segments.stableChunks) {
+        for ((index, chunk) in chunks.withIndex()) {
             key(chunk.id) {
                 val fades = remember { !reduceMotion && shownBefore >= 0 && chunk.start >= shownBefore }
                 val alpha = remember { Animatable(if (fades) 0f else 1f) }
                 if (fades) {
-                    LaunchedEffect(Unit) { alpha.animateTo(1f, tween(AIDEN_SEALED_CHUNK_FADE_MILLIS)) }
+                    LaunchedEffect(Unit) { alpha.animateTo(1f, AidenMotion.nonSpatial(reduceMotion)) }
+                }
+                val previous = chunks.getOrNull(index - 1)
+                val body = remember(chunk.text, previous?.text) {
+                    val trimmed = chunk.text.trimEnd()
+                    if (previous != null && AidenStreamingSeams.joinsCode(previous.text, chunk.text)) trimmed.trimStart() else trimmed
                 }
                 Box(Modifier.graphicsLayer { this.alpha = alpha.value }) {
-                    RichFormattedMessage(chunk.text.trimEnd(), palette, onCopy, onOpenUrl)
+                    RichFormattedMessage(body, palette, onCopy, onOpenUrl)
                 }
-                // Match the gap the whole reply shows at this point when it is
-                // rendered as one message.
-                when (chunk.seam) {
-                    AidenStreamingMarkdownSplitter.Seam.BLANK_LINE -> Spacer(Modifier.height(blankLineGap))
-                    AidenStreamingMarkdownSplitter.Seam.CODE_FENCE -> Spacer(Modifier.height(8.dp))
-                    AidenStreamingMarkdownSplitter.Seam.SINGLE_LINE_BLOCK -> Unit
-                }
+                val next = chunks.getOrNull(index + 1)?.text ?: tail
+                Spacer(Modifier.height(AidenStreamingSeams.gap(chunk, next, blankLineGap)))
             }
         }
-        val tail = segments.activeMarkdown
-        if (tail.isNotEmpty() || showCursor) {
+        val shownTail = chunks.lastOrNull()
+            ?.takeIf { AidenStreamingSeams.joinsCode(it.text, tail) }
+            ?.let { tail.trimStart() }
+            ?: tail
+        if (shownTail.isNotEmpty() || showCursor) {
             Row(verticalAlignment = Alignment.Bottom) {
-                if (tail.isNotEmpty()) {
-                    RichFormattedMessage(tail, palette, onCopy, onOpenUrl, Modifier.weight(1f, fill = false))
+                if (shownTail.isNotEmpty()) {
+                    RichFormattedMessage(shownTail, palette, onCopy, onOpenUrl, Modifier.weight(1f, fill = false))
                 }
                 if (showCursor) AidenStreamingCursor(palette = palette)
             }
         }
     }
+}
+
+/**
+ * The gap between two pieces of a split reply, matching what the finished
+ * message shows there. The renderer trims prose next to a code block and sets
+ * the two 8dp apart; anywhere else a blank line keeps its own line height.
+ */
+internal object AidenStreamingSeams {
+    val CODE_GAP = 8.dp
+
+    /** Whether a code block sits on either side of the seam between [before] and [after]. */
+    fun joinsCode(before: String, after: String): Boolean =
+        endsWithCodeBlock(before.trimEnd()) || startsWithCodeBlock(after.trimStart())
+
+    fun gap(chunk: AidenStreamingMarkdownSplitter.Chunk, next: String, blankLineGap: Dp): Dp = when {
+        joinsCode(chunk.text, next) -> CODE_GAP
+        chunk.seam == AidenStreamingMarkdownSplitter.Seam.BLANK_LINE -> blankLineGap
+        else -> 0.dp
+    }
+
+    private fun startsWithCodeBlock(text: String): Boolean =
+        text.startsWith("```") && CODE_BLOCK_REGEX.find(text)?.range?.first == 0
+
+    private fun endsWithCodeBlock(text: String): Boolean =
+        text.endsWith("```") && CODE_BLOCK_REGEX.findAll(text).lastOrNull()?.range?.last == text.lastIndex
 }
 
 /** The reply body's line height, shared with [RichFormattedMessage]. */
