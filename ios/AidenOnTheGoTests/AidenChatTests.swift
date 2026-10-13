@@ -12479,17 +12479,19 @@ private final class AidenAnnouncedRunFixture: @unchecked Sendable {
     }
 
     private var previousRun: String {
-        event(1, "run.started", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
-            + event(2, "done", #"{"messageId":"reply-old"}"#, terminal: true)
-            + event(2, "run.ended", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true)
+        event(1, "run.started", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","origin":"renderer"}"#, streamId: "run-old")
+            + event(2, "done", #"{"messageId":"reply-old"}"#, terminal: true, streamId: "run-old")
+            + event(2, "run.ended", #"{"runId":"run-old","chatId":"chat-progress-lifecycle","state":"done"}"#, terminal: true, streamId: "run-old")
     }
 
     private static let runGone = (404, "application/json", Data(
         #"{"error":{"code":"run_gone","message":"This run is no longer available on this Aiden host.","requestId":"r","retryable":false}}"#.utf8
     ))
 
-    private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
-        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-13T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    private func event(
+        _ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false, streamId: String = "run-mac"
+    ) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"\(streamId)\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-13T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
     }
 }
 
