@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("./model-pad-settings.tsx", import.meta.url), "utf8");
-const modelDataSource = readFileSync(new URL("./model-data-settings.tsx", import.meta.url), "utf8");
-const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+const source = [
+  readFileSync(new URL("./model-pad-settings.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("./model-pad-data-rows.tsx", import.meta.url), "utf8"),
+].join("\n");
+const modelDataSource = readFileSync(new URL("../model-data-settings.tsx", import.meta.url), "utf8");
+const styles = readFileSync(new URL("../../../styles.css", import.meta.url), "utf8");
 
 test("Model Pad owns the OpenRouter benchmark-key flow and explains catalog isolation", () => {
   assert.match(source, /label="OpenRouter key for Model Pad"/u);

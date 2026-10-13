@@ -347,7 +347,7 @@ Paths below are the authoritative audit evidence. Component code takes precedenc
 
 <a id="s11"></a>**S11 — Work surfaces/results:** [Files](../../renderer/components/files-panel.tsx), [Review](../../renderer/components/review-panel.tsx), [Environment](../../renderer/components/environment-panel.tsx), [artifact preview/export](../../renderer/components/html-artifact-frame.tsx), [commit](../../renderer/components/git-commit-dialog.tsx), [push](../../renderer/components/git-push-dialog.tsx).
 
-<a id="s12"></a>**S12 — Search and optional model information:** [Web Search](../../renderer/components/settings/web-search-settings.tsx), [Model Pad](../../renderer/components/settings/model-pad-settings.tsx), [model data](../../renderer/components/settings/model-data-settings.tsx), [manual catalog policy](../../AGENTS.md).
+<a id="s12"></a>**S12 — Search and optional model information:** [Web Search](../../renderer/components/settings/web-search-settings.tsx), [Model Pad](../../renderer/components/settings/model-pad/model-pad-settings.tsx), [model data](../../renderer/components/settings/model-data-settings.tsx), [manual catalog policy](../../AGENTS.md).
 
 <a id="s13"></a>**S13 — Desktop remote UX:** [settings and pairing dialog](../../renderer/components/settings/remote-access-settings.tsx), [remote settings tests](../../renderer/components/settings/remote-access-settings.test.tsx), [connection popover](../../renderer/components/remote-connection-popover.tsx), [pairing lifecycle](../../renderer/lib/remote-pairing-lifecycle.ts).
 

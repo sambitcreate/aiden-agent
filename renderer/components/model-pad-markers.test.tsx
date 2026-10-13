@@ -8,8 +8,8 @@ import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { positionSavedModels, type ModelEntry } from "../lib/model-picker-data";
 import type { AppSettings, Provider } from "../lib/types";
 import { ModelPickerPad } from "./model-picker-pad";
-import { ModelPadLegend } from "./settings/model-pad-legend";
-import { ModelPadSettings } from "./settings/model-pad-settings";
+import { ModelPadLegend } from "./settings/model-pad/model-pad-legend";
+import { ModelPadSettings } from "./settings/model-pad/model-pad-settings";
 
 afterEach(cleanup);
 

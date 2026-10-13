@@ -434,7 +434,7 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/onboarding-flow.tsx",
     "components/ui.tsx",
     "components/settings/provider-model-visibility.tsx",
-    "components/settings/model-pad-settings.tsx",
+    "components/settings/model-pad/model-pad-settings.tsx",
     "components/settings/telegram-settings.tsx",
   ].map(readRenderer);
   const radiusSources = [

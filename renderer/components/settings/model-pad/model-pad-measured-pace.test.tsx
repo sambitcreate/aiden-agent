@@ -1,14 +1,14 @@
-import "../../main/bots/test-dom";
+import "../../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { installBotTestIpc } from "../../main/bots/test-dom";
-import { createBotTestQueryClient } from "../../main/bots/test-providers";
-import type { AppSettings, Provider } from "../../lib/types";
-import type { ModelPaceSummary } from "../../shared/model-pace";
-import type { ModelPadPlacements } from "../../shared/model-pad-preferences";
-import { Toaster, toast } from "../ui";
+import { installBotTestIpc } from "../../../main/bots/test-dom";
+import { createBotTestQueryClient } from "../../../main/bots/test-providers";
+import type { AppSettings, Provider } from "../../../lib/types";
+import type { ModelPaceSummary } from "../../../shared/model-pace";
+import type { ModelPadPlacements } from "../../../shared/model-pad-preferences";
+import { Toaster, toast } from "../../ui";
 import { ModelPadSettings } from "./model-pad-settings";
 
 afterEach(() => {

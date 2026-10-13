@@ -2,7 +2,7 @@ import type * as React from "react";
 import {
   MODEL_PAD_PLACEMENT_KIND_LABELS,
   type ModelPadPlacementKind,
-} from "../../lib/model-pad-layout";
+} from "../../../lib/model-pad-layout";
 
 const LEGEND_KINDS: readonly ModelPadPlacementKind[] = ["personal", "benchmark"];
 
