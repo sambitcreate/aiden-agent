@@ -10,7 +10,7 @@ import {
 import { cn } from "../lib/ui-utils";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
-import { storedWorkbenchWidth } from "../lib/environment-panel-layout";
+import { resolveEnvironmentPanelResizeBounds, storedWorkbenchWidth } from "../lib/environment-panel-layout";
 
 export interface WorkbenchWidthState {
   /** The person's preferred width; the rendered width is resolved against the container. */
@@ -122,5 +122,211 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
       <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
       <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
     </header>
+  );
+}
+
+export interface WorkbenchViewContext {
+  /** The surface is open and in front. */
+  presented: boolean;
+  /** This view is the selected one. */
+  selected: boolean;
+  /** The rendered surface width, for compact layouts. */
+  width: number;
+}
+
+export interface WorkbenchView {
+  id: string;
+  render: (context: WorkbenchViewContext) => React.ReactNode;
+}
+
+export interface WorkbenchPanelProps<T extends WorkbenchTab>
+  extends Omit<WorkbenchTabStripProps<T>, "activeTabRef"> {
+  id: string;
+  label: string;
+  resizeLabel: string;
+  open: boolean;
+  /** Open and not covered by a surface stacked in front of it. */
+  presented: boolean;
+  inline: boolean;
+  width: number;
+  containerWidth: number;
+  resizing: boolean;
+  onResizingChange: (resizing: boolean) => void;
+  /** Live width while dragging, already clamped. */
+  onWidthChange: (width: number) => void;
+  /** Final width after a drag or a key, already clamped; persist it. */
+  onWidthCommit: (width: number) => void;
+  onActivate?: () => void;
+  /** Every view stays mounted; only `selectedViewId` is visible. */
+  views: readonly WorkbenchView[];
+  selectedViewId: string;
+  activeTabRef?: React.RefObject<HTMLButtonElement | null>;
+  surfaceRef?: React.RefObject<HTMLElement | null>;
+}
+
+export function WorkbenchPanel<T extends WorkbenchTab>({
+  id,
+  label,
+  resizeLabel,
+  open,
+  presented,
+  inline,
+  width,
+  containerWidth,
+  resizing,
+  onResizingChange,
+  onWidthChange,
+  onWidthCommit,
+  onActivate,
+  views,
+  selectedViewId,
+  activeTabRef: providedActiveTabRef,
+  surfaceRef: providedSurfaceRef,
+  tabs,
+  idPrefix,
+  tabListLabel,
+  busy,
+  onSelectTab,
+  onCloseTab,
+  newTab,
+  closeLabel,
+  closeTitle,
+  onClose,
+}: WorkbenchPanelProps<T>) {
+  const ownActiveTabRef = React.useRef<HTMLButtonElement | null>(null);
+  const ownSurfaceRef = React.useRef<HTMLElement | null>(null);
+  const activeTabRef = providedActiveTabRef ?? ownActiveTabRef;
+  const surfaceRef = providedSurfaceRef ?? ownSurfaceRef;
+  const widthRef = React.useRef(width);
+  widthRef.current = width;
+
+  const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline);
+  const clampToResizeBounds = React.useCallback(
+    (nextWidth: number) => Math.min(resizeBounds.max, Math.max(resizeBounds.min, nextWidth)),
+    [resizeBounds.max, resizeBounds.min],
+  );
+
+  const commitWidth = React.useCallback(
+    (nextWidth: number) => onWidthCommit(clampToResizeBounds(nextWidth)),
+    [clampToResizeBounds, onWidthCommit],
+  );
+
+  const beginResize = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !open) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const startX = event.clientX;
+      const startWidth = widthRef.current;
+      onResizingChange(true);
+      const move = (moveEvent: PointerEvent) => {
+        onWidthChange(clampToResizeBounds(startWidth + startX - moveEvent.clientX));
+      };
+      const finish = (endEvent: PointerEvent) => {
+        commitWidth(
+          endEvent.type === "pointerup" ? startWidth + startX - endEvent.clientX : widthRef.current,
+        );
+        onResizingChange(false);
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    },
+    [clampToResizeBounds, commitWidth, open, onResizingChange, onWidthChange],
+  );
+
+  const resizeWithKeyboard = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const increment = event.shiftKey ? 40 : 16;
+      let next = width;
+      if (event.key === "ArrowLeft") next += increment;
+      else if (event.key === "ArrowRight") next -= increment;
+      else if (event.key === "Home") next = resizeBounds.min;
+      else if (event.key === "End") next = resizeBounds.max;
+      else return;
+      event.preventDefault();
+      commitWidth(next);
+    },
+    [commitWidth, resizeBounds.max, resizeBounds.min, width],
+  );
+
+  return (
+    <aside
+      ref={surfaceRef}
+      id={id}
+      data-environment-surface="tools"
+      data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
+      data-state={open ? (presented ? "open" : "covered") : "closed"}
+      inert={!presented ? true : undefined}
+      aria-hidden={!presented ? true : undefined}
+      aria-label={label}
+      onFocusCapture={onActivate}
+      onPointerDownCapture={onActivate}
+      className={cn(
+        "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
+        inline
+          ? "inset-y-0 right-0 border-l border-separator"
+          : "bottom-3 right-3 rounded-sheet shadow-dialog",
+        // Float below the top bar so its tool buttons stay reachable, like Quick View.
+        !inline && "top-14",
+        resizing
+          ? "transition-none"
+          : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        (!open || !presented) && !inline && "translate-x-[calc(100%+0.75rem)]",
+      )}
+      style={{
+        width: open ? width : inline ? 0 : width,
+        opacity: open && presented ? 1 : 0,
+        pointerEvents: open && presented ? "auto" : "none",
+      }}
+    >
+      <div
+        role="separator"
+        aria-label={resizeLabel}
+        aria-orientation="vertical"
+        aria-valuemin={resizeBounds.min}
+        aria-valuemax={resizeBounds.max}
+        aria-valuenow={Math.round(width)}
+        tabIndex={open ? 0 : -1}
+        onPointerDown={beginResize}
+        onKeyDown={resizeWithKeyboard}
+        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
+      />
+
+      <WorkbenchTabStrip
+        tabs={tabs}
+        idPrefix={idPrefix}
+        tabListLabel={tabListLabel}
+        busy={busy}
+        activeTabRef={activeTabRef}
+        onSelectTab={onSelectTab}
+        onCloseTab={onCloseTab}
+        newTab={newTab}
+        closeLabel={closeLabel}
+        closeTitle={closeTitle}
+        onClose={onClose}
+      />
+
+      <div className="min-h-0 flex-1 @container">
+        {views.map((view) => {
+          const selected = view.id === selectedViewId;
+          return (
+            <div
+              key={view.id}
+              id={`${idPrefix}-${view.id}-panel`}
+              role="tabpanel"
+              aria-labelledby={`${idPrefix}-${view.id}-tab`}
+              hidden={!selected}
+              className="h-full min-h-0"
+            >
+              {view.render({ presented, selected, width })}
+            </div>
+          );
+        })}
+      </div>
+    </aside>
   );
 }

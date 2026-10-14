@@ -2,11 +2,12 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../lib/command-system";
 import { COMMAND_IDS } from "../shared/keybindings";
-import { WorkbenchTabStrip, type WorkbenchTab } from "./workbench-panel";
+import { resolveEnvironmentPanelLayout } from "../lib/environment-panel-layout";
+import { WorkbenchPanel, WorkbenchTabStrip, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
 
 const SHORTCUTS = {
   effective: Object.fromEntries(
@@ -204,4 +205,148 @@ test("Close panel names the panel toggle shortcut", async () => {
     assert.match(close.getAttribute("aria-keyshortcuts") ?? "", /^(Meta|Control)\+Shift\+E$/u),
   );
   assert.match(close.getAttribute("title") ?? "", /^Close test panel \((?!Unassigned).+\)$/u);
+});
+
+const WIDTH_KEY = "test.notes-workbench.width";
+
+/** The test-only consumer: a non-workspace tab set mounted through the shell. */
+function NotesWorkbench({
+  containerWidth = 1600,
+  initiallyOpen = false,
+  covered = false,
+}: {
+  containerWidth?: number;
+  initiallyOpen?: boolean;
+  covered?: boolean;
+}) {
+  const [open, setOpen] = React.useState(initiallyOpen);
+  const [selectedId, setSelectedId] = React.useState("notes");
+  const panelWidth = useWorkbenchWidth(WIDTH_KEY);
+  const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
+  const tabs: WorkbenchTab[] = [
+    { id: "notes", viewId: "notes", label: "Notes", selected: selectedId === "notes", closable: false },
+    { id: "log", viewId: "log", label: "Log", selected: selectedId === "log", closable: false },
+  ];
+  const views: WorkbenchView[] = [
+    {
+      id: "notes",
+      render: ({ selected, presented }) => (
+        <p>Notes body {selected ? "selected" : "idle"} {presented ? "presented" : "hidden"}</p>
+      ),
+    },
+    { id: "log", render: ({ width: viewWidth }) => <p>Log body at {viewWidth}px</p> },
+  ];
+  return (
+    <>
+      <button type="button" onClick={() => setOpen((value) => !value)}>Toggle notes panel</button>
+      <WorkbenchPanel
+        id="notes-panel"
+        label="Notes work surface"
+        resizeLabel="Resize notes panel"
+        open={open}
+        presented={open && !covered}
+        inline={inline}
+        width={width}
+        containerWidth={containerWidth}
+        resizing={panelWidth.resizing}
+        onResizingChange={panelWidth.setResizing}
+        onWidthChange={panelWidth.setPreferredWidth}
+        onWidthCommit={panelWidth.commitPreferredWidth}
+        views={views}
+        selectedViewId={selectedId}
+        tabs={tabs}
+        idPrefix="notes"
+        tabListLabel="Notes views"
+        onSelectTab={(tab) => setSelectedId(tab.viewId)}
+        onCloseTab={() => undefined}
+        closeLabel="Close notes panel"
+        closeTitle="Close notes panel"
+        onClose={() => setOpen(false)}
+      />
+    </>
+  );
+}
+
+/**
+ * A closed or covered surface is `aria-hidden`, and an aria-hidden element has no
+ * computed accessible name, so find it by role and label attribute instead.
+ */
+const notesSurface = () => {
+  const surface = screen
+    .getAllByRole("complementary", { hidden: true })
+    .find((element) => element.getAttribute("aria-label") === "Notes work surface");
+  assert.ok(surface, "the notes surface is rendered");
+  return surface;
+};
+
+test("a non-workspace tab set renders and toggles through the shell", () => {
+  renderWithCommands(<NotesWorkbench />);
+  const surface = notesSurface();
+  assert.equal(surface.getAttribute("data-state"), "closed");
+  assert.equal(surface.hasAttribute("inert"), true);
+  assert.equal(surface.getAttribute("aria-hidden"), "true");
+  assert.equal(screen.getByRole("separator", { name: "Resize notes panel", hidden: true }).tabIndex, -1);
+
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  assert.equal(surface.getAttribute("data-state"), "open");
+  assert.equal(screen.getByRole("complementary", { name: "Notes work surface" }), surface);
+  assert.equal(surface.hasAttribute("inert"), false);
+  assert.equal(surface.hasAttribute("aria-modal"), false);
+  assert.equal(within(surface).queryByRole("dialog"), null);
+  assert.equal(screen.getByRole("separator", { name: "Resize notes panel" }).tabIndex, 0);
+  assert.match(screen.getByRole("tabpanel", { name: "Notes" }).textContent ?? "", /Notes body selected presented/u);
+  assert.equal(document.getElementById("notes-log-panel")?.hasAttribute("hidden"), true);
+
+  fireEvent.click(screen.getByRole("tab", { name: "Log" }));
+  assert.match(screen.getByRole("tabpanel", { name: "Log" }).textContent ?? "", /Log body at 560px/u);
+  assert.equal(document.getElementById("notes-notes-panel")?.hasAttribute("hidden"), true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close notes panel" }));
+  assert.equal(surface.getAttribute("data-state"), "closed");
+  fireEvent.click(screen.getByRole("button", { name: "Toggle notes panel" }));
+  assert.equal(surface.getAttribute("data-state"), "open");
+  assert.equal(screen.getByRole("tab", { name: "Log" }).getAttribute("aria-selected"), "true");
+});
+
+test("a covered shell keeps its open state but leaves the tab order and the accessibility tree", () => {
+  renderWithCommands(<NotesWorkbench initiallyOpen covered />);
+  const surface = notesSurface();
+  assert.equal(surface.getAttribute("data-state"), "covered");
+  assert.equal(surface.hasAttribute("inert"), true);
+  assert.equal(surface.getAttribute("aria-hidden"), "true");
+  assert.match(document.getElementById("notes-notes-panel")?.textContent ?? "", /Notes body selected hidden/u);
+});
+
+test("keyboard resizing clamps to the bounds the container allows and keeps the clamped width", () => {
+  const view = renderWithCommands(<NotesWorkbench initiallyOpen containerWidth={1600} />);
+  const separator = () => screen.getByRole("separator", { name: "Resize notes panel" });
+  assert.equal(separator().getAttribute("aria-valuenow"), "560");
+  assert.equal(separator().getAttribute("aria-valuemin"), "480");
+  assert.equal(separator().getAttribute("aria-valuemax"), "720");
+  fireEvent.keyDown(separator(), { key: "End" });
+  assert.equal(separator().getAttribute("aria-valuenow"), "720");
+  fireEvent.keyDown(separator(), { key: "ArrowLeft" });
+  assert.equal(separator().getAttribute("aria-valuenow"), "720");
+  assert.equal(localStorage.getItem(WIDTH_KEY), "720");
+  fireEvent.keyDown(separator(), { key: "Home" });
+  fireEvent.keyDown(separator(), { key: "ArrowRight" });
+  assert.equal(separator().getAttribute("aria-valuenow"), "480");
+  fireEvent.keyDown(separator(), { key: "ArrowLeft", shiftKey: true });
+  assert.equal(separator().getAttribute("aria-valuenow"), "520");
+  assert.equal(localStorage.getItem(WIDTH_KEY), "520");
+  view.unmount();
+  renderWithCommands(<NotesWorkbench initiallyOpen containerWidth={1600} />);
+  assert.equal(separator().getAttribute("aria-valuenow"), "520");
+});
+
+test("the shell pins beside the content when it fits and floats when it does not", () => {
+  renderWithCommands(<NotesWorkbench initiallyOpen containerWidth={1100} />);
+  assert.equal(notesSurface().getAttribute("data-surface-mode"), "tools-pinned");
+  const separator = screen.getByRole("separator", { name: "Resize notes panel" });
+  assert.equal(separator.getAttribute("aria-valuemax"), "540");
+  fireEvent.keyDown(separator, { key: "End" });
+  assert.equal(separator.getAttribute("aria-valuenow"), "540");
+  cleanup();
+  renderWithCommands(<NotesWorkbench initiallyOpen containerWidth={900} />);
+  assert.equal(notesSurface().getAttribute("data-surface-mode"), "tools-floating");
 });
