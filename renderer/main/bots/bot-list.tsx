@@ -114,7 +114,7 @@ function BotListItem({
             className="flex w-full min-w-0 items-center gap-3 rounded-card py-2.5 pl-3 pr-12 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
             onClick={() => onOpen(bot)}
           >
-            <span className="relative shrink-0">
+            <span className="shrink-0">
               <BotAvatar
                 botId={bot.id}
                 avatar={bot.avatar}

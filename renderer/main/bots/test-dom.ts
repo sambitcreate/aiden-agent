@@ -1,4 +1,5 @@
 import { Window } from "happy-dom";
+import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 
 const GLOBAL_KEYS = [
   "window",
@@ -108,6 +109,8 @@ export function installBotTestIpc(
 ): BotTestIpcCall[] {
   const calls: BotTestIpcCall[] = [];
   notificationListeners.clear();
+  // The photo cache is process-wide; a photo cached by an earlier test must not answer this one.
+  invalidateBotCanonicalPhotos();
   (window as unknown as { aidenAPI: unknown }).aidenAPI = {
     ipc: {
       invoke: async (channel: string, ...args: unknown[]) => {

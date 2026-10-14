@@ -6,7 +6,6 @@ import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
-import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 
 afterEach(cleanup);
@@ -946,8 +945,7 @@ test("each queued message has its own Remove, and removing one moves focus on: t
   await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Ask Planner"));
 });
 
-test("the chat header's face works while the Bot works, and a photo gets a small activity badge", async () => {
-  invalidateBotCanonicalPhotos();
+test("the chat header's face works only while the Bot works, and a photo gets a small activity badge", async () => {
   await mountChat({
     "bots:getCanonicalPhoto": () => ({ assetRevision: "a1", dataUrl: "data:image/png;base64,AAAA" }),
     "bots:live:subscribe": () =>
@@ -955,6 +953,17 @@ test("the chat header's face works while the Bot works, and a photo gets a small
   });
   const pill = await screen.findByRole("button", { name: "Planner profile" });
   const face = within(pill).getByTitle("Planner");
-  assert.equal(face.hasAttribute("data-working"), true);
-  await waitFor(() => assert.ok(face.querySelector('[data-aiden-mark="glance"]')));
+  await waitFor(() => {
+    assert.equal(face.hasAttribute("data-working"), true);
+    assert.ok(face.querySelector('[data-aiden-mark="glance"]'));
+  });
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "state",
+    state: { kind: "idle" },
+  });
+  await waitFor(() => assert.equal(face.hasAttribute("data-working"), false));
+  assert.equal(face.querySelector('[data-aiden-mark="glance"]'), null);
 });
