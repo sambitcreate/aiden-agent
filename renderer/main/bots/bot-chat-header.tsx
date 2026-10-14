@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { ChevronLeft, Ellipsis } from "lucide-react";
+import { ChevronLeft, Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
   Button,
@@ -9,7 +9,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui";
+import { useShortcutBinding, useShortcutLabel } from "../../lib/command-system";
+import { ariaKeyShortcut } from "../../shared/keybindings";
 import type { BotDefinition } from "../../shared/bots";
+import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
 
 /** Back to the Bots list, in the chat toolbar's leading slot. */
 export function BotChatBackButton({ onBack }: { onBack(): void }) {
@@ -81,5 +84,28 @@ export function BotChatActions({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** Shows and hides the Bot side panel; `environment.toggle` does the same from the keyboard. */
+export function BotPanelToggle() {
+  const panel = useBotPanel();
+  const shortcut = useShortcutLabel("environment.toggle");
+  const binding = useShortcutBinding("environment.toggle");
+  return (
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      onClick={panel.toggle}
+      aria-label={panel.open ? "Hide panel" : "Show panel"}
+      aria-pressed={panel.open}
+      aria-controls={BOT_PANEL_ID}
+      aria-keyshortcuts={ariaKeyShortcut(binding)}
+      title={`Toggle panel (${shortcut})`}
+      data-bot-panel-toggle
+    >
+      {panel.open ? <PanelRightClose /> : <PanelRightOpen />}
+    </Button>
   );
 }

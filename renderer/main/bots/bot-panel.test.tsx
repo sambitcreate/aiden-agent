@@ -1,16 +1,29 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { BotLiveSnapshot } from "../../shared/bot-live";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
+import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotLiveProvider, useBotLive, useSharedBotLive } from "../../lib/use-bot-live";
 import {
   BOT_PANEL_OPEN_KEY,
   BOT_PANEL_TAB_KEY,
   BotPanelProvider,
+  RoutedBotPanelProvider,
   useBotPanel,
   useBotPanelActions,
 } from "./bot-panel-context";
+import { BotPanelFiles } from "./bot-panel-files";
+import { botFixture } from "./test-fixtures";
+import { mountWithBotRouter } from "./test-providers";
 
 beforeEach(() => {
   installBotTestIpc();
@@ -177,6 +190,69 @@ test("a file asked for in one Bot's chat is dropped when the chat moves to anoth
     </BotPanelProvider>,
   );
   assert.equal(panelState(), "open files none", "the panel stays open on its tab; only the stale file request goes");
+});
+
+test("a page that is not a Bot chat keeps a file request, so it lands when that Bot's chat opens", () => {
+  const tree = (routedBotId: string | null) => (
+    <BotPanelProvider routedBotId={routedBotId}>
+      <PanelProbe />
+    </BotPanelProvider>
+  );
+  // From Bot B's chat the person asks for one of Bot A's files (say, from the sidebar), on the way to A's chat.
+  const view = render(tree("bot-b"));
+  fireEvent.click(screen.getByRole("button", { name: "Open groceries" }));
+  const request = panelState();
+  assert.match(request, /^open files bot-a:lists\/groceries\.md#\d+$/u);
+  view.rerender(tree(null));
+  assert.equal(panelState(), request, "a page that is no Bot's chat keeps it");
+  view.rerender(tree("bot-a"));
+  assert.equal(panelState(), request, "B → nowhere → A keeps the request made for A");
+  view.rerender(tree(null));
+  view.rerender(tree("bot-b"));
+  assert.equal(panelState(), "open files none", "reaching a different Bot drops it");
+});
+
+test("the routed provider follows the router: a request for one Bot is dropped on reaching another, and a late event after unmount is harmless", async () => {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <RoutedBotPanelProvider>
+        <PanelProbe />
+        <Outlet />
+      </RoutedBotPanelProvider>
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren(
+      ["/bots", "/bots/$botId/chat"].map((path) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null })),
+    ),
+    history: createMemoryHistory({ initialEntries: ["/bots/bot-a/chat"] }),
+  });
+  // Under `tsx --test` TanStack runs as on a server and never emits onResolved itself.
+  const resolve = () =>
+    act(() =>
+      router.emit({
+        type: "onResolved",
+        fromLocation: undefined,
+        toLocation: router.state.location,
+        pathChanged: true,
+        hrefChanged: true,
+        hashChanged: false,
+      }),
+    );
+  await router.load();
+  const view = render(<RouterProvider router={router} />);
+  await screen.findByRole("button", { name: "Open groceries" });
+  fireEvent.click(screen.getByRole("button", { name: "Open groceries" }));
+  assert.match(panelState(), /^open files bot-a:/u);
+  await act(() => router.navigate({ to: "/bots" }));
+  resolve();
+  assert.match(panelState(), /^open files bot-a:/u, "the Bots home is not another Bot");
+  await act(() => router.navigate({ to: "/bots/$botId/chat", params: { botId: "bot-b" } }));
+  resolve();
+  assert.equal(panelState(), "open files none");
+  view.unmount();
+  resolve();
+  assert.equal(screen.queryByRole("status", { name: "Panel" }), null);
 });
 
 test("a component that only acts keeps one stable set of actions while panel state changes", () => {
@@ -437,4 +513,270 @@ test("a consumer joining a store that failed after it had a view retries it", as
   } finally {
     mock.timers.reset();
   }
+});
+
+function chatSnapshot(entries: BotTranscriptEntry[] = []): BotLiveSnapshot {
+  return {
+    botId: "bot-1",
+    epoch: "e1",
+    seq: 0,
+    entries,
+    partial: null,
+    state: { kind: "idle" },
+    question: null,
+    activity: null,
+    queued: [],
+  };
+}
+
+const FILE_HANDLERS = {
+  "bots:files:list": () => ({
+    entries: [
+      { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
+      { path: "lists/groceries.md", name: "groceries.md", parentPath: "lists", depth: 1, kind: "file" },
+    ],
+    truncated: false,
+    skippedDirectories: 0,
+  }),
+  "bots:files:read": (_botId: unknown, path: unknown) => ({ path, content: "eggs\nmilk", size: 9, modifiedAt: 1, version: "v1" }),
+};
+
+async function mountBotChat(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+  const calls = installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:pendingApprovals": () => [],
+    "bots:live:subscribe": () => chatSnapshot(),
+    "bots:live:unsubscribe": () => undefined,
+    "bots:routines:list": () => [],
+    ...handlers,
+  });
+  const mounted = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByRole("button", { name: "Planner profile" });
+  return { calls, ...mounted };
+}
+
+// A closed panel is aria-hidden, which leaves it without an accessible name; find it by its id.
+const botPanel = (): HTMLElement => {
+  const panel = document.getElementById("bot-panel");
+  assert.ok(panel, "the Bot panel is mounted");
+  return panel;
+};
+const panelTab = (name: string) => within(botPanel()).getByRole("tab", { name });
+
+test("the panel toggle opens the Bot panel with only Bot tabs, focused on the selected tab, and Close gives focus back", async () => {
+  await mountBotChat();
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+  const toggle = screen.getByRole("button", { name: "Show panel" });
+  toggle.focus();
+  fireEvent.click(toggle);
+  assert.equal(botPanel().getAttribute("data-state"), "open");
+  assert.equal(screen.getByRole("complementary", { name: "Bot panel" }) === botPanel(), true);
+  assert.deepEqual(
+    within(botPanel()).getAllByRole("tab").map((tab) => tab.textContent),
+    ["Activity", "Files", "Memory", "Routines"],
+  );
+  assert.equal(within(botPanel()).queryByRole("button", { name: /^Close .+ tab$/u }), null, "Bot tabs are fixed");
+  assert.equal(within(botPanel()).queryByRole("button", { name: "New workspace tab" }), null);
+  assert.equal(botPanel().closest('[data-environment-surface="tools"]') === null, true, "the workspace panel's focus rules never claim it");
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
+  fireEvent.keyDown(panelTab("Activity"), { key: "ArrowRight" });
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Files"), true));
+  assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
+  assert.equal(screen.getByRole("button", { name: "Hide panel" }).getAttribute("aria-pressed"), "true");
+  fireEvent.click(within(botPanel()).getByRole("button", { name: "Close Bot panel" }));
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+  await waitFor(() => assert.equal(document.activeElement === screen.getByRole("button", { name: "Show panel" }), true));
+});
+
+test("a panel restored open at launch does not take focus", async () => {
+  localStorage.setItem("aiden-agent.bot-panel.open", "true");
+  await mountBotChat();
+  assert.equal(botPanel().getAttribute("data-state"), "open");
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  assert.equal(botPanel().contains(document.activeElement), false);
+});
+
+test("Escape inside the Bot panel closes it and leaves the workspace panel's saved state alone", async () => {
+  localStorage.setItem("aiden-agent.environment.open", "true");
+  localStorage.setItem("aiden-agent.environment.open-tabs-v1", JSON.stringify(["files"]));
+  await mountBotChat();
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Routines"));
+  panelTab("Routines").focus();
+  fireEvent.keyDown(panelTab("Routines"), { key: "Escape" });
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+  assert.equal(localStorage.getItem("aiden-agent.environment.open"), "true");
+  assert.equal(localStorage.getItem("aiden-agent.environment.open-tabs-v1"), JSON.stringify(["files"]));
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  assert.equal(panelTab("Routines").getAttribute("aria-selected"), "true", "it reopens where it was");
+});
+
+test("Activity lists every step newest reply first, names a routine run, and tells failed from blocked", async () => {
+  const today = new Date().setHours(12, 0, 0, 0);
+  const yesterday = new Date(today).setDate(new Date(today).getDate() - 1);
+  const { calls } = await mountBotChat({
+    "bots:live:subscribe": () =>
+      chatSnapshot([
+        { id: "r1", type: "routine", label: "Sunday plan", text: "Plan next week", at: yesterday },
+        { id: "a1", type: "assistant", text: "", toolCalls: [{ id: "c1", name: "read_file", kind: "reading", label: "Read 1 file", detail: "pantry.md" }], stopReason: "toolUse", at: yesterday },
+        { id: "t1", type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, status: "ok" },
+        { id: "a2", type: "assistant", text: "Planned.", toolCalls: [], stopReason: "stop", at: yesterday },
+        { id: "u1", type: "user", text: "Plan dinners for this week", imageCount: 0, at: today },
+        {
+          id: "a3",
+          type: "assistant",
+          text: "",
+          toolCalls: [
+            { id: "c2", name: "web_search", kind: "searching", label: "Searched the web", detail: "dairy-free dinners" },
+            { id: "c3", name: "run_command", kind: "command", label: "Ran a command" },
+            { id: "c4", name: "edit_file", kind: "editing", label: "Edited 1 file", detail: "meal-plan.md" },
+          ],
+          stopReason: "toolUse",
+          at: today,
+        },
+        { id: "t2", type: "tool_result", toolCallId: "c2", toolName: "web_search", isError: false, status: "ok" },
+        { id: "t3", type: "tool_result", toolCallId: "c3", toolName: "run_command", isError: true, status: "failed" },
+        { id: "t4", type: "tool_result", toolCallId: "c4", toolName: "edit_file", isError: true, status: "blocked" },
+        { id: "a4", type: "assistant", text: "Here's your week.", toolCalls: [], stopReason: "stop", at: today },
+      ]),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  const headings = await within(botPanel()).findAllByRole("heading");
+  assert.match(headings[0]!.textContent ?? "", /^Today, .+ · Plan dinners for this week$/u);
+  assert.match(headings[1]!.textContent ?? "", /^Yesterday, .+ · Sunday plan \(routine\)$/u);
+  const steps = within(botPanel()).getAllByRole("listitem").map((item) => item.textContent);
+  assert.deepEqual(steps, [
+    "Searched the web · dairy-free dinners",
+    "Couldn’t run a command",
+    "Blocked: edit a file · meal-plan.md",
+    "Read 1 file · pantry.md",
+  ]);
+  assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 1, "the chat and Activity share one subscription");
+});
+
+test("Activity shows every step even when the chat keeps its activity quiet", async () => {
+  await mountBotChat({
+    "bots:get": () => botFixture({ chatActivity: { level: "quiet", wording: "follows" } }),
+    "bots:live:subscribe": () =>
+      chatSnapshot([
+        { id: "u1", type: "user", text: "Go", imageCount: 0, at: Date.now() },
+        { id: "a1", type: "assistant", text: "", toolCalls: [{ id: "c1", name: "read_file", kind: "reading", label: "Read 1 file" }], stopReason: "toolUse" },
+        { id: "t1", type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, status: "ok" },
+        { id: "a2", type: "assistant", text: "Done.", toolCalls: [], stopReason: "stop" },
+      ]),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  assert.deepEqual(
+    (await within(botPanel()).findAllByRole("listitem")).map((item) => item.textContent),
+    ["Read 1 file"],
+  );
+});
+
+test("Files lists the Bot's folder and opens a file read-only, with All files to go back", async () => {
+  const { calls } = await mountBotChat(FILE_HANDLERS);
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Files"));
+  fireEvent.click(await within(botPanel()).findByRole("button", { name: "groceries.md" }));
+  assert.equal((await within(botPanel()).findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
+  assert.deepEqual(calls.find((call) => call.channel === "bots:files:read")?.args, ["bot-1", "lists/groceries.md"]);
+  fireEvent.click(within(botPanel()).getByRole("button", { name: "All files" }));
+  assert.ok(await within(botPanel()).findByRole("list", { name: "Files" }));
+});
+
+test("Files opens a requested file only for its own Bot, once, and not again after a remount", async () => {
+  const calls = installBotTestIpc(FILE_HANDLERS);
+  function Harness({ mounted }: { mounted: boolean }) {
+    const panel = useBotPanel();
+    return (
+      <>
+        <button type="button" onClick={() => panel.show("files", { botId: "bot-2", path: "lists/groceries.md" })}>
+          Other Bot's file
+        </button>
+        <button type="button" onClick={() => panel.show("files", { botId: "bot-1", path: "lists/groceries.md" })}>
+          This Bot's file
+        </button>
+        {mounted ? <BotPanelFiles botId="bot-1" botName="Planner" active request={panel.fileRequest} /> : null}
+      </>
+    );
+  }
+  const tree = (mounted: boolean) => (
+    <BotPanelProvider routedBotId="bot-1">
+      <Harness mounted={mounted} />
+    </BotPanelProvider>
+  );
+  const reads = () => calls.filter((call) => call.channel === "bots:files:read").length;
+  const view = render(tree(true));
+  await screen.findByRole("list", { name: "Files" });
+  fireEvent.click(screen.getByRole("button", { name: "Other Bot's file" }));
+  assert.ok(screen.getByRole("list", { name: "Files" }), "another Bot's request is not this Bot's file");
+  assert.equal(reads(), 0);
+  fireEvent.click(screen.getByRole("button", { name: "This Bot's file" }));
+  assert.ok(await screen.findByLabelText("Contents of lists/groceries.md"));
+  fireEvent.click(screen.getByRole("button", { name: "All files" }));
+  view.rerender(tree(false));
+  view.rerender(tree(true));
+  assert.ok(await screen.findByRole("list", { name: "Files" }), "a remount does not reopen an old request");
+  assert.equal(reads(), 1);
+  fireEvent.click(screen.getByRole("button", { name: "This Bot's file" }));
+  assert.ok(await screen.findByLabelText("Contents of lists/groceries.md"), "the same chip again is a new request");
+  assert.equal(reads(), 2);
+});
+
+function memoryView(entries: { id: string; text: string }[]): BotMemoryView {
+  const store = (list: { id: string; text: string }[], limitChars: number) => ({
+    entries: list,
+    usedChars: list.reduce((sum, entry) => sum + entry.text.length, 0),
+    limitChars,
+    overBudget: false,
+  });
+  return { botId: "bot-1", revision: `rev-${entries.length}`, readable: true, user: store(entries, 1_375), memory: store([], 2_200), updatedAt: 1 };
+}
+
+test("Memory in the panel edits an entry exactly as Profile → Memory does", async () => {
+  const edits: unknown[] = [];
+  await mountBotChat({
+    "bots:memory:get": () => memoryView([{ id: "u-short", text: "Prefers short answers." }]),
+    "bots:memory:edit": (input) => {
+      edits.push((input as { edit: unknown }).edit);
+      return { ok: true, view: memoryView([{ id: "u-short", text: "Prefers short, friendly answers." }]) };
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Memory"));
+  assert.ok(await within(botPanel()).findByText("Prefers short answers."));
+  fireEvent.keyDown(within(botPanel()).getByRole("button", { name: "Memory options" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+  const dialog = await screen.findByRole("dialog", { name: "Edit memory" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Memory" }), { target: { value: "Prefers short, friendly answers." } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    assert.deepEqual(edits, [{ kind: "replace", target: "user", entryId: "u-short", text: "Prefers short, friendly answers." }]),
+  );
+  assert.ok(await within(botPanel()).findByText("Prefers short, friendly answers."));
+});
+
+test("Routines in the panel lists the Bot's routines and offers Add routine", async () => {
+  await mountBotChat({
+    "bots:routines:list": () => [
+      {
+        id: "task-1",
+        botId: "bot-1",
+        name: "Weekly meal prep",
+        prompt: "Plan this week's meals.",
+        schedule: { kind: "weekly", days: [0], time: "08:41" },
+        timezone: "UTC",
+        label: "Every Sunday at 8:41 AM",
+        enabled: true,
+        updatedAt: 10,
+      },
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Routines"));
+  const list = await within(botPanel()).findByRole("list", { name: "Routines" });
+  assert.ok(within(list).getByText("Every Sunday at 8:41 AM"));
+  fireEvent.click(within(botPanel()).getByRole("button", { name: /Add routine/u }));
+  assert.ok(await screen.findByRole("dialog", { name: "Add routine" }));
 });

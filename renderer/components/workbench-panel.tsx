@@ -146,6 +146,11 @@ export interface WorkbenchView {
 export interface WorkbenchPanelProps<T extends WorkbenchTab>
   extends Omit<WorkbenchTabStripProps<T>, "activeTabRef"> {
   id: string;
+  /**
+   * `data-environment-surface`: the workspace's focus and Escape rules act on
+   * "tools". Another workbench (the Bot panel) names its own surface.
+   */
+  surface?: string;
   label: string;
   resizeLabel: string;
   open: boolean;
@@ -170,6 +175,7 @@ export interface WorkbenchPanelProps<T extends WorkbenchTab>
 
 export function WorkbenchPanel<T extends WorkbenchTab>({
   id,
+  surface = "tools",
   label,
   resizeLabel,
   open,
@@ -261,7 +267,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
     <aside
       ref={surfaceRef}
       id={id}
-      data-environment-surface="tools"
+      data-environment-surface={surface}
       data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
       data-state={open ? (presented ? "open" : "covered") : "closed"}
       inert={!presented ? true : undefined}

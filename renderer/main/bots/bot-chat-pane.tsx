@@ -22,12 +22,12 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { useBot } from "../../lib/queries";
-import { useBotLive } from "../../lib/use-bot-live";
+import { useSharedBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
-import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-header";
+import { BotChatActions, BotChatBackButton, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
@@ -472,7 +472,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
-  const live = useBotLive(botId);
+  const live = useSharedBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
   const [retrying, setRetrying] = React.useState(false);
@@ -514,14 +514,17 @@ export function BotChatPane({ botId }: { botId: string }) {
       }
       actions={
         current ? (
-          <BotChatActions
-            bot={current}
-            onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
-            onOpenFiles={() => setFiles({ open: true, path: null })}
-            onOpenMemory={openMemory}
-            onOpenAdvanced={openAdvanced}
-            onDelete={() => setDeleteOpen(true)}
-          />
+          <>
+            <BotPanelToggle />
+            <BotChatActions
+              bot={current}
+              onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
+              onOpenFiles={() => setFiles({ open: true, path: null })}
+              onOpenMemory={openMemory}
+              onOpenAdvanced={openAdvanced}
+              onDelete={() => setDeleteOpen(true)}
+            />
+          </>
         ) : null
       }
       autoScrollToBottom

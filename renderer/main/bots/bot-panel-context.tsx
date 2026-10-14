@@ -39,7 +39,7 @@ export interface BotPanelActions {
 export interface BotPanelState {
   open: boolean;
   tab: BotPanelTab;
-  /** Cleared when the routed Bot changes. Apply it only when `botId` is the Bot on screen. */
+  /** Cleared when the chat moves to a different Bot. Apply it only when `botId` is the Bot on screen. */
   fileRequest: BotPanelFileRequest | null;
   /** Bumped whenever the person opens the panel or picks a tab from outside it. */
   focusRequest: number;
@@ -67,6 +67,12 @@ function writeStored(key: string, value: string): void {
   }
 }
 
+/**
+ * Keys are unique in the window, not per provider, so a consumer that records
+ * the keys it handled never mistakes a new provider's request for an old one.
+ */
+let lastFileRequestKey = 0;
+
 const BotPanelStateContext = React.createContext<BotPanelState | null>(null);
 const BotPanelActionsContext = React.createContext<BotPanelActions | null>(null);
 
@@ -77,8 +83,9 @@ interface PanelState {
 }
 
 /**
- * `routedBotId` is the Bot whose chat is on screen. When it changes, a pending
- * file request is dropped, so it is never re-applied to a different Bot.
+ * `routedBotId` is the Bot whose chat is on screen, or null on any other page.
+ * When it becomes a different Bot, a pending file request is dropped, so it is
+ * never re-applied to that Bot.
  */
 export function BotPanelProvider({
   children,
@@ -94,17 +101,17 @@ export function BotPanelProvider({
   openRef.current = state.open;
   const pendingFocus = React.useRef(false);
   const returnFocus = React.useRef<HTMLElement | null>(null);
-  const fileKey = React.useRef(0);
 
   React.useEffect(() => writeStored(BOT_PANEL_OPEN_KEY, String(state.open)), [state.open]);
   React.useEffect(() => writeStored(BOT_PANEL_TAB_KEY, state.tab), [state.tab]);
-  React.useEffect(
-    () =>
-      setState((current) =>
-        current.fileRequest && current.fileRequest.botId !== routedBotId ? { ...current, fileRequest: null } : current,
-      ),
-    [routedBotId],
-  );
+  // Only reaching a different Bot's chat drops a request: a page in between
+  // (the Bots home, a Profile) may be where a request for the next chat was made.
+  React.useEffect(() => {
+    if (routedBotId === null) return;
+    setState((current) =>
+      current.fileRequest && current.fileRequest.botId !== routedBotId ? { ...current, fileRequest: null } : current,
+    );
+  }, [routedBotId]);
 
   const requestFocus = React.useCallback(() => {
     if (!openRef.current) {
@@ -136,7 +143,7 @@ export function BotPanelProvider({
       // A path without its Bot can't be scoped, so it selects nothing.
       const request =
         options?.path && options.botId
-          ? { botId: options.botId, path: options.path, key: (fileKey.current += 1) }
+          ? { botId: options.botId, path: options.path, key: (lastFileRequestKey += 1) }
           : null;
       setState((current) => ({ open: true, tab, fileRequest: request ?? current.fileRequest }));
     },
