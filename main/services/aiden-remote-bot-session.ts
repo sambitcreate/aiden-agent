@@ -108,7 +108,9 @@ import {
   liveQueuedInputIds,
   liveQueuedMessages,
   liveRunKey,
+  createBotRunStarts,
   projectBotTranscript,
+  type BotRunStarts,
 } from "./bot-runtime/live-projection.js";
 import {
   botRoutineLabel,
@@ -187,6 +189,12 @@ export interface AidenRemoteBotSessionServiceOptions {
   onReport?(botId: string, error: unknown): void;
   /** Pause before a failed classification is retried; defaults to one second. */
   classifyRetryMs?: number;
+  /**
+   * Run start times shared with the desktop live projection (`botRunStarts`):
+   * a projector created mid-run, or after the 60 s idle close, keeps the
+   * run's start instead of its own creation time. Defaults to this service's own.
+   */
+  runStarts?: BotRunStarts;
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
@@ -497,6 +505,8 @@ interface ProjectorActivity {
   /** `AidenRemoteBotSessionRuntime.placedSubmissions` for this Bot. */
   placed(): Promise<ReadonlyMap<string, string>>;
   now(): number;
+  /** Shared with the desktop feed: a projector opened mid-run keeps the run's start. */
+  runStarts: BotRunStarts;
   retryMs: number;
   report(error: unknown): void;
 }
@@ -723,13 +733,17 @@ class BotLiveProjector {
     docs: Readonly<Record<string, unknown>>,
   ): void {
     const runKey = liveRunKey(docs);
+    const deps = this.activityDeps!;
     if (next.state === "running") {
       const replaced = runKey !== null && this.runKey !== null && runKey !== this.runKey;
       if (previous.state !== "running" || replaced) {
-        this.runStartedAt = this.activityDeps!.now();
         this.stopping = false;
         this.resuming = false;
       }
+      // Asked on every running frame, so the run's key is recorded as soon as
+      // it shows. Not the attach time: a phone that opens mid-run sees how long
+      // the run has really gone, and a replaced run gets its own start.
+      this.runStartedAt = deps.runStarts.startedAt(this.botId, runKey, () => deps.now());
       if (this.resumeRequested) {
         this.resumeRequested = false;
         this.resuming = true;
@@ -739,6 +753,7 @@ class BotLiveProjector {
     } else {
       this.stopping = false;
       this.resuming = false;
+      deps.runStarts.ended(this.botId);
       // A Resume is heard before the session publishes the run it resumed, so a
       // paused state still on its way out keeps it; any other state ends it.
       if (next.state !== "interrupted") this.resumeRequested = false;
@@ -778,7 +793,7 @@ class BotLiveProjector {
     const ids = liveQueuedInputIds(docs);
     for (const id of [...this.inputKinds.keys()]) if (!ids.includes(id)) this.inputKinds.delete(id);
     const unknown = ids.filter((id) => !this.inputKinds.has(id));
-    if (unknown.length > 0 && Date.now() >= this.classifyNotBefore) {
+    if (unknown.length > 0 && deps.now() >= this.classifyNotBefore) {
       try {
         const answers = await deps.classify(unknown);
         for (const id of unknown) {
@@ -841,8 +856,8 @@ class BotLiveProjector {
 
   /** One retry after the pause, on the serial lane, even if no frame arrives. */
   private scheduleClassifyRetry(): void {
-    const { retryMs } = this.activityDeps!;
-    this.classifyNotBefore = Math.max(this.classifyNotBefore, Date.now() + retryMs);
+    const { retryMs, now } = this.activityDeps!;
+    this.classifyNotBefore = Math.max(this.classifyNotBefore, now() + retryMs);
     if (this.classifyRetry !== undefined || this.closed) return;
     this.classifyRetry = setTimeout(() => {
       this.classifyRetry = undefined;
@@ -1104,8 +1119,10 @@ export class AidenRemoteBotSessionService {
   /** Bot approval ids answered here recently, so a retried request replays its receipt. */
   private readonly answeredApprovals = new Set<string>();
   private readonly stopIntents: (() => void) | undefined;
+  private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
+    this.runStarts = options.runStarts ?? createBotRunStarts();
     // A question or approval asked or settled is published in order with entries and state.
     const refresh = (botId: string) => {
       void this.projectors.get(botId)?.then((projector) => projector.refresh(), () => undefined);
@@ -1431,6 +1448,7 @@ export class AidenRemoteBotSessionService {
               classify: (ids) => runtime.quietInputs(botId, ids),
               placed: () => runtime.placedSubmissions(botId),
               now: () => this.options.now?.() ?? Date.now(),
+              runStarts: this.runStarts,
               retryMs: this.options.classifyRetryMs ?? CLASSIFY_RETRY_MS,
               report: (error) => this.options.onReport?.(botId, error),
             }

@@ -2,9 +2,14 @@
 // Remote Stop (`aiden-remote-bot-session.ts`) and the session's Resume
 // (`onResumed` in `bot-session-main.ts`) announce here; the desktop live
 // projection (`bot-session-main.ts`) and Remote projectors listen.
+// `botRunStarts` is the run start times those same surfaces share.
 
 import { logger } from "../../platform.js";
 import { createBotTurnIntents } from "./bot-turn-intents.js";
+import { createBotRunStarts } from "./live-projection.js";
+
+/** When each Bot's run started, shared by the desktop feed and every Remote projector. */
+export const botRunStarts = createBotRunStarts();
 
 export const botTurnIntents = createBotTurnIntents({
   // A surface that missed a Stop or Resume would keep its old line; say so instead of hiding it.

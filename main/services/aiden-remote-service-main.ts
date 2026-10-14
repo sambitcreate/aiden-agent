@@ -125,7 +125,7 @@ import {
 } from "./aiden-remote-bot-session.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
-import { botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
+import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
@@ -884,6 +884,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 questions: botQuestions,
                 approvals: botApprovals,
                 turnIntents: botTurnIntents,
+                // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
+                runStarts: botRunStarts,
                 onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued or placed messages could not be read for phones.`, error),
                 presets: {
                   list: () => BOT_PRESETS,

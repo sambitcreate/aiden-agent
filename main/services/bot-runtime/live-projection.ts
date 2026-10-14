@@ -424,6 +424,45 @@ export function liveRunKey(docs: Readonly<Record<string, unknown>>): string | nu
   return String(first);
 }
 
+/**
+ * When each Bot's current run started, as first seen by any live surface in
+ * this process. The desktop feed and every Remote projector share one, so a
+ * surface that opens mid-run, or reopens after an idle close, shows the run's
+ * real elapsed time instead of restarting the clock. Nothing durable records
+ * a run's start, so a run already going when Aiden started is timed from when
+ * a surface first saw it.
+ */
+export interface BotRunStarts {
+  /**
+   * The start of `botId`'s run `runKey` (`liveRunKey`), recorded from `now`
+   * the first time it is asked for. A null key (the run is not in `pi.live`
+   * yet, or is just leaving) belongs to the run already recorded.
+   */
+  startedAt(botId: string, runKey: string | null, now: () => number): number;
+  /** A surface saw `botId` not running: its next run, even a Resume of the same one, starts afresh. */
+  ended(botId: string): void;
+}
+
+export function createBotRunStarts(): BotRunStarts {
+  // One run per Bot: a new run replaces the last, so this stays bounded by the Bots.
+  const runs = new Map<string, { runKey: string | null; at: number }>();
+  return {
+    startedAt(botId, runKey, now) {
+      const known = runs.get(botId);
+      if (known && (known.runKey === runKey || known.runKey === null || runKey === null)) {
+        if (known.runKey === null) known.runKey = runKey;
+        return known.at;
+      }
+      const at = now();
+      runs.set(botId, { runKey, at });
+      return at;
+    },
+    ended(botId) {
+      runs.delete(botId);
+    },
+  };
+}
+
 function liveRunActive(docs: Readonly<Record<string, unknown>>): boolean {
   const live = docs["pi.live"] as { run?: unknown } | undefined;
   return live?.run !== undefined;
@@ -572,6 +611,12 @@ export interface BotLiveProjectionDeps {
   approvalPending?(botId: string): boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
   now?(): number;
+  /**
+   * Run start times shared with the Remote projectors (`botRunStarts`), so
+   * every surface times a run from the same moment. Defaults to this
+   * projection's own.
+   */
+  runStarts?: BotRunStarts;
   /** The current status of a connect card (connected or dismissed since it was offered). */
   connectCardStatus?(botId: string, card: ConnectCardEntry): Promise<ConnectCardStatus>;
   /** Schedules a subscriber flush. Defaults to the next macrotask. */
@@ -668,6 +713,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const schedule = deps.schedule ?? ((flush: () => void) => void setTimeout(flush, 0));
   const newEpoch = deps.newEpoch ?? (() => randomUUID());
   const now = deps.now ?? Date.now;
+  const runStarts = deps.runStarts ?? createBotRunStarts();
   /** Bots whose next run is a Resume. */
   const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
@@ -778,7 +824,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   /** A new run began: its start time, Stop and Resume marks belong to it alone. */
   function startRun(feed: Feed): void {
-    feed.startedAt = now();
+    // A run another surface already saw keeps the time it started.
+    feed.startedAt = runStarts.startedAt(feed.botId, liveRunKey(feed.frame.docs), now);
     feed.stopping = false;
     feed.resuming = resumingBots.delete(feed.botId);
     feed.resumedFrom = feed.frame.docs["pi.live"];
@@ -869,6 +916,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       startRun(feed);
     }
     feed.runKey = runKey;
+    // Records the run's key as soon as it shows, so a replacing run is told apart from this one.
+    if (feed.state.kind === "running") feed.startedAt = runStarts.startedAt(feed.botId, runKey, now);
     applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(entries)));
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
@@ -907,6 +956,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     if (state.kind !== "running") {
       feed.stopping = false;
       feed.resuming = false;
+      runStarts.ended(feed.botId);
     }
     emit(feed, { type: "state", state });
     updateActivity(feed);
@@ -955,6 +1005,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         queue: Promise.resolve(),
       };
       if (feed.state.kind === "running") startRun(feed);
+      else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
       feed.queued = await queuedFor(feed, initial.docs);
       feeds.set(botId, feed);

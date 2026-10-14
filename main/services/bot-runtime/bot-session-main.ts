@@ -44,7 +44,7 @@ import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
-import { botTurnIntents } from "./bot-turn-intents-main.js";
+import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import {
@@ -359,6 +359,7 @@ export function botLiveProjection(): BotLiveProjection {
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,
+    runStarts: botRunStarts,
     onRunSettled: broadcastState,
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });

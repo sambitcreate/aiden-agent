@@ -25,6 +25,7 @@ import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.
 import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
+import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
 import {
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   parseAidenRemoteBotSession,
@@ -1519,6 +1520,54 @@ test("a follow-up that replaces the run while the Bot stays running gets its own
   }
 });
 
+test("a phone or desktop chat that opens mid-run, or after the projector's idle close, sees when the run really started", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let clock = 1_000;
+  const runStarts = createBotRunStarts();
+  const service = runningOn(driven, fake, { now: () => clock, runStarts, projectorIdleMs: 20 });
+  const desktop = createBotLiveProjection({
+    conversation: async () => driven.conversation as never,
+    state: () => fake.runtime.state(BOT_ID),
+    quietInputs: async () => new Map(),
+    now: () => clock,
+    runStarts,
+  });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const first = stream.frames[0]!.payload.session;
+    assert.deepEqual(first.activity, { phase: "preparing", startedAt: 1_000 });
+
+    clock = 31_000; // the Mac's chat opens half a minute in
+    const { snapshot, unsubscribe } = await desktop.subscribe(BOT_ID, { send() {} });
+    assert.equal(snapshot.activity?.startedAt, 1_000, "the desktop line counts from the run's start");
+    unsubscribe();
+
+    await stream.close();
+    clock = 91_000; // the phone comes back after the projector closed for being idle
+    const deadline = Date.now() + 10_000;
+    let reopened = await service.session(BOT_ID, { activity: true });
+    while (reopened.epoch === first.epoch) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the idle close");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      reopened = await service.session(BOT_ID, { activity: true });
+    }
+    assert.deepEqual(reopened.activity, { phase: "preparing", startedAt: 1_000 }, "a new projector, the same run");
+
+    // The run ends; the next one, even for the same input, is timed from its own start.
+    fake.setState({ kind: "idle" });
+    assert.equal((await service.session(BOT_ID, { activity: true })).activity, null);
+    fake.setState({ kind: "running", submissionId: "sub_1" });
+    clock = 120_000;
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).activity, { phase: "preparing", startedAt: 120_000 });
+  } finally {
+    await stream.close();
+    await desktop.close();
+    await service.close();
+  }
+});
+
 test("a Resume after a crash mid-reply reads Picking up where it left off on phones until the resumed run moves", async () => {
   const stale = { run: { taskId: 3, inputs: [1] }, generation: { attempt: 1, message: { content: [{ type: "text", text: "Monday: soup" }] } } };
   const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": stale });
@@ -1651,6 +1700,48 @@ test("a waiting input that can't be classified stays off phones and is retried, 
     assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false);
   } finally {
     await stream.close();
+    await service.close();
+  }
+});
+
+test("the classification pause runs on the host's clock: once it has passed, the next frame asks again", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const asked: string[][] = [];
+  let failing = true;
+  let clock = 1_000;
+  const service = runningOn(driven, fake, {
+    runtime: async () => ({
+      ...fake.runtime,
+      conversation: async () => driven.conversation as never,
+      async quietInputs(_botId: string, ids: readonly string[]) {
+        asked.push([...ids]);
+        if (failing) throw new Error("The session could not be inspected.");
+        return new Map(ids.map((id) => [id, false]));
+      },
+    }),
+    now: () => clock,
+    // Longer than the test: only a frame after the pause can ask again.
+    classifyRetryMs: 60_000,
+  });
+  try {
+    await service.session(BOT_ID, { activity: true });
+    const docs = {
+      "pi.live": { run: { inputs: [1] } },
+      "pi.inbox": { items: [{ id: 21, mode: "followUp", content: [{ type: "text", text: "Also a shopping list." }] }] },
+    };
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    assert.equal(asked.length, 1, "within the pause");
+
+    failing = false;
+    clock += 60_000;
+    await driven.emitView([user(1, "Plan dinners")], docs);
+    assert.equal(asked.length, 2, "the pause is over on the host's clock");
+    assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, [
+      { submissionId: "21", mode: "queue", text: "Also a shopping list." },
+    ]);
+  } finally {
     await service.close();
   }
 });
