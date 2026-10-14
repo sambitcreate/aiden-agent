@@ -9,7 +9,7 @@ import {
   botStepPhrase,
   type BotToolPhase,
 } from "../../shared/bot-activity";
-import type { BotToolResultStatus } from "../../shared/bot-live";
+import type { BotToolResultStatus, BotTranscriptToolCall } from "../../shared/bot-live";
 
 export type BotRecapStepStatus = BotToolResultStatus | "running";
 
@@ -24,6 +24,27 @@ export interface BotRecapStep {
   status: BotRecapStepStatus;
   /** Set on a merged row. */
   count?: number;
+}
+
+/** A tool call as a step that has not reported back yet. Its detail is the one the transcript already redacted. */
+export function botStepFromCall(call: BotTranscriptToolCall): BotRecapStep {
+  return {
+    id: call.id,
+    kind: call.kind,
+    label: call.label,
+    ...(call.detail ? { detail: call.detail } : {}),
+    ...(call.app ? { app: call.app } : {}),
+    status: "running",
+  };
+}
+
+/**
+ * A finished reply has no running step: a call that never reported back was
+ * cut short by Stop or a restart (neutral), or else it failed.
+ */
+export function botSettleSteps(steps: readonly BotRecapStep[], cutShort: boolean): BotRecapStep[] {
+  const unfinished = cutShort ? "stopped" : "failed";
+  return steps.map((step) => (step.status === "running" ? { ...step, status: unfinished } : step));
 }
 
 /** Consecutive successful steps of the same kind (and app) become one row. */

@@ -13,7 +13,7 @@ import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry 
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
-import type { BotRecapStep } from "./bot-activity-steps";
+import { botSettleSteps, botStepFromCall, type BotRecapStep } from "./bot-activity-steps";
 
 export interface BotTranscriptRowOptions {
   running: boolean;
@@ -78,13 +78,10 @@ export function botTranscriptRows(
     if (!turn) return;
     const steps = turn.steps.filter((step) => step.kind !== "waiting");
     if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
-      // A finished turn has no running step: a call that never reported back
-      // was cut short by Stop or a restart, or else it failed.
-      const unfinished = turn.stopped || turn.interrupted ? "stopped" : "failed";
       const recap: BotTranscriptRow = {
         kind: "recap",
         id: `${turn.id}:recap`,
-        steps: live ? steps : steps.map((step) => (step.status === "running" ? { ...step, status: unfinished } : step)),
+        steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
         durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
         live,
       };
@@ -140,14 +137,7 @@ export function botTranscriptRows(
         const turn = state.turn!;
         touch(entry.at);
         for (const call of entry.toolCalls) {
-          const recapStep: BotRecapStep = {
-            id: call.id,
-            kind: call.kind,
-            label: call.label,
-            ...(call.detail ? { detail: call.detail } : {}),
-            ...(call.app ? { app: call.app } : {}),
-            status: "running",
-          };
+          const recapStep = botStepFromCall(call);
           turn.steps.push(recapStep);
           turn.byCall.set(call.id, recapStep);
         }
