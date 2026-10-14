@@ -264,10 +264,12 @@ On any `/bots` route, `chat-sidebar.tsx` renders `BotSidebar` instead of the pro
   - Phones have no side panel, so Files and Memory open the existing sheets.
 - **New Bot model field (desktop).** An "AI model" field in step 1 of `bot-create-flow.tsx`.
   - It opens `BotModelPicker` (`renderer/main/bots/bot-model-picker.tsx`), a Bot-specific searchable popover built from the same `Popover`/`Command` primitives as the composer picker. The composer's `ModelPicker` needs real provider ids for its icons, model info and Pad, and Bot catalog ids are deliberately opaque, so it can't be reused. Provider logos fall back to initials until the catalog carries a non-secret icon slug.
-  - It defaults to today's `recommendedFullAccess` choice, marked Recommended.
+  - It defaults to `recommendedBotModelChoice` (the first available model, as before), marked Recommended.
   - When the chosen model reads text only, a "For photos" row is filled with `firstAvailableVisionModel`.
   - With no model set up, the field reads "No AI model set up yet", with Set up…, and creating still works.
 - **New Bot model row (iOS and Android).** A Model row in the New Bot form pushes a list of the Mac's models: Recommended first, then one section per provider with provider icons. A Photos row appears for text-only models.
+  - iOS shows the Photos row only when a model that reads images is set up on the Mac; otherwise it says "<model> reads text only, and no model that reads images is set up on your Mac." and creates the Bot reading text only, as desktop does.
+  - Android differs (slice A): New Bot uses the shared `AidenModelPickerField` sheet, which has no Recommended section, and has no photo model row; the Mac picks the image model. Adding one is a recorded follow-up.
   - The create request already carries the selection (`AidenBotEditorDraft.customAccess`), so there is no contract change.
 - **Advanced model control.** Advanced uses the same model field as New Bot instead of the Service + Model selects.
   - The selected value shows only the model name on one line with an ellipsis.
