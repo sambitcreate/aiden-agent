@@ -144,6 +144,14 @@ class AidenRemoteCoordinator(
         get() = installationStore.activeInstallation?.instanceId
 
     /**
+     * Runs [block] on the coordinator's own scope, which outlives every screen. For work a
+     * person started and may leave behind: a settings pick still saving after they back out.
+     */
+    fun launchDetached(block: suspend () -> Unit) {
+        scope.launch { block() }
+    }
+
+    /**
      * True while [client] is still the active client of installation [instanceId]. A read
      * started before a pairing was removed, revoked, or switched must check this right before
      * it publishes or caches its response, so it can never recreate a purged cache.

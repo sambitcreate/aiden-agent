@@ -262,7 +262,14 @@ fun AidenBotsHomeScreen(
                 throw e
             } catch (_: Exception) {
                 if (coordinator.holdsReadAuthority(cl, requestInstance)) {
-                    coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                    // Offline: Advanced still opens from the cached Bot, so Chat activity stays reachable.
+                    val cached = coordinator.botCache.getBotDetail(botId)
+                    if (cached != null) {
+                        advancedClient = cl
+                        advancedBot = cached
+                    } else {
+                        coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                    }
                 }
             } finally {
                 openingAdvanced = false
@@ -440,7 +447,10 @@ fun AidenBotsHomeScreen(
                 advancedBot = null
                 advancedClient = null
                 scope.launch { viewModel.loadBots(force = true) }
-            }
+            },
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true),
+            chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() },
+            onChatActivitySaved = { saved -> coordinator.botCache.putBotDetail(saved) }
         )
     }
 

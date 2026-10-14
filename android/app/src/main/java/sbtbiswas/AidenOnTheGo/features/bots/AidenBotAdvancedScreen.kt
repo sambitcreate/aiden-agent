@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -30,6 +33,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenGroupCard
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSegmentedPillRow
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
@@ -191,11 +195,30 @@ fun AidenBotAdvancedSheet(
     bot: AidenBotDetail,
     client: AidenRemoteClient?,
     onDismiss: () -> Unit,
-    onSaved: (AidenBotDetail) -> Unit
+    onSaved: (AidenBotDetail) -> Unit,
+    /** Chat activity needs the Mac's `bot-activity-v1` and the phone's grant: see [aidenBotShowsChatActivity]. */
+    chatActivityAvailable: Boolean = false,
+    /** What Chat activity saves with; the row is offered only when this is set too. */
+    chatActivityHost: AidenBotChatActivityHost? = null,
+    /** The newest Bot after Chat activity picks: once when Advanced closes, or at once for a pick that finishes later. */
+    onChatActivitySaved: (AidenBotDetail) -> Unit = {}
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    // A Chat activity save moves the Bot's revision; Advanced's own Save uses the newest.
+    var latestBot by remember(bot.id) { mutableStateOf(bot) }
+    var chatActivityController by remember(bot.id) { mutableStateOf<AidenBotChatActivityController?>(null) }
+    var showingChatActivity by remember(bot.id) { mutableStateOf(false) }
+    val currentOnChatActivitySaved by rememberUpdatedState(onChatActivitySaved)
+    val reporter = remember(bot.id) { AidenBotChatActivityReporter { currentOnChatActivitySaved(it) } }
+    // The screens behind hear about picks when Advanced goes away, however it goes.
+    DisposableEffect(reporter) { onDispose { reporter.close() } }
+    val close = {
+        reporter.close()
+        onDismiss()
+    }
+    val showsChatActivityRow = chatActivityAvailable && chatActivityHost != null
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     var draft by remember { mutableStateOf<AidenBotAdvancedDraft?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -219,14 +242,14 @@ fun AidenBotAdvancedSheet(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Scaffold(
             containerColor = palette.canvas,
             topBar = {
                 TopAppBar(
                     title = { Text(stringResource(R.string.bot_advanced_title), fontWeight = FontWeight.SemiBold) },
                     navigationIcon = {
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = close) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = palette.foreground)
                         }
                     },
@@ -243,7 +266,10 @@ fun AidenBotAdvancedSheet(
                                     isSaving = true
                                     saveError = null
                                     try {
-                                        onSaved(aidenBotSaveAdvanced(cl, bot, current, cat))
+                                        val saved = aidenBotSaveAdvanced(cl, latestBot, current, cat)
+                                        // The screen behind gets this Bot, which already holds any Chat activity pick.
+                                        reporter.settle()
+                                        onSaved(saved)
                                     } catch (error: CancellationException) {
                                         throw error
                                     } catch (_: Exception) {
@@ -262,13 +288,6 @@ fun AidenBotAdvancedSheet(
         ) { padding ->
             val cat = catalog
             val current = draft
-            if (loadError == null && (cat == null || current == null)) {
-                AidenBotFormSkeleton(
-                    loadingDescription = stringResource(R.string.bot_advanced_loading),
-                    modifier = Modifier.padding(padding).aidenReadableWidth()
-                )
-                return@Scaffold
-            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -280,7 +299,7 @@ fun AidenBotAdvancedSheet(
             ) {
                 when {
                     loadError != null -> Text(loadError.orEmpty(), color = palette.secondary)
-                    cat == null || current == null -> Unit
+                    cat == null || current == null -> AidenBotAdvancedPlaceholder(stringResource(R.string.bot_advanced_loading))
                     else -> {
                         AidenBotAdvancedSection(title = stringResource(R.string.bot_advanced_model)) {
                             AidenModelPickerField(
@@ -320,10 +339,63 @@ fun AidenBotAdvancedSheet(
                                 )
                             }
                         }
-
-                        saveError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
                     }
                 }
+
+                // Chat activity opens from the cached Bot: it doesn't wait for the catalog, a
+                // connection, or a clean Advanced form, so it stays reachable offline.
+                if (showsChatActivityRow) {
+                    AidenBotAdvancedSection(title = stringResource(R.string.bot_chat_activity_title)) {
+                        AidenConnectedColumn {
+                            AidenGroupCard(
+                                index = 0,
+                                count = 1,
+                                onClick = {
+                                    // A controller still saving keeps its own revision: reopening must not fork a second writer.
+                                    if (chatActivityController?.state?.value?.isSaving != true) {
+                                        chatActivityController = chatActivityHost?.controller(latestBot) { saved ->
+                                            latestBot = saved
+                                            reporter.saved(saved)
+                                        }
+                                    }
+                                    showingChatActivity = true
+                                }
+                            ) {
+                                Text(stringResource(R.string.bot_chat_activity_title), color = palette.foreground, modifier = Modifier.weight(1f))
+                                Text(aidenBotChatActivitySummary(latestBot.chatActivity), color = palette.secondary, style = MaterialTheme.typography.bodyMedium)
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                            }
+                        }
+                    }
+                }
+
+                saveError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
+
+    val controller = chatActivityController
+    if (showsChatActivityRow && showingChatActivity && controller != null && chatActivityHost != null) {
+        AidenBotChatActivityDialog(
+            botName = latestBot.name,
+            controller = controller,
+            launch = chatActivityHost.launch,
+            onDismiss = { showingChatActivity = false }
+        )
+    }
+}
+
+/** Model and Access placeholders while the capability catalog arrives. */
+@Composable
+private fun AidenBotAdvancedPlaceholder(loadingDescription: String) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(AidenUi.SectionGap),
+        modifier = Modifier.clearAndSetSemantics { contentDescription = loadingDescription }
+    ) {
+        repeat(2) { section ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+                AidenSkeletonBlock(height = if (section == 0) 96.dp else 72.dp, shape = MaterialTheme.shapes.large)
             }
         }
     }

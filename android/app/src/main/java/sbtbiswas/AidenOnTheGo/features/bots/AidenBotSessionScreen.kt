@@ -191,7 +191,10 @@ fun AidenBotSessionScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                // Offline: Advanced still opens from the cached Bot, so Chat activity stays reachable.
+                val cached = coordinator.botCache.getBotDetail(botId)
+                if (cached != null) advancedBot = cached
+                else coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
             } finally {
                 openingAdvanced = false
             }
@@ -268,6 +271,7 @@ fun AidenBotSessionScreen(
     }
 
     advancedBot?.let { bot ->
+        val chatActivityHost = remember(cl) { coordinator.botChatActivityHost() }
         AidenBotAdvancedSheet(
             bot = bot,
             client = cl,
@@ -275,6 +279,13 @@ fun AidenBotSessionScreen(
             onSaved = { saved ->
                 coordinator.botCache.putBotDetail(saved)
                 advancedBot = null
+                scope.launch { controller.refetch() }
+            },
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true),
+            chatActivityHost = chatActivityHost,
+            onChatActivitySaved = { saved ->
+                coordinator.botCache.putBotDetail(saved)
+                controller.setWording(saved.chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
                 scope.launch { controller.refetch() }
             }
         )

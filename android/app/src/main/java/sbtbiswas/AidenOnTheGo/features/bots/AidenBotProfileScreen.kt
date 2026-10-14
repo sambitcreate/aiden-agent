@@ -487,7 +487,10 @@ fun AidenBotProfileScreen(
             onSaved = {
                 accept(it)
                 showAdvanced = false
-            }
+            },
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true),
+            chatActivityHost = remember(client) { coordinator.botChatActivityHost() },
+            onChatActivitySaved = { accept(it) }
         )
     }
 

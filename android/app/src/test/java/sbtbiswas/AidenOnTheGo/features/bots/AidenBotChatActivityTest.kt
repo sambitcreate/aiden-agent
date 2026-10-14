@@ -3,7 +3,9 @@ package sbtbiswas.AidenOnTheGo.features.bots
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
@@ -21,6 +23,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -507,6 +510,92 @@ class AidenBotChatActivityTest {
         controller.pick(detailed)
         assertEquals(quiet, controller.state.value.value)
         assertTrue(controller.state.value.saveFailed)
+    }
+
+    // The screens behind Advanced hear about picks once, when it closes; a late pick is reported at once.
+    @Test
+    fun theScreensBehindHearOnceWithTheNewestBotWhenAdvancedCloses() {
+        val heard = mutableListOf<String>()
+        val reporter = AidenBotChatActivityReporter { heard += it.revision }
+        reporter.saved(detail("rev_2", summary))
+        reporter.saved(detail("rev_3", detailed))
+        assertEquals("nothing is reported while Advanced is open", emptyList<String>(), heard)
+        reporter.close()
+        reporter.close()
+        assertEquals(listOf("rev_3"), heard)
+    }
+
+    @Test
+    fun aPickThatFinishesAfterAdvancedClosedIsReportedAtOnce() {
+        val heard = mutableListOf<String>()
+        val reporter = AidenBotChatActivityReporter { heard += it.revision }
+        reporter.close()
+        assertEquals("no pick, nothing to report", emptyList<String>(), heard)
+        reporter.saved(detail("rev_4", summary))
+        assertEquals(listOf("rev_4"), heard)
+    }
+
+    @Test
+    fun advancedsOwnSaveSettlesThePicksItAlreadyCarries() {
+        val heard = mutableListOf<String>()
+        val reporter = AidenBotChatActivityReporter { heard += it.revision }
+        reporter.saved(detail("rev_2", summary))
+        reporter.settle()
+        reporter.close()
+        assertEquals(emptyList<String>(), heard)
+        reporter.saved(detail("rev_3", detailed))
+        assertEquals("a later pick still reaches them", listOf("rev_3"), heard)
+    }
+
+    // The page waits for the Mac without blocking; it gives up only when there is no Mac to wait for.
+    @Test
+    fun theHoldEndsWhenTheMacIsUpAndKeepsWaitingThroughOffline() = runTest {
+        val connection = MutableStateFlow(AidenConnectionState.CONNECTING)
+        val client = MutableStateFlow<String?>(null)
+        val result = async { aidenBotAwaitConnected(connection, client) }
+        runCurrent()
+        assertFalse(result.isCompleted)
+        connection.value = AidenConnectionState.OFFLINE
+        runCurrent()
+        assertFalse(result.isCompleted)
+        connection.value = AidenConnectionState.CONNECTED
+        runCurrent()
+        assertFalse("connected without a client is not yet usable", result.isCompleted)
+        client.value = "client"
+        runCurrent()
+        assertTrue(result.await())
+    }
+
+    @Test
+    fun theHoldGivesUpAtOnceWhenThePhoneNeedsPairing() = runTest {
+        val connection = MutableStateFlow(AidenConnectionState.NEEDS_PAIRING)
+        assertFalse(aidenBotAwaitConnected(connection, MutableStateFlow<String?>("stale client")))
+    }
+
+    // A pick is cached for the screens behind as soon as the Mac confirms it.
+    @Test
+    fun aConfirmedPickIsCachedAndReported() = runBlocking {
+        val patched = fixture.getValue("botActivity").jsonObject.getValue("identityPatch").jsonObject
+        val server = MockWebServer()
+        server.start()
+        try {
+            val client = AidenRemoteClient(
+                endpoint = server.url("/api/aiden/v1").toString().trimEnd('/'),
+                credential = "test_credential_123",
+                customOkHttpClient = OkHttpClient()
+            )
+            val cached = mutableListOf<AidenBotDetail>()
+            val host = AidenBotChatActivityHost(client = { client }, waitForConnection = { true }, launch = { }, cache = { cached += it })
+            val reported = mutableListOf<AidenBotDetail>()
+            server.enqueue(MockResponse().setResponseCode(200).setBody(patched.getValue("response").toString()))
+
+            host.controller(bot.copy(revision = "bot_revision_8")) { reported += it }.pick(detailed)
+
+            assertEquals(listOf("bot_revision_9"), cached.map { it.revision })
+            assertEquals(cached, reported)
+        } finally {
+            server.shutdown()
+        }
     }
 
     // Advanced offers the page only to a phone that can use it.
