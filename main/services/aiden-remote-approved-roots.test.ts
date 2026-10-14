@@ -81,14 +81,17 @@ async function storedRoot(directory: string) {
   return { folderPath, device: live.dev.toString(), inode: live.ino.toString(), liveDevice: live.dev };
 }
 
-test("an approved root survives a remount that renumbers its volume", async () => {
+// The approval records live on the same volume as the temporary folders.
+const approvalStore = os.tmpdir();
+
+test("an approved root on the approval-store volume survives a remount that renumbers it", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-approved-root-"));
   try {
     const stored = await storedRoot(directory);
     // macOS assigns APFS st_dev at mount time, so a reboot changes it while the
     // folder, its path, and its inode stay the same.
     const remounted = { ...stored, device: (stored.liveDevice + 3n).toString() };
-    assert.deepEqual(await verifyApprovedRootIdentity(remounted), {
+    assert.deepEqual(await verifyApprovedRootIdentity(remounted, approvalStore), {
       root: stored.folderPath,
       device: stored.liveDevice.toString(),
       inode: stored.inode,
@@ -98,37 +101,38 @@ test("an approved root survives a remount that renumbers its volume", async () =
   }
 });
 
-test("an approved root fails closed when its folder, path, or mounted volume is replaced", async () => {
+test("an approved root fails closed when its folder, path, or volume is replaced", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-approved-root-"));
   try {
     const stored = await storedRoot(directory);
+    const renumbered = { ...stored, device: (stored.liveDevice + 3n).toString() };
     assert.equal(
-      await verifyApprovedRootIdentity({ ...stored, inode: (BigInt(stored.inode) + 1n).toString() }),
+      await verifyApprovedRootIdentity({ ...stored, inode: (BigInt(stored.inode) + 1n).toString() }, approvalStore),
       null,
     );
 
     const alias = `${directory}-alias`;
     await fs.symlink(stored.folderPath, alias);
     try {
-      assert.equal(await verifyApprovedRootIdentity({ ...stored, folderPath: alias }), null);
+      assert.equal(await verifyApprovedRootIdentity({ ...stored, folderPath: alias }, approvalStore), null);
     } finally {
       await fs.rm(alias, { force: true });
     }
 
-    // A folder that is itself a mount point keeps the exact device check: a
-    // different volume mounted there can reuse the same root inode.
+    // A folder on another volume (an external drive, a disk image) keeps the
+    // exact device check: a replacement volume can present the same path and
+    // inode without touching the approval records.
     const live = await fs.stat(stored.folderPath, { bigint: true });
-    const mountPoint = {
+    const otherVolume = {
       realpath: fs.realpath,
       stat: async (target: string) =>
-        target === stored.folderPath ? live : { ...(await fs.stat(target, { bigint: true })), dev: live.dev + 1n },
+        target === approvalStore ? { ...live, dev: live.dev + 1n } : fs.stat(target, { bigint: true }),
     };
-    const renumbered = { ...stored, device: (stored.liveDevice + 3n).toString() };
-    assert.equal(await verifyApprovedRootIdentity(renumbered, mountPoint), null);
-    assert.notEqual(await verifyApprovedRootIdentity(stored, mountPoint), null);
+    assert.equal(await verifyApprovedRootIdentity(renumbered, approvalStore, otherVolume), null);
+    assert.notEqual(await verifyApprovedRootIdentity(stored, approvalStore, otherVolume), null);
 
     await fs.rm(directory, { force: true, recursive: true });
-    assert.equal(await verifyApprovedRootIdentity(stored), null);
+    assert.equal(await verifyApprovedRootIdentity(stored, approvalStore), null);
   } finally {
     await fs.rm(directory, { force: true, recursive: true });
   }

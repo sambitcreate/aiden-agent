@@ -154,7 +154,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       const candidate = approvedRoots().find((item) => item.id === grant.sourceId);
       if (!candidate) throw new Error("The approved Bot folder is unavailable.");
       // A remount can renumber the volume; the tool pin uses the live device.
-      const live = await verifyApprovedRootIdentity(candidate);
+      const live = await verifyApprovedRootIdentity(candidate, agentDir);
       if (!live || botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
       locations.push({ id: candidate.id, label: candidate.label, root: live.root, expectedIdentity: { device: live.device, inode: live.inode } });
     }

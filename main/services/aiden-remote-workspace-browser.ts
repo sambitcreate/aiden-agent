@@ -111,6 +111,8 @@ export class AidenRemoteWorkspaceBrowserService {
     private readonly options: {
       instanceId: string;
       state: Pick<AidenRemoteStateRegistry, "snapshot">;
+      /** Directory holding the persisted approvals; see `verifyApprovedRootIdentity`. */
+      approvalStore: string;
       handles?: AidenOpaqueHandleStore;
       now?: () => number;
     },
@@ -148,7 +150,7 @@ export class AidenRemoteWorkspaceBrowserService {
     >,
   ): Promise<AidenOpaqueHandleClaims> {
     try {
-      if (!(await verifyApprovedRootIdentity(root))) {
+      if (!(await verifyApprovedRootIdentity(root, this.options.approvalStore))) {
         throw new AidenOpaqueHandleError("filesystem_identity_changed");
       }
       const identity = await inspectAidenFilesystemIdentity(root.folderPath, candidatePath);

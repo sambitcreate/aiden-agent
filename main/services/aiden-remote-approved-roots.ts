@@ -39,14 +39,17 @@ const liveFilesystem: ApprovedRootFilesystem = {
  *
  * macOS assigns APFS `st_dev` numbers when a volume mounts, so a reboot can
  * renumber the device under an unchanged folder. A device change is accepted
- * only when the canonical path and inode still match and the root shares a
- * device with its parent, i.e. it is not itself a mount point where another
- * volume could present the same root inode. This is the boundary
- * `sameHomeByInode` in bot-managed-workspace.ts accepts for Bot homes:
- * substituting the volume that holds the parent needs control of that mount.
+ * only when the canonical path and inode still match and the root now lives
+ * on the same volume as `approvalStore`, the directory holding the persisted
+ * approval records. Substituting that volume already means controlling every
+ * record that approved the folder, the boundary `sameHomeByInode` in
+ * bot-managed-workspace.ts accepts for Bot homes. Any other volume (an
+ * external or network drive, a disk image) could be replaced by one that
+ * presents the same path and inode, so its roots keep the exact device check.
  */
 export async function verifyApprovedRootIdentity(
   root: Pick<AidenRemoteApprovedRoot, "folderPath" | "device" | "inode">,
+  approvalStore: string,
   filesystem: ApprovedRootFilesystem = liveFilesystem,
 ): Promise<AidenRemoteApprovedRootLiveIdentity | null> {
   try {
@@ -58,8 +61,8 @@ export async function verifyApprovedRootIdentity(
       return null;
     }
     if (metadata.dev.toString() !== root.device) {
-      const parent = await filesystem.stat(path.dirname(canonical));
-      if (parent.dev !== metadata.dev) return null;
+      const store = await filesystem.stat(approvalStore);
+      if (store.dev !== metadata.dev) return null;
     }
     return { root: canonical, device: metadata.dev.toString(), inode: root.inode };
   } catch {

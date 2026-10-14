@@ -12,6 +12,7 @@ import {
   type BotRuntimeEffectiveAuthority,
 } from "./bot-runtime-authority.js";
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
+import { app } from "../platform.js";
 import { verifyApprovedRootIdentity } from "./aiden-remote-approved-roots.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 import { configStore } from "./config-store.js";
@@ -124,7 +125,7 @@ export async function resolveBotRuntimeApprovedRoots(
     if (!candidate) throw new Error("A selected Bot file location is no longer available.");
     // The grant fingerprints the persisted identity; the tool pin below uses
     // the live one, which differs from it after a remount renumbers the volume.
-    const live = await verifyApprovedRootIdentity(candidate);
+    const live = await verifyApprovedRootIdentity(candidate, app.getPath("userData"));
     if (
       !live ||
       botCapabilityFactsFingerprint({

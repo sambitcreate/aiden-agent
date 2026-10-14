@@ -37,6 +37,7 @@ async function fixture() {
     state: {
       snapshot: async () => ({ approvedRoots }) as never,
     },
+    approvalStore: temporary,
     now: () => now,
   });
   return {
