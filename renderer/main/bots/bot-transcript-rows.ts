@@ -193,6 +193,9 @@ export function botTranscriptRows(
         touch(entry.at);
         const recapStep = state.turn?.byCall.get(entry.toolCallId);
         if (recapStep) recapStep.status = entry.status;
+        // A Stop during a tool run writes only the round's results; no aborted reply follows.
+        // A later "interrupted" notice still turns it back into a restart.
+        if (entry.status === "stopped" && state.turn) state.turn.stopped = true;
         break;
       }
     }

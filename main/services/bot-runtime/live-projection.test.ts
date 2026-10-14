@@ -11,6 +11,7 @@ import {
   type BotLiveEvent,
   type BotLiveSnapshot,
 } from "../../../renderer/shared/bot-live.js";
+import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
@@ -698,6 +699,53 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     first.unsubscribe();
   } finally {
     stopListening();
+    await live.close();
+  }
+});
+
+test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
+  const reader = countingTool(
+    "read_file",
+    (_params, signal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+  );
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(40)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "What's on my list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the tool to run" });
+    live.projection.notifyStopping("bot:a");
+    const state = await live.service.stop("bot:a");
+    assert.equal(state.kind, "idle");
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    const entries = tape.view!.entries;
+    const results = entries.filter((entry) => entry.type === "tool_result");
+    assert.deepEqual(
+      results.map((entry) => (entry.type === "tool_result" ? entry.status : null)),
+      ["stopped"],
+    );
+    for (const level of ["quiet", "summary"] as const) {
+      const rows = botTranscriptRows(entries, tape.view!.partial, { running: false, level });
+      assert.equal(rows[rows.length - 1]?.kind, "stopped", `${level}: ${rows.map((row) => row.kind).join(", ")}`);
+      const recap = rows.find((row) => row.kind === "recap");
+      if (recap?.kind === "recap") assert.deepEqual(recap.steps.map((step) => step.status), ["stopped"]);
+    }
+    assert.equal(fauxModels.calls(), 1, "the second reply never ran");
+    unsubscribe();
+  } finally {
     await live.close();
   }
 });

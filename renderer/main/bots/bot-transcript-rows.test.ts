@@ -81,23 +81,37 @@ test("a call with no result in a finished turn counts as failed", () => {
   assert.deepEqual(recap.steps.map((s) => s.status), ["failed"]);
 });
 
-test("a stopped step carries through as stopped, and an unfinished call in a stopped turn is stopped, not failed", () => {
+test("Stop during a tool run: the step reads as stopped and the turn ends with a stopped line", () => {
+  // The harness writes only the round's tool results (status "stopped"); no aborted reply follows.
   const stoppedResult = { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry;
-  const aborted: BotTranscriptEntry = {
-    id: "a2",
-    type: "assistant",
-    text: "",
-    toolCalls: [{ id: "a2-call", name: "run_command", kind: "command", label: "Ran a command" }],
-    stopReason: "aborted",
-  };
-  const rows = botTranscriptRows(
-    [user("u1", "go"), step("a1", ""), stoppedResult, aborted],
-    null,
-    { running: false, level: "summary" },
-  );
+  const rows = botTranscriptRows([user("u1", "go"), step("a1", ""), stoppedResult], null, { running: false, level: "summary" });
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
-  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped", "stopped"]);
+  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
+  assert.equal(rows[rows.length - 1]?.kind, "stopped");
+  const quietRows = botTranscriptRows([user("u1", "go"), step("a1", ""), stoppedResult], null, quiet);
+  assert.equal(quietRows[quietRows.length - 1]?.kind, "stopped", "Quiet shows the stopped line too");
+
+  const restarted = botTranscriptRows(
+    [user("u1", "go"), step("a1", ""), stoppedResult, { id: "n1", type: "notice", notice: "interrupted" }],
+    null,
+    quiet,
+  );
+  assert.equal(kinds(restarted).includes("stopped"), false, "a restart cut it short; the person did not stop it");
+});
+
+test("an unfinished call in a reply the person stopped is stopped, not failed", () => {
+  const aborted: BotTranscriptEntry = {
+    id: "a1",
+    type: "assistant",
+    text: "",
+    toolCalls: [{ id: "a1-call", name: "run_command", kind: "command", label: "Ran a command" }],
+    stopReason: "aborted",
+  };
+  const rows = botTranscriptRows([user("u1", "go"), aborted], null, { running: false, level: "summary" });
+  const recap = rows.find((row) => row.kind === "recap");
+  assert.ok(recap?.kind === "recap");
+  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
   assert.equal(rows[rows.length - 1]?.kind, "stopped");
 });
 
