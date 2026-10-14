@@ -649,18 +649,22 @@ struct AidenBotSessionChatView: View {
     private func start() async {
         guard let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context) else { return }
-        // The chat opens on its last transcript from this run of the app (R14).
+        // The chat opens on its last transcript and adopts the messages a
+        // previous visit or launch left unsent (R14, R17).
         let model = AidenBotSessionModel(
             botID: botID,
             transport: client,
-            cacheKey: "\(context.instanceId)/\(botID)"
+            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, botID: botID)
         )
         model.activitySupported = coordinator.server?.supportsBotActivity == true
         self.model = model
+        // Nothing waits on another: the first snapshot, the Bot's detail and the
+        // stream (with the outbox it sends) start together.
         async let summaryLoad: Void = loadSummary()
-        await model.load()
-        _ = await summaryLoad
+        async let firstLoad: Void = model.load()
         await model.listen()
+        _ = await (summaryLoad, firstLoad)
+        model.release()
     }
 
     @MainActor
