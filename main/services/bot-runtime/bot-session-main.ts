@@ -382,6 +382,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       unbindTelegram,
       eraseBotData,
     ],
+    onResumed: (botId) => botLiveProjection().notifyResuming(botId),
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);

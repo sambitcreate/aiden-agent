@@ -830,19 +830,12 @@ function observedTurns(events: readonly BotLiveEvent[]): Array<{ startedAt: numb
   return seen;
 }
 
-test("a Resume that never started a run does not mark the next turn, and one that did marks only its own", async () => {
+test("a Resume marks the run it started, and the turn after it reads normally", async () => {
   const fauxModels = createFauxModels(
-    [fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30))],
+    [fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30))],
     { tokensPerSecond: 40 },
   );
-  let interrupted = false;
-  const holder: { live?: Harness } = {};
-  const live = await start(fauxModels, {
-    projection: {
-      state: async (botId) => (interrupted ? { kind: "interrupted", submissionId: "earlier" } : holder.live!.service.state(botId)),
-    },
-  });
-  holder.live = live;
+  const live = await start(fauxModels);
   try {
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
@@ -852,28 +845,54 @@ test("a Resume that never started a run does not mark the next turn, and one tha
       await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
       await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
     };
+    live.projection.notifyResuming("bot:a");
+    await reply("resumed turn", "desk-1");
+    assert.ok(observedPhases(tape.events).includes("resuming"));
+    const after = tape.events.length;
+    await reply("the next turn", "desk-2");
+    assert.equal(observedPhases(tape.events.slice(after)).includes("resuming"), false);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
 
-    // A Resume while the Bot is not interrupted (stale button, second window) is refused.
-    await live.projection.notifyResuming("bot:a");
-    await reply("first", "desk-1");
-    assert.equal(observedPhases(tape.events).includes("resuming"), false);
-
-    // A Resume that failed before any run began is forgotten.
-    interrupted = true;
-    await live.projection.notifyResuming("bot:a");
-    interrupted = false;
-    live.projection.cancelResuming("bot:a");
-    const before = tape.events.length;
-    await reply("second", "desk-2");
-    assert.equal(observedPhases(tape.events.slice(before)).includes("resuming"), false);
-
-    // A Resume that did start the run reads "resuming" for that run only.
-    interrupted = true;
-    await live.projection.notifyResuming("bot:a");
-    interrupted = false;
-    const resumedFrom = tape.events.length;
-    await reply("third", "desk-3");
-    assert.ok(observedPhases(tape.events.slice(resumedFrom)).includes("resuming"));
+test("a tool round hands the run to a new generation but is still one turn: one start time, and Stop keeps reading Stopping", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
+  });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(40)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  let tick = 1_000;
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+    projection: { now: () => (tick += 1_000) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const sent = await live.service.send("bot:a", { text: "list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the reading phase" });
+    live.projection.notifyStopping("bot:a");
+    await waitFor(() => tape.view?.activity?.phase === "stopping", { what: "the stopping line" });
+    const stoppedAt = tape.events.length;
+    release();
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    const turns = observedTurns(tape.events);
+    assert.equal(new Set(turns.map((turn) => turn.startedAt)).size, 1, JSON.stringify(turns));
+    const after = observedPhases(tape.events.slice(stoppedAt)).filter((phase) => phase !== null);
+    // The line never left Stopping after the hand-over: no other phase appears before it clears.
+    assert.deepEqual(after, [], after.join(" → "));
     unsubscribe();
   } finally {
     await live.close();

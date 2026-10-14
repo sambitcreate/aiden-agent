@@ -202,6 +202,8 @@ export interface BotSessionServiceDeps {
   idleCloseMs?: number;
   now?: () => number;
   onStateChange?(botId: string, state: BotSessionState): void;
+  /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
+  onResumed?(botId: string): void;
   onReport?(botId: string, error: unknown): void;
 }
 
@@ -472,6 +474,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         await prepareToRun(botId, conversation, registry);
         const opened = await requireHost().open(botId);
         opened.harness.resume();
+        deps.onResumed?.(botId);
         requireHost().touch(botId);
         return remember(key, publish(botId, await currentState(botId)));
       });

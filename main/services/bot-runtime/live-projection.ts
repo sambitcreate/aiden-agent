@@ -407,13 +407,18 @@ export function livePartialText(docs: Readonly<Record<string, unknown>>): string
   return text;
 }
 
-/** The run's identity, or null when none: a queued follow-up starts a new run while `pi.live.run` stays present. */
+/**
+ * The turn's identity, or null when no run: its first input. A queued follow-up
+ * starts a new run (fresh inputs) while `pi.live.run` stays present; steering
+ * appends to the inputs and a tool round hands the run to a new generation
+ * task, so neither changes the key (and neither is a new turn).
+ */
 function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
-  const live = docs["pi.live"] as { run?: { taskId?: unknown; inputs?: unknown } } | undefined;
+  const live = docs["pi.live"] as { run?: { inputs?: unknown } } | undefined;
   const run = live?.run;
   if (run === undefined) return null;
-  const inputs = Array.isArray(run.inputs) ? run.inputs : [];
-  return `${String(run.taskId)}:${String(inputs[0])}`;
+  const first = Array.isArray(run.inputs) ? run.inputs[0] : undefined;
+  return String(first);
 }
 
 function liveRunActive(docs: Readonly<Record<string, unknown>>): boolean {
@@ -536,12 +541,11 @@ export interface BotLiveProjection {
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
   /**
-   * The next run starts from Resume: it reads "Picking up where it left off" until it moves on.
-   * Honoured only while the Bot is interrupted; resolves once the flag is set or refused.
+   * The session resumed an interrupted turn (called by the service, inside its per-Bot
+   * serialization, only when this call resumed it): the run reads "Picking up where it left off"
+   * until it moves on.
    */
-  notifyResuming(botId: string): Promise<void>;
-  /** The Resume did not start a run (it failed or was refused): forget it. */
-  cancelResuming(botId: string): void;
+  notifyResuming(botId: string): void;
   /** The Stop did not take (it failed): the run goes on and no longer reads "Stopping". */
   cancelStopping(botId: string): void;
   /** An approval appeared or settled: re-derive the activity. */
@@ -928,13 +932,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       });
     },
 
-    async notifyResuming(botId) {
-      const state = await deps.state(botId).catch(() => null);
-      if (state?.kind === "interrupted") resumingBots.add(botId);
-    },
-
-    cancelResuming(botId) {
-      resumingBots.delete(botId);
+    notifyResuming(botId) {
+      resumingBots.add(botId);
     },
 
     cancelStopping(botId) {
