@@ -8,7 +8,7 @@ import * as React from "react";
 import { Pause, Play } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Field, FieldSet, Label, RadioGroup, RadioGroupItem, toast } from "../../components/ui";
-import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { APPEARANCE_CHANGE_EVENT, prefersReducedMotion } from "../../lib/appearance-runtime";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { BotToolPhase } from "../../shared/bot-activity";
 import {
@@ -67,8 +67,31 @@ const PREVIEW_FRAMES: ReadonlyArray<{ ms: number; phase?: "thinking" | BotToolPh
   { ms: 1_400, phase: "editing", step: 2 },
   { ms: 2_800 },
 ];
-/** Reduce Motion's still frame: mid-turn, with a step and the line showing. */
-const STILL_FRAME = 2;
+/**
+ * Reduce Motion's still pose shows what each level adds: Summary holds the
+ * replied frame with its folded recap; Quiet and Detailed hold mid-turn, where
+ * Detailed has its steps open.
+ */
+function stillFrameFor(level: BotChatActivityLevel): number {
+  return level === "summary" ? PREVIEW_FRAMES.length - 1 : 2;
+}
+
+/** Follows the app's Reduce Motion setting and the system's, live. */
+function useReducedMotion(): boolean {
+  return React.useSyncExternalStore(
+    (notify) => {
+      const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+      window.addEventListener(APPEARANCE_CHANGE_EVENT, notify);
+      query?.addEventListener?.("change", notify);
+      return () => {
+        window.removeEventListener(APPEARANCE_CHANGE_EVENT, notify);
+        query?.removeEventListener?.("change", notify);
+      };
+    },
+    prefersReducedMotion,
+    () => false,
+  );
+}
 const PREVIEW_STARTED_AT = 0;
 
 export function BotChatActivityPreview({
@@ -85,10 +108,19 @@ export function BotChatActivityPreview({
   name: string;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
-  const [reduced] = React.useState(() => prefersReducedMotion());
-  const [playing, setPlaying] = React.useState(!reduced);
+  const reduced = useReducedMotion();
+  const still = stillFrameFor(level);
+  // Under Reduce Motion the preview waits for Play; otherwise it always loops.
+  const [played, setPlayed] = React.useState(false);
+  const playing = !reduced || played;
   const [visible, setVisible] = React.useState(true);
-  const [tick, setTick] = React.useState(reduced ? STILL_FRAME : 0);
+  const [tick, setTick] = React.useState(reduced ? still : 0);
+
+  // A change of setting (or level) returns to that mode's starting pose.
+  React.useEffect(() => {
+    setPlayed(false);
+    setTick(reduced ? still : 0);
+  }, [reduced, still]);
 
   React.useEffect(() => {
     const node = ref.current;
@@ -153,7 +185,7 @@ export function BotChatActivityPreview({
           size="small"
           className="self-start"
           aria-label={`${playing ? "Pause" : "Play"} preview: ${label}`}
-          onClick={() => setPlaying((value) => !value)}
+          onClick={() => setPlayed((value) => !value)}
         >
           {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           {playing ? "Pause" : "Play"}
@@ -176,18 +208,30 @@ function ChoiceRow({
   recommended?: boolean;
   preview: React.ReactNode;
 }) {
+  const id = React.useId();
+  const badgeId = `${id}-recommended`;
+  const descriptionId = `${id}-description`;
   return (
     <div className="rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
       <Label className="cursor-pointer items-start">
-        <RadioGroupItem value={value} aria-label={label} className="mt-0.5 shrink-0" />
+        <RadioGroupItem
+          value={value}
+          aria-label={label}
+          aria-describedby={recommended ? `${badgeId} ${descriptionId}` : descriptionId}
+          className="mt-0.5 shrink-0"
+        />
         <span className="min-w-0">
           <span className="flex items-center gap-2 text-regular text-primary">
             {label}
             {recommended ? (
-              <span className="rounded-pill bg-control px-2 py-0.5 text-mini text-secondary">Recommended</span>
+              <span id={badgeId} className="rounded-pill bg-control px-2 py-0.5 text-mini text-secondary">
+                Recommended
+              </span>
             ) : null}
           </span>
-          <span className="mt-0.5 block text-small text-secondary">{description}</span>
+          <span id={descriptionId} className="mt-0.5 block text-small text-secondary">
+            {description}
+          </span>
         </span>
       </Label>
       <div className="mt-2 pl-7">{preview}</div>
@@ -198,8 +242,8 @@ function ChoiceRow({
 export function BotChatActivityPage({ bot, onClose }: { bot: BotDefinition; onClose(): void }) {
   const qc = useQueryClient();
   const [value, setValue] = React.useState<BotChatActivity>(() => resolveBotChatActivity(bot.chatActivity));
-  // Saves run one at a time, each applied to the last saved choice, so quick
-  // picks never conflict and a failed one never leaks into the next.
+  // Saves run one at a time, each carrying only its own patch, so quick picks
+  // never conflict and a failed one never leaks into the next.
   const queue = React.useRef<Promise<void>>(Promise.resolve());
   const pending = React.useRef(0);
   // The last choice that reached the Bot; the page settles on it when saves end.
@@ -212,9 +256,9 @@ export function BotChatActivityPage({ bot, onClose }: { bot: BotDefinition; onCl
     pending.current += 1;
     queue.current = queue.current.then(async () => {
       try {
-        const choice = { ...saved.current, ...patch };
-        await updateBotIdentity(qc, bot.id, { chatActivity: choice });
-        saved.current = choice;
+        // The helper merges the patch onto the freshly read Bot, so only the picked field changes.
+        const stored = await updateBotIdentity(qc, bot.id, { chatActivity: patch });
+        saved.current = resolveBotChatActivity(stored.chatActivity);
       } catch (error) {
         toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
       } finally {
