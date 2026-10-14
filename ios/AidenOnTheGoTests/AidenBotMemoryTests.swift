@@ -10,6 +10,8 @@ private final class FakeBotMemoryTransport: AidenBotMemoryTransport, @unchecked 
     private var _editResults: [Result<AidenBotMemory, Error>] = []
     private var _readCount = 0
     private var _edits: [(edit: AidenBotMemoryEdit, key: UUID)] = []
+    private var _holding = false
+    private var _held: [CheckedContinuation<Void, Never>] = []
 
     private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
@@ -21,6 +23,17 @@ private final class FakeBotMemoryTransport: AidenBotMemoryTransport, @unchecked 
     func queueEdit(_ result: Result<AidenBotMemory, Error>) { locked { _editResults.append(result) } }
     var readCount: Int { locked { _readCount } }
     var edits: [(edit: AidenBotMemoryEdit, key: UUID)] { locked { _edits } }
+    /// Holds each edit until `releaseEdits()`.
+    func holdEdits() { locked { _holding = true } }
+    var heldEdits: Int { locked { _held.count } }
+    func releaseEdits() {
+        let waiting = locked { () -> [CheckedContinuation<Void, Never>] in
+            _holding = false
+            defer { _held = [] }
+            return _held
+        }
+        waiting.forEach { $0.resume() }
+    }
 
     func botMemory(botId: String) async throws -> AidenBotMemory {
         let next = locked { () -> Result<AidenBotMemory, Error>? in
@@ -36,9 +49,14 @@ private final class FakeBotMemoryTransport: AidenBotMemoryTransport, @unchecked 
         request: AidenBotMemoryEditRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotMemory {
+        locked { _edits.append((request.edit, idempotencyKey)) }
+        if locked({ _holding }) {
+            await withCheckedContinuation { continuation in
+                locked { _held.append(continuation) }
+            }
+        }
         let next = locked { () -> Result<AidenBotMemory, Error>? in
-            _edits.append((request.edit, idempotencyKey))
-            return _editResults.isEmpty ? nil : _editResults.removeFirst()
+            _editResults.isEmpty ? nil : _editResults.removeFirst()
         }
         guard let next else { throw URLError(.notConnectedToInternet) }
         return try next.get()
@@ -265,6 +283,79 @@ final class AidenBotMemoryTests: XCTestCase {
         XCTAssertTrue(erased)
         XCTAssertEqual(model.memory?.readable, true)
         XCTAssertEqual(model.countSummary, "Nothing yet")
+    }
+
+    // MARK: Instant edits (R15)
+
+    private func waitUntil(_ condition: () -> Bool, what: String) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func testAnEditShowsAtOnceAndTheMacsViewReplacesIt() async throws {
+        let transport = FakeBotMemoryTransport()
+        let model = await loadedModel(transport, try fixtureMemory())
+        transport.holdEdits()
+        transport.queueEdit(.success(try editedMemory()))
+        let saving = Task { await model.save(target: .user, entryId: "0f1e2d3c4b5a6978", text: "Prefers tea.") }
+        try await waitUntil({ transport.heldEdits == 1 }, what: "the edit")
+        XCTAssertEqual(model.memory?.user.entries.first?.text, "Prefers tea.", "the new text shows before the Mac answers")
+        transport.releaseEdits()
+        let failure = await saving.value
+        XCTAssertNil(failure)
+        XCTAssertEqual(model.memory, try editedMemory(), "the Mac's own view replaces it")
+    }
+
+    func testADeleteGoesAtOnceAndComesBackWhenItFailsAndTheMacCantBeRead() async throws {
+        let transport = FakeBotMemoryTransport()
+        let before = try fixtureMemory()
+        let model = await loadedModel(transport, before)
+        transport.holdEdits()
+        transport.queueEdit(.failure(try serverError(status: 422, code: "invalid_request")))
+        let deleting = Task { await model.delete(target: .memory, entryId: "a1b2c3d4e5f60718") }
+        try await waitUntil({ transport.heldEdits == 1 }, what: "the delete")
+        XCTAssertEqual(model.memory?.memory.entries.count, 0, "gone at once")
+        XCTAssertEqual(model.countSummary, "2 things")
+        transport.releaseEdits()
+        await deleting.value
+        XCTAssertEqual(model.memory, before, "no view to refetch: back to what showed before")
+        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.notSaved)
+    }
+
+    func testQuickEditsAreNeverRefusedAndReachTheMacInOrder() async throws {
+        let transport = FakeBotMemoryTransport()
+        let model = await loadedModel(transport, try fixtureMemory())
+        transport.holdEdits()
+        transport.queueEdit(.success(try fixtureMemory()))
+        transport.queueEdit(.success(try emptyMemory()))
+        let first = Task { await model.delete(target: .memory, entryId: "a1b2c3d4e5f60718") }
+        try await waitUntil({ transport.heldEdits == 1 }, what: "the first delete")
+        let second = Task { await model.delete(target: .user, entryId: "0f1e2d3c4b5a6978") }
+        try await waitUntil({ model.memory?.user.entries.count == 1 }, what: "the second delete to show")
+        XCTAssertEqual(transport.edits.count, 1, "the second waits for the first")
+        transport.releaseEdits()
+        await first.value
+        await second.value
+        XCTAssertEqual(transport.edits.map(\.edit), [
+            .remove(target: .memory, entryId: "a1b2c3d4e5f60718"),
+            .remove(target: .user, entryId: "0f1e2d3c4b5a6978"),
+        ])
+        XCTAssertNil(model.errorMessage, "no edit is turned away for arriving during another")
+        XCTAssertEqual(model.memory?.entryCount, 0)
+    }
+
+    func testAnEditSavedFromTheClosedSheetReportsAFailureOnThePage() async throws {
+        let transport = FakeBotMemoryTransport()
+        let model = await loadedModel(transport, try fixtureMemory())
+        transport.queueEdit(.failure(try serverError(status: 422, code: "memory_blocked")))
+        transport.queueRead(.success(try fixtureMemory()))
+        model.saveInBackground(target: .user, entryId: "0f1e2d3c4b5a6978", text: "password: hunter2")
+        try await waitUntil({ model.errorMessage != nil }, what: "the failure")
+        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.blocked)
+        XCTAssertEqual(model.memory, try fixtureMemory(), "the Mac's view is back")
     }
 
     func testUsageLineReadsLikeTheDesktop() {

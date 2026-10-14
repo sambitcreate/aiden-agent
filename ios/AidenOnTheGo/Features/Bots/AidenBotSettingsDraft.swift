@@ -22,6 +22,18 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
             installation?.serverCapabilities?.map(\.rawValue).sorted().joined(separator: ",") ?? "legacy",
         ].joined(separator: "|")
     }
+
+    /// The same pairing and grants, whatever the connection is doing. Bot pages
+    /// start over when this changes; a connection coming up only re-reads (R15).
+    struct Pairing: Equatable, Hashable {
+        let instanceID: String?
+        let deviceID: String?
+        let capabilityRevision: String
+    }
+
+    var pairing: Pairing {
+        Pairing(instanceID: instanceID, deviceID: deviceID, capabilityRevision: capabilityRevision)
+    }
 }
 
 struct AidenBotCustomAccessDraft: Equatable {

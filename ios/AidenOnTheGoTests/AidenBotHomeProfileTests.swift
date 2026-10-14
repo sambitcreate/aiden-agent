@@ -469,3 +469,283 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertThrowsError(try draft.accessUpdate(catalog: catalog))
     }
 }
+
+/// R15: New Bot, Profile and Advanced apply at once, never wait on the
+/// connection, and roll back with an error when the Mac doesn't take a change.
+@MainActor
+final class AidenBotInstantEditTests: XCTestCase {
+    private struct Refused: Error {}
+
+    private func shared() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    private func detail(id: String = "bot_fixture_01", revision: String = "bot_revision_7", name: String = "Scout") throws -> AidenBotDetail {
+        var object = try XCTUnwrap(try shared()["botDetail"] as? [String: Any])
+        object["id"] = id
+        object["revision"] = revision
+        object["name"] = name
+        var access = try XCTUnwrap(object["access"] as? [String: Any])
+        access["botId"] = id
+        object["access"] = access
+        return try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func catalog() throws -> AidenBotCapabilityCatalog {
+        try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(try shared()["botCapabilityCatalog"]))
+        )
+    }
+
+    private func conflict() throws -> Error {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"revision_conflict","message":"changed","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        return AidenRemoteClientError.server(statusCode: 409, body: body)
+    }
+
+    // MARK: Profile
+
+    func testProfileEditsGoInOrderOnTheNewestRevision() async throws {
+        var sent: [(String?, String)] = []
+        let saver = AidenBotIdentitySaver(
+            send: { patch, revision in
+                sent.append((patch.name, revision))
+                return try self.detail(revision: "rev_\(sent.count + 7)", name: patch.name ?? "Scout")
+            },
+            refresh: { try self.detail() }
+        )
+        saver.adopt(try detail())
+        let (one, two) = (try AidenBotIdentityPatch(name: "Scout II"), try AidenBotIdentityPatch(name: "Scout III"))
+        async let first = saver.save(one)
+        async let second = saver.save(two)
+        let outcomes = await [first, second]
+        XCTAssertEqual(sent.map(\.1), ["bot_revision_7", "rev_8"], "the second waits and goes on the first's revision")
+        XCTAssertEqual(outcomes, [.saved(try detail(revision: "rev_8", name: "Scout II")), .saved(try detail(revision: "rev_9", name: "Scout III"))])
+    }
+
+    func testAProfileEditTheMacSavedThoughItsAnswerWasLostCountsAsSaved() async throws {
+        let saver = AidenBotIdentitySaver(
+            send: { _, _ in throw URLError(.networkConnectionLost) },
+            refresh: { try self.detail(revision: "bot_revision_8", name: "Scout II") }
+        )
+        saver.adopt(try detail())
+        let outcome = await saver.save(try AidenBotIdentityPatch(name: "Scout II"))
+        XCTAssertEqual(outcome, .saved(try detail(revision: "bot_revision_8", name: "Scout II")))
+    }
+
+    func testARefusedProfileEditRollsBackToWhatTheMacHolds() async throws {
+        var sent = 0
+        let saver = AidenBotIdentitySaver(
+            send: { _, _ in sent += 1; throw try self.conflict() },
+            refresh: { try self.detail(revision: "bot_revision_9", name: "Scout (Mac)") }
+        )
+        saver.adopt(try detail())
+        let outcome = await saver.save(try AidenBotIdentityPatch(name: "Scout II"))
+        XCTAssertEqual(outcome, .failed(authoritative: try detail(revision: "bot_revision_9", name: "Scout (Mac)")))
+        XCTAssertEqual(sent, 1)
+
+        // Unreadable afterwards too: the page goes back to what it showed before.
+        let unreadable = AidenBotIdentitySaver(send: { _, _ in throw Refused() }, refresh: { throw Refused() })
+        unreadable.adopt(try detail())
+        let lost = await unreadable.save(try AidenBotIdentityPatch(name: "Scout II"))
+        XCTAssertEqual(lost, .failed(authoritative: nil))
+    }
+
+    func testAProfileEditWaitsForTheConnectionAndNeverSendsWithoutOne() async throws {
+        var sent = 0
+        var asked: [Duration] = []
+        let saver = AidenBotIdentitySaver(
+            send: { _, _ in sent += 1; return try self.detail(revision: "bot_revision_8") },
+            refresh: { throw Refused() },
+            waitForConnection: { hold in asked.append(hold); return false }
+        )
+        saver.adopt(try detail())
+        let outcome = await saver.save(try AidenBotIdentityPatch(name: "Scout II"))
+        XCTAssertEqual(outcome, .failed(authoritative: nil))
+        XCTAssertEqual(sent, 0, "nothing goes out without the Mac")
+        XCTAssertEqual(asked, [.seconds(8)], "it waits briefly for the connection first")
+    }
+
+    // MARK: Advanced
+
+    private func operations(
+        connected: Bool = true,
+        identity: @escaping @MainActor (String, AidenBotIdentityPatch) async throws -> AidenBotDetail,
+        readBot: @escaping @MainActor () async throws -> AidenBotDetail
+    ) throws -> AidenBotAdvancedSaveOperations {
+        let catalog = try catalog()
+        return AidenBotAdvancedSaveOperations(
+            waitForConnection: { _ in connected },
+            updateIdentity: identity,
+            updateAccess: { _, _ in },
+            readBot: readBot,
+            readCatalog: { catalog }
+        )
+    }
+
+    func testAnAdvancedSaveSendsTheEditOnTheRevisionItWasMadeOn() async throws {
+        let baseline = try detail()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: baseline, catalog: try catalog()))
+        draft.name = "Scout II"
+        var revisions: [String] = []
+        let outcome = await aidenBotAdvancedSave(
+            draft: draft, baseline: baseline, catalog: try catalog(),
+            operations: try operations(identity: { revision, patch in
+                revisions.append(revision)
+                return try self.detail(revision: "bot_revision_8", name: patch.name ?? "")
+            }, readBot: { throw Refused() })
+        )
+        XCTAssertEqual(revisions, ["bot_revision_7"])
+        XCTAssertEqual(outcome, .saved(try detail(revision: "bot_revision_8", name: "Scout II")))
+    }
+
+    func testAnAdvancedSaveWhoseAnswerWasLostButLandedIsSaved() async throws {
+        let baseline = try detail()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: baseline, catalog: try catalog()))
+        draft.name = "Scout II"
+        let outcome = await aidenBotAdvancedSave(
+            draft: draft, baseline: baseline, catalog: try catalog(),
+            operations: try operations(
+                identity: { _, _ in throw URLError(.networkConnectionLost) },
+                readBot: { try self.detail(revision: "bot_revision_8", name: "Scout II") }
+            )
+        )
+        XCTAssertEqual(outcome, .saved(try detail(revision: "bot_revision_8", name: "Scout II")))
+    }
+
+    func testAnAdvancedSaveThatDidNotStickSaysSoBehindTheClosedPage() async throws {
+        let baseline = try detail()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: baseline, catalog: try catalog()))
+        draft.name = "Scout II"
+        let changed = await aidenBotAdvancedSave(
+            draft: draft, baseline: baseline, catalog: try catalog(),
+            operations: try operations(
+                identity: { _, _ in throw try self.conflict() },
+                readBot: { try self.detail(revision: "bot_revision_9", name: "Scout") }
+            )
+        )
+        XCTAssertEqual(changed, .failed(AidenBotAdvancedCopy.changedOnMac))
+
+        var sent = 0
+        let offline = await aidenBotAdvancedSave(
+            draft: draft, baseline: baseline, catalog: try catalog(),
+            operations: try operations(connected: false, identity: { _, _ in
+                sent += 1
+                return try self.detail()
+            }, readBot: { try self.detail() })
+        )
+        XCTAssertEqual(offline, .failed(AidenBotAdvancedCopy.unreachable))
+        XCTAssertEqual(sent, 0)
+    }
+
+    // MARK: New Bot
+
+    /// A scripted Mac for New Bot, recording what reached it.
+    private final class CreateMac {
+        var creates: [(request: AidenBotCreateRequest, key: UUID)] = []
+        var chats: [UUID] = []
+        var createErrors: [Error] = []
+        var chatErrors: [Error] = []
+        var hold: CheckedContinuation<Void, Never>?
+        var holds = false
+    }
+
+    private func createOperations(
+        _ mac: CreateMac,
+        connected: Bool = true,
+        durable: Bool = true
+    ) throws -> AidenBotCreateOperations {
+        let catalog = try catalog()
+        return AidenBotCreateOperations(
+            scope: "mac_a|device_1",
+            usesDurableSession: durable,
+            waitForConnection: { _ in connected },
+            catalog: { catalog },
+            create: { request, key in
+                mac.creates.append((request, key))
+                if mac.holds { await withCheckedContinuation { mac.hold = $0 } }
+                if !mac.createErrors.isEmpty { throw mac.createErrors.removeFirst() }
+                return try self.detail(id: "bot_new_01", revision: "bot_revision_1", name: request.name)
+            },
+            createChat: { _, _, key in
+                mac.chats.append(key)
+                if !mac.chatErrors.isEmpty { throw mac.chatErrors.removeFirst() }
+            },
+            readBot: { id in try self.detail(id: id, revision: "bot_revision_2", name: "Planner") }
+        )
+    }
+
+    private let input = AidenBotCreateInput(name: "  Planner ", purpose: "Plans my week", draft: nil)
+
+    func testCreateShowsTheBotAtOnceAndOpensItOnceTheMacHasIt() async throws {
+        let mac = CreateMac()
+        mac.holds = true
+        let flow = AidenBotCreateFlow()
+        var created: [AidenBotDetail] = []
+        let operations = try createOperations(mac)
+        let task = Task { await flow.submit(self.input, operations: operations) { created.append($0) } }
+        let deadline = Date().addingTimeInterval(5)
+        while mac.hold == nil {
+            guard Date() < deadline else { return XCTFail("the create never went out") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(flow.pending?.name, "Planner", "the row shows before the Mac answers")
+        mac.hold?.resume()
+        await task.value
+        XCTAssertNil(flow.pending)
+        XCTAssertNil(flow.failure)
+        XCTAssertEqual(created.map(\.revision), ["bot_revision_2"], "the Mac's own Bot opens")
+        let sent = try XCTUnwrap(mac.creates.first?.request)
+        XCTAssertEqual(sent.name, "Planner")
+        XCTAssertNotNil(sent.access, "no model picked: the Mac's recommended one")
+    }
+
+    func testAFailedCreateOffersTryAgainWithTheSameBotAndNeverMakesTwo() async throws {
+        let mac = CreateMac()
+        let flow = AidenBotCreateFlow()
+        var created = 0
+
+        // Lost on the way: Try Again replays the same key.
+        mac.createErrors = [URLError(.networkConnectionLost)]
+        await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
+        let failure = try XCTUnwrap(flow.failure)
+        XCTAssertEqual(failure.input, input, "Try Again brings New Bot back as it was")
+        XCTAssertNil(flow.pending, "the row goes")
+        await flow.submit(failure.input, operations: try createOperations(mac)) { _ in created += 1 }
+        XCTAssertEqual(mac.creates.count, 2)
+        XCTAssertEqual(mac.creates[0].key, mac.creates[1].key, "the Mac may have made it: same key")
+        XCTAssertEqual(created, 1)
+
+        // Refused outright: the next try is a new request.
+        mac.createErrors = [try conflict()]
+        await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
+        XCTAssertNotEqual(mac.creates[2].key, mac.creates[3].key)
+    }
+
+    func testABotMadeBeforeItsChatFailedIsNotMadeAgain() async throws {
+        let mac = CreateMac()
+        mac.chatErrors = [URLError(.timedOut)]
+        let flow = AidenBotCreateFlow()
+        await flow.submit(input, operations: try createOperations(mac, durable: false)) { _ in }
+        XCTAssertNotNil(flow.failure)
+        await flow.submit(input, operations: try createOperations(mac, durable: false)) { _ in }
+        XCTAssertEqual(mac.creates.count, 1, "the Bot already made is kept")
+        XCTAssertEqual(mac.chats.count, 2)
+        XCTAssertEqual(mac.chats[0], mac.chats[1], "its chat retries under the same key")
+        XCTAssertNil(flow.failure)
+    }
+
+    func testACreateThatNeverReachesTheMacSaysSoAndSendsNothing() async throws {
+        let mac = CreateMac()
+        let flow = AidenBotCreateFlow()
+        await flow.submit(input, operations: try createOperations(mac, connected: false)) { _ in }
+        XCTAssertEqual(flow.failure?.message, AidenBotCreateFlow.unreachable)
+        XCTAssertEqual(mac.creates.count, 0)
+        XCTAssertNil(flow.pending)
+    }
+}

@@ -81,8 +81,10 @@ protocol AidenBotMemoryTransport: Sendable {
 
 extension AidenRemoteClient: AidenBotMemoryTransport {}
 
-/// Loads a Bot's memory and applies the person's edits. Every failed edit
-/// refetches the view, because the Mac's error bodies carry none.
+/// Loads a Bot's memory and applies the person's edits. Each edit shows at
+/// once and goes to the Mac in order (R15); a failed one refetches the view,
+/// because the Mac's error bodies carry none, or, if that fails too, goes
+/// back to what showed before it.
 @MainActor
 @Observable
 final class AidenBotMemoryModel {
@@ -92,13 +94,17 @@ final class AidenBotMemoryModel {
 
     private(set) var memory: AidenBotMemory?
     private(set) var isLoading = false
-    private(set) var isMutating = false
+    /// Edits on their way to the Mac.
+    private(set) var editsInFlight = 0
+    var isMutating: Bool { editsInFlight > 0 }
     /// A load failure, shown in place of the page.
     private(set) var loadError: String?
     /// A failed delete or erase, shown as an alert on the page.
     var errorMessage: String?
 
     @ObservationIgnored private var retainedEdit: (edit: AidenBotMemoryEdit, key: UUID)?
+    /// The edit going to the Mac now; the next one waits for it.
+    @ObservationIgnored private var lane: Task<Void, Never>?
 
     init(botID: String, botName: String, transport: any AidenBotMemoryTransport) {
         self.botID = botID
@@ -110,19 +116,32 @@ final class AidenBotMemoryModel {
 
     var countSummary: String? { memory.map(AidenBotMemoryCopy.count) }
 
-    func load() async {
+    /// Returns true when the Mac's view replaced what showed.
+    @discardableResult
+    func load() async -> Bool {
         isLoading = true
         defer { isLoading = false }
         do {
             let loaded = try await transport.botMemory(botId: botID)
-            guard loaded.botId == botID else { return }
+            guard loaded.botId == botID else { return false }
             memory = loaded
             loadError = nil
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
             loadError = AidenBotMemoryCopy.couldNotLoad
+            return false
         }
+    }
+
+    /// Saves from the edit sheet, which closes at once: a failure shows on the page.
+    func saveInBackground(target: AidenBotMemoryTarget, entryId: String, text: String) {
+        guard let edit = try? AidenBotMemoryEdit.replacing(target: target, entryId: entryId, text: text) else {
+            errorMessage = AidenBotMemoryCopy.notSaved
+            return
+        }
+        Task { if let failure = await apply(edit) { errorMessage = failure } }
     }
 
     /// Replaces one entry's text. Returns nil when it was saved, or the
@@ -154,8 +173,23 @@ final class AidenBotMemoryModel {
         return true
     }
 
+    /// Shows the edit at once, then sends it after the edits before it.
     private func apply(_ edit: AidenBotMemoryEdit) async -> String? {
-        guard !isMutating else { return AidenBotMemoryCopy.notSaved }
+        let before = memory
+        if let optimistic = memory?.applying(edit) { memory = optimistic }
+        editsInFlight += 1
+        defer { editsInFlight -= 1 }
+        let previous = lane
+        let job = Task { @MainActor [weak self] () -> String? in
+            await previous?.value
+            guard let self else { return AidenBotMemoryCopy.notSaved }
+            return await self.send(edit, restoring: before)
+        }
+        lane = Task { _ = await job.value }
+        return await job.value
+    }
+
+    private func send(_ edit: AidenBotMemoryEdit, restoring before: AidenBotMemory?) async -> String? {
         let key: UUID
         if let retainedEdit, retainedEdit.edit == edit {
             key = retainedEdit.key
@@ -163,23 +197,24 @@ final class AidenBotMemoryModel {
             key = UUID()
             retainedEdit = (edit, key)
         }
-        isMutating = true
-        defer { isMutating = false }
         do {
-            let updated = try await transport.editBotMemory(
-                botId: botID,
-                request: AidenBotMemoryEditRequest(edit: edit),
-                idempotencyKey: key
-            )
+            let updated = try await aidenBotWithin(.seconds(12)) { [transport, botID] in
+                try await transport.editBotMemory(
+                    botId: botID,
+                    request: AidenBotMemoryEditRequest(edit: edit),
+                    idempotencyKey: key
+                )
+            }
             retainedEdit = nil
             if updated.botId == botID { memory = updated }
             return nil
-        } catch is CancellationError {
-            return AidenBotMemoryCopy.notSaved
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedEdit = nil }
-            let message = message(for: AidenBotMemoryEditFailure(error), edit: edit)
-            await load()
+            let message = error is CancellationError
+                ? AidenBotMemoryCopy.notSaved
+                : message(for: AidenBotMemoryEditFailure(error), edit: edit)
+            // The Mac's view is the truth; without it, what showed before the edit.
+            if await !load() { memory = before }
             return message
         }
     }
@@ -278,7 +313,7 @@ struct AidenBotMemoryView: View {
                     Button(AidenBotMemoryCopy.eraseMemory, role: .destructive) {
                         isConfirmingErase = true
                     }
-                    .disabled(!canWrite || model.isMutating)
+                    .disabled(!canWrite)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -291,10 +326,7 @@ struct AidenBotMemoryView: View {
             }
             .background(palette.canvas.ignoresSafeArea())
         } else {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(palette.canvas.ignoresSafeArea())
-                .accessibilityLabel("Loading memory")
+            AidenBotMemorySkeletonView()
         }
     }
 
@@ -366,6 +398,28 @@ struct AidenBotMemoryView: View {
     }
 }
 
+/// Skeleton rows while Memory loads (R15): its shape, never a spinner.
+private struct AidenBotMemorySkeletonView: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AidenBotSkeletonBlock(width: nil, height: 44, radius: 12, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 120, height: 14, radius: 7, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 104, radius: 18, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 140, height: 14, radius: 7, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: nil, height: 64, radius: 18, reduceMotion: reduceMotion)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(palette.canvas.ignoresSafeArea())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading memory")
+    }
+}
+
 /// A slim neutral meter and its "563 of 1,375 characters" line.
 private struct AidenBotMemoryUsageMeter: View {
     let group: AidenBotMemoryGroup
@@ -403,8 +457,6 @@ private struct AidenBotMemoryEditSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @State private var text: String
-    @State private var isSaving = false
-    @State private var errorMessage: String?
 
     init(model: AidenBotMemoryModel, target: AidenBotMemoryTarget, entry: AidenBotMemoryEntry) {
         self.model = model
@@ -416,7 +468,7 @@ private struct AidenBotMemoryEditSheet: View {
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var count: Int { trimmed.unicodeScalars.count }
     private var canSave: Bool {
-        !isSaving && !trimmed.isEmpty && count <= AidenBotMemoryWire.maxEntryLength && trimmed != entry.text
+        !trimmed.isEmpty && count <= AidenBotMemoryWire.maxEntryLength && trimmed != entry.text
     }
 
     var body: some View {
@@ -432,14 +484,6 @@ private struct AidenBotMemoryEditSheet: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(count > AidenBotMemoryWire.maxEntryLength ? palette.danger : palette.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(palette.danger)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(palette.danger.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
                 Spacer(minLength: 0)
             }
             .padding(16)
@@ -451,17 +495,10 @@ private struct AidenBotMemoryEditSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
+                    // The change shows at once; a failure comes back on the Memory page (R15).
                     Button(AidenBotMemoryCopy.save) {
-                        Task {
-                            isSaving = true
-                            let failure = await model.save(target: target, entryId: entry.id, text: text)
-                            isSaving = false
-                            if let failure {
-                                errorMessage = failure
-                            } else {
-                                dismiss()
-                            }
-                        }
+                        model.saveInBackground(target: target, entryId: entry.id, text: text)
+                        dismiss()
                     }
                     .disabled(!canSave)
                 }

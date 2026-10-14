@@ -1,12 +1,82 @@
 import SwiftUI
 
-private struct AidenBotAdvancedSaveAttempt: Equatable {
-    let context: AidenRemoteRequestContext
-    let botID: String
-    let identityRevision: String
-    let accessRevision: String
-    let catalogRevision: String
-    let token: UUID
+/// Copy for an Advanced Save that didn't stick, shown by the screen behind it.
+enum AidenBotAdvancedCopy {
+    static let unreachable = "Aiden couldn’t reach your Mac, so Advanced wasn’t saved. Open it to try again."
+    static let changedOnMac = "Something changed on your Mac, so Advanced wasn’t saved. Open it to check and save again."
+    static let couldNotCheck = "Aiden couldn’t check what Advanced saved. Open it again to see."
+}
+
+/// The requests one Advanced Save makes; the remote client provides them, tests a fake.
+struct AidenBotAdvancedSaveOperations {
+    var waitForConnection: @MainActor (Duration) async -> Bool
+    var updateIdentity: @MainActor (_ revision: String, AidenBotIdentityPatch) async throws -> AidenBotDetail
+    var updateAccess: @MainActor (_ revision: String, AidenBotAccessUpdate) async throws -> Void
+    var readBot: @MainActor () async throws -> AidenBotDetail
+    var readCatalog: @MainActor () async throws -> AidenBotCapabilityCatalog
+    /// True when the error revoked this phone; the save then stops quietly.
+    var handleRevocation: @MainActor (Error) async -> Bool = { _ in false }
+}
+
+enum AidenBotAdvancedSaveOutcome: Equatable {
+    case saved(AidenBotDetail)
+    case failed(String)
+    /// This phone lost access; nothing more to say.
+    case stopped
+}
+
+/// One Advanced Save, which runs after the page has closed (R15): it waits
+/// briefly for the Mac, sends the identity and access changes on the revisions
+/// the page was edited on, and re-reads the Bot. A lost answer is settled by
+/// re-reading, so a change the Mac saved is never sent twice or called failed.
+@MainActor
+func aidenBotAdvancedSave(
+    draft: AidenBotEditorDraft,
+    baseline: AidenBotDetail,
+    catalog: AidenBotCapabilityCatalog,
+    operations: AidenBotAdvancedSaveOperations,
+    connectionHold: Duration = .seconds(8),
+    requestLimit: Duration = .seconds(12)
+) async -> AidenBotAdvancedSaveOutcome {
+    func bounded<T: Sendable>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        let call = AidenBotMainActorCall(operation)
+        return try await aidenBotWithin(requestLimit) { try await call.call() }
+    }
+    do {
+        guard await operations.waitForConnection(connectionHold) else { return .failed(AidenBotAdvancedCopy.unreachable) }
+        var latest = baseline
+        if let patch = try draft.identityPatch(comparedTo: baseline) {
+            latest = try await bounded { try await operations.updateIdentity(baseline.revision, patch) }
+        }
+        if try draft.changesAccess(comparedTo: baseline, catalog: catalog) {
+            let update = try draft.accessUpdate(catalog: catalog)
+            try await bounded { try await operations.updateAccess(baseline.access.revision, update) }
+            latest = try await bounded { try await operations.readBot() }
+        }
+        return .saved(latest)
+    } catch is CancellationError {
+        return .stopped
+    } catch {
+        if await operations.handleRevocation(error) { return .stopped }
+        do {
+            let authoritative = try await bounded { try await operations.readBot() }
+            let refreshedCatalog = try await bounded { try await operations.readCatalog() }
+            let rebased = try aidenBotEditorRebasedDraft(
+                draft,
+                baseline: baseline,
+                baselineCatalog: catalog,
+                authoritative: authoritative,
+                authoritativeCatalog: refreshedCatalog
+            )
+            if (try? rebased.isSatisfied(by: authoritative, catalog: refreshedCatalog)) == true {
+                return .saved(authoritative)
+            }
+            return .failed(AidenBotAdvancedCopy.changedOnMac)
+        } catch {
+            if await operations.handleRevocation(error) { return .stopped }
+            return .failed(AidenBotAdvancedCopy.couldNotCheck)
+        }
+    }
 }
 
 /// One page for the settings most people never need: the AI model, the image
@@ -16,6 +86,8 @@ struct AidenBotAdvancedView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let botID: String
     var onSaved: (AidenBotDetail) -> Void = { _ in }
+    /// A Save that didn't reach the Mac, after Advanced closed: the screen behind says so.
+    var onSaveFailed: (String) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -26,8 +98,6 @@ struct AidenBotAdvancedView: View {
     @State private var capturedContext: AidenRemoteRequestContext?
     @State private var isLoading = true
     @State private var loadError: String?
-    @State private var saveError: String?
-    @State private var activeAttempt: AidenBotAdvancedSaveAttempt?
     @State private var isConfirmingDiscard = false
     @State private var chatActivityModel: AidenBotChatActivityModel?
     @State private var isShowingChatActivity = false
@@ -37,8 +107,6 @@ struct AidenBotAdvancedView: View {
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
     }
-
-    private var isSaving: Bool { activeAttempt != nil }
 
     private var isDirty: Bool {
         aidenBotEditorIsDirty(
@@ -50,15 +118,15 @@ struct AidenBotAdvancedView: View {
         )
     }
 
+    /// Editing works on the saved details at once, connected or not (R15); Save
+    /// waits briefly for the Mac after the page closes.
     private var canWrite: Bool {
         capturedContext.map(coordinator.isCurrent) == true
-            && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
     private var canSave: Bool {
-        guard canWrite, !isLoading, !isSaving, isDirty,
-              let catalog, let draft, draft.isSaveable(catalog: catalog) else { return false }
+        guard canWrite, isDirty, let catalog, let draft, draft.isSaveable(catalog: catalog) else { return false }
         return true
     }
 
@@ -66,42 +134,34 @@ struct AidenBotAdvancedView: View {
         content
             .navigationTitle("Advanced")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(isDirty || isSaving)
+            .navigationBarBackButtonHidden(isDirty)
             .toolbar {
-                if isDirty || isSaving {
+                if isDirty {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { isConfirmingDiscard = true }
-                            .disabled(isSaving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(isSaving ? "Saving…" : "Save") {
-                            Task { await save() }
-                        }
-                        .disabled(!canSave)
+                        Button("Save") { save() }
+                            .disabled(!canSave)
                     }
                 }
             }
-            .task(id: sessionIdentity) {
+            // A new pairing starts over; a connection coming up only re-reads, keeping edits.
+            .task(id: sessionIdentity.pairing) {
                 let expectedSession = sessionIdentity
                 reset(for: expectedSession)
                 await load(for: expectedSession)
+            }
+            .onChange(of: coordinator.connectionState == .connected) { _, connected in
+                guard connected, baselineBot != nil else { return }
+                let expectedSession = sessionIdentity
+                Task { await load(for: expectedSession) }
             }
             .onAppear { chatActivityReport.advancedOpened() }
             .onDisappear {
                 // Closing Advanced (not opening Chat activity) reports a saved pick once;
                 // one that lands later is reported when it lands.
                 if !isShowingChatActivity { chatActivityReport.advancedClosed(reportBehind: onSaved) }
-            }
-            .alert(
-                "Couldn’t Save",
-                isPresented: Binding(
-                    get: { saveError != nil },
-                    set: { if !$0 { saveError = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) { saveError = nil }
-            } message: {
-                Text(saveError ?? "Your changes weren’t saved.")
             }
             .confirmationDialog(
                 "Discard changes?",
@@ -144,14 +204,21 @@ struct AidenBotAdvancedView: View {
         }
     }
 
-    /// Editing waits for a connection and for a save; Chat activity has its own rules.
-    private var isLocked: Bool { isSaving || !canWrite }
+    /// Only a phone that may not change Bots is locked; Chat activity has its own rules.
+    private var isLocked: Bool { !canWrite }
 
     private func form(_ catalog: AidenBotCapabilityCatalog) -> some View {
         Form {
             if !canWrite {
                 Section {
                     Label(readOnlyMessage, systemImage: "lock.fill")
+                        .foregroundStyle(palette.secondary)
+                }
+            } else if coordinator.connectionState != .connected {
+                Section {
+                    // Never a lock: changes save once the Mac is reachable.
+                    Text(AidenBotSessionCopy.connecting)
+                        .font(.footnote)
                         .foregroundStyle(palette.secondary)
                 }
             }
@@ -260,7 +327,7 @@ struct AidenBotAdvancedView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(isDirty || isSaving)
+                .disabled(isDirty)
             } footer: {
                 Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your Mac while it works.")
             }
@@ -424,7 +491,7 @@ struct AidenBotAdvancedView: View {
     }
 
     private var readOnlyMessage: String {
-        if coordinator.connectionState != .connected { return "Connect to your Mac to change this." }
+        if capturedContext == nil { return "Connect to your Mac to change this." }
         return "This phone can look but not change Bots."
     }
 
@@ -439,8 +506,6 @@ struct AidenBotAdvancedView: View {
         capturedContext = nil
         isLoading = true
         loadError = nil
-        saveError = nil
-        activeAttempt = nil
         isConfirmingDiscard = false
         chatActivityModel = nil
         isShowingChatActivity = false
@@ -449,37 +514,51 @@ struct AidenBotAdvancedView: View {
 
     @MainActor
     private func load(for expectedSession: AidenBotCustomAccessSessionIdentity) async {
-        guard sessionIdentity == expectedSession else { return }
-        isLoading = true
+        guard sessionIdentity.pairing == expectedSession.pairing else { return }
+        if draft == nil { isLoading = true }
         loadError = nil
         var requestContext: AidenRemoteRequestContext?
         do {
             let context = try coordinator.requestContext()
             requestContext = context
-            guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
-            if let cached = await AidenBotCache.shared.load(
+            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing else { return }
+            if draft == nil, let cached = await AidenBotCache.shared.load(
                 instanceId: context.instanceId,
                 deviceId: context.deviceId
             ), let cachedCatalog = cached.catalog(forBotID: botID),
                let cachedBot = cached.details.first(where: { $0.id == botID }),
                let cachedDraft = AidenBotEditorDraft(detail: cachedBot, catalog: cachedCatalog) {
-                guard coordinator.isCurrent(context), sessionIdentity == expectedSession else { return }
+                guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing else { return }
                 catalog = cachedCatalog
                 baselineBot = cachedBot
                 draft = cachedDraft
+                // The saved settings are editable at once; Save waits for the Mac (R15).
+                capturedContext = context
                 isLoading = false
             }
             let client = try coordinator.remoteClient(for: context)
             async let catalogRequest = client.botCapabilityCatalog(botId: botID)
             async let detailRequest = client.bot(id: botID)
             let (loadedCatalog, loadedBot) = try await (catalogRequest, detailRequest)
-            guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
+            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing,
                   !Task.isCancelled else { return }
-            let loadedDraft = try aidenBotEditorResolvedDraft(
-                mode: .edit(botID: botID),
-                catalog: loadedCatalog,
-                bot: loadedBot
-            )
+            let loadedDraft: AidenBotEditorDraft
+            if isDirty, let draft, let baselineBot, let catalog {
+                // Edits made before the Mac answered stay, on top of what it holds now.
+                loadedDraft = try aidenBotEditorRebasedDraft(
+                    draft,
+                    baseline: baselineBot,
+                    baselineCatalog: catalog,
+                    authoritative: loadedBot,
+                    authoritativeCatalog: loadedCatalog
+                )
+            } else {
+                loadedDraft = try aidenBotEditorResolvedDraft(
+                    mode: .edit(botID: botID),
+                    catalog: loadedCatalog,
+                    bot: loadedBot
+                )
+            }
             capturedContext = context
             catalog = loadedCatalog
             baselineBot = loadedBot
@@ -496,7 +575,7 @@ struct AidenBotAdvancedView: View {
                     deviceId: context.deviceId
                 )
             }
-            guard coordinator.isCurrent(context), sessionIdentity == expectedSession,
+            guard coordinator.isCurrent(context), sessionIdentity.pairing == expectedSession.pairing,
                   !Task.isCancelled else { return }
             isLoading = false
         } catch is CancellationError {
@@ -504,104 +583,60 @@ struct AidenBotAdvancedView: View {
         } catch {
             if let context = requestContext,
                await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard sessionIdentity == expectedSession else { return }
-            capturedContext = nil
-            loadError = aidenBotFriendlyLoadError(error)
+            guard sessionIdentity.pairing == expectedSession.pairing else { return }
+            // Saved settings stay editable offline; with none, there is nothing to edit.
+            if draft == nil {
+                capturedContext = nil
+                loadError = aidenBotFriendlyLoadError(error)
+            }
             isLoading = false
         }
     }
 
+    /// Save closes Advanced at once (R15). The change goes out after, waiting
+    /// briefly for the Mac; the screens behind hear the Mac's Bot, or the error.
     @MainActor
-    private func save() async {
+    private func save() {
         guard canSave, let context = capturedContext, coordinator.isCurrent(context),
               let catalog, let draft, let baselineBot else { return }
-        let attempt = AidenBotAdvancedSaveAttempt(
-            context: context,
-            botID: baselineBot.id,
-            identityRevision: baselineBot.revision,
-            accessRevision: baselineBot.access.revision,
-            catalogRevision: catalog.revision,
-            token: UUID()
+        let botID = baselineBot.id
+        let coordinator = coordinator
+        let report = chatActivityReport
+        let onSaved = onSaved
+        let onSaveFailed = onSaveFailed
+        let operations = AidenBotAdvancedSaveOperations(
+            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
+            updateIdentity: { revision, patch in
+                try await coordinator.remoteClient(for: context).updateBotIdentity(id: botID, revision: revision, patch: patch)
+            },
+            updateAccess: { revision, update in
+                _ = try await coordinator.remoteClient(for: context).updateBotAccess(botId: botID, revision: revision, update: update)
+            },
+            readBot: { try await coordinator.remoteClient(for: context).bot(id: botID) },
+            readCatalog: { try await coordinator.remoteClient(for: context).botCapabilityCatalog(botId: botID) },
+            handleRevocation: { error in await coordinator.handleCredentialRevocation(error, context: context) }
         )
-        activeAttempt = attempt
-        saveError = nil
-        defer { if activeAttempt == attempt { activeAttempt = nil } }
-        do {
-            let client = try coordinator.remoteClient(for: attempt.context)
-            var latest = baselineBot
-            if let patch = try draft.identityPatch(comparedTo: baselineBot) {
-                guard isCurrent(attempt) else { return }
-                latest = try await client.updateBotIdentity(
-                    id: attempt.botID,
-                    revision: attempt.identityRevision,
-                    patch: patch
-                )
-                guard isCurrent(attempt) else { return }
-                self.baselineBot = latest
-            }
-            if try draft.changesAccess(comparedTo: baselineBot, catalog: catalog) {
-                guard isCurrent(attempt) else { return }
-                _ = try await client.updateBotAccess(
-                    botId: attempt.botID,
-                    revision: attempt.accessRevision,
-                    update: try draft.accessUpdate(catalog: catalog)
-                )
-                guard isCurrent(attempt) else { return }
-                latest = try await client.bot(id: attempt.botID)
-                guard isCurrent(attempt) else { return }
-                self.baselineBot = latest
-            }
-            guard isCurrent(attempt) else { return }
-            chatActivityReport.reportedByAdvanced()
-            onSaved(latest)
-            dismiss()
-        } catch is CancellationError {
-            return
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: attempt.context) { return }
-            guard isCurrent(attempt) else { return }
-            // A response can be lost after the Mac saves. Re-read the Bot
-            // before allowing a retry so stale revisions never repeat an edit.
-            do {
-                let client = try coordinator.remoteClient(for: attempt.context)
-                async let detailRequest = client.bot(id: attempt.botID)
-                async let catalogRequest = client.botCapabilityCatalog(botId: attempt.botID)
-                let (authoritative, refreshedCatalog) = try await (detailRequest, catalogRequest)
-                guard isCurrent(attempt) else { return }
-                let rebasedDraft = try aidenBotEditorRebasedDraft(
-                    draft,
-                    baseline: baselineBot,
-                    baselineCatalog: catalog,
-                    authoritative: authoritative,
-                    authoritativeCatalog: refreshedCatalog
-                )
-                self.baselineBot = authoritative
-                self.catalog = refreshedCatalog
-                self.draft = rebasedDraft
-                if (try? rebasedDraft.isSatisfied(by: authoritative, catalog: refreshedCatalog)) == true {
-                    chatActivityReport.reportedByAdvanced()
-                    onSaved(authoritative)
-                    dismiss()
-                } else {
-                    saveError = "Something changed on your Mac. Check your changes and save again."
+        Task { @MainActor in
+            let outcome = await aidenBotAdvancedSave(draft: draft, baseline: baselineBot, catalog: catalog, operations: operations)
+            guard coordinator.isCurrent(context) else { return }
+            switch outcome {
+            case let .saved(latest):
+                report.reportedByAdvanced()
+                _ = await coordinator.withRetainedInstallationData(for: context) {
+                    _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                        latest,
+                        instanceId: context.instanceId,
+                        deviceId: context.deviceId
+                    )
                 }
-            } catch is CancellationError {
-                return
-            } catch let reconciliationError {
-                if await coordinator.handleCredentialRevocation(reconciliationError, context: attempt.context) { return }
-                guard isCurrent(attempt) else { return }
-                capturedContext = nil
-                saveError = "Aiden couldn’t check what was saved. Go back and open Advanced again."
+                onSaved(latest)
+            case let .failed(message):
+                onSaveFailed(message)
+            case .stopped:
+                break
             }
         }
-    }
-
-    @MainActor
-    private func isCurrent(_ attempt: AidenBotAdvancedSaveAttempt) -> Bool {
-        coordinator.isCurrent(attempt.context)
-            && capturedContext == attempt.context
-            && activeAttempt == attempt
-            && baselineBot?.id == attempt.botID
+        dismiss()
     }
 }
 

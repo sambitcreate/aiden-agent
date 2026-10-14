@@ -20,6 +20,8 @@ struct AidenBotSessionChatView: View {
     @State private var isConfirmingDelete = false
     @State private var isDeleting = false
     @State private var deleteErrorMessage: String?
+    /// An Advanced Save that didn't reach the Mac after Advanced closed (R15).
+    @State private var advancedSaveError: String?
     /// The Bot's conversation tools, loaded once it has a conversation; Files
     /// is offered only when they grant file access.
     @State private var filesTools: AidenBotChatToolsModel?
@@ -119,10 +121,16 @@ struct AidenBotSessionChatView: View {
         .navigationDestination(isPresented: $isShowingAdvanced) {
             // "Set up" and "Advanced" land here; a saved model or access
             // change refreshes the session state.
-            AidenBotAdvancedView(coordinator: coordinator, botID: botID) { updated in
-                summary = AidenBotSummary(detail: updated)
-                Task { await model?.load() }
-            }
+            AidenBotAdvancedView(
+                coordinator: coordinator,
+                botID: botID,
+                onSaved: { updated in
+                    summary = AidenBotSummary(detail: updated)
+                    model?.wording = updated.chatActivity?.wording ?? .follows
+                    Task { await model?.load() }
+                },
+                onSaveFailed: { advancedSaveError = $0 }
+            )
         }
         .alert(
             "Something Went Wrong",
@@ -162,11 +170,12 @@ struct AidenBotSessionChatView: View {
     /// A failed delete, then unsent messages that couldn't be restored (shown
     /// even before the first snapshot), then the chat's own error once loaded.
     private var alertMessage: String? {
-        deleteErrorMessage ?? model?.restoreNotice ?? (model?.hasLoaded == true ? model?.errorMessage : nil)
+        deleteErrorMessage ?? advancedSaveError ?? model?.restoreNotice ?? (model?.hasLoaded == true ? model?.errorMessage : nil)
     }
 
     private func clearErrors() {
         deleteErrorMessage = nil
+        advancedSaveError = nil
         model?.restoreNotice = nil
         // Before the first snapshot the chat's error is the connection hint, not this alert.
         if model?.hasLoaded == true { model?.errorMessage = nil }

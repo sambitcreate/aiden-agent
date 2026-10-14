@@ -137,6 +137,76 @@ struct AidenBotMemory: Codable, Equatable, Sendable {
     /// Every remembered entry, across both groups.
     var entryCount: Int { user.entries.count + memory.entries.count }
 
+    init(
+        botId: String,
+        revision: String,
+        readable: Bool,
+        memory: AidenBotMemoryGroup,
+        user: AidenBotMemoryGroup,
+        updatedAt: AidenRemoteTimestamp?
+    ) {
+        self.botId = botId
+        self.revision = revision
+        self.readable = readable
+        self.memory = memory
+        self.user = user
+        self.updatedAt = updatedAt
+    }
+
+    /// The view as it will look once the Mac applies `edit`, shown at once (R15).
+    /// Nil when the edit names an entry this view doesn't hold. The Mac's own
+    /// view replaces it when it answers.
+    func applying(_ edit: AidenBotMemoryEdit) -> AidenBotMemory? {
+        func size(_ text: String) -> Int { text.unicodeScalars.count }
+        func changed(_ group: AidenBotMemoryGroup, entries: [AidenBotMemoryEntry], used: Int) -> AidenBotMemoryGroup? {
+            let used = min(max(0, used), AidenBotMemoryWire.maxChars)
+            return try? AidenBotMemoryGroup(
+                entries: entries,
+                usedChars: used,
+                limitChars: group.limitChars,
+                overBudget: used > group.limitChars
+            )
+        }
+        func with(_ target: AidenBotMemoryTarget, _ next: AidenBotMemoryGroup) -> AidenBotMemory {
+            AidenBotMemory(
+                botId: botId,
+                revision: revision,
+                readable: readable,
+                memory: target == .memory ? next : memory,
+                user: target == .user ? next : user,
+                updatedAt: updatedAt
+            )
+        }
+        switch edit {
+        case let .replace(target, entryId, text):
+            let current = group(target)
+            guard let old = current.entries.first(where: { $0.id == entryId }),
+                  let replacement = try? AidenBotMemoryEntry(id: entryId, text: text),
+                  let next = changed(
+                      current,
+                      entries: current.entries.map { $0.id == entryId ? replacement : $0 },
+                      used: current.usedChars - size(old.text) + size(text)
+                  ) else { return nil }
+            return with(target, next)
+        case let .remove(target, entryId):
+            let current = group(target)
+            guard let old = current.entries.first(where: { $0.id == entryId }),
+                  let next = changed(
+                      current,
+                      entries: current.entries.filter { $0.id != entryId },
+                      used: current.usedChars - size(old.text)
+                  ) else { return nil }
+            return with(target, next)
+        case .clear:
+            guard let emptyMemory = changed(memory, entries: [], used: 0),
+                  let emptyUser = changed(user, entries: [], used: 0) else { return nil }
+            return AidenBotMemory(
+                botId: botId, revision: revision, readable: true,
+                memory: emptyMemory, user: emptyUser, updatedAt: updatedAt
+            )
+        }
+    }
+
     private enum CodingKeys: String, CodingKey { case botId, revision, readable, memory, user, updatedAt }
 }
 
