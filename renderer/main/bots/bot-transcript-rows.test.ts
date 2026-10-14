@@ -115,6 +115,37 @@ test("an unfinished call in a reply the person stopped is stopped, not failed", 
   assert.equal(rows[rows.length - 1]?.kind, "stopped");
 });
 
+test("a reply that carries on after a restart's stop marker and finishes never reads as stopped", () => {
+  // Resume after a restart: recovery settles an unsafe in-flight tool as interrupted ("stopped"), then the run goes on.
+  const interruptedResult = { ...result("a1"), status: "stopped", isError: true } as BotTranscriptEntry;
+  const resumed = botTranscriptRows(
+    [user("u1", "go"), step("a1", ""), interruptedResult, answer("a2", "Recovered.")],
+    null,
+    { running: false, level: "summary" },
+  );
+  assert.equal(kinds(resumed).includes("stopped"), false, kinds(resumed).join(", "));
+  const recap = resumed.find((row) => row.kind === "recap");
+  assert.ok(recap?.kind === "recap");
+  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"], "the cut-short step stays neutral");
+
+  // A retried request after a restart mid-stream: the partial lands as an aborted reply, then the retry answers.
+  const partialCall: BotTranscriptEntry = {
+    id: "a1",
+    type: "assistant",
+    text: "Once upon",
+    toolCalls: [{ id: "a1-call", name: "run_command", kind: "command", label: "Ran a command" }],
+    stopReason: "aborted",
+  };
+  const retried = botTranscriptRows([user("u1", "Story"), partialCall, answer("a2", "Recovered.")], null, {
+    running: false,
+    level: "summary",
+  });
+  assert.equal(kinds(retried).includes("stopped"), false, kinds(retried).join(", "));
+  const retriedRecap = retried.find((row) => row.kind === "recap");
+  assert.ok(retriedRecap?.kind === "recap");
+  assert.deepEqual(retriedRecap.steps.map((s) => s.status), ["stopped"], "the unfinished call is neither failed nor running");
+});
+
 test("a reply the person stopped ends with a stopped line; an interrupted one does not", () => {
   const aborted: BotTranscriptEntry = { id: "a1", type: "assistant", text: "Once upon", toolCalls: [], stopReason: "aborted" };
   assert.deepEqual(kinds(botTranscriptRows([user("u1", "Story"), aborted], null, quiet)), ["user", "assistant", "stopped"]);

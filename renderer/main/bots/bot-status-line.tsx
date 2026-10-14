@@ -59,10 +59,16 @@ function useAnnouncement(text: string): string {
   return shown.text;
 }
 
-/** What the line says to a screen reader: the word, plus the step on the Mac with Follows the work. */
-export function botStatusSpeech(activity: BotLiveActivity, wording: BotChatActivityWording): string {
+/** The line's word and mark, plus the step's detail on the Mac with Follows the work. */
+function botStatusParts(activity: BotLiveActivity, wording: BotChatActivityWording) {
   const display = botActivityDisplay(activity.phase, wording, activity.app);
   const detail = wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
+  return { display, detail };
+}
+
+/** What the line says to a screen reader: the word, plus the step on the Mac with Follows the work. */
+export function botStatusSpeech(activity: BotLiveActivity, wording: BotChatActivityWording): string {
+  const { display, detail } = botStatusParts(activity, wording);
   return detail ? `${display.word}, ${detail}` : display.word;
 }
 
@@ -95,9 +101,8 @@ export function BotStatusLine({
   /** Reports which optional parts are showing, so a pinned scroll view can follow the height change. */
   onLayoutChange?(key: string): void;
 }) {
-  const display = botActivityDisplay(activity.phase, wording, activity.app);
+  const { display, detail } = botStatusParts(activity, wording);
   const now = useClock(fixedNow);
-  const detail = wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
   const elapsed = botElapsedLabel(activity.startedAt, now);
   // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
   const stillGoing =

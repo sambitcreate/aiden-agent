@@ -107,6 +107,14 @@ export function botTranscriptRows(
     };
   };
 
+  // A person's Stop ends the run. If the run carries on after a stop marker, a
+  // restart cut it short and Resume or a retry picked it up: no stopped line.
+  const carriedOn = (turn: Turn) => {
+    if (!turn.stopped) return;
+    turn.stopped = false;
+    turn.interrupted = true;
+  };
+
   const touch = (at: number | undefined) => {
     if (state.turn && at !== undefined) state.turn.lastAt = at;
   };
@@ -144,6 +152,7 @@ export function botTranscriptRows(
           turn.byCall.set(call.id, recapStep);
         }
         if (entry.stopReason === "aborted") turn.stopped = true;
+        else carriedOn(turn);
         if (entry.text.trim()) {
           if (entry.toolCalls.length === 0) turn.answerRow = rows.length;
           rows.push({ kind: "assistant", id: entry.id, text: entry.text });
@@ -169,6 +178,7 @@ export function botTranscriptRows(
         rows.push({ kind: "connect", id: entry.id, card: entry.card });
         break;
       case "failed_turn":
+        if (state.turn) carriedOn(state.turn);
         rows.push({
           kind: "failed",
           id: entry.id,
