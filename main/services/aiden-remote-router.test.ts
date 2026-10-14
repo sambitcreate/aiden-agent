@@ -23,6 +23,8 @@ import {
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
+import { AidenRemoteBotService } from "./aiden-remote-bots.js";
+import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
@@ -5237,4 +5239,89 @@ test("a bubble's submissionId reaches only a device holding bot:activity, on a f
     await sessions.close();
   }
   assert.deepEqual(seen, { plain: [null, null], holder: ["17", "17"] });
+});
+
+test("a send the paused Bot refused is not recorded: once resumed, the same key sends, and a real failure still replays", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const post = (key: string, body = "{}") => ({
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+    body,
+  });
+  const planner = {
+    id: "bot-1", revision: "bot_revision_1", name: "Planner", instructions: "Plan.",
+    avatar: { version: 1 as const, shape: "orb" as const, color: "sky" as const }, createdAt: 1_000, updatedAt: 2_000,
+  };
+  let persisted: { entries: unknown[] } | undefined;
+  const bots = new AidenRemoteBotService({
+    application: { get: async (botId: string) => (botId === "bot-1" ? planner : null), list: async () => [planner] } as never,
+    chatStore: { get: async () => null },
+    sessionStates: async () => new Map(),
+    // The durable path: the ledger is written before and after every action.
+    persistIdempotency: async (snapshot) => {
+      persisted = snapshot as { entries: unknown[] };
+    },
+  });
+  let paused = true;
+  const sent: string[] = [];
+  let state: BotSessionState = { kind: "interrupted", submissionId: "16" };
+  const sessions = new AidenRemoteBotSessionService({
+    bots,
+    runtime: async () => ({
+      send: async (_botId, input) => {
+        // The session's own refusal from state, before anything is written.
+        if (paused) throw new BotSessionError("bot_paused");
+        sent.push(input.requestId);
+        if (input.text === "explode") throw new Error("The input was written, then the session failed.");
+        state = { kind: "running", submissionId: "17" };
+        return { submissionId: "17", deduped: false };
+      },
+      resume: async () => {
+        paused = false;
+        state = { kind: "running", submissionId: "16" };
+        return state;
+      },
+      dismiss: async () => ({ kind: "idle" }),
+      stop: async () => ({ kind: "idle" }),
+      state: async () => state,
+      conversation: async () => { throw new Error("not used"); },
+      quietInputs: async () => new Map(),
+      placedSubmissions: async () => new Map(),
+    }),
+  });
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"],
+    acceptsBotCapabilities: true,
+    botSessions: sessions,
+  });
+  try {
+    const message = JSON.stringify({ text: "Plan dinners" });
+    const refused = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json()).error.code, "operation_stale");
+    assert.deepEqual(persisted?.entries, [], "the refusal left nothing in the durable ledger");
+
+    assert.equal((await fetch(`${app.base}/bots/bot-1/resume`, post("resume-key-0000000001"))).status, 200);
+    const accepted = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(accepted.status, 200);
+    const receipt = await accepted.json();
+    assert.equal(receipt.submissionId, "17");
+    // Once it ran, the key is spent: a repeat replays the receipt without sending again.
+    const replayed = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.deepEqual(await replayed.json(), receipt);
+    assert.equal(sent.length, 1);
+
+    // A failure after the session started work keeps its key: a retry replays it and never runs twice.
+    const exploded = JSON.stringify({ text: "explode" });
+    const failed = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000002", exploded));
+    assert.equal(failed.status, 500);
+    const retried = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000002", exploded));
+    assert.equal(retried.status, 500);
+    assert.equal((await retried.json()).error.code, "internal_error");
+    assert.equal(sent.length, 2, "the failed send ran once");
+    assert.equal(persisted?.entries.length, 3, "resume, the sent message and the failed one are recorded");
+  } finally {
+    await app.close();
+    await sessions.close();
+  }
 });

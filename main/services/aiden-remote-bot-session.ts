@@ -98,7 +98,8 @@ import { openCursorSse, sseFrame, type CursorSseHandle } from "./aiden-remote-ss
 import type { BotApprovals } from "./bot-runtime/bot-approvals.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
-import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
+import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
+import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
 import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import {
@@ -970,7 +971,38 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
   };
 }
 
+/**
+ * Refusals the session makes from its state before it changes anything: no
+ * host, no model (or one that can't run), or a paused turn a send won't
+ * replace. Each is checked before any input is written or any run resumes.
+ */
+const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
+  "needs_model",
+  "model_error",
+  "unavailable",
+  "bot_paused",
+]);
+
+/**
+ * Runs one session call inside an idempotent request. A refusal from state
+ * leaves no record in the operation ledger, so the same key is evaluated
+ * again once the Bot is fixed (a model chosen, the Bot resumed) instead of
+ * replaying the refusal for a day.
+ */
+async function unlessRefusedBeforeRunning<Result>(call: () => Promise<Result>): Promise<Result> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof BotSessionError && REFUSED_BEFORE_RUNNING.has(error.reason)) {
+      throw new AidenOperationNotExecutedError(error);
+    }
+    throw error;
+  }
+}
+
 function mapSessionError(error: unknown): never {
+  // A ledger always unwraps it; a bare `executeIdempotent` passes it through.
+  if (error instanceof AidenOperationNotExecutedError) return mapSessionError(error.cause);
   if (error instanceof AidenRemoteServiceError) throw error;
   if (error instanceof BotSessionError) {
     switch (error.reason) {
@@ -1531,12 +1563,12 @@ export class AidenRemoteBotSessionService {
         async () => {
           const runtime = await this.options.runtime();
           // The request UUID is the session request id: a resubmission dedupes.
-          const sent = await runtime.send(bot.id, {
+          const sent = await unlessRefusedBeforeRunning(() => runtime.send(bot.id, {
             text: parsed.text,
             requestId: `remote:${deviceId}:${key}`,
             // Steer joins the running turn; Queue (or nothing, as before) runs after it.
             ...(parsed.whenBusy ? { whenBusy: parsed.whenBusy === "steer" ? "steer" as const : "followUp" as const } : {}),
-          });
+          }));
           return { ...sent, ...projectBotSessionState(await runtime.state(bot.id)) };
         },
       );
@@ -1563,11 +1595,15 @@ export class AidenRemoteBotSessionService {
         async () => {
           const runtime = await this.options.runtime();
           const requestId = `remote:${deviceId}:${key}`;
-          if (action === "resume") return projectBotSessionState(await runtime.resume(bot.id, requestId));
-          if (action === "dismiss") return projectBotSessionState(await runtime.dismiss(bot.id, requestId));
+          if (action === "resume") {
+            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
+          }
+          if (action === "dismiss") {
+            return projectBotSessionState(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
+          }
           // Stop ends a running turn; a paused one belongs to Dismiss. Every
           // surface reads "Stopping" until the run ends, or until the Stop fails.
-          const stop = () => runtime.stop(bot.id);
+          const stop = () => unlessRefusedBeforeRunning(() => runtime.stop(bot.id));
           const state = this.options.turnIntents
             ? await stopWithIntents(this.options.turnIntents, bot.id, stop)
             : await stop();
