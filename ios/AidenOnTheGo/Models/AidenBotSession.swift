@@ -276,7 +276,10 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             }
             let submissionId = try AidenBotWire.optional(String.self, from: values, forKey: .submissionId)
             if let submissionId {
-                guard role == .user else { throw AidenBotContractError.invalidCombination("message submissionId") }
+                // Only the person's own message: never an assistant's, never a routine's labelled input.
+                guard role == .user, !values.contains(.label) else {
+                    throw AidenBotContractError.invalidCombination("message submissionId")
+                }
                 try AidenBotSessionWire.validateSubmissionID(submissionId, field: "message.submissionId")
             }
             self = .message(AidenBotSessionMessage(

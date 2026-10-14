@@ -2490,10 +2490,12 @@ test("the person's own message carries its submissionId for bot:activity devices
   for (const sample of raw.botActivityPrivacy.rejectedSubmissionIdEntries) {
     assert.throws(() => parseAidenRemoteBotSessionEntry(sample), Error, JSON.stringify(sample));
   }
-  assert.throws(
-    () => parseAidenRemoteBotSessionEntry(raw.botActivityPrivacy.rejectedSubmissionIdEntries[0]),
-    /Only the person's message can carry a submissionId/u,
-  );
+  const [assistantWithId, routineWithId] = raw.botActivityPrivacy.rejectedSubmissionIdEntries;
+  assert.throws(() => parseAidenRemoteBotSessionEntry(assistantWithId), /Only the person's message can carry a submissionId/u);
+  assert.equal(routineWithId.label, "Morning brief", "a routine's input");
+  assert.throws(() => parseAidenRemoteBotSessionEntry(routineWithId), /Only the person's message can carry a submissionId/u);
+  const { submissionId: _routineId, ...routine } = routineWithId;
+  assert.deepEqual(parseAidenRemoteBotSessionEntry(routine), routine, "the same routine bubble without an id is fine");
 });
 
 test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {

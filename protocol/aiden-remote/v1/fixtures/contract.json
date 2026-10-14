@@ -2219,6 +2219,7 @@
     },
     "rejectedSubmissionIdEntries": [
       { "type": "message", "id": "entry_31", "role": "assistant", "text": "Here is a plan.", "submissionId": "17" },
+      { "type": "message", "id": "entry_33", "role": "user", "text": "Check my inbox.", "label": "Morning brief", "submissionId": "21" },
       { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "17 18" },
       { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "" },
       { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcde" },

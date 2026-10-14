@@ -5023,7 +5023,8 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
       if (hasOwn(value, "interrupted") && (value.interrupted !== true || role !== "assistant")) {
         throw new Error("Only an assistant message can be marked interrupted.");
       }
-      if (hasOwn(value, "submissionId") && role !== "user") {
+      // A routine's input (it has a label) is never the person's message.
+      if (hasOwn(value, "submissionId") && (role !== "user" || hasOwn(value, "label"))) {
         throw new Error("Only the person's message can carry a submissionId.");
       }
       const submissionId = hasOwn(value, "submissionId")

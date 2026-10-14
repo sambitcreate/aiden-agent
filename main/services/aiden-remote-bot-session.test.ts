@@ -19,7 +19,6 @@ import {
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
-  AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
@@ -27,6 +26,7 @@ import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import {
+  AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
@@ -1825,38 +1825,173 @@ test("a device without bot:activity gets each tagged bubble without its id, at t
   }
 });
 
-test("the projector remembers only the newest placements, and asks once per new message", async () => {
+test("tags stay on every bubble in view, past the window, and no old bubble is ever sent again", async () => {
   const driven = drivenConversation([]);
   const fake = fakeRuntime({ kind: "running", submissionId: "1" });
-  const asked: number[] = [];
-  const sent = Array.from({ length: AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX + 6 }, (_, index) => user(index + 1, `Message ${index + 1}`));
+  let asked = 0;
+  let current: RawEntry[] = [];
   const service = runningOn(driven, {
     ...fake,
     runtime: {
       ...fake.runtime,
       async placedSubmissions() {
-        asked.push(Date.now());
-        return new Map(sent.map((entry) => [String(entry.id), `sub_${entry.id}`]));
+        asked += 1;
+        // Only the message just sent is still placed; every earlier turn is done.
+        const newest = current[current.length - 1];
+        return new Map(newest ? [[String(newest.id), `sub_${newest.id}`]] : []);
       },
     },
   });
+  const total = AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES + 10;
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    for (let id = 1; id <= total; id += 1) {
+      current = [...current, user(id, `Message ${id}`)];
+      await driven.emit(current);
+      if (id % 50 === 0) await driven.emit(current, "Working"); // streaming frames ask nothing
+    }
+    const entryFrames = (frames: Frame[]) => frames.filter((frame) => frame.type === "entry");
+    await holder.until(() => entryFrames(holder.frames).length >= total, "every message");
+    await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
+
+    for (const stream of [holder, legacy]) {
+      // Each bubble is sent exactly once, when it is new: never again when an older one leaves view.
+      assert.deepEqual(
+        entryFrames(stream.frames).map((frame) => frame.payload.entry.id),
+        Array.from({ length: total }, (_, index) => `entry_${index + 1}`),
+      );
+      assert.ok(gapless(stream.frames));
+    }
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.deepEqual(
+      entryFrames(holder.frames).map((frame) => frame.payload.entry.submissionId),
+      Array.from({ length: total }, (_, index) => `sub_${index + 1}`),
+    );
+    assert.equal(asked, total, "one lookup per new message");
+
+    // Long after their turns ended, every bubble in view still names its send.
+    const bubbles = userBubbles((await service.session(BOT_ID, { activity: true })).entries);
+    assert.equal(bubbles.length, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
+    assert.deepEqual(bubbles.map(([, id]) => id), bubbles.map(([text]) => `sub_${String(text).slice("Message ".length)}`));
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("a failed placement lookup is reported, and that bubble falls back to its text", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "1" });
+  const reports: unknown[] = [];
+  let failing = true;
+  const service = runningOn(
+    driven,
+    {
+      ...fake,
+      runtime: {
+        ...fake.runtime,
+        async placedSubmissions() {
+          if (failing) throw new Error("The session could not be inspected.");
+          return new Map([["2", "sub_2"]]);
+        },
+      },
+    },
+    { onReport: (_botId, error) => reports.push(error) },
+  );
   try {
     await service.session(BOT_ID, { activity: true });
-    const before = asked.length;
-    await driven.emit(sent);
-    await driven.emit(sent, "Work");
-    await driven.emit(sent, "Working");
-    assert.equal(asked.length - before, 1, "streaming frames with no new message ask nothing");
-
-    const bubbles = userBubbles((await service.session(BOT_ID, { activity: true })).entries);
-    assert.equal(bubbles.length, sent.length);
-    assert.deepEqual(bubbles.slice(0, 6).map(([, id]) => id), [null, null, null, null, null, null], "the oldest are forgotten");
-    assert.deepEqual(
-      bubbles.slice(6).map(([, id]) => id),
-      sent.slice(6).map((entry) => `sub_${entry.id}`),
-      "the newest keep theirs",
-    );
+    await driven.emit([user(1, "Plan dinners")]);
+    failing = false;
+    await driven.emit([user(1, "Plan dinners"), user(2, "And lunches")]);
+    assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [
+      ["Plan dinners", null],
+      ["And lunches", "sub_2"],
+    ]);
+    assert.deepEqual(reports.map((error) => (error as Error).message), ["The session could not be inspected."]);
   } finally {
     await service.close();
+  }
+});
+
+/** Publish order: frames one publish emits never go back in this order. */
+const PUBLISH_ORDER = ["entry", "partial", "state", "question", "approval", "activity", "queued"];
+
+test("a steer and a follow-up placed mid-turn take their queued ids, two at one boundary each their own, in the publish that drops them from Queued", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-placed-"));
+  durableRoots.push(profileDir);
+  const releases: Array<() => void> = [];
+  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "plan" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Vegetarian, no mushrooms."),
+    fauxAssistantMessage("Here is the shopping list."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const first = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0001", { text: "Plan dinners" });
+    await waitFor(() => command.executions.length === 1, { what: "the turn to work" });
+    const followUp = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0002", { text: "Also a shopping list.", whenBusy: "queue" });
+    const steer = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0003", { text: "Keep it vegetarian.", whenBusy: "steer" });
+    const second = await service.send(DEVICE_ID, BOT_ID, "send-request-placed-0004", { text: "No mushrooms.", whenBusy: "steer" });
+    const ids = [followUp, steer, second].map((receipt) => receipt.submissionId);
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "queued" && frame.payload.queued.length === 3),
+      "all three waiting",
+    );
+    releases.shift()!();
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Here is the shopping list."),
+      "the follow-up's reply",
+    );
+
+    const bubbleFrame = (text: string) =>
+      stream.frames.findIndex((frame) => frame.type === "entry" && frame.payload.entry.role === "user" && frame.payload.entry.text === text);
+    const placedIds = ["Plan dinners", "Also a shopping list.", "Keep it vegetarian.", "No mushrooms."].map(
+      (text) => stream.frames[bubbleFrame(text)]!.payload.entry.submissionId,
+    );
+    assert.deepEqual(placedIds, [first.submissionId, ...ids], "each bubble names its own send");
+    assert.equal(new Set(placedIds).size, 4);
+
+    for (const [text, id] of [["Also a shopping list.", ids[0]], ["Keep it vegetarian.", ids[1]], ["No mushrooms.", ids[2]]] as const) {
+      const at = bubbleFrame(text);
+      const listing = stream.frames.map((frame) =>
+        frame.type === "queued" && frame.payload.queued.some((item: { submissionId: string }) => item.submissionId === id));
+      const lastListed = listing.lastIndexOf(true);
+      const dropped = stream.frames.findIndex((frame, index) => index > lastListed && frame.type === "queued");
+      assert.ok(lastListed < at && at < dropped, `${text}: listed, then placed, then dropped`);
+      // From the bubble to the Queued change, the frames follow one publish's order.
+      const order = stream.frames.slice(at, dropped + 1).map((frame) => PUBLISH_ORDER.indexOf(frame.type));
+      assert.deepEqual(order, [...order].sort((left, right) => left - right), `${text}: dropped in the publish that placed it`);
+    }
+    // Pi places waiting inputs at a boundary: at least two of them landed in one publish
+    // (consecutive bubble frames), and each still named its own send.
+    const together = stream.frames.findIndex((frame, index) => {
+      const next = stream.frames[index + 1];
+      return frame.type === "entry" && frame.payload.entry.role === "user"
+        && next?.type === "entry" && next.payload.entry.role === "user";
+    });
+    assert.ok(together > 0, "two inputs placed at one boundary");
+    const pair = [stream.frames[together]!, stream.frames[together + 1]!].map((frame) => frame.payload.entry.submissionId);
+    assert.ok(pair.every((id) => ids.includes(id)) && pair[0] !== pair[1], JSON.stringify(pair));
+    assert.ok(gapless(stream.frames));
+  } finally {
+    for (const release of releases) release();
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
   }
 });

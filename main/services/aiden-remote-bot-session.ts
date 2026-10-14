@@ -125,13 +125,6 @@ const PROJECTOR_IDLE_MS = 60_000;
 /** Pause before a failed queued-input classification is tried again (the desktop's throttle). */
 const CLASSIFY_RETRY_MS = 1_000;
 const WIRE_SUBMISSION_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
-/**
- * How many of the person's placed messages a projector remembers (entry →
- * submission id) after their turns end; the newest are kept. Phones settle
- * only their few unsent bubbles, and an older bubble without an id is matched
- * by its text.
- */
-export const AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX = 64;
 
 export interface AidenRemoteBotSessionRuntime {
   send(
@@ -185,7 +178,11 @@ export interface AidenRemoteBotSessionServiceOptions {
    * streams hear every surface's Stop and Resume (`supportsActivity`).
    */
   turnIntents?: Pick<BotTurnIntents, "announce" | "onIntent">;
-  /** A queued input could not be classified (it stays off phones and is retried). Reported once per failing streak. */
+  /**
+   * A queued input could not be classified (it stays off phones and is
+   * retried; reported once per failing streak), or the submission a new
+   * message was placed as could not be read (that bubble goes without its id).
+   */
   onReport?(botId: string, error: unknown): void;
   /** Pause before a failed classification is retried; defaults to one second. */
   classifyRetryMs?: number;
@@ -542,9 +539,10 @@ class BotLiveProjector {
   private classifyRetry: ReturnType<typeof setTimeout> | undefined;
   /**
    * Entry id → submission id of the person's messages placed while this
-   * projector lived, newest last and at most `AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX`:
-   * a finished turn's submission drops out of the session, but a reconnect
-   * snapshot still names it.
+   * projector lived. A finished turn's submission drops out of the session,
+   * but its bubble keeps the id while it is in view, so a reconnect snapshot
+   * still names it. Pruned to the entries in the session window, so it stays
+   * bounded by that window.
    */
   private readonly submissionOf = new Map<string, string>();
   /** The newest `pi.user` entry already looked up, so each message is asked about once. */
@@ -570,6 +568,7 @@ class BotLiveProjector {
     this.entries = await this.resolveEntries(
       projectBotSessionEntries(watch.value.entries, await this.submissionsFor(watch.value.entries)),
     );
+    this.pruneSubmissions(this.entries);
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     this.question = this.readQuestion();
@@ -815,19 +814,28 @@ class BotLiveProjector {
     let placed: ReadonlyMap<string, string>;
     try {
       placed = await this.activityDeps.placed();
-    } catch {
-      // The field is optional: without it the phone falls back to the text.
+    } catch (error) {
+      // The field is optional: without it the phone matches this bubble by its text.
+      this.activityDeps.report(error);
       return this.submissionOf;
     }
-    for (const [entryId, submissionId] of [...placed].sort(([left], [right]) => Number(left) - Number(right))) {
-      if (!WIRE_SUBMISSION_ID.test(submissionId)) continue;
-      this.submissionOf.delete(entryId);
-      this.submissionOf.set(entryId, submissionId);
-    }
-    while (this.submissionOf.size > AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX) {
-      this.submissionOf.delete(this.submissionOf.keys().next().value!);
+    for (const [entryId, submissionId] of placed) {
+      if (WIRE_SUBMISSION_ID.test(submissionId)) this.submissionOf.set(entryId, submissionId);
     }
     return this.submissionOf;
+  }
+
+  /** Forget the ids of bubbles that left the session window: no snapshot can show them again. */
+  private pruneSubmissions(entries: readonly AidenRemoteBotSessionEntry[]): void {
+    if (this.submissionOf.size === 0) return;
+    // Either window: a device without `bot:cards` sees further back past the cards it skips.
+    const inView = new Set(
+      [...entries.slice(-AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES), ...withoutBotCards(entries).slice(-AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES)]
+        .map((entry) => entry.id),
+    );
+    for (const entryId of [...this.submissionOf.keys()]) {
+      if (!inView.has(wireEntryId(entryId))) this.submissionOf.delete(entryId);
+    }
   }
 
   /** One retry after the pause, on the serial lane, even if no frame arrives. */
@@ -862,7 +870,11 @@ class BotLiveProjector {
     }
 
     const previous = this.entries;
-    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(entry)]));
+    this.pruneSubmissions(next);
+    // A bubble's tag is set when it first shows and only dropped once it leaves
+    // the window, so a tag change alone is never news: re-sending an old bubble
+    // would make phones that no longer hold it append it at the bottom.
+    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(withoutSubmissionId(entry))]));
     const nextIds = new Set(next.map((entry) => entry.id));
     // Appends and in-place updates are entry events; anything that removes or
     // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
@@ -883,7 +895,7 @@ class BotLiveProjector {
       return;
     }
     for (const entry of next) {
-      if (previousById.get(entry.id) === JSON.stringify(entry)) continue;
+      if (previousById.get(entry.id) === JSON.stringify(withoutSubmissionId(entry))) continue;
       this.frame({ type: "entry", payload: { entry } });
     }
     if (partial !== this.partial) {
