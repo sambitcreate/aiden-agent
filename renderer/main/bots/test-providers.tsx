@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../../lib/command-system";
 import { BotChatRoute } from "../bot-chat-route";
-import { BotPanelProvider } from "./bot-panel-context";
+import { RoutedBotPanelProvider } from "./bot-panel-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -63,10 +63,10 @@ function createBotRouterHarness(
   // (when a test passes one) stays mounted beside the routed page.
   const rootRoute = createRootRoute({
     component: () => (
-      <BotPanelProvider>
+      <RoutedBotPanelProvider>
         {options.sidebar}
         <Outlet />
-      </BotPanelProvider>
+      </RoutedBotPanelProvider>
     ),
   });
   const routes = BOT_TEST_PATHS.map((path) =>

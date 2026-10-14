@@ -4,7 +4,13 @@ import { afterEach, beforeEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BotLiveSnapshot } from "../../shared/bot-live";
 import { BotLiveProvider, useBotLive, useSharedBotLive } from "../../lib/use-bot-live";
-import { BOT_PANEL_OPEN_KEY, BOT_PANEL_TAB_KEY, BotPanelProvider, useBotPanel } from "./bot-panel-context";
+import {
+  BOT_PANEL_OPEN_KEY,
+  BOT_PANEL_TAB_KEY,
+  BotPanelProvider,
+  useBotPanel,
+  useBotPanelActions,
+} from "./bot-panel-context";
 
 beforeEach(() => {
   installBotTestIpc();
@@ -14,11 +20,13 @@ afterEach(cleanup);
 
 function PanelProbe() {
   const panel = useBotPanel();
-  const request = panel.fileRequest ? `${panel.fileRequest.path}#${panel.fileRequest.key}` : "none";
+  const request = panel.fileRequest
+    ? `${panel.fileRequest.botId}:${panel.fileRequest.path}#${panel.fileRequest.key}`
+    : "none";
   return (
     <>
       <output aria-label="Panel">{`${panel.open ? "open" : "closed"} ${panel.tab} ${request}`}</output>
-      <button type="button" onClick={() => panel.show("files", { path: "lists/groceries.md" })}>
+      <button type="button" onClick={() => panel.show("files", { botId: "bot-a", path: "lists/groceries.md" })}>
         Open groceries
       </button>
       <button type="button" onClick={() => panel.show("memory")}>
@@ -42,7 +50,7 @@ test("a file asked for twice is two requests, and the toggle closes and reopens 
   assert.equal(panelState(), "closed activity none");
   fireEvent.click(screen.getByRole("button", { name: "Open groceries" }));
   const first = panelState();
-  assert.match(first, /^open files lists\/groceries\.md#\d+$/u);
+  assert.match(first, /^open files bot-a:lists\/groceries\.md#\d+$/u);
   fireEvent.click(screen.getByRole("button", { name: "Open groceries" }));
   assert.notEqual(panelState(), first, "the same chip clicked again selects its file again");
   fireEvent.click(screen.getByRole("button", { name: "Toggle" }));
@@ -86,6 +94,106 @@ test("a saved tab this build doesn't know, or a garbled open flag, opens closed 
     </BotPanelProvider>,
   );
   assert.equal(panelState(), "closed activity none");
+});
+
+test("the panel persists under its literal keys, so a relaunch finds them", () => {
+  render(
+    <BotPanelProvider>
+      <PanelProbe />
+    </BotPanelProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
+  assert.equal(localStorage.getItem("aiden-agent.bot-panel.open"), "true");
+  assert.equal(localStorage.getItem("aiden-agent.bot-panel.tab"), "memory");
+});
+
+test("storage that throws leaves the panel closed on Activity, and it still works", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const broken = {
+    getItem: () => {
+      throw new Error("storage is blocked");
+    },
+    setItem: () => {
+      throw new Error("storage is blocked");
+    },
+  };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: broken });
+  try {
+    render(
+      <BotPanelProvider>
+        <PanelProbe />
+      </BotPanelProvider>,
+    );
+    assert.equal(panelState(), "closed activity none");
+    fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
+    assert.equal(panelState(), "open memory none");
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+  }
+});
+
+test("a path asked for without its Bot selects nothing, and the same path twice is two requests", () => {
+  function Unscoped() {
+    const panel = useBotPanel();
+    return (
+      <>
+        <output aria-label="Key">{String(panel.fileRequest?.key ?? "none")}</output>
+        <button
+          type="button"
+          onClick={() => panel.show("files", { path: "a.md" } as unknown as { path: string; botId: string })}
+        >
+          Unscoped
+        </button>
+        <button type="button" onClick={() => panel.show("files", { botId: "bot-a", path: "a.md" })}>
+          Scoped
+        </button>
+      </>
+    );
+  }
+  render(
+    <BotPanelProvider>
+      <Unscoped />
+    </BotPanelProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Unscoped" }));
+  assert.equal(screen.getByLabelText("Key").textContent, "none");
+  fireEvent.click(screen.getByRole("button", { name: "Scoped" }));
+  const first = screen.getByLabelText("Key").textContent;
+  fireEvent.click(screen.getByRole("button", { name: "Scoped" }));
+  assert.notEqual(screen.getByLabelText("Key").textContent, first);
+});
+
+test("a file asked for in one Bot's chat is dropped when the chat moves to another Bot", () => {
+  const view = render(
+    <BotPanelProvider routedBotId="bot-a">
+      <PanelProbe />
+    </BotPanelProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open groceries" }));
+  assert.match(panelState(), /^open files bot-a:lists\/groceries\.md#\d+$/u);
+  view.rerender(
+    <BotPanelProvider routedBotId="bot-b">
+      <PanelProbe />
+    </BotPanelProvider>,
+  );
+  assert.equal(panelState(), "open files none", "the panel stays open on its tab; only the stale file request goes");
+});
+
+test("a component that only acts keeps one stable set of actions while panel state changes", () => {
+  const seen: unknown[] = [];
+  function ActsOnly() {
+    seen.push(useBotPanelActions());
+    return null;
+  }
+  render(
+    <BotPanelProvider>
+      <ActsOnly />
+      <PanelProbe />
+    </BotPanelProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
+  fireEvent.click(screen.getByRole("button", { name: "Toggle" }));
+  assert.equal(new Set(seen).size, 1);
 });
 
 const liveSnapshot = (botId: string, text?: string): BotLiveSnapshot => ({

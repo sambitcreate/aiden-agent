@@ -5,6 +5,8 @@
 // what was focused before, else the header toggle.
 
 import * as React from "react";
+import { useRouter } from "@tanstack/react-router";
+import { botChatRouteBotId } from "../../lib/bot-routes";
 
 export const BOT_PANEL_ID = "bot-panel";
 export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines"] as const;
@@ -14,24 +16,36 @@ export const BOT_PANEL_TAB_KEY = "aiden-agent.bot-panel.tab";
 export const BOT_PANEL_WIDTH_KEY = "aiden-agent.bot-panel.width";
 
 export interface BotPanelFileRequest {
+  /** The Bot the file belongs to. Consumers must match both `botId` and `key` before applying a request. */
+  botId: string;
   path: string;
   /** New on every request, so the same file chip clicked twice selects its file again. */
   key: number;
 }
 
-export interface BotPanelValue {
-  open: boolean;
-  tab: BotPanelTab;
-  fileRequest: BotPanelFileRequest | null;
-  /** Bumped whenever the person opens the panel or picks a tab from outside it. */
-  focusRequest: number;
-  show(tab: BotPanelTab, options?: { path?: string }): void;
+/** A file to select needs the Bot it belongs to, so a request never lands on another Bot. */
+export type BotPanelShowOptions = { path?: undefined; botId?: string } | { path: string; botId: string };
+
+/** Actions never change identity, so a component that only acts does not re-render with panel state. */
+export interface BotPanelActions {
+  show(tab: BotPanelTab, options?: BotPanelShowOptions): void;
   setTab(tab: BotPanelTab): void;
   toggle(): void;
   close(): void;
   /** True once after a person-initiated open: the panel then focuses its selected tab. */
   consumeFocusRequest(): boolean;
 }
+
+export interface BotPanelState {
+  open: boolean;
+  tab: BotPanelTab;
+  /** Cleared when the routed Bot changes. Apply it only when `botId` is the Bot on screen. */
+  fileRequest: BotPanelFileRequest | null;
+  /** Bumped whenever the person opens the panel or picks a tab from outside it. */
+  focusRequest: number;
+}
+
+export type BotPanelValue = BotPanelState & BotPanelActions;
 
 export function parseBotPanelTab(value: string | null): BotPanelTab {
   return (BOT_PANEL_TABS as readonly string[]).includes(value ?? "") ? (value as BotPanelTab) : "activity";
@@ -53,7 +67,8 @@ function writeStored(key: string, value: string): void {
   }
 }
 
-const BotPanelContext = React.createContext<BotPanelValue | null>(null);
+const BotPanelStateContext = React.createContext<BotPanelState | null>(null);
+const BotPanelActionsContext = React.createContext<BotPanelActions | null>(null);
 
 interface PanelState {
   open: boolean;
@@ -61,7 +76,14 @@ interface PanelState {
   fileRequest: BotPanelFileRequest | null;
 }
 
-export function BotPanelProvider({ children }: React.PropsWithChildren) {
+/**
+ * `routedBotId` is the Bot whose chat is on screen. When it changes, a pending
+ * file request is dropped, so it is never re-applied to a different Bot.
+ */
+export function BotPanelProvider({
+  children,
+  routedBotId = null,
+}: React.PropsWithChildren<{ routedBotId?: string | null }>) {
   const [state, setState] = React.useState<PanelState>(() => ({
     open: readStored(BOT_PANEL_OPEN_KEY) === "true",
     tab: parseBotPanelTab(readStored(BOT_PANEL_TAB_KEY)),
@@ -76,6 +98,13 @@ export function BotPanelProvider({ children }: React.PropsWithChildren) {
 
   React.useEffect(() => writeStored(BOT_PANEL_OPEN_KEY, String(state.open)), [state.open]);
   React.useEffect(() => writeStored(BOT_PANEL_TAB_KEY, state.tab), [state.tab]);
+  React.useEffect(
+    () =>
+      setState((current) =>
+        current.fileRequest && current.fileRequest.botId !== routedBotId ? { ...current, fileRequest: null } : current,
+      ),
+    [routedBotId],
+  );
 
   const requestFocus = React.useCallback(() => {
     if (!openRef.current) {
@@ -102,9 +131,13 @@ export function BotPanelProvider({ children }: React.PropsWithChildren) {
   }, []);
 
   const show = React.useCallback(
-    (tab: BotPanelTab, options?: { path?: string }) => {
+    (tab: BotPanelTab, options?: BotPanelShowOptions) => {
       requestFocus();
-      const request = options?.path ? { path: options.path, key: (fileKey.current += 1) } : null;
+      // A path without its Bot can't be scoped, so it selects nothing.
+      const request =
+        options?.path && options.botId
+          ? { botId: options.botId, path: options.path, key: (fileKey.current += 1) }
+          : null;
       setState((current) => ({ open: true, tab, fileRequest: request ?? current.fileRequest }));
     },
     [requestFocus],
@@ -130,15 +163,39 @@ export function BotPanelProvider({ children }: React.PropsWithChildren) {
     return pending;
   }, []);
 
-  const value = React.useMemo<BotPanelValue>(
-    () => ({ ...state, focusRequest, show, setTab, toggle, close, consumeFocusRequest }),
-    [state, focusRequest, show, setTab, toggle, close, consumeFocusRequest],
+  const actions = React.useMemo<BotPanelActions>(
+    () => ({ show, setTab, toggle, close, consumeFocusRequest }),
+    [show, setTab, toggle, close, consumeFocusRequest],
   );
-  return <BotPanelContext.Provider value={value}>{children}</BotPanelContext.Provider>;
+  const panelState = React.useMemo<BotPanelState>(() => ({ ...state, focusRequest }), [state, focusRequest]);
+  return (
+    <BotPanelActionsContext.Provider value={actions}>
+      <BotPanelStateContext.Provider value={panelState}>{children}</BotPanelStateContext.Provider>
+    </BotPanelActionsContext.Provider>
+  );
+}
+
+/** The provider for the app and for tests under a router: it follows the Bot whose chat is routed. */
+export function RoutedBotPanelProvider({ children }: React.PropsWithChildren) {
+  const router = useRouter();
+  const [routedBotId, setRoutedBotId] = React.useState(() => botChatRouteBotId(router.state.location.pathname));
+  React.useEffect(() => {
+    const follow = (pathname: string) => setRoutedBotId(botChatRouteBotId(pathname));
+    follow(router.state.location.pathname);
+    return router.subscribe("onResolved", ({ toLocation }) => follow(toLocation.pathname));
+  }, [router]);
+  return <BotPanelProvider routedBotId={routedBotId}>{children}</BotPanelProvider>;
+}
+
+export function useBotPanelActions(): BotPanelActions {
+  const value = React.useContext(BotPanelActionsContext);
+  if (!value) throw new Error("useBotPanelActions must be used inside BotPanelProvider.");
+  return value;
 }
 
 export function useBotPanel(): BotPanelValue {
-  const value = React.useContext(BotPanelContext);
-  if (!value) throw new Error("useBotPanel must be used inside BotPanelProvider.");
-  return value;
+  const actions = useBotPanelActions();
+  const panelState = React.useContext(BotPanelStateContext);
+  if (!panelState) throw new Error("useBotPanel must be used inside BotPanelProvider.");
+  return React.useMemo(() => ({ ...panelState, ...actions }), [panelState, actions]);
 }

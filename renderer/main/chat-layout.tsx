@@ -3,7 +3,7 @@ import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Selection is route-driven (chatId param); the unified sidebar can open chats
 // across registered workspaces while WorkspaceProvider tracks execution context.
 
-import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { SplitView, Text, toast } from "../components/ui";
@@ -28,9 +28,13 @@ import { isBotsPath, rememberRoute } from "../lib/bot-routes";
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const href = useRouterState({ select: (state) => state.location.href });
-  // ‹ in the Bots sidebar returns to the last page outside Bots (spec §9).
-  React.useEffect(() => rememberRoute(href), [href]);
+  // ‹ in the Bots sidebar returns to the last page outside Bots (spec §9). The
+  // href is read from the router, not selected, so search-only changes don't re-render the layout.
+  const router = useRouter();
+  React.useEffect(() => {
+    rememberRoute(router.state.location.href);
+    return router.subscribe("onResolved", ({ toLocation }) => rememberRoute(toLocation.href));
+  }, [router]);
   // The workspace Environment, Quick View and device mini player are hidden, not
   // closed, on Bots pages: the Bot has its own panel, and leaving restores them.
   const botsSurface = isBotsPath(pathname);

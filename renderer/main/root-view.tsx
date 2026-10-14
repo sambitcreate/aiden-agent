@@ -9,7 +9,7 @@ import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context"
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
-import { BotPanelProvider, useBotPanel } from "./bots/bot-panel-context";
+import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
@@ -50,11 +50,11 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <BotPanelProvider>
+          <RoutedBotPanelProvider>
             <CommandSystemProvider>
               <RootContent />
             </CommandSystemProvider>
-          </BotPanelProvider>
+          </RoutedBotPanelProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
@@ -65,7 +65,7 @@ function RootContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
-  const botPanel = useBotPanel();
+  const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
