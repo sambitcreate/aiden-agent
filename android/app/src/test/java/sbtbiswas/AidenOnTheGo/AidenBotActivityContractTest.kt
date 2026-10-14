@@ -23,6 +23,8 @@ import sbtbiswas.AidenOnTheGo.features.bots.AidenBotActivityPhase
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionEventOutcome
 import sbtbiswas.AidenOnTheGo.features.bots.aidenApplyBotSessionEvent
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotActivityDisplay
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatActivity
+import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotElapsedLabel
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotFaceGlance
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotNextAnnouncement
@@ -93,6 +95,14 @@ class AidenBotActivityContractTest {
         )
         // Frames re-encode as the Mac sent them.
         assertEquals(activity.getValue("events"), json.encodeToJsonElement(ListSerializer(AidenBotSessionEvent.serializer()), events))
+        // The stream's own frame decoder (duplicate keys, privacy scan, identity) reads them the same.
+        fun streamed(frame: JsonElement) =
+            AidenBotSessionEventStream.decodeFrame(json.encodeToString(JsonElement.serializer(), frame).toByteArray(), "bot_fixture_01")
+        assertEquals(events, activity.getValue("events").jsonArray.map(::streamed))
+        val tagged = streamed(activity.getValue("entryEvent")).payload as AidenBotSessionEventPayload.Entry
+        assertEquals("18", (tagged.entry as AidenBotSessionEntry.Message).submissionId)
+        val nonHolder = streamed(privacy.getValue("nonHolder").jsonObject.getValue("entryEvent")).payload as AidenBotSessionEventPayload.Entry
+        assertNull("a device without bot:activity never sees the tag", (nonHolder.entry as AidenBotSessionEntry.Message).submissionId)
         // A newer Mac's phase decodes and reads as Working.
         assertEquals(
             aidenBotActivityDisplay("working", AidenBotChatActivityWording.FOLLOWS, null),
@@ -354,10 +364,73 @@ class AidenBotActivityContractTest {
         assertTrue(both.supportsBotActivity)
         assertEquals("bot-activity-v1", feature)
         assertEquals("bot:activity", grant.rawValue)
-        // The grant is negotiable like the other phone grants.
-        assertTrue(AidenRemoteCapability.NEGOTIABLE.contains(grant))
-        assertTrue(AidenRemoteCapability.PHONE_KNOWN.contains(grant))
-        assertEquals(listOf(grant), AidenRemoteCapability.PHONE_BOT_ACTIVITY)
+    }
+
+    private fun installationHolding(vararg held: AidenRemoteCapability) = AidenInstallation(
+        instanceId = "inst_activity",
+        deviceId = "dev_activity",
+        name = "Mac",
+        endpoint = "https://aiden.test/api/aiden/v1",
+        serverSpkiSha256 = "sha256/test",
+        deviceCapabilities = listOf(AidenRemoteCapability.CHAT_READ) + held,
+        serverCapabilities = listOf(AidenRemoteCapability.CHAT_READ) + held,
+        createdAt = java.time.Instant.parse("2026-10-14T09:00:00Z")
+    )
+
+    @Test
+    fun aGrantIsAskedForOnlyFromAMacThatAnnouncesItsFeatureAndOnlyWhenNotHeld() {
+        val rows = listOf(
+            AidenRemoteProtocol.BOT_ACTIVITY_FEATURE to listOf(AidenRemoteCapability.BOT_ACTIVITY),
+            AidenRemoteProtocol.BOT_MEMORY_FEATURE to listOf(AidenRemoteCapability.BOT_CARDS),
+            AidenRemoteProtocol.MOBILE_SIMULATORS_FEATURE to listOf(AidenRemoteCapability.SIMULATORS_MOBILE),
+            AidenRemoteProtocol.PHONE_RUN_CONTROL_FEATURE to listOf(AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL),
+            AidenRemoteProtocol.CHAT_TASKS_FEATURE to listOf(AidenRemoteCapability.TASKS_READ)
+        )
+        for ((feature, grants) in rows) {
+            val base = listOf(AidenRemoteCapability.CHAT_READ)
+            // No feature: nothing is asked.
+            assertEquals(feature, emptyList<AidenRemoteCapability>(), aidenProgressCapabilitiesToRequest(macWith(emptyList(), base), installationHolding()))
+            // The feature alone: the phone asks for its grant.
+            assertEquals(feature, grants, aidenProgressCapabilitiesToRequest(macWith(listOf(feature), base), installationHolding()))
+            // The feature with the grant already held: nothing more is asked.
+            assertEquals(
+                feature,
+                emptyList<AidenRemoteCapability>(),
+                aidenProgressCapabilitiesToRequest(macWith(listOf(feature), base + grants), installationHolding(*grants.toTypedArray()))
+            )
+            // An older Mac with a grant left over from before and no feature: never asked.
+            assertEquals(
+                feature,
+                emptyList<AidenRemoteCapability>(),
+                aidenProgressCapabilitiesToRequest(macWith(emptyList(), base + grants), installationHolding(*grants.toTypedArray()))
+            )
+        }
+        // Several features at once ask for each missing grant once, in a stable order.
+        val all = macWith(listOf(AidenRemoteProtocol.BOT_MEMORY_FEATURE, AidenRemoteProtocol.BOT_PROACTIVE_FEATURE, AidenRemoteProtocol.BOT_ACTIVITY_FEATURE), emptyList())
+        assertEquals(
+            listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY),
+            aidenProgressCapabilitiesToRequest(all, installationHolding())
+        )
+    }
+
+    @Test
+    fun aCachedChatActivityCountsOnlyWhileTheMacSupportsItNow() {
+        val detail = json.decodeFromJsonElement(AidenBotDetail.serializer(), activity.getValue("detail"))
+        val grant = AidenRemoteCapability.BOT_ACTIVITY
+        val feature = AidenRemoteProtocol.BOT_ACTIVITY_FEATURE
+        assertEquals(detail.chatActivity, aidenBotChatActivity(macWith(listOf(feature), listOf(grant)), detail))
+        assertNull("not connected yet", aidenBotChatActivity(null, detail))
+        assertNull("an older Mac", aidenBotChatActivity(macWith(emptyList(), listOf(grant)), detail))
+        assertNull("the grant was taken away", aidenBotChatActivity(macWith(listOf(feature), emptyList()), detail))
+    }
+
+    @Test
+    fun chatActivityAndWhenBusyGoOnlyToAMacThatTakesThem() {
+        val pick = AidenBotChatActivity(AidenBotChatActivityLevel.DETAILED, AidenBotChatActivityWording.FOLLOWS)
+        val both = AidenBotIdentityPatch(name = "Chef", chatActivity = pick)
+        assertEquals(both, both.forHost(supportsBotActivity = true))
+        assertEquals(AidenBotIdentityPatch(name = "Chef"), both.forHost(supportsBotActivity = false))
+        assertNull("nothing left for an older Mac", AidenBotIdentityPatch(chatActivity = pick).forHost(supportsBotActivity = false))
     }
 
     private fun pairedStore(): Pair<AidenInstallationStore, AidenInstallation> {
@@ -402,5 +475,35 @@ class AidenBotActivityContractTest {
         assertEquals(base, reloaded.current().deviceCapabilities)
         val relaunched = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
         assertFalse(relaunched.current().hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY))
+    }
+
+    @Test
+    fun eachPairedMacKeepsOrDropsItsOwnBotActivityGrant() {
+        val (store, first) = pairedStore()
+        val second = store.addInstallation(
+            AidenPairingExchange(
+                instanceId = "inst_other",
+                deviceId = "dev_other",
+                endpoint = "https://other.test/api/aiden/v1",
+                serverSpkiSha256 = "sha256/other",
+                credential = "other_credential",
+                capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ),
+                displayName = "Studio Mac"
+            ),
+            null
+        )
+        val base = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ)
+        val granted = base + AidenRemoteCapability.BOT_ACTIVITY
+        for (installation in listOf(first, second)) {
+            store.updateServerCapabilities(installation.instanceId, granted, "Mac", base)
+            store.updateDeviceCapabilities(installation.instanceId, granted)
+        }
+        // Only the first Mac stops granting it.
+        store.updateServerCapabilities(first.instanceId, base, "Mac", base)
+        val reloaded = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        fun holds(instanceId: String) =
+            reloaded.installations.value.single { it.instanceId == instanceId }.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY)
+        assertFalse(holds(first.instanceId))
+        assertTrue("the other Mac's grant is its own", holds(second.instanceId))
     }
 }

@@ -7,7 +7,10 @@ import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkProperty
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.spec
+import sbtbiswas.AidenOnTheGo.models.AidenBotChatActivity
 import sbtbiswas.AidenOnTheGo.models.AidenBotChatActivityWording
+import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
+import sbtbiswas.AidenOnTheGo.models.AidenServer
 
 /**
  * The status line's words and marks (spec §5), in §5's order. Kept in step with
@@ -103,3 +106,11 @@ fun aidenBotFaceGlance(timeMs: Long): AidenBotFaceGlance {
     // The mark's view box is 24 wide.
     return AidenBotFaceGlance(dx / 24f, blink)
 }
+
+/**
+ * A Bot's Chat activity as this phone may use it: only while the Mac announces
+ * `bot-activity-v1` and this phone holds `bot:activity` now. A detail cached from another
+ * pairing or before an older Mac was restored never decides what the chat shows.
+ */
+fun aidenBotChatActivity(server: AidenServer?, detail: AidenBotDetail?): AidenBotChatActivity? =
+    if (server?.supportsBotActivity == true) detail?.chatActivity else null

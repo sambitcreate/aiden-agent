@@ -426,6 +426,16 @@ data class AidenBotIdentityPatch(
         purpose?.let { AidenBotWire.validateString(it, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true) }
         instructions?.let { AidenBotWire.validateString(it, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH) }
     }
+
+    /**
+     * The patch a Mac can take: without `chatActivity` unless it announces `bot-activity-v1` and
+     * this phone holds `bot:activity`. Null when nothing else is left to send.
+     */
+    fun forHost(supportsBotActivity: Boolean): AidenBotIdentityPatch? = when {
+        supportsBotActivity || chatActivity == null -> this
+        name == null && purpose == null && instructions == null && avatar == null -> null
+        else -> copy(chatActivity = null)
+    }
 }
 
 @Serializable

@@ -357,19 +357,21 @@ class AidenBotRevision25ClientTest {
         val activity = fixture.getValue("botActivity").jsonObject.getValue("send")
         server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
         val key = UUID.randomUUID()
-        val receipt = client.sendBotMessage("bot_fixture_01", "Keep it vegetarian.", key, AidenStreamInputMode.STEER)
+        val receipt = client.sendBotMessage("bot_fixture_01", "Keep it vegetarian.", key, AidenStreamInputMode.STEER, supportsBotActivity = true)
         assertEquals("19", receipt.submissionId)
         val steer = server.takeRequest()
         assertEquals("/api/aiden/v1/bots/bot_fixture_01/messages", steer.path)
         assertEquals(key.toString(), steer.getHeader("Idempotency-Key"))
         assertEquals(activity.jsonObject.getValue("request"), Json.parseToJsonElement(steer.body.readUtf8()))
 
-        // Without a mode the body is the revision-29 body, byte for byte.
-        server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
-        client.sendBotMessage("bot_fixture_01", "Hi", UUID.randomUUID())
-        assertEquals(
-            Json.parseToJsonElement("""{"text":"Hi"}"""),
-            Json.parseToJsonElement(server.takeRequest().body.readUtf8())
-        )
+        // Without a mode, or to a Mac that doesn't take one, the body is the revision-29 body.
+        for (mode in listOf(null, AidenStreamInputMode.STEER)) {
+            server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
+            client.sendBotMessage("bot_fixture_01", "Hi", UUID.randomUUID(), mode)
+            assertEquals(
+                Json.parseToJsonElement("""{"text":"Hi"}"""),
+                Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            )
+        }
     }
 }

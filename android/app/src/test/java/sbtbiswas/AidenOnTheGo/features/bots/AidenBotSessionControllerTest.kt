@@ -1566,4 +1566,27 @@ class AidenBotSessionControllerTest {
         assertEquals(AidenBotRoutineProposalStatus.PENDING, controller.state.value.proposal(pendingProposalId).status)
         assertEquals(AidenBotProposalPhase.FAILED, controller.state.value.proposalResponses[pendingProposalId])
     }
+
+    // Task 8 review: an optimistic Stop or Resume never leaves the line on the run before's phase.
+    @Test
+    fun theLineNeverShowsAStalePhaseAfterResumeStopOrANewTurn() = runTest {
+        val paused = interruptedSession.copy(partial = null, activity = AidenBotSessionActivity("app", "Notion", started))
+        val transport = FakeTransport(paused)
+        val controller = AidenBotSessionController(paused.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        assertTrue(controller.resume())
+        assertEquals(
+            "the Mac took the Resume: its intent, not the paused run's app",
+            AidenBotActivityPhase.RESUMING,
+            aidenBotStatusLine(controller.state.value, started)!!.display.phase
+        )
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("searching", null, started + 9_000)))
+        assertEquals(AidenBotActivityPhase.SEARCHING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+
+        // Stopped: the next turn starts at "Getting ready", not at the stopped run's phase.
+        assertTrue(controller.stop())
+        assertNull(aidenBotStatusLine(controller.state.value, started))
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)))
+        assertEquals(AidenBotActivityPhase.PREPARING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+    }
 }

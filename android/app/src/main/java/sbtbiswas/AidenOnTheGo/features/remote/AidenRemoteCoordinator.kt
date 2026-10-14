@@ -33,6 +33,41 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
 
+/**
+ * The opt-in grants this phone asks a Mac for, each only from a Mac that announces its
+ * feature, in this order. Older Macs never announce the newer features, so they never see the
+ * phone-scoped subsets requested.
+ */
+private val AIDEN_PROGRESS_GRANTS: List<Pair<(AidenServer) -> Boolean, List<AidenRemoteCapability>>> = listOf(
+    AidenServer::supportsChatTasks to listOf(AidenRemoteCapability.TASKS_READ),
+    AidenServer::supportsChatAgents to listOf(AidenRemoteCapability.AGENTS_READ),
+    AidenServer::supportsQuestionPrompts to listOf(AidenRemoteCapability.QUESTIONS_RESPOND),
+    AidenServer::supportsChatSkills to listOf(AidenRemoteCapability.SKILLS_INVOKE),
+    // Contract revision 24: the phone-scoped run subset.
+    AidenServer::supportsPhoneRunControl to AidenRemoteCapability.PHONE_RUNS,
+    // Contract revision 26: the phone simulator grant.
+    AidenServer::supportsMobileSimulators to AidenRemoteCapability.PHONE_SIMULATORS,
+    // Contract revision 27: memory and routine proposal cards.
+    AidenServer::offersBotCards to AidenRemoteCapability.PHONE_BOT_CARDS,
+    // Contract revision 30: activity frames and Chat activity.
+    AidenServer::offersBotActivity to AidenRemoteCapability.PHONE_BOT_ACTIVITY
+)
+
+/**
+ * What to ask [server] for: each grant whose feature the Mac announces and that [installation]
+ * doesn't already hold. A grant left over from an older pairing is never asked for, or trusted,
+ * without its feature.
+ */
+internal fun aidenProgressCapabilitiesToRequest(
+    server: AidenServer,
+    installation: AidenInstallation
+): List<AidenRemoteCapability> =
+    AIDEN_PROGRESS_GRANTS
+        .filter { (announced, _) -> announced(server) }
+        .flatMap { (_, grants) -> grants }
+        .filterNot { installation.hasNegotiatedAccess(it) }
+        .distinct()
+
 enum class AidenConnectionState {
     NEEDS_PAIRING,
     CONNECTING,
@@ -237,47 +272,7 @@ class AidenRemoteCoordinator(
         server: AidenServer
     ): AidenServer {
         if (!isCurrent(generation, installation.id, client)) return server
-        val requested = buildList {
-            if (server.supportsChatTasks && !installation.hasNegotiatedAccess(AidenRemoteCapability.TASKS_READ)) {
-                add(AidenRemoteCapability.TASKS_READ)
-            }
-            if (server.supportsChatAgents && !installation.hasNegotiatedAccess(AidenRemoteCapability.AGENTS_READ)) {
-                add(AidenRemoteCapability.AGENTS_READ)
-            }
-            if (server.supportsQuestionPrompts && !installation.hasNegotiatedAccess(AidenRemoteCapability.QUESTIONS_RESPOND)) {
-                add(AidenRemoteCapability.QUESTIONS_RESPOND)
-            }
-            if (server.supportsChatSkills && !installation.hasNegotiatedAccess(AidenRemoteCapability.SKILLS_INVOKE)) {
-                add(AidenRemoteCapability.SKILLS_INVOKE)
-            }
-            // Contract revision 24: older Macs never advertise the feature, so
-            // they never see the phone-scoped run subset requested.
-            if (server.supportsPhoneRunControl) {
-                for (capability in AidenRemoteCapability.PHONE_RUNS) {
-                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
-                }
-            }
-            // Contract revision 26: only Macs with the simulator feature are
-            // asked for the phone simulator grant.
-            if (server.supportsMobileSimulators) {
-                for (capability in AidenRemoteCapability.PHONE_SIMULATORS) {
-                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
-                }
-            }
-            // Contract revision 27: this phone renders memory and routine proposal
-            // cards. Older Macs never advertise the features and are never asked.
-            if (server.offersBotCards) {
-                for (capability in AidenRemoteCapability.PHONE_BOT_CARDS) {
-                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
-                }
-            }
-            // Contract revision 30: activity frames and Chat activity. Older Macs never announce it.
-            if (server.offersBotActivity) {
-                for (capability in AidenRemoteCapability.PHONE_BOT_ACTIVITY) {
-                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
-                }
-            }
-        }
+        val requested = aidenProgressCapabilitiesToRequest(server, installation)
         if (requested.isEmpty()) return server
         return try {
             val completeCapabilities = client.updateDeviceCapabilities(requested)

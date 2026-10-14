@@ -139,7 +139,7 @@ fun AidenBotSessionScreen(
         val sessionKey = coordinator.installationStore.activeInstallation?.let { AidenBotSessionKey(it.instanceId, it.deviceId, botId) }
         AidenBotSessionController(
             botId,
-            AidenRemoteBotSessionTransport(cl),
+            AidenRemoteBotSessionTransport(cl) { coordinator.serverInfo.value?.supportsBotActivity == true },
             scope,
             knownState,
             sessionKey = sessionKey,

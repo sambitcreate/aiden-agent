@@ -44,11 +44,15 @@ interface AidenBotSessionTransport {
     ): AidenBotRoutineProposalRespondResult
 }
 
-class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : AidenBotSessionTransport {
+/** [supportsBotActivity] reads whether the Mac takes `whenBusy` now; an older Mac refuses it. */
+class AidenRemoteBotSessionTransport(
+    private val client: AidenRemoteClient,
+    private val supportsBotActivity: () -> Boolean = { false }
+) : AidenBotSessionTransport {
     override suspend fun session(botId: String) = client.botSession(botId)
     override fun events(botId: String) = client.botSessionEvents(botId)
     override suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode?) =
-        client.sendBotMessage(botId, text, key, whenBusy)
+        client.sendBotMessage(botId, text, key, whenBusy, supportsBotActivity())
     override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
     override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
     override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
