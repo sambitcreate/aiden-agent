@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { verifyApprovedRootIdentity } from "./aiden-remote-approved-roots.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenOpaqueHandleError,
@@ -147,14 +148,7 @@ export class AidenRemoteWorkspaceBrowserService {
     >,
   ): Promise<AidenOpaqueHandleClaims> {
     try {
-      const rootIdentity = await fs.stat(root.folderPath, { bigint: true });
-      const canonicalRoot = await fs.realpath(root.folderPath);
-      if (
-        !rootIdentity.isDirectory() ||
-        canonicalRoot !== root.folderPath ||
-        rootIdentity.dev.toString() !== root.device ||
-        rootIdentity.ino.toString() !== root.inode
-      ) {
+      if (!(await verifyApprovedRootIdentity(root))) {
         throw new AidenOpaqueHandleError("filesystem_identity_changed");
       }
       const identity = await inspectAidenFilesystemIdentity(root.folderPath, candidatePath);
