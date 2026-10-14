@@ -729,7 +729,7 @@ test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered fo
     body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "send", arguments: {} } }),
   });
   assert.equal(response.status, 403);
-  assert.deepEqual(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read").split(" ").sort(), ["mail.read", "mail.send"]);
+  assert.deepEqual(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read")?.split(" ").sort(), ["mail.read", "mail.send"]);
   clearMcpStepUpScope(serviceUrl);
   // A non-MCP request on the same origin (an OAuth form POST) records nothing.
   await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
