@@ -23,15 +23,25 @@ export interface BotTurnIntents {
   onIntent(listener: (botId: string, intent: BotTurnIntent) => void): () => void;
 }
 
-export function createBotTurnIntents(): BotTurnIntents {
+export interface BotTurnIntentsDeps {
+  /** A listener threw: its surface missed this intent. The others still heard it. */
+  onError?(botId: string, intent: BotTurnIntent, error: unknown): void;
+}
+
+export function createBotTurnIntents(deps: BotTurnIntentsDeps = {}): BotTurnIntents {
   const listeners = new Set<(botId: string, intent: BotTurnIntent) => void>();
   return {
     announce(botId, intent) {
       for (const listener of [...listeners]) {
         try {
           listener(botId, intent);
-        } catch {
-          // A status line that can't update must never block the Stop itself.
+        } catch (error) {
+          // A status line that can't update must never block the Stop itself, or the next listener.
+          try {
+            deps.onError?.(botId, intent, error);
+          } catch {
+            // A failing report must not block delivery either.
+          }
         }
       }
     },

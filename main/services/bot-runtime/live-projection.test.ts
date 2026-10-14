@@ -885,7 +885,10 @@ function gatedAnswer(text: string) {
 }
 
 test("each Stop and Resume intent reaches the desktop projection as its own call, until unwired", async () => {
-  const intents = createBotTurnIntents();
+  const reported: string[] = [];
+  const intents = createBotTurnIntents({
+    onError: (botId, intent, error) => void reported.push(`${intent} ${botId}: ${(error as Error).message}`),
+  });
   const calls: string[] = [];
   const projection = {
     notifyStopping: (botId: string) => void calls.push(`stopping ${botId}`),
@@ -900,6 +903,7 @@ test("each Stop and Resume intent reaches the desktop projection as its own call
 
   assert.equal(await stopWithIntents(intents, "bot:a", async () => "stopped"), "stopped");
   assert.deepEqual(calls, ["stopping bot:a"], "a Stop that took is never taken back");
+  assert.deepEqual(reported, ["stopping bot:a: a broken surface"], "the surface that missed it is reported");
 
   calls.length = 0;
   const refused = new Error("The Bot is held by another Aiden.");
@@ -914,6 +918,49 @@ test("each Stop and Resume intent reaches the desktop projection as its own call
   unwire();
   intents.announce("bot:a", "stopping");
   assert.deepEqual(calls, []);
+  // The broken listener is still registered: each intent it missed is reported once.
+  assert.deepEqual(reported, [
+    "stopping bot:a: a broken surface",
+    "stopping bot:b: a broken surface",
+    "stopCancelled bot:b: a broken surface",
+    "resuming bot:c: a broken surface",
+    "stopping bot:a: a broken surface",
+  ]);
+});
+
+test("a Stop for one Bot leaves another Bot's running reply on its work, never Stopping", async () => {
+  const live = await start(createFauxModels([slowAnswer(), slowAnswer()], { tokensPerSecond: 40 }), {
+    service: { knownBotIds: async () => new Set(["bot:a", "bot:b"]) },
+  });
+  const intents = createBotTurnIntents();
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    const tapeA = recorder();
+    const tapeB = recorder();
+    const a = await live.projection.subscribe("bot:a", tapeA.sink);
+    tapeA.start(a.snapshot);
+    const b = await live.projection.subscribe("bot:b", tapeB.sink);
+    tapeB.start(b.snapshot);
+    await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-a" });
+    await live.service.send("bot:b", { text: "tell me another", requestId: "desk-b" });
+    await waitFor(() => tapeA.view?.activity?.phase === "writing" && tapeB.view?.activity?.phase === "writing", {
+      what: "both replies to stream",
+    });
+
+    await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"));
+    await waitFor(() => tapeA.view?.activity === null && tapeA.view.state.kind === "idle", { what: "Bot A to stop" });
+    assert.ok(observedPhases(tapeA.events).includes("stopping"), observedPhases(tapeA.events).join(" → "));
+    // Bot B's feed has handled every intent by now: a refresh runs after it on the same queue.
+    await live.projection.refreshActivity("bot:b");
+    assert.equal(tapeB.view?.state.kind, "running");
+    assert.equal(tapeB.view?.activity?.phase, "writing");
+    assert.equal(observedPhases(tapeB.events).includes("stopping"), false, observedPhases(tapeB.events).join(" → "));
+    a.unsubscribe();
+    b.unsubscribe();
+  } finally {
+    unwire();
+    await live.close();
+  }
 });
 
 test("a Stop announced while nothing runs changes nothing, and the next reply starts at Getting ready", async () => {
