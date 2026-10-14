@@ -654,6 +654,7 @@
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
+    <string name="bot_editor_model_gone">That model isn’t available any more. Choose another one.</string>
     <string name="bot_editor_later_hint">You can change its look, instructions and what it can use later.</string>
     <string name="bot_editor_instructions_load_failed">Aiden couldn’t load the instructions. Try again.</string>
     <string name="bot_editor_name_placeholder">Like Meal Planner or Chief of Staff</string>

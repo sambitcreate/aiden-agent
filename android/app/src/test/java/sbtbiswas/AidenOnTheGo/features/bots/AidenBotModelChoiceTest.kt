@@ -30,6 +30,17 @@ class AidenBotModelChoiceTest {
     }
 
     @Test
+    fun aProviderThatIsUpStillListsItsDownModelsAsUnavailable() {
+        val mixed = catalog.copy(
+            providers = catalog.providers.map { provider ->
+                provider.copy(available = true, models = provider.models.mapIndexed { i, m -> m.copy(available = i == 0) })
+            }
+        )
+        val flags = aidenBotModelPickerProviders(mixed).flatMap { it.models }.map { it.available }
+        assertEquals(listOf(true, false), flags)
+    }
+
+    @Test
     fun recommendedModelIsTheFirstOneTheMacCanRun() {
         assertEquals(AidenModelRoute("provider_fixture", "model_fixture"), aidenBotRecommendedModel(catalog))
     }
@@ -52,5 +63,19 @@ class AidenBotModelChoiceTest {
         assertNull(draft.request(catalog))
         assertNull(draft.copy(model = AidenModelRoute("provider_fixture", "model_fixture")).request(null))
         assertFalse(AidenBotCreateDraft(name = "").canCreate)
+    }
+
+    @Test
+    fun aChosenModelThatVanishedFromTheCatalogIsFlaggedAndBlocksCreate() {
+        val chosen = AidenBotCreateDraft(name = "Seer", model = AidenModelRoute("provider_fixture", "vision_model_fixture"))
+        assertFalse(chosen.modelIsGone(catalog))
+        assertFalse(chosen.modelIsGone(null))
+        assertFalse(AidenBotCreateDraft(name = "Seer").modelIsGone(catalog))
+
+        val withoutIt = catalog.copy(
+            providers = catalog.providers.map { p -> p.copy(models = p.models.map { m -> m.copy(available = m.id != "vision_model_fixture") }) }
+        )
+        assertTrue(chosen.modelIsGone(withoutIt))
+        assertNull(chosen.request(withoutIt))
     }
 }

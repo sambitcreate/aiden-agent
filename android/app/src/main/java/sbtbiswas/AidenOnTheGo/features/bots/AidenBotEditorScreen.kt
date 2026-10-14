@@ -49,6 +49,12 @@ data class AidenBotCreateDraft(
     val canCreate: Boolean
         get() = name.isNotBlank()
 
+    /** True when a model was chosen and the Mac's [catalog] no longer offers it as runnable. */
+    fun modelIsGone(catalog: AidenBotCapabilityCatalog?): Boolean {
+        val route = model ?: return false
+        return catalog != null && !catalog.containsAvailable(route.providerId, route.modelId)
+    }
+
     /**
      * The create request for this draft. The answer becomes the subtitle and seeds the
      * instructions; the character is picked from the name. With no [model] chosen, access
@@ -156,12 +162,12 @@ private fun AidenBotCreateScreen(
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
     LaunchedEffect(client) {
         val cl = client ?: return@LaunchedEffect
-        catalog = try {
-            cl.botCapabilityCatalog()
+        // A failed refetch keeps the catalog already loaded.
+        try {
+            catalog = cl.botCapabilityCatalog()
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            null
         }
     }
     // One key per attempt, so a retried Create never makes two Bots.
@@ -214,7 +220,8 @@ private fun AidenBotCreateScreen(
         )
         catalog?.let { cat ->
             val providers = remember(cat) { aidenBotModelPickerProviders(cat) }
-            if (providers.any { provider -> provider.models.any { it.available } }) {
+            val modelGone = draft.modelIsGone(cat)
+            if (modelGone || providers.any { provider -> provider.models.any { it.available } }) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = stringResource(R.string.bot_advanced_model),
@@ -228,6 +235,14 @@ private fun AidenBotCreateScreen(
                         selection = draft.model ?: aidenBotRecommendedModel(cat),
                         onSelect = { entry -> draft = draft.copy(model = entry.route) }
                     )
+                    if (modelGone) {
+                        Text(
+                            text = stringResource(R.string.bot_editor_model_gone),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.danger,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
                 }
             }
         }
