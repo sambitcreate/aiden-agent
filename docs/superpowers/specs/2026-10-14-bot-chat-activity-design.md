@@ -242,6 +242,7 @@ chatActivity?: { level: "quiet" | "summary" | "detailed"; wording: "follows" | "
   - **Memory:** the Memory page's content in compact form. Edit and delete behave exactly as in Profile → Memory, which stays.
   - **Routines:** the Routines group's content, with Add routine.
 - **Opening it.** A panel toggle sits in the Bot chat header. Files, Memory and Routines in the ••• menu open the panel on that tab.
+  - Implemented in C2 on the chat route `/bots/$botId/chat` (`renderer/main/bots/bot-workbench.tsx`), with its own state and keys (`aiden-agent.bot-panel.*`, `BotPanelProvider`). `environment.toggle` toggles it in a Bot chat and does nothing on other Bots pages. The workspace Environment, Quick View and device mini player are suppressed on every Bots path and come back unchanged (the workspace panel reads `data-state="covered"` while Bots pages show).
 
 ## 9. Bots sidebar
 
@@ -379,3 +380,24 @@ Every new test file is registered in the matching `package.json` script and `scr
   - The Chat activity page saves on pick through a serial queue (a failed save returns the radio to the saved choice with a toast). Each level has its own Reduce Motion still frame, and Reduce Motion is read live.
   - Faces glance through `data-working` on the avatar, with one shared off-screen observer.
   - The Bots onboarding tile needed no redraw: it shows neither the list nor the Updates line (it draws the name pill, one exchange and a routine chip).
+
+- **Slice C2 rulings (2026-10-14):**
+  - The Bot panel lives on the chat route only; Profile and its sub-pages stay full pages.
+  - Bots on paired Macs are listed in the Bots sidebar under "On {Mac}", and search filters them.
+  - "Most recently used" is the Bot last viewed on this Mac, else the newest activity (chat activity once the summaries answer, else the Bot's own `updatedAt` after 800 ms, so a summary that never answers cannot leave `/bots` blank). While the list loads, or a Bot is about to open, `/bots` shows a skeleton; an open create flow suppresses the redirect.
+  - Unread compares the last reply with last-viewed, or with when the preference record began for a Bot never viewed, so updating lights up nothing.
+  - The pinned Bot shows only as the hero; deleting it clears the pin.
+  - The footer shows the profile name's initial (Aiden has no profile photo) and Connect apps opens Settings → Plugins.
+  - The chat header has no "All Bots" back; Profile's back reads "Chat".
+  - "Memory updated" opens the panel's Memory tab.
+  - A waiting Bot's row reads "Waiting for you"; a working one "Thinking…".
+  - `bots:live:summary` gained `needsYou` and `lastReplyAt`; `bots:attention` refreshes a row when a question or approval changes. Desktop IPC only.
+  - Deviations from the plan as written, all accepted:
+    - One refcounted live store per Bot per window (`useSharedBotLive`) instead of a context-only provider, so a consumer outside the provider (the panel tabs, a chip) still shares the single `bots:live:subscribe`.
+    - C1's `WorkbenchPanel` gained two optional props: `surface` (the `data-environment-surface` name, default `"tools"`, so the Bot panel is not treated as the workspace surface by focus and Escape rules) and `tabMenu` (default true; the Bot panel hides the "Open tabs" menu because its tabs are fixed).
+    - Back to Aiden, Search and New Bot sit at the top of the sidebar body rather than in the title bar, which the window controls overlap.
+    - `bots:changed` and `bots:attention` are synced once per window (`useBotNotificationsSync`) and re-read only the Bot they name.
+    - The Activity tab always shows the full log. The Chat activity level governs only the in-chat recap, since opening the panel is an explicit ask.
+    - Bot renderer suites run with `NODE_ENV=test` (`renderer/main/bots/test-env.ts`, imported first by `test-dom.ts`) so TanStack Router uses its client behaviour and routed pages re-render; navigation tests are real.
+  - Parked, not fixed in C2: the workspace sidebar's local state is lost when Bots pages remount it; a batched summaries IPC (one read per Bot on mount today); a failed live re-join drops the kept snapshot; Profile → Chat pushes history; a remote-only list still shows "Meet your first Bot".
+  - The Bots onboarding tile keeps its content; only its header changed from a back chevron to the panel toggle.

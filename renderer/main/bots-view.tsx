@@ -19,6 +19,9 @@ import { BotProfile } from "./bots/bot-profile";
 import { BotStarterCarousel } from "./bots/bot-starter-carousel";
 import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
+/** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
+const SUMMARIES_GRACE_MS = 800;
+
 /**
  * `/bots` with no Bot selected (spec §9): the Bot list lives in the sidebar, so
  * this opens the chat of the Bot last viewed on this Mac, else the one with the
@@ -29,6 +32,7 @@ function BotsIndex() {
   const { bots, rows, summariesSettled } = useBotRows();
   const { preferences } = useBotSidebarPreferences();
   const [creating, setCreating] = React.useState(false);
+  const [summariesGraceOver, setSummariesGraceOver] = React.useState(false);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
   // Only a settled, successful load names a Bot to open: never a stale or failed list.
   const settled = bots.isSuccess && !bots.isFetching;
@@ -37,15 +41,29 @@ function BotsIndex() {
     if (!settled || bots.data === undefined || bots.data.length === 0) return null;
     const viewed = lastViewedBotId(preferences, new Set(bots.data.map((bot) => bot.id)));
     if (viewed) return viewed;
-    return summariesSettled ? (rows[0]?.bot.id ?? null) : null;
-  }, [bots.data, preferences, rows, settled, summariesSettled]);
+    // Rows are ordered by chat activity once the summaries are in, else by the Bot's own
+    // updatedAt; a summary that never answers must not keep /bots blank.
+    return summariesSettled || summariesGraceOver ? (rows[0]?.bot.id ?? null) : null;
+  }, [bots.data, preferences, rows, settled, summariesGraceOver, summariesSettled]);
+
+  React.useEffect(() => {
+    if (!settled || summariesSettled) return;
+    const timer = setTimeout(() => setSummariesGraceOver(true), SUMMARIES_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [settled, summariesSettled]);
 
   React.useEffect(() => {
     // While the create flow is open it finishes first and opens the new Bot itself.
     if (target && !creating) void navigate({ ...botChatPath(target), replace: true });
   }, [creating, navigate, target]);
 
-  if (hasBots && !creating) return <div className="h-full" />;
+  if (hasBots && !creating) {
+    return (
+      <main className="mx-auto h-full w-full max-w-3xl px-5 pt-4">
+        <BotPageSkeleton label="Opening your Bot" groups={[3]} />
+      </main>
+    );
+  }
   return (
     <ScrollArea
       scrollRestorationId="bots-home"

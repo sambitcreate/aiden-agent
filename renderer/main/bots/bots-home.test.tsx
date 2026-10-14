@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotsView } from "../bots-view";
+import { QueryClient } from "@tanstack/react-query";
+import { queryKeys } from "../../lib/queries";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture } from "./test-fixtures";
 import { BOT_SIDEBAR_PREFERENCES_KEY, serializeBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
@@ -57,6 +59,60 @@ test("/bots replaces its own entry, so Back does not return to it", async () => 
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
   assert.equal(router.history.length, 1);
+});
+
+test("a summary that never answers does not leave /bots blank: it shows a skeleton, then opens a Bot", async () => {
+  installBotTestIpc({
+    "bots:list": () => [PLANNER, INBOX],
+    "bots:live:summary": () => new Promise(() => {}),
+    "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
+    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:pendingApprovals": () => [],
+  });
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  assert.ok(await screen.findByRole("status", { name: "Opening your Bot" }));
+  assert.equal(router.state.location.pathname, "/bots");
+  await waitFor(() => assert.ok(router.state.location.pathname.startsWith("/bots/bot-")), { timeout: 3000 });
+  assert.ok(router.state.location.pathname.endsWith("/chat"));
+});
+
+test("an open create flow keeps /bots in place even when the list becomes non-empty underneath it", async () => {
+  let bots: ReturnType<typeof botFixture>[] = [];
+  installBotTestIpc({
+    "bots:list": () => bots,
+    "bots:live:summary": () => idle,
+    "bots:get": () => PLANNER,
+    "bots:live:subscribe": () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:pendingApprovals": () => [],
+  });
+  const { router, queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  fireEvent.click(await screen.findByRole("button", { name: "Create my own" }));
+  assert.ok(await screen.findByRole("dialog", { name: "New Bot" }));
+  // Another window (or a phone) adds a Bot while the dialog is open.
+  bots = [PLANNER];
+  await queryClient.invalidateQueries({ queryKey: queryKeys.bots });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(router.state.location.pathname, "/bots");
+  assert.ok(screen.getByRole("dialog", { name: "New Bot" }));
+});
+
+test("a stale cached Bots list does not navigate until the refetch settles", async () => {
+  let release: (bots: ReturnType<typeof botFixture>[]) => void = () => {};
+  installBotTestIpc({
+    "bots:list": () => new Promise<ReturnType<typeof botFixture>[]>((resolve) => (release = resolve)),
+    "bots:live:summary": () => idle,
+    "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
+    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:pendingApprovals": () => [],
+  });
+  // The cache still holds a Bot that has since been deleted; the app's default staleTime would refetch.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } } });
+  queryClient.setQueryData([...queryKeys.bots, "active"], [INBOX]);
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots", queryClient });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(router.state.location.pathname, "/bots");
+  release([PLANNER]);
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1/chat"));
 });
 
 test("/bots with no Bots stays put and offers to create one", async () => {
