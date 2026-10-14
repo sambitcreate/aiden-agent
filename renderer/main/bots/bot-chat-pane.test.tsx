@@ -393,13 +393,51 @@ test("a Bot open in another Aiden window says so in plain words", async () => {
   assert.equal(screen.queryByPlaceholderText(/held_by_live_process/u), null);
 });
 
-test("a just-sent message shows the Bot working before any reply text arrives", async () => {
+test("a just-sent message shows the status line before any reply text arrives", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
-      snapshot({ entries: [userEntry("u1", "Plan Lisbon")], state: { kind: "running", submissionId: "s1" } }),
+      snapshot({
+        entries: [userEntry("u1", "Plan Lisbon")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "preparing", startedAt: Date.now() },
+      }),
   });
   assert.ok(await screen.findByText("Plan Lisbon"));
-  assert.ok(await screen.findByRole("button", { name: /Working/u }));
+  assert.ok(await screen.findByRole("status", { name: "Getting ready" }));
+});
+
+test("the status line follows live activity, and hides while the reply's words stream", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "What's on my list?")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
+      }),
+  });
+  assert.ok(await screen.findByRole("status", { name: "Reading, groceries.md" }));
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "activity",
+    activity: { phase: "writing", startedAt: Date.now() },
+  });
+  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." });
+  await waitFor(() => assert.equal(screen.queryByText("Reading") === null, true));
+  assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
+});
+
+test("a Bot set to Always Thinking says Thinking while it reads", async () => {
+  await mountChat({
+    "bots:get": () => botFixture({ chatActivity: { level: "quiet", wording: "thinking" } }),
+    "bots:live:subscribe": () =>
+      snapshot({
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
+      }),
+  });
+  assert.ok(await screen.findByRole("status", { name: "Thinking" }));
 });
 
 test("a deleted Bot's chat says it was not found instead of loading forever", async () => {

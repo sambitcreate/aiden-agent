@@ -20,6 +20,7 @@ import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
+import { resolveBotChatActivity } from "../../shared/bots";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotTranscriptEntry } from "../../shared/bot-live";
@@ -30,6 +31,7 @@ import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-h
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
+import { BotStatusLine } from "./bot-status-line";
 import { BotFilesDialog } from "./bot-files-dialog";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { botTranscriptRows } from "./bot-transcript-rows";
@@ -468,6 +470,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         state?.kind,
         approvals.prompts.length,
         snapshot?.question?.waitId,
+        snapshot?.activity?.phase,
       ]}
       showScrollToBottomButton
       streaming={running}
@@ -533,6 +536,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const chatActivity = resolveBotChatActivity(current.chatActivity);
+  // While the reply's visible words stream, the words are the signal (§5.2).
+  const replyStreaming = running && (snapshot.partial?.trim().length ?? 0) > 0;
 
   const send = async (
     text: string,
@@ -725,6 +731,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRespondToProposal={respondToProposal}
         />
       </MessageAttachmentPreviewProvider>
+      {snapshot.activity && !replyStreaming ? (
+        <BotStatusLine activity={snapshot.activity} wording={chatActivity.wording} onStop={stop} />
+      ) : null}
       {state?.kind === "interrupted" ? (
         <BotInterruptedCard
           name={current.name}
