@@ -333,6 +333,14 @@ botApprovals.onChange((botId) => {
   );
 });
 
+// "Needs you" in the Bots sidebar follows questions and approvals as they
+// appear and settle; the renderer re-reads that Bot's summary.
+function broadcastAttention(botId: string): void {
+  ipcMain.broadcast("bots:attention", { botId });
+}
+botQuestions.onChange(broadcastAttention);
+botApprovals.onChange(broadcastAttention);
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({

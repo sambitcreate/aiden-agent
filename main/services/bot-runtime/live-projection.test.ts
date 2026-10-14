@@ -7,9 +7,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
+  botLastReplyAt,
   botRetryableFailedTurn,
   type BotLiveEvent,
   type BotLiveSnapshot,
+  type BotPendingQuestion,
 } from "../../../renderer/shared/bot-live.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
@@ -1213,6 +1215,68 @@ test("an id the session cannot find stays hidden and is retried", async () => {
     await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert after the retry" });
     await live.service.stop("bot:a");
     unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("the last reply time ignores the person's newer messages and replies with no text", () => {
+  assert.equal(botLastReplyAt([]), null);
+  assert.equal(
+    botLastReplyAt([
+      { id: "a1", type: "assistant", text: "Here you go.", toolCalls: [], stopReason: "stop", at: 10 },
+      { id: "a2", type: "assistant", text: "  ", toolCalls: [], stopReason: "toolUse", at: 20 },
+      { id: "u2", type: "user", text: "Thanks", imageCount: 0, at: 30 },
+    ]),
+    10,
+  );
+});
+
+test("a list summary says when the last reply arrived and whether the Bot is waiting on the person", async () => {
+  let waiting = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Here is your meal plan.")]), {
+    projection: { approvalPending: () => waiting },
+  });
+  try {
+    const before = await live.projection.summary("bot:a");
+    assert.equal(before.lastReplyAt, null);
+    assert.equal(before.needsYou, false);
+    const sent = await live.service.send("bot:a", { text: "Plan dinners", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const after = await live.projection.summary("bot:a");
+    assert.equal(after.preview, "Here is your meal plan.");
+    assert.equal(typeof after.lastReplyAt, "number");
+    assert.equal(after.lastReplyAt, after.updatedAt, "the newest message is the reply");
+    waiting = true;
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a list summary reads a waiting question and approval whether or not a chat is open", async () => {
+  let question: BotPendingQuestion | null = null;
+  let approval = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: { question: () => question, approvalPending: () => approval },
+  });
+  try {
+    const closed = async () => (await live.projection.summary("bot:a")).needsYou;
+    assert.equal(await closed(), false);
+    question = { botId: "bot:a", waitId: "w1", toolCallId: "t1", questions: [] };
+    assert.equal(await closed(), true, "a question waits with no chat open");
+    question = null;
+    approval = true;
+    assert.equal(await closed(), true, "an approval waits with no chat open");
+    approval = false;
+    const { unsubscribe } = await live.projection.subscribe("bot:a", { send() {} });
+    try {
+      assert.equal(await closed(), false, "settled with a chat open");
+      approval = true;
+      assert.equal(await closed(), true, "an approval waits with a chat open");
+    } finally {
+      unsubscribe();
+    }
   } finally {
     await live.close();
   }
