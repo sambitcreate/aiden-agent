@@ -9,7 +9,6 @@ import {
   EmptyState,
   Field,
   FieldSet,
-  InlineMetadata,
   Label,
   RadioGroup,
   RadioGroupItem,
@@ -45,30 +44,22 @@ import {
   botFullAccessAccepted,
   buildBotAccessUpdate,
   firstAvailableModel,
-  firstAvailableVisionModel,
   type BotAccessDraft,
 } from "./bot-access-draft";
+import {
+  chooseBotModel,
+  chooseBotVisionModel,
+  findBotModel,
+  recommendedBotModelChoice,
+  sameBotModelChoice,
+} from "./bot-model-choice";
+import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
 type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
 
 function sameDraft(left: BotAccessDraft | null, right: BotAccessDraft | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function withRecommendedModel(draft: BotAccessDraft, catalog: BotCapabilityCatalog): BotAccessDraft {
-  const model = firstAvailableModel(catalog);
-  const supportsImages = catalog.providers
-    .find((provider) => provider.id === model?.providerId)
-    ?.models.find((candidate) => candidate.id === model?.modelId)?.supportsImages;
-  const vision = supportsImages ? undefined : firstAvailableVisionModel(catalog, model?.providerId);
-  return {
-    ...draft,
-    providerId: model?.providerId,
-    modelId: model?.modelId,
-    visionProviderId: vision?.providerId,
-    visionModelId: vision?.modelId,
-  };
 }
 
 function ModelSection({
@@ -84,18 +75,12 @@ function ModelSection({
   onChange(next: BotAccessDraft): void;
   onSetUpModel(): void;
 }) {
-  const provider = catalog.providers.find(({ id }) => id === draft.providerId);
-  const model = provider?.models.find(({ id }) => id === draft.modelId);
-  const visionProviders = catalog.providers.filter(
+  const recommended = recommendedBotModelChoice(catalog);
+  const usingRecommended = sameBotModelChoice(recommended, draft);
+  const primary = findBotModel(catalog, draft.providerId, draft.modelId);
+  const visionAvailable = catalog.providers.some(
     (candidate) => candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
   );
-  const visionProvider = catalog.providers.find(({ id }) => id === draft.visionProviderId);
-  const recommended = withRecommendedModel(draft, catalog);
-  const usingRecommended =
-    recommended.providerId === draft.providerId &&
-    recommended.modelId === draft.modelId &&
-    recommended.visionProviderId === draft.visionProviderId &&
-    recommended.visionModelId === draft.visionModelId;
   if (!firstAvailableModel(catalog)) {
     return (
       <FieldSet title="AI model">
@@ -109,125 +94,41 @@ function ModelSection({
   }
   return (
     <FieldSet title="AI model">
-      <Field label="Service">
-        <Select
-          value={draft.providerId ?? ""}
+      <Field label="Model" description={primary ? botModelCapabilityLabel(primary.model.supportsImages) : undefined}>
+        <BotModelPicker
+          catalog={catalog}
+          label="AI model"
+          providerId={draft.providerId}
+          modelId={draft.modelId}
+          recommended={recommended.providerId && recommended.modelId
+            ? { providerId: recommended.providerId, modelId: recommended.modelId }
+            : undefined}
           disabled={disabled}
-          onValueChange={(providerId) => {
-            const nextProvider = catalog.providers.find(({ id }) => id === providerId);
-            const nextModel = nextProvider?.models.find((candidate) => candidate.available);
-            const vision = nextModel?.supportsImages
-              ? undefined
-              : firstAvailableVisionModel(catalog, providerId);
-            onChange({
-              ...draft,
-              providerId,
-              modelId: nextModel?.id,
-              visionProviderId: vision?.providerId,
-              visionModelId: vision?.modelId,
-            });
-          }}
-        >
-          <SelectTrigger aria-label="AI service">
-            <SelectValue placeholder="Choose a service" />
-          </SelectTrigger>
-          <SelectContent>
-            {catalog.providers.map((candidate) => (
-              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                {candidate.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onSelect={(providerId, modelId) => onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })}
+        />
       </Field>
-      <Field label="Model">
-        <Select
-          value={draft.modelId ?? ""}
-          disabled={disabled}
-          onValueChange={(modelId) => {
-            const nextModel = provider?.models.find(({ id }) => id === modelId);
-            const vision = nextModel?.supportsImages
-              ? undefined
-              : draft.visionProviderId && draft.visionModelId
-                ? { providerId: draft.visionProviderId, modelId: draft.visionModelId }
-                : firstAvailableVisionModel(catalog, provider?.id);
-            onChange({
-              ...draft,
-              modelId,
-              visionProviderId: vision?.providerId,
-              visionModelId: vision?.modelId,
-            });
-          }}
-        >
-          <SelectTrigger aria-label="AI model">
-            <SelectValue placeholder="Choose a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {(provider?.models ?? []).map((candidate) => (
-              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                {candidate.label}{" "}
-                <InlineMetadata>· {candidate.supportsImages ? "Reads images" : "Text only"}</InlineMetadata>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-      {model && !model.supportsImages ? (
-        visionProviders.length === 0 ? (
+      {primary && !primary.model.supportsImages ? (
+        visionAvailable ? (
           <Field
-            label="Image model"
-            description={`${model.label} reads text only, and no model that reads images is set up. Add one in Settings → Providers.`}
-          />
+            label="Model for photos"
+            description={`${primary.model.label} reads text only. Photos and screenshots go to this model.`}
+          >
+            <BotModelPicker
+              catalog={catalog}
+              label="Model for photos"
+              imagesOnly
+              providerId={draft.visionProviderId}
+              modelId={draft.visionModelId}
+              disabled={disabled}
+              onSelect={(providerId, modelId) =>
+                onChange({ ...draft, ...chooseBotVisionModel(catalog, draft, providerId, modelId) })}
+            />
+          </Field>
         ) : (
-          <>
-            <Field
-              label="Image service"
-              description={`${model.label} reads text only. Photos and screenshots go to this model.`}
-            >
-              <Select
-                value={draft.visionProviderId ?? ""}
-                disabled={disabled}
-                onValueChange={(providerId) => {
-                  const nextProvider = catalog.providers.find(({ id }) => id === providerId);
-                  const nextModel = nextProvider?.models.find(
-                    (candidate) => candidate.available && candidate.supportsImages,
-                  );
-                  onChange({ ...draft, visionProviderId: providerId, visionModelId: nextModel?.id });
-                }}
-              >
-                <SelectTrigger aria-label="Image service">
-                  <SelectValue placeholder="Choose a service" />
-                </SelectTrigger>
-                <SelectContent>
-                  {visionProviders.map((candidate) => (
-                    <SelectItem key={candidate.id} value={candidate.id}>
-                      {candidate.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Image model">
-              <Select
-                value={draft.visionModelId ?? ""}
-                disabled={disabled}
-                onValueChange={(visionModelId) => onChange({ ...draft, visionModelId })}
-              >
-                <SelectTrigger aria-label="Image model">
-                  <SelectValue placeholder="Choose a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(visionProvider?.models ?? [])
-                    .filter((candidate) => candidate.available && candidate.supportsImages)
-                    .map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
-                        {candidate.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </>
+          <Field
+            label="Model for photos"
+            description={`${primary.model.label} reads text only, and no model that reads images is set up. Add one in Settings → Providers.`}
+          />
         )
       ) : null}
       <Field label="Recommended" description="The first model you set up, plus an image model when it reads text only.">
@@ -235,7 +136,7 @@ function ModelSection({
           size="small"
           variant="filled"
           disabled={disabled || usingRecommended}
-          onClick={() => onChange(recommended)}
+          onClick={() => onChange({ ...draft, ...recommended })}
         >
           <RotateCcw /> Use recommended
         </Button>
