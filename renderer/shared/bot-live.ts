@@ -7,7 +7,7 @@
 // that sees a different epoch or a gap re-subscribes for a fresh snapshot.
 
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
-import type { BotToolPhase } from "./bot-activity.js";
+import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
@@ -182,6 +182,24 @@ export function botRetryableFailedTurn(
   return last?.type === "failed_turn" && last.retryText !== null ? last : null;
 }
 
+/** The step behind the current phase, for the Mac's hover peek and Detailed steps. */
+export interface BotLiveActivityStep {
+  kind: BotToolPhase;
+  /** Present tense, the phase word: "Reading", "Using Notion". */
+  label: string;
+  detail?: string;
+}
+
+/** What a Bot in a running turn is doing now (spec §5). Null when no turn runs. */
+export interface BotLiveActivity {
+  phase: BotActivityPhase;
+  /** The connection's label, for `app`. */
+  app?: string;
+  /** When the turn started, for elapsed time. */
+  startedAt: number;
+  step?: BotLiveActivityStep;
+}
+
 export interface BotLiveSnapshot {
   botId: string;
   epoch: string;
@@ -192,6 +210,8 @@ export interface BotLiveSnapshot {
   state: BotSessionState;
   /** The question the Bot is waiting on, or null. */
   question: BotPendingQuestion | null;
+  /** What the Bot is doing in the running turn, or null. */
+  activity: BotLiveActivity | null;
 }
 
 export type BotLiveEventBody =
@@ -199,6 +219,7 @@ export type BotLiveEventBody =
   | { type: "partial"; text: string | null }
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
+  | { type: "activity"; activity: BotLiveActivity | null }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
   | { type: "snapshot"; snapshot: BotLiveSnapshot };
 
@@ -260,5 +281,7 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, state: event.state };
     case "question":
       return { ...snapshot, seq: event.seq, question: event.question };
+    case "activity":
+      return { ...snapshot, seq: event.seq, activity: event.activity };
   }
 }

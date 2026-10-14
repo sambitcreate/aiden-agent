@@ -47,12 +47,24 @@ function baseName(value: unknown): string | undefined {
   return parts[parts.length - 1];
 }
 
+/**
+ * Drops the last word and the whitespace before it. A linear scan: the
+ * equivalent `/\s+\S*$/` backtracks quadratically on long runs of spaces.
+ */
+function cutAtLastWhitespace(text: string): string {
+  let end = text.length;
+  while (end > 0 && !/\s/u.test(text[end - 1]!)) end -= 1;
+  if (end === 0) return text;
+  while (end > 0 && /\s/u.test(text[end - 1]!)) end -= 1;
+  return text.slice(0, end);
+}
+
 function bounded(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const stripped = value.replace(FORMAT_CHARACTERS, "");
   const points = [...stripped];
   const window =
-    points.length > RAW_DETAIL_CHARS ? points.slice(0, RAW_DETAIL_CHARS).join("").replace(/\s+\S*$/u, "") : stripped;
+    points.length > RAW_DETAIL_CHARS ? cutAtLastWhitespace(points.slice(0, RAW_DETAIL_CHARS).join("")) : stripped;
   const clean = sanitizeDiagnosticText(window, RAW_DETAIL_CHARS);
   if (!clean) return undefined;
   const shown = [...clean];

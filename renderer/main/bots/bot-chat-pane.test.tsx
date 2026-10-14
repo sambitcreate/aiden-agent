@@ -20,6 +20,7 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
     partial: null,
     state: { kind: "idle" },
     question: null,
+    activity: null,
     ...overrides,
   };
 }

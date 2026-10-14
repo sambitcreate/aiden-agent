@@ -196,15 +196,21 @@ export function registerBotHandlers(): void {
   });
   ipcMain.handle("bots:resume", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "resume");
-    return (await botSessionRuntime()).resume(botId, requestId);
+    botLiveProjection().notifyResuming(botId);
+    const state = await (await botSessionRuntime()).resume(botId, requestId);
+    // A Resume that did not start a run must not leave its mark on the next turn.
+    if (state.kind !== "running") botLiveProjection().notifyState(botId, state);
+    return state;
   });
   ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
-  ipcMain.handle("bots:stop", async (_event, id: unknown) =>
-    (await botSessionRuntime()).stop(parseBotId(id)),
-  );
+  ipcMain.handle("bots:stop", async (_event, id: unknown) => {
+    const botId = parseBotId(id);
+    botLiveProjection().notifyStopping(botId);
+    return (await botSessionRuntime()).stop(botId);
+  });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, access } = parseBotCreateFromPreset(input);
     const { bot, created } = await botStarter().startFromPreset(presetId, access === undefined ? {} : { access });

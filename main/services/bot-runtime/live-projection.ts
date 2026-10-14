@@ -28,6 +28,7 @@ import {
   botFailedTurnId,
   botQuestionAnswerText,
   botTranscriptPreview,
+  type BotLiveActivity,
   type BotLiveEvent,
   type BotPendingQuestion,
   type BotLiveEventBody,
@@ -36,6 +37,7 @@ import {
   type BotToolResultStatus,
   type BotTranscriptEntry,
 } from "../../../renderer/shared/bot-live.js";
+import { botPhaseWord, pickActiveToolSlot, type BotActivityPhase } from "../../../renderer/shared/bot-activity.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
 import {
   BOT_MEMORY_REVIEW_ENTRY_KIND,
@@ -410,6 +412,77 @@ function liveRunActive(docs: Readonly<Record<string, unknown>>): boolean {
   return live?.run !== undefined;
 }
 
+interface LiveDocView {
+  run?: unknown;
+  generation?: { message?: { content?: unknown } };
+  tools?: Array<{ callId: string; name: string; status: string }>;
+  compactions?: Array<{ blocking?: boolean }>;
+}
+
+export interface BotLiveActivityInput {
+  entries: readonly EntryRecord[];
+  docs: Readonly<Record<string, unknown>>;
+  /** An approval or A–E question is open. */
+  waiting: boolean;
+  /** The person pressed Stop and the run has not ended. */
+  stopping: boolean;
+  /** This run is a Resume and has not moved on yet. */
+  resuming: boolean;
+  startedAt: number;
+}
+
+/** Whether the newest input already has an assistant entry after it. */
+function inputAnswered(entries: readonly EntryRecord[]): boolean {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const kind = entries[index]!.kind;
+    if (kind === "pi.assistant") return true;
+    if (kind === "pi.user") return false;
+  }
+  return false;
+}
+
+/** The arguments of tool call `callId`, from the answer that made it. */
+function callArguments(entries: readonly EntryRecord[], callId: string): unknown {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const message = firstMessage(entries[index]!);
+    if (message?.role !== "assistant") continue;
+    const call = message.content.find((part): part is ToolCall => part.type === "toolCall" && part.id === callId);
+    if (call) return call.arguments;
+  }
+  return undefined;
+}
+
+/**
+ * The phase of a run from `pi.live` (spec §5): Stop, then an open card,
+ * then compaction inside the turn, then the newest running tool (§5.2), then
+ * the reply's text, then Resume, then thinking (or "getting ready" before
+ * the model produced anything). Thinking content is read only to know the
+ * model is generating; its text is never copied.
+ */
+export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | null {
+  const live = input.docs["pi.live"] as LiveDocView | undefined;
+  if (live?.run === undefined) return null;
+  const at = (phase: BotActivityPhase): BotLiveActivity => ({ phase, startedAt: input.startedAt });
+  if (input.stopping) return at("stopping");
+  if (input.waiting) return at("waiting");
+  if (live.compactions?.some((compaction) => compaction.blocking === true)) return at("tidying");
+  const slot = pickActiveToolSlot(live.tools);
+  if (slot) {
+    const step = botStepDescriptor(slot.name, callArguments(input.entries, slot.callId));
+    return {
+      phase: step.kind,
+      startedAt: input.startedAt,
+      ...(step.app ? { app: step.app } : {}),
+      step: { kind: step.kind, label: botPhaseWord(step.kind, step.app), ...(step.detail ? { detail: step.detail } : {}) },
+    };
+  }
+  const content = live.generation?.message?.content;
+  if (Array.isArray(content) && textOf(content as TextContent[]).trim()) return at("writing");
+  if (input.resuming) return at("resuming");
+  if (Array.isArray(content) && content.length > 0) return at("thinking");
+  return at(inputAnswered(input.entries) ? "thinking" : "preparing");
+}
+
 /* ------------------------------------------------------------------------- */
 /* Feeds and subscribers                                                     */
 /* ------------------------------------------------------------------------- */
@@ -423,6 +496,10 @@ export interface BotLiveProjectionDeps {
   state(botId: string): Promise<BotSessionState>;
   /** The question the Bot is waiting on right now, if any. */
   question?(botId: string): BotPendingQuestion | null;
+  /** Whether a tool approval is waiting on the person. */
+  approvalPending?(botId: string): boolean;
+  /** Clock for `startedAt`; defaults to `Date.now`. */
+  now?(): number;
   /** The current status of a connect card (connected or dismissed since it was offered). */
   connectCardStatus?(botId: string, card: ConnectCardEntry): Promise<ConnectCardStatus>;
   /** Schedules a subscriber flush. Defaults to the next macrotask. */
@@ -447,6 +524,12 @@ export interface BotLiveProjection {
   refresh(botId: string): Promise<void>;
   /** The Bot's pending question changed (asked, answered, withdrawn): push a `question` event. */
   refreshQuestion(botId: string): Promise<void>;
+  /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
+  notifyStopping(botId: string): void;
+  /** The next run starts from Resume: it reads "Picking up where it left off" until it moves on. */
+  notifyResuming(botId: string): void;
+  /** An approval appeared or settled: re-derive the activity. */
+  refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
   /** Stop every feed (the Bot was deleted, or the app is quitting). */
@@ -469,6 +552,13 @@ interface Feed {
   partial: string | null;
   state: BotSessionState;
   question: BotPendingQuestion | null;
+  activity: BotLiveActivity | null;
+  /** When the current running turn started. */
+  startedAt: number;
+  stopping: boolean;
+  resuming: boolean;
+  /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
+  frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
   runActive: boolean;
   watch: ConversationWatch;
   cancel: () => void;
@@ -485,6 +575,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const maxPending = deps.maxPending ?? BOT_LIVE_MAX_PENDING_EVENTS;
   const schedule = deps.schedule ?? ((flush: () => void) => void setTimeout(flush, 0));
   const newEpoch = deps.newEpoch ?? (() => randomUUID());
+  const now = deps.now ?? Date.now;
+  /** Bots whose next run is a Resume. */
+  const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
   const opening = new Map<string, Promise<Feed>>();
   const subscribers = new Map<string, Set<Subscriber>>();
@@ -502,6 +595,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       partial: feed.partial,
       state: feed.state,
       question: feed.question,
+      activity: feed.activity,
     };
   }
 
@@ -561,6 +655,38 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const subscriber of subscribers.get(feed.botId) ?? []) enqueue(subscriber, feed.botId, event);
   }
 
+  function waitingOn(botId: string): boolean {
+    return (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
+  }
+
+  /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
+  function computeActivity(feed: Feed): BotLiveActivity | null {
+    if (feed.state.kind !== "running") return null;
+    return (
+      liveBotActivity({
+        ...feed.frame,
+        waiting: waitingOn(feed.botId),
+        stopping: feed.stopping,
+        resuming: feed.resuming,
+        startedAt: feed.startedAt,
+      }) ?? { phase: "preparing", startedAt: feed.startedAt }
+    );
+  }
+
+  function updateActivity(feed: Feed): void {
+    const activity = computeActivity(feed);
+    if (activity && activity.phase !== "resuming") feed.resuming = false;
+    if (JSON.stringify(activity) === JSON.stringify(feed.activity)) return;
+    feed.activity = activity;
+    emit(feed, { type: "activity", activity });
+  }
+
+  function startRun(feed: Feed): void {
+    feed.startedAt = now();
+    feed.stopping = false;
+    feed.resuming = resumingBots.delete(feed.botId);
+  }
+
   async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
     if (!deps.connectCardStatus) return entries;
     const resolved: BotTranscriptEntry[] = [];
@@ -591,6 +717,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
     if (feed.ended) return;
+    feed.frame = { entries, docs };
     applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(entries)));
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
@@ -598,21 +725,32 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       emit(feed, { type: "partial", text: partial });
     }
     const runActive = liveRunActive(docs);
-    if (runActive !== feed.runActive) {
-      feed.runActive = runActive;
-      const state = await deps.state(feed.botId).catch(() => feed.state);
-      setState(feed, state);
-      if (!runActive) {
-        deps.onRunSettled?.(feed.botId, state);
-        void closeIfUnwatched(feed);
-      }
+    if (runActive === feed.runActive) {
+      updateActivity(feed);
+      return;
+    }
+    feed.runActive = runActive;
+    // The run's end is reported with its new state, so the line never flashes a phase after the reply.
+    const state = await deps.state(feed.botId).catch(() => feed.state);
+    setState(feed, state);
+    updateActivity(feed);
+    if (!runActive) {
+      deps.onRunSettled?.(feed.botId, state);
+      void closeIfUnwatched(feed);
     }
   }
 
   function setState(feed: Feed, state: BotSessionState): void {
     if (JSON.stringify(state) === JSON.stringify(feed.state)) return;
+    const wasRunning = feed.state.kind === "running";
     feed.state = state;
+    if (state.kind === "running" && !wasRunning) startRun(feed);
+    if (state.kind !== "running") {
+      feed.stopping = false;
+      feed.resuming = false;
+    }
     emit(feed, { type: "state", state });
+    updateActivity(feed);
   }
 
   function enqueueWork(feed: Feed, work: () => Promise<void>): Promise<void> {
@@ -639,12 +777,19 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
+        activity: null,
+        startedAt: now(),
+        stopping: false,
+        resuming: false,
+        frame: { entries: initial.entries, docs: initial.docs },
         runActive: liveRunActive(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
         ended: false,
         queue: Promise.resolve(),
       };
+      if (feed.state.kind === "running") startRun(feed);
+      feed.activity = computeActivity(feed);
       feeds.set(botId, feed);
       watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
       void watch.closed.then(() => {
@@ -701,6 +846,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (question?.waitId === feed.question?.waitId) return;
       feed.question = question;
       emit(feed, { type: "question", question });
+      updateActivity(feed);
     });
   }
 
@@ -729,6 +875,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     },
 
     notifyState(botId, state) {
+      if (state.kind !== "running") resumingBots.delete(botId);
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         void enqueueWork(feed, async () => setState(feed, state));
@@ -740,6 +887,26 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         (opened) => enqueueWork(opened, async () => setState(opened, state)),
         (error) => report(botId, error),
       );
+    },
+
+    notifyStopping(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      void enqueueWork(feed, async () => {
+        if (feed.state.kind !== "running") return;
+        feed.stopping = true;
+        updateActivity(feed);
+      });
+    },
+
+    notifyResuming(botId) {
+      resumingBots.add(botId);
+    },
+
+    async refreshActivity(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await enqueueWork(feed, async () => updateActivity(feed));
     },
 
     async refresh(botId) {

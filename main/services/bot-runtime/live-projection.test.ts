@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
   botRetryableFailedTurn,
@@ -15,6 +15,7 @@ import { createBotSessionService, type BotSessionRuntime, type BotSessionService
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  liveBotActivity,
   projectBotTranscript,
   type BotLiveProjection,
   type BotLiveProjectionDeps,
@@ -113,6 +114,29 @@ async function waitForStreamedText(service: BotSessionRuntime, botId: string): P
   }
 }
 
+function observedPhases(events: readonly BotLiveEvent[]): Array<string | null> {
+  const phases: Array<string | null> = [];
+  for (const event of events) {
+    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : undefined;
+    if (activity === undefined) continue;
+    const phase = activity?.phase ?? null;
+    if (phases[phases.length - 1] !== phase) phases.push(phase);
+  }
+  return phases;
+}
+
+/** Every phase seen appears in `allowed`, in that order (frames may coalesce, so some can be skipped). */
+function inOrder(phases: ReadonlyArray<string | null>, allowed: readonly string[]): boolean {
+  let at = 0;
+  for (const phase of phases) {
+    if (phase === null) continue;
+    const found = allowed.indexOf(phase, at);
+    if (found === -1) return false;
+    at = found;
+  }
+  return true;
+}
+
 const visibleText =(snapshot: BotLiveSnapshot | null) =>
   (snapshot?.entries ?? []).map((entry) =>
     entry.type === "user" || entry.type === "assistant"
@@ -134,6 +158,7 @@ test("subscribing mid-stream returns a snapshot that already has the partial rep
     try {
       assert.equal(snapshot.state.kind, "running");
       assert.match(snapshot.partial ?? "", /^word word/u);
+      assert.equal(snapshot.activity?.phase, "writing");
       assert.deepEqual(visibleText(snapshot), ["user:tell me a story"]);
     } finally {
       unsubscribe();
@@ -528,9 +553,13 @@ test("Stop ends the running reply, keeps what was written, and the Bot is idle a
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "go", requestId: "desk-1" });
     await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "a partial reply" });
+    live.projection.notifyStopping("bot:a");
     const state = await live.service.stop("bot:a");
     assert.equal(state.kind, "idle");
     await waitFor(() => tape.view?.partial === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    const phases = observedPhases(tape.events);
+    assert.ok(phases.includes("stopping"), phases.join(" → "));
+    assert.equal(phases[phases.length - 1], null);
     const last = tape.view!.entries[tape.view!.entries.length - 1];
     assert.equal(last?.type, "assistant");
     assert.equal(last?.type === "assistant" ? last.stopReason : null, "aborted");
@@ -666,6 +695,123 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     first.unsubscribe();
   } finally {
     stopListening();
+    await live.close();
+  }
+});
+
+test("a reply's activity follows the work: getting ready, reading while a file tool runs, writing, then nothing", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
+  });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(60)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    assert.equal(snapshot.activity, null);
+    const sent = await live.service.send("bot:a", { text: "What's on my list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the reading phase" });
+    assert.deepEqual(tape.view?.activity?.step, { kind: "reading", label: "Reading" });
+    assert.ok((tape.view?.activity?.startedAt ?? 0) > 0);
+    release();
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the line to clear" });
+    const phases = observedPhases(tape.events);
+    assert.ok(inOrder(phases, ["preparing", "thinking", "reading", "thinking", "writing"]), phases.join(" → "));
+    assert.ok(phases.includes("writing"), phases.join(" → "));
+    assert.equal(phases[phases.length - 1], null);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("thinking text is never projected, in the transcript or the live activity", () => {
+  const entries = [
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 1 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{ role: "assistant", stopReason: "stop", timestamp: 2, content: [fauxThinking("SECRET-PLAN"), fauxText("Done.")] }],
+    },
+  ];
+  assert.doesNotMatch(JSON.stringify(projectBotTranscript(entries as never)), /SECRET-PLAN/u);
+  const activity = liveBotActivity({
+    entries: entries as never,
+    docs: { "pi.live": { run: { taskId: 1, inputs: [1] }, generation: { attempt: 1, message: { content: [fauxThinking("SECRET-PLAN")] } } } },
+    waiting: false,
+    stopping: false,
+    resuming: false,
+    startedAt: 5,
+  });
+  assert.deepEqual(activity, { phase: "thinking", startedAt: 5 });
+});
+
+test("the live phase reads stop, a waiting card, compaction, the newest running tool, and resume, in that order", () => {
+  const user = { id: 1, kind: "pi.user", model: [{ role: "user", content: "go", timestamp: 1 }] };
+  const calling = {
+    id: 2,
+    kind: "pi.assistant",
+    model: [{
+      role: "assistant",
+      stopReason: "toolUse",
+      timestamp: 2,
+      content: [
+        { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "lists/a.md" } },
+        { type: "toolCall", id: "c2", name: "web_search", arguments: { query: "tofu bowls" } },
+      ],
+    }],
+  };
+  const tools = [
+    { callId: "c1", name: "read_file", status: "running" },
+    { callId: "c2", name: "web_search", status: "running" },
+  ];
+  const base = { entries: [user, calling] as never, waiting: false, stopping: false, resuming: false, startedAt: 9 };
+  const docs = (live: Record<string, unknown>) => ({ "pi.live": { run: { taskId: 1, inputs: [1] }, ...live } });
+  assert.equal(liveBotActivity({ ...base, docs: {} }), null, "no run, no line");
+  assert.deepEqual(liveBotActivity({ ...base, docs: docs({ tools }) }), {
+    phase: "searching",
+    startedAt: 9,
+    step: { kind: "searching", label: "Searching the web", detail: "tofu bowls" },
+  });
+  assert.equal(liveBotActivity({ ...base, docs: docs({ compactions: [{ blocking: true }], tools }) })?.phase, "tidying");
+  assert.equal(liveBotActivity({ ...base, waiting: true, docs: docs({ tools }) })?.phase, "waiting");
+  assert.equal(liveBotActivity({ ...base, waiting: true, stopping: true, docs: docs({ tools }) })?.phase, "stopping");
+  assert.equal(liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase, "preparing");
+  assert.equal(liveBotActivity({ ...base, docs: docs({}) })?.phase, "thinking");
+  assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
+  assert.equal(
+    liveBotActivity({ ...base, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } } }) })?.phase,
+    "writing",
+  );
+});
+
+test("Stop pressed while nothing runs is ignored, so the next reply never starts at Stopping", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(40))], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    live.projection.notifyStopping("bot:a");
+    const sent = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    assert.equal(observedPhases(tape.events).includes("stopping"), false);
+    unsubscribe();
+  } finally {
     await live.close();
   }
 });

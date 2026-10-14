@@ -62,3 +62,14 @@ test("a search step shows its query; a connection step names the app and shows n
   assert.deepEqual(botStepDescriptor("ask_user_question", {}), { kind: "waiting", label: "Asked you a question" });
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
 });
+
+test("an argument of thousands of spaces is cut without stalling the main process", () => {
+  const started = performance.now();
+  const padded = botStepDescriptor("web_search", { query: `tofu${" ".repeat(15_990)}alpha beta gamma delta epsilon` }).detail ?? "";
+  const blank = botStepDescriptor("web_search", { query: `${" ".repeat(20_000)}tofu` }).detail;
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 50, `took ${elapsed.toFixed(0)} ms`);
+  assert.ok([...padded].length <= BOT_STEP_DETAIL_CHARS);
+  assert.match(padded, /^tofu/u);
+  assert.ok(blank === undefined || [...blank].length <= BOT_STEP_DETAIL_CHARS);
+});
