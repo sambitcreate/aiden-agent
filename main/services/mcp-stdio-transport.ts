@@ -183,7 +183,9 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): Tran
     return new StdioClientTransport({
       command: options.command,
       args: [...(options.args ?? [])],
-      env: options.env,
+      // The pinned SDK already layers env over its defaults; spell it out so
+      // this contract does not depend on SDK internals.
+      env: { ...getDefaultEnvironment(), ...options.env },
       cwd: options.cwd,
       maxBufferSize: options.maxBufferSize,
     });
