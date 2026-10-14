@@ -1,7 +1,8 @@
 // The one calm line a working Bot shows (spec §5, §6, §14): an activity mark
 // and a word, a hover/focus peek at the current step on the Mac, elapsed time
-// and Stop after 20 seconds, and a still-going note after 2 minutes. The
-// accessible name changes at most once every 2 seconds.
+// and Stop after 20 seconds, and a still-going note after 2 minutes. Screen
+// readers hear it through `BotStatusAnnouncer`, a live region the chat keeps
+// mounted while the line comes and goes, at most once every 2 seconds.
 
 import * as React from "react";
 import { Square } from "lucide-react";
@@ -27,23 +28,55 @@ function useClock(fixed: number | undefined): number {
   return fixed ?? now;
 }
 
+const SILENT: BotAnnouncement = { text: "", at: Number.NEGATIVE_INFINITY };
+
+/** Clearing is immediate and keeps the last announcement's time, so the gap still holds after it. */
+function settleAnnouncement(shown: BotAnnouncement, text: string, now: number): { shown: BotAnnouncement; retryInMs?: number } {
+  if (text === "") return { shown: shown.text === "" ? shown : { text: "", at: shown.at } };
+  return nextBotAnnouncement(shown, text, now);
+}
+
 /**
  * The text screen readers hear: the newest wording, at most once per gap.
  * A change inside the gap keeps the last text until a timer releases the newest.
+ * The first commit is always empty, so a live region mounted with the text still announces it.
  */
 function useAnnouncement(text: string): string {
-  const [shown, setShown] = React.useState<BotAnnouncement>(() => ({ text, at: Date.now() }));
-  if (shown.text !== text) {
-    const next = nextBotAnnouncement(shown, text, Date.now());
+  const [armed, setArmed] = React.useState(false);
+  React.useEffect(() => setArmed(true), []);
+  const wanted = armed ? text : "";
+  const [shown, setShown] = React.useState<BotAnnouncement>(SILENT);
+  if (shown.text !== wanted) {
+    const next = settleAnnouncement(shown, wanted, Date.now());
     if (next.shown !== shown) setShown(next.shown);
   }
   React.useEffect(() => {
-    if (shown.text === text) return;
-    const wait = nextBotAnnouncement(shown, text, Date.now()).retryInMs ?? 0;
-    const timer = setTimeout(() => setShown({ text, at: Date.now() }), wait);
+    if (shown.text === wanted) return;
+    const wait = settleAnnouncement(shown, wanted, Date.now()).retryInMs ?? 0;
+    const timer = setTimeout(() => setShown({ text: wanted, at: Date.now() }), wait);
     return () => clearTimeout(timer);
-  }, [text, shown]);
+  }, [wanted, shown]);
   return shown.text;
+}
+
+/** What the line says to a screen reader: the word, plus the step on the Mac with Follows the work. */
+export function botStatusSpeech(activity: BotLiveActivity, wording: BotChatActivityWording): string {
+  const display = botActivityDisplay(activity.phase, wording, activity.app);
+  const detail = wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
+  return detail ? `${display.word}, ${detail}` : display.word;
+}
+
+/**
+ * The status line's live region. Keep it mounted for the whole chat and pass ""
+ * while no line shows: a region that mounts together with its text may stay silent.
+ */
+export function BotStatusAnnouncer({ text }: { text: string }) {
+  const announced = useAnnouncement(text);
+  return (
+    <div role="status" className="sr-only" data-bot-status-announcement>
+      {announced}
+    </div>
+  );
 }
 
 export function BotStatusLine({
@@ -66,8 +99,9 @@ export function BotStatusLine({
   const now = useClock(fixedNow);
   const detail = wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
   const elapsed = botElapsedLabel(activity.startedAt, now);
-  const stillGoing = now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS;
-  const announced = useAnnouncement(detail ? `${display.word}, ${detail}` : display.word);
+  // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
+  const stillGoing =
+    now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS && display.phase !== "waiting" && display.phase !== "stopping";
   const layoutKey = `${elapsed ? "e" : ""}${stillGoing ? "s" : ""}`;
   React.useEffect(() => {
     onLayoutChange?.(layoutKey);
@@ -79,16 +113,13 @@ export function BotStatusLine({
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-2">
         <div
-          role="status"
+          role="group"
+          aria-label={botStatusSpeech(activity, wording)}
           tabIndex={wording === "follows" ? 0 : undefined}
           data-bot-status-phase={display.phase}
           className="group/status flex h-6 min-w-0 max-w-full items-center gap-2 rounded-control outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
-          {/* Live regions announce text changes, so the throttled wording lives here as text. */}
-          <span className="sr-only" data-bot-status-announcement>
-            {announced}
-          </span>
           <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
             <span className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
             {detail ? (

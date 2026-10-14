@@ -37,10 +37,14 @@ const COLOUR_QUESTION = {
   ],
 };
 
-/** What a screen reader is told by the status line, or null while it is not shown. */
+/** The chat's status live region, which stays mounted while the line comes and goes. */
+function statusRegion(): Element | undefined {
+  return screen.queryAllByRole("status").find((node) => node.hasAttribute("data-bot-status-announcement"));
+}
+
+/** What a screen reader is told by the status line ("" while no line shows), or null without a region. */
 function announced(): string | null {
-  const line = screen.queryAllByRole("status").find((node) => node.querySelector("[data-bot-status-announcement]"));
-  return line?.querySelector("[data-bot-status-announcement]")?.textContent ?? null;
+  return statusRegion()?.textContent ?? null;
 }
 
 function userEntry(id: string, text: string): BotTranscriptEntry {
@@ -439,6 +443,44 @@ test("the status line follows live activity, and hides while the reply's words s
   emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." });
   await waitFor(() => assert.equal(screen.queryByText("Reading") === null, true));
   assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
+});
+
+test("one status region stays mounted from an idle chat through streaming, so each new line is announced", async () => {
+  await mountChat({
+    "bots:live:subscribe": () => snapshot({ entries: [assistantEntry("a1", "Hi there.")] }),
+  });
+  assert.ok(await screen.findByText("Hi there."));
+  const region = statusRegion();
+  assert.ok(region, "the region is there before the Bot does anything");
+  assert.equal(announced(), "");
+
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "state",
+    state: { kind: "running", submissionId: "s1" },
+  });
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "activity",
+    activity: { phase: "writing", startedAt: Date.now() },
+  });
+  await waitFor(() => assert.equal(announced(), "Writing"));
+  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 3, type: "partial", text: "Let me check." });
+  await waitFor(() => assert.equal(announced(), "", "words are streaming, so the region is quiet"));
+
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 4,
+    type: "activity",
+    activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "notes.md" } },
+  });
+  await waitFor(() => assert.equal(announced(), "Reading, notes.md"), { timeout: 3_000 });
+  assert.equal(statusRegion() === region, true, "the same region announced both stretches");
 });
 
 test("a Bot set to Always Thinking says Thinking while it reads", async () => {

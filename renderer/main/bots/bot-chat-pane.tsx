@@ -32,7 +32,7 @@ import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
 import { BotActivityRecap } from "./bot-activity-recap";
-import { BotStatusLine } from "./bot-status-line";
+import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotFilesDialog } from "./bot-files-dialog";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { botTranscriptRows } from "./bot-transcript-rows";
@@ -533,7 +533,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         approvals.prompts.length,
         snapshot?.question?.waitId,
         snapshot?.activity?.phase,
-        snapshot?.queued.length,
+        snapshot?.queued?.length ?? 0,
         statusLayout,
       ]}
       showScrollToBottomButton
@@ -609,6 +609,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     (snapshot.partial?.trim().length ?? 0) > 0 &&
     (activityPhase === "writing" || activityPhase === "thinking") &&
     !snapshot.activity?.step;
+  const statusActivity = snapshot.activity && !replyStreaming ? snapshot.activity : null;
 
   const send = async (
     text: string,
@@ -812,7 +813,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
-          queued={snapshot.queued}
+          queued={snapshot.queued ?? []}
           removing={removing}
           onRemoveQueued={(id, button) => void removeQueued(id, button)}
           retrying={retrying}
@@ -825,9 +826,10 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRespondToProposal={respondToProposal}
         />
       </MessageAttachmentPreviewProvider>
-      {snapshot.activity && !replyStreaming ? (
+      <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
+      {statusActivity ? (
         <BotStatusLine
-          activity={snapshot.activity}
+          activity={statusActivity}
           wording={chatActivity.wording}
           onStop={stop}
           onLayoutChange={setStatusLayout}
