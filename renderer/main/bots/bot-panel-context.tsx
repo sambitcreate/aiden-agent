@@ -24,7 +24,13 @@ export interface BotPanelFileRequest {
 }
 
 /** A file to select needs the Bot it belongs to, so a request never lands on another Bot. */
-export type BotPanelShowOptions = { path?: undefined; botId?: string } | { path: string; botId: string };
+export type BotPanelShowOptions = (
+  | { path?: undefined; botId?: string }
+  | { path: string; botId: string }
+) & {
+  /** Where closing the panel returns focus when it was opened from something that unmounts, such as a menu item. */
+  returnFocus?: HTMLElement | null;
+};
 
 /** Actions never change identity, so a component that only acts does not re-render with panel state. */
 export interface BotPanelActions {
@@ -113,10 +119,11 @@ export function BotPanelProvider({
     );
   }, [routedBotId]);
 
-  const requestFocus = React.useCallback(() => {
+  const requestFocus = React.useCallback((returnTo?: HTMLElement | null) => {
     if (!openRef.current) {
       const active = document.activeElement;
-      returnFocus.current = active instanceof HTMLElement && !active.closest(`#${BOT_PANEL_ID}`) ? active : null;
+      returnFocus.current =
+        returnTo ?? (active instanceof HTMLElement && !active.closest(`#${BOT_PANEL_ID}`) ? active : null);
     }
     pendingFocus.current = true;
     setFocusRequest((value) => value + 1);
@@ -139,7 +146,7 @@ export function BotPanelProvider({
 
   const show = React.useCallback(
     (tab: BotPanelTab, options?: BotPanelShowOptions) => {
-      requestFocus();
+      requestFocus(options?.returnFocus);
       // A path without its Bot can't be scoped, so it selects nothing.
       const request =
         options?.path && options.botId

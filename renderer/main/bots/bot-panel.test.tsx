@@ -21,6 +21,7 @@ import {
   useBotPanel,
   useBotPanelActions,
 } from "./bot-panel-context";
+import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 import { BotPanelFiles } from "./bot-panel-files";
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
@@ -754,6 +755,44 @@ test("Files and Memory in the chat's ••• menu open the panel on that tab",
   fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Memory" }));
   assert.equal(panelTab("Memory").getAttribute("aria-selected"), "true");
+});
+
+test("Routines in the chat's ••• menu opens the panel on Routines, and Pin to top pins the Bot", async () => {
+  await mountBotChat();
+  const more = () => screen.getByRole("button", { name: "More for Planner" });
+  fireEvent.keyDown(more(), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Routines" }));
+  assert.equal(panelTab("Routines").getAttribute("aria-selected"), "true");
+  fireEvent.keyDown(more(), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
+  assert.equal(parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), 0).pinnedBotId, "bot-1");
+  fireEvent.keyDown(more(), { key: "Enter" });
+  assert.ok(await screen.findByRole("menuitem", { name: "Unpin" }));
+});
+
+test("opening the panel from ••• → Files focuses the panel's tab, and closing it returns focus to the ••• button", async () => {
+  await mountBotChat(FILE_HANDLERS);
+  const more = screen.getByRole("button", { name: "More for Planner" });
+  more.focus();
+  fireEvent.keyDown(more, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Files"), true));
+  // Radix restores focus when the menu closes; that must not outlast the panel's own focus.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(document.activeElement === panelTab("Files"), true);
+  fireEvent.click(within(botPanel()).getByRole("button", { name: /^Close/ }));
+  await waitFor(() => assert.equal(document.activeElement === more, true));
+});
+
+test("Delete Bot in the chat's ••• menu asks first and deletes nothing until confirmed", async () => {
+  const { calls } = await mountBotChat({ "bots:delete": () => undefined, "bots:list": () => [] });
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.ok(within(dialog).getByText("Delete Planner?"));
+  assert.equal(calls.some((call) => call.channel === "bots:delete"), false, "nothing is deleted before confirming");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete Bot" }));
+  await waitFor(() => assert.equal(calls.some((call) => call.channel === "bots:delete"), true));
 });
 
 function memoryView(entries: { id: string; text: string }[]): BotMemoryView {

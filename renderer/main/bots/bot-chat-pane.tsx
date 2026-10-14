@@ -34,7 +34,9 @@ import { BotNeedsModel } from "./bot-needs-model";
 import { BotActivityRecap } from "./bot-activity-recap";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
+import { useBotMenuActions } from "./bot-menu";
 import { useBotPanelActions } from "./bot-panel-context";
+import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
@@ -475,6 +477,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const live = useSharedBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
+  const { preferences } = useBotSidebarPreferences();
+  const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
   const [pausedBusy, setPausedBusy] = React.useState(false);
@@ -519,11 +523,8 @@ export function BotChatPane({ botId }: { botId: string }) {
             <BotPanelToggle />
             <BotChatActions
               bot={current}
-              onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
-              onOpenFiles={() => panel.show("files")}
-              onOpenMemory={openMemory}
-              onOpenAdvanced={openAdvanced}
-              onDelete={() => setDeleteOpen(true)}
+              pinned={preferences.pinnedBotId === current.id}
+              onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
             />
           </>
         ) : null
