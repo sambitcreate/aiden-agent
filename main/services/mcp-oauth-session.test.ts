@@ -716,3 +716,22 @@ test("a late refresh response neither overwrites newer tokens nor restores a sig
   assert.equal(sessionWithRefreshedMcpTokens(rotated, binding, presented, late), undefined);
   assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
 });
+
+test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered for the server", async () => {
+  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
+  const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
+  const serviceUrl = "https://sse-step-up.example.test/sse";
+  const fetch = createMcpFetchPolicy({ serviceUrl, fetch: async () =>
+    new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="mail.send"' } }) });
+  const response = await fetch("https://sse-step-up.example.test/messages?sessionId=abc", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "send", arguments: {} } }),
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read").split(" ").sort(), ["mail.read", "mail.send"]);
+  clearMcpStepUpScope(serviceUrl);
+  // A non-MCP request on the same origin (an OAuth form POST) records nothing.
+  await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
+  assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read"), "mail.read");
+});

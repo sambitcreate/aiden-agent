@@ -278,7 +278,6 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     throw new Error("Invalid MCP transport policy.");
   }
   const service = new URL(options.serviceUrl);
-  const servicePath = `${service.origin}${service.pathname}`;
   const policyFetch = async (
     input: Parameters<typeof fetch>[0],
     init: RequestInit | undefined,
@@ -345,7 +344,9 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       let responseHeaders = response.headers;
       const challenge = response.headers.get("www-authenticate");
       if ((response.status === 401 || response.status === 403) && challenge) {
-        if (response.status === 403 && `${url.origin}${url.pathname}` === servicePath &&
+        // Legacy SSE servers take JSON-RPC POSTs at a separate message path
+        // (e.g. /messages), so any MCP request to the server's origin counts.
+        if (response.status === 403 && mcpRequest && url.origin === service.origin &&
             challengeParameter(challenge, "error") === "insufficient_scope") {
           const scope = challengeParameter(challenge, "scope");
           if (scope) recordMcpStepUpScope(options.serviceUrl, scope);
