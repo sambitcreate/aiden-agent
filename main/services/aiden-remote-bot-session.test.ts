@@ -19,6 +19,7 @@ import {
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
+  AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
@@ -129,6 +130,9 @@ function fakeRuntime(initial: BotSessionState) {
     async quietInputs(_botId, ids) {
       // Every queued input is the person's own unless a test says otherwise.
       return new Map(ids.map((id) => [id, false]));
+    },
+    async placedSubmissions() {
+      return new Map();
     },
   };
   return {
@@ -1668,4 +1672,191 @@ test("a host without bot-activity-v1 refuses whenBusy instead of guessing", asyn
   );
   await service.close();
   await ungated.close();
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 30: the person's messages carry their submissionId
+// ---------------------------------------------------------------------------
+
+/** Every `submissionId` key anywhere in a frame or snapshot. */
+function submissionIdKeys(value: unknown): number {
+  return JSON.stringify(value).match(/"submissionId"/gu)?.length ?? 0;
+}
+
+/** The user bubbles a device holds, as `[text, submissionId]`. */
+function userBubbles(entries: readonly { type: string; role?: string; text?: string; submissionId?: string }[]) {
+  return entries.filter((entry) => entry.type === "message" && entry.role === "user").map((entry) => [entry.text, entry.submissionId ?? null]);
+}
+
+test("a person's send carries its submissionId on its bubble in frames and on a reconnect snapshot, and a routine's input never does", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-submission-"));
+  durableRoots.push(profileDir);
+  const releases: Array<() => void> = [];
+  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Tidied."),
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "brief" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Inbox is quiet."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  const idle = async () => {
+    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", { what: "the turn to end" });
+  };
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the first snapshot");
+    const receipt = await service.send(DEVICE_ID, BOT_ID, "send-request-submission-0001", { text: "Tidy my notes" });
+    await waitFor(() => command.executions.length === 1, { what: "the person's turn to work" });
+    // While the turn works, the session lists the person's placed input under its entry.
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [receipt.submissionId]);
+    releases.shift()!();
+    await idle();
+
+    // A routine's input, worked on while the projector watches.
+    await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
+    await waitFor(() => command.executions.length === 2, { what: "the routine's turn to work" });
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], [], "a routine's input is not the person's message");
+    releases.shift()!();
+    await idle();
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet."),
+      "the routine's reply",
+    );
+
+    const sentFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Tidy my notes")!;
+    assert.equal(sentFrame.payload.entry.submissionId, receipt.submissionId, "the bubble's frame names the send it settles");
+    const routineFrame = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.text === "Check my inbox.")!;
+    assert.equal("submissionId" in routineFrame.payload.entry, false);
+
+    // Both turns are done, so the session no longer lists them; the projector remembers.
+    assert.deepEqual([...(await runtime.placedSubmissions(BOT_ID)).values()], []);
+    const reconnect = await openAudienceStream(service, { activity: true });
+    try {
+      await reconnect.until(() => reconnect.frames.length >= 1, "the reconnect snapshot");
+      const expected = [["Tidy my notes", receipt.submissionId], ["Check my inbox.", null]];
+      assert.deepEqual(userBubbles(reconnect.frames[0]!.payload.session.entries), expected);
+      assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), expected, "a fetch agrees");
+    } finally {
+      await reconnect.close();
+    }
+
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false, "a device without bot:activity never sees the key");
+    assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0);
+    assert.ok(gapless(holder.frames) && gapless(legacy.frames));
+  } finally {
+    for (const release of releases) release();
+    await holder.close();
+    await legacy.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("only the person's own message is tagged: a routine's input and a question answer never carry a submissionId", () => {
+  const entries = projectBotSessionEntries(
+    [
+      user(1, "Plan dinners"),
+      notice(2, { notice: "routine", label: "Morning brief", requestId: "routine:t:1" }),
+      user(3, "Check my inbox."),
+      {
+        id: 4,
+        kind: "pi.tool-result",
+        model: [{ role: "toolResult", toolName: "ask_user_question", isError: false, content: [{ type: "text", text: "Answer: Blue" }], details: { answerText: "Blue" } }],
+      },
+      assistant(5, "Done."),
+      user(6, "Thanks"),
+    ] as never,
+    // A runtime that wrongly listed every entry: only the person's own messages take an id.
+    new Map([["1", "17"], ["3", "18"], ["4", "19"], ["5", "20"], ["6", "bad id"]]),
+  );
+  assert.deepEqual(
+    entries.map((entry) => (entry.type === "message" ? [entry.role, entry.text, entry.submissionId ?? null] : [entry.type])),
+    [
+      ["user", "Plan dinners", "17"],
+      ["user", "Check my inbox.", null],
+      ["user", "Blue", null],
+      ["assistant", "Done.", null],
+      ["user", "Thanks", null],
+    ],
+  );
+});
+
+test("a device without bot:activity gets each tagged bubble without its id, at the same seq", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "17" });
+  let placed = new Map<string, string>();
+  const service = runningOn(driven, { ...fake, runtime: { ...fake.runtime, placedSubmissions: async () => placed } });
+  const holder = await openAudienceStream(service, { activity: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    placed = new Map([["1", "17"]]);
+    await driven.emit([user(1, "Plan dinners")]);
+    // The turn ended: the session forgets the submission, the projector does not.
+    placed = new Map();
+    fake.setState({ kind: "idle" });
+    await driven.emit([user(1, "Plan dinners"), assistant(2, "Monday: soup.")]);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.role === "assistant"), "the reply");
+    await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
+
+    const bubbles = (frames: Frame[]) => frames.filter((frame) => frame.type === "entry" && frame.payload.entry.role === "user");
+    assert.deepEqual(bubbles(holder.frames).map((frame) => frame.payload.entry.submissionId), ["17"], "one entry frame, never updated");
+    const { submissionId: _submissionId, ...untagged } = bubbles(holder.frames)[0]!.payload.entry;
+    assert.deepEqual(bubbles(legacy.frames).map((frame) => frame.payload.entry), [untagged], "the same bubble, without its id");
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq), "every device stays on one seq");
+    assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+
+    assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [["Plan dinners", "17"]]);
+    assert.equal(submissionIdKeys(await service.session(BOT_ID)), 0, "a fetch without bot:activity has no submissionId");
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("the projector remembers only the newest placements, and asks once per new message", async () => {
+  const driven = drivenConversation([]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "1" });
+  const asked: number[] = [];
+  const sent = Array.from({ length: AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX + 6 }, (_, index) => user(index + 1, `Message ${index + 1}`));
+  const service = runningOn(driven, {
+    ...fake,
+    runtime: {
+      ...fake.runtime,
+      async placedSubmissions() {
+        asked.push(Date.now());
+        return new Map(sent.map((entry) => [String(entry.id), `sub_${entry.id}`]));
+      },
+    },
+  });
+  try {
+    await service.session(BOT_ID, { activity: true });
+    const before = asked.length;
+    await driven.emit(sent);
+    await driven.emit(sent, "Work");
+    await driven.emit(sent, "Working");
+    assert.equal(asked.length - before, 1, "streaming frames with no new message ask nothing");
+
+    const bubbles = userBubbles((await service.session(BOT_ID, { activity: true })).entries);
+    assert.equal(bubbles.length, sent.length);
+    assert.deepEqual(bubbles.slice(0, 6).map(([, id]) => id), [null, null, null, null, null, null], "the oldest are forgotten");
+    assert.deepEqual(
+      bubbles.slice(6).map(([, id]) => id),
+      sent.slice(6).map((entry) => `sub_${entry.id}`),
+      "the newest keep theirs",
+    );
+  } finally {
+    await service.close();
+  }
 });

@@ -14452,6 +14452,11 @@
               },
               "interrupted": {
                 "const": true
+              },
+              "submissionId": {
+                "description": "Contract revision 30, only for devices holding bot:activity, and only on the person's own message (role user): the submission it was sent as, the same id as the send receipt and the queued list, so a phone settles its optimistic bubble exactly. Never on a routine's input or a question answer, and omitted when the Mac no longer knows it; a device without bot:activity never receives the key.",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,64}$"
               }
             },
             "additionalProperties": false

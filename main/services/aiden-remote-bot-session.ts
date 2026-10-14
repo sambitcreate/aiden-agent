@@ -20,7 +20,9 @@
 //   `queued` (the person's waiting messages) in the snapshot and as frames.
 //   Other devices get the state they already hold at those seqs. A waiting
 //   input shows only once the session classified it as the person's own, so a
-//   routine's or the self-intro's prompt never reaches a phone.
+//   routine's or the self-intro's prompt never reaches a phone. The person's
+//   own messages also carry the `submissionId` they were sent as, so a phone
+//   settles its optimistic bubble exactly; other devices never see the key.
 // - Routines, connection requests and starter presets call their main services.
 
 import { randomUUID } from "node:crypto";
@@ -123,6 +125,13 @@ const PROJECTOR_IDLE_MS = 60_000;
 /** Pause before a failed queued-input classification is tried again (the desktop's throttle). */
 const CLASSIFY_RETRY_MS = 1_000;
 const WIRE_SUBMISSION_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
+/**
+ * How many of the person's placed messages a projector remembers (entry →
+ * submission id) after their turns end; the newest are kept. Phones settle
+ * only their few unsent bubbles, and an older bubble without an id is matched
+ * by its text.
+ */
+export const AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX = 64;
 
 export interface AidenRemoteBotSessionRuntime {
   send(
@@ -142,6 +151,12 @@ export interface AidenRemoteBotSessionRuntime {
    * find are left out (`BotSessionRuntime.quietInputs`).
    */
   quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  /**
+   * The person's own inputs placed in the running turn, by the `pi.user`
+   * entry each became (entry id → submission id); never a routine's input or
+   * the self-intro (`BotSessionRuntime.placedSubmissions`).
+   */
+  placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
 }
 
 export interface AidenRemoteBotSessionServiceOptions {
@@ -252,8 +267,15 @@ const wireEntryId = (id: string) => `entry_${id}`;
  * turns are left out, tool traffic stays on the Mac, a failed turn is a typed
  * `failed_turn` entry (with the message Retry resends),
  * and each plugin has one connect card (latest status at the first card's place).
+ *
+ * `submissions` (revision 30) names the submission each of the person's own
+ * messages was sent as, by entry id. Only a `user` message takes one: a
+ * routine's input and a question answer never do, whatever the map says.
  */
-export function projectBotSessionEntries(entries: readonly EntryRecord[]): AidenRemoteBotSessionEntry[] {
+export function projectBotSessionEntries(
+  entries: readonly EntryRecord[],
+  submissions: ReadonlyMap<string, string> = new Map(),
+): AidenRemoteBotSessionEntry[] {
   const output: AidenRemoteBotSessionEntry[] = [];
   const cards = new Map<string, number>();
   for (const entry of projectBotTranscript(entries)) {
@@ -263,6 +285,7 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
       case "routine": {
         const createdAt = isoOf(entry.at);
         const label = entry.type === "routine" ? wireText(entry.label, 120).trim() : "";
+        const submissionId = entry.type === "user" ? submissions.get(entry.id) : undefined;
         output.push({
           type: "message",
           id,
@@ -271,6 +294,7 @@ export function projectBotSessionEntries(entries: readonly EntryRecord[]): Aiden
           text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text),
           ...(createdAt ? { createdAt } : {}),
           ...(label ? { label } : {}),
+          ...(submissionId !== undefined && WIRE_SUBMISSION_ID.test(submissionId) ? { submissionId } : {}),
         });
         break;
       }
@@ -372,6 +396,19 @@ export function withoutBotCards(entries: readonly AidenRemoteBotSessionEntry[]):
   );
 }
 
+/** The entry a device without `bot:activity` may see: shipped phones decode message keys strictly. */
+function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotSessionEntry {
+  if (entry.type !== "message" || entry.submissionId === undefined) return entry;
+  const { submissionId: _submissionId, ...rest } = entry;
+  return rest;
+}
+
+/** The entries one device is sent: cards for `bot:cards`, submission ids for `bot:activity`. */
+function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
+  const shown = audience.cards ? [...entries] : withoutBotCards(entries);
+  return audience.activity ? shown : shown.map(withoutSubmissionId);
+}
+
 /** Text of the in-flight (or paused) assistant partial, if any. A reply heading for `[SILENT]` is never shown. */
 export function projectBotSessionPartial(view: Pick<ConversationView, "docs">): string | undefined {
   const text = livePartialText(view.docs);
@@ -459,6 +496,8 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set(["activity", "queued"]
 interface ProjectorActivity {
   /** `AidenRemoteBotSessionRuntime.quietInputs` for this Bot. */
   classify(submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  /** `AidenRemoteBotSessionRuntime.placedSubmissions` for this Bot. */
+  placed(): Promise<ReadonlyMap<string, string>>;
   now(): number;
   retryMs: number;
   report(error: unknown): void;
@@ -501,6 +540,15 @@ class BotLiveProjector {
   /** No classification before this time: a persistent failure is not retried on every frame. */
   private classifyNotBefore = 0;
   private classifyRetry: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Entry id → submission id of the person's messages placed while this
+   * projector lived, newest last and at most `AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX`:
+   * a finished turn's submission drops out of the session, but a reconnect
+   * snapshot still names it.
+   */
+  private readonly submissionOf = new Map<string, string>();
+  /** The newest `pi.user` entry already looked up, so each message is asked about once. */
+  private placedThrough = -1;
   closed = false;
 
   constructor(
@@ -519,7 +567,9 @@ class BotLiveProjector {
     const watch = await conversation.watch(ctx);
     this.stopWatch = () => watch.stop();
     this.view = watch.value;
-    this.entries = await this.resolveEntries(projectBotSessionEntries(watch.value.entries));
+    this.entries = await this.resolveEntries(
+      projectBotSessionEntries(watch.value.entries, await this.submissionsFor(watch.value.entries)),
+    );
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     this.question = this.readQuestion();
@@ -544,7 +594,7 @@ class BotLiveProjector {
       seq: this.seq,
       ...this.state,
       ...(this.partial !== undefined ? { partial: this.partial } : {}),
-      ...windowed(audience.cards ? this.entries : withoutBotCards(this.entries)),
+      ...windowed(entriesFor(this.entries, audience)),
       question: this.question,
       approval: this.approval,
       ...(audience.activity && this.activityDeps ? { activity: this.activity, queued: this.queued } : {}),
@@ -606,7 +656,14 @@ class BotLiveProjector {
     // its seq: clients refetch on any gap. That device gets the state it
     // already holds under that seq instead, which changes nothing it shows.
     const noOp = card || activityOnly ? sseFrame(id, "state", { ...data, type: "state", payload: this.state }) : text;
-    this.broadcast((audience) => ((card && !audience.cards) || (activityOnly && !audience.activity) ? noOp : text));
+    // A bubble tagged with its submission id reaches other devices without the key.
+    const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
+    const bare = entry && withoutSubmissionId(entry);
+    const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
+    this.broadcast((audience) => {
+      if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp;
+      return audience.activity ? text : untagged;
+    });
   }
 
   /**
@@ -740,6 +797,39 @@ class BotLiveProjector {
     return projectBotSessionQueued(docs, new Set(ids.filter((id) => this.inputKinds.get(id) === false)));
   }
 
+  /**
+   * The submission ids of the person's messages, by entry id (revision 30).
+   * Looked up on the serial lane when a new `pi.user` entry appears: its input
+   * is placed in the same commit, so the session still lists it unless its
+   * turn already ended. An id that can't be found is left out; phones then
+   * match the bubble by its text.
+   */
+  private async submissionsFor(entries: readonly EntryRecord[]): Promise<ReadonlyMap<string, string>> {
+    if (!this.activityDeps) return this.submissionOf;
+    let newest = this.placedThrough;
+    for (const record of entries) {
+      if (record.kind === "pi.user" && Number(record.id) > newest) newest = Number(record.id);
+    }
+    if (newest <= this.placedThrough) return this.submissionOf;
+    this.placedThrough = newest;
+    let placed: ReadonlyMap<string, string>;
+    try {
+      placed = await this.activityDeps.placed();
+    } catch {
+      // The field is optional: without it the phone falls back to the text.
+      return this.submissionOf;
+    }
+    for (const [entryId, submissionId] of [...placed].sort(([left], [right]) => Number(left) - Number(right))) {
+      if (!WIRE_SUBMISSION_ID.test(submissionId)) continue;
+      this.submissionOf.delete(entryId);
+      this.submissionOf.set(entryId, submissionId);
+    }
+    while (this.submissionOf.size > AIDEN_REMOTE_BOT_SUBMISSION_MEMO_MAX) {
+      this.submissionOf.delete(this.submissionOf.keys().next().value!);
+    }
+    return this.submissionOf;
+  }
+
   /** One retry after the pause, on the serial lane, even if no frame arrives. */
   private scheduleClassifyRetry(): void {
     const { retryMs } = this.activityDeps!;
@@ -758,7 +848,7 @@ class BotLiveProjector {
 
   private async publish(view: ConversationView): Promise<void> {
     if (this.closed) return;
-    const next = await this.resolveEntries(projectBotSessionEntries(view.entries));
+    const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
     const question = this.readQuestion();
@@ -1295,6 +1385,7 @@ export class AidenRemoteBotSessionService {
         this.supportsActivity
           ? {
               classify: (ids) => runtime.quietInputs(botId, ids),
+              placed: () => runtime.placedSubmissions(botId),
               now: () => this.options.now?.() ?? Date.now(),
               retryMs: this.options.classifyRetryMs ?? CLASSIFY_RETRY_MS,
               report: (error) => this.options.onReport?.(botId, error),

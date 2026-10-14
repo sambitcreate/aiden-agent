@@ -22,6 +22,8 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
+import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { HostRunRegistry } from "./host-run-registry.js";
@@ -5170,4 +5172,69 @@ test("only a device holding bot:activity is served activity frames and a Bot's c
   assert.deepEqual(seen, ["session:plain", "events:plain", "session:activity", "events:activity"]);
   assert.deepEqual(shown.plain, ["get:plain", "create:plain", "patch:plain", "avatar delete:plain"]);
   assert.deepEqual(shown.holder, ["get:activity", "create:activity", "patch:activity", "avatar delete:activity"]);
+});
+
+test("a bubble's submissionId reaches only a device holding bot:activity, on a fetch and on the stream's snapshot", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const placedMessage = {
+    id: 1,
+    kind: "pi.user",
+    model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 1_700_000_000_000 }],
+  };
+  const sessions = new AidenRemoteBotSessionService({
+    bots: {
+      supportsChatActivity: true,
+      bot: async (botId) => ({
+        id: botId, revision: "bot_revision_1", name: "Planner", instructions: "Plan.",
+        avatar: { version: 1, shape: "orb", color: "sky" }, createdAt: 1_000, updatedAt: 2_000,
+      }),
+      summaryOf: async () => { throw new Error("not used"); },
+      executeIdempotent: async (_scope, _input, action) => action(),
+    },
+    runtime: async () => ({
+      send: async () => ({ submissionId: "17", deduped: false }),
+      resume: async () => ({ kind: "running", submissionId: "17" }),
+      dismiss: async () => ({ kind: "idle" }),
+      stop: async () => ({ kind: "idle" }),
+      state: async () => ({ kind: "running", submissionId: "17" }),
+      conversation: async () => ({
+        watch: async () => ({
+          value: { entries: [placedMessage], docs: {} },
+          start() {},
+          stop: async () => {},
+          closed: new Promise<void>(() => {}),
+        }),
+      }) as never,
+      quietInputs: async () => new Map(),
+      placedSubmissions: async () => new Map([["1", "17"]]),
+    }),
+    turnIntents: createBotTurnIntents(),
+  });
+  const seen: Record<string, Array<string | null>> = {};
+  try {
+    for (const [label, capabilities] of [
+      ["plain", ["server:read", "bot:read", "chat:read"]],
+      ["holder", ["server:read", "bot:read", "chat:read", "bot:activity"]],
+    ] as Array<[string, AidenRemoteCapability[]]>) {
+      const app = await fixture({ capabilities, acceptsBotCapabilities: true, deviceType: "iphone", botSessions: sessions, chatActivity: true });
+      try {
+        const fetched = await (await fetch(`${app.base}/bots/bot-1/session`, { headers })).json();
+        const controller = new AbortController();
+        const stream = await fetch(`${app.base}/bots/bot-1/session/events`, { headers, signal: controller.signal });
+        const reader = stream.body!.getReader();
+        let text = "";
+        while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+        controller.abort();
+        const snapshot = JSON.parse(text.split("\n").find((line) => line.startsWith("data: "))!.slice(6));
+        assert.equal(snapshot.type, "snapshot");
+        seen[label] = [fetched.entries[0].submissionId ?? null, snapshot.payload.session.entries[0].submissionId ?? null];
+        if (label === "plain") assert.equal(JSON.stringify([fetched, snapshot]).includes("submissionId"), false);
+      } finally {
+        await app.close();
+      }
+    }
+  } finally {
+    await sessions.close();
+  }
+  assert.deepEqual(seen, { plain: [null, null], holder: ["17", "17"] });
 });

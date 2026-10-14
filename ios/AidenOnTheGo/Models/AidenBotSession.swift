@@ -29,6 +29,20 @@ enum AidenBotSessionWire {
         }
     }
 
+    /// Submission ids: 1–64 ASCII letters, digits, `.`, `_`, `:` or `-`.
+    static func validateSubmissionID(_ value: String, field: String) throws {
+        let scalars = Array(value.unicodeScalars)
+        guard (1...maxSubmissionIDLength).contains(scalars.count),
+              scalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
+                  default: false
+                  }
+              }) else {
+            throw AidenBotContractError.invalidField(field)
+        }
+    }
+
     static func validateEpoch(_ value: String) throws {
         let scalars = Array(value.unicodeScalars)
         guard (1...maxEpochLength).contains(scalars.count),
@@ -128,6 +142,28 @@ struct AidenBotSessionMessage: Equatable, Sendable {
     let label: String?
     /// An assistant answer that was cut off.
     let interrupted: Bool
+    /// Contract revision 30 (`bot:activity`): the submission the person's own
+    /// message was sent as, the same id as the send receipt and the queued
+    /// list. Absent on every other message and whenever the Mac no longer knows it.
+    let submissionId: String?
+
+    init(
+        id: String,
+        role: AidenBotSessionMessageRole,
+        text: String,
+        createdAt: AidenRemoteTimestamp?,
+        label: String?,
+        interrupted: Bool,
+        submissionId: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.label = label
+        self.interrupted = interrupted
+        self.submissionId = submissionId
+    }
 }
 
 enum AidenBotConnectCardStatus: String, Codable, Sendable {
@@ -231,12 +267,17 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case "message":
             try AidenBotWire.requireOnlyKeys(
                 decoder,
-                allowed: ["type", "id", "role", "text", "createdAt", "label", "interrupted"]
+                allowed: ["type", "id", "role", "text", "createdAt", "label", "interrupted", "submissionId"]
             )
             let role = try values.decode(AidenBotSessionMessageRole.self, forKey: .role)
             let interrupted = try AidenBotWire.optional(Bool.self, from: values, forKey: .interrupted)
             guard interrupted == nil || (interrupted == true && role == .assistant) else {
                 throw AidenBotContractError.invalidCombination("interrupted message")
+            }
+            let submissionId = try AidenBotWire.optional(String.self, from: values, forKey: .submissionId)
+            if let submissionId {
+                guard role == .user else { throw AidenBotContractError.invalidCombination("message submissionId") }
+                try AidenBotSessionWire.validateSubmissionID(submissionId, field: "message.submissionId")
             }
             self = .message(AidenBotSessionMessage(
                 id: id,
@@ -249,7 +290,8 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
                 ),
                 createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt),
                 label: try AidenBotWire.optionalString(values, forKey: .label, maxLength: AidenBotSessionWire.maxLabelLength),
-                interrupted: interrupted == true
+                interrupted: interrupted == true,
+                submissionId: submissionId
             ))
         case "connect_card":
             try AidenBotWire.requireOnlyKeys(
@@ -341,6 +383,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encodeIfPresent(message.createdAt, forKey: .createdAt)
             try values.encodeIfPresent(message.label, forKey: .label)
             if message.interrupted { try values.encode(true, forKey: .interrupted) }
+            try values.encodeIfPresent(message.submissionId, forKey: .submissionId)
         case let .connectCard(card):
             try values.encode("connect_card", forKey: .type)
             try values.encode(card.id, forKey: .id)
@@ -376,7 +419,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, role, text, createdAt, label, interrupted
+        case type, id, role, text, createdAt, label, interrupted, submissionId
         case pluginId, name, iconId, reason, status, notice, retryText
         case proposalId, prompt, routineId
     }
@@ -562,12 +605,7 @@ struct AidenBotQueuedMessage: Codable, Equatable, Sendable {
             forKey: .submissionId,
             maxLength: AidenBotSessionWire.maxSubmissionIDLength
         )
-        guard submissionId.unicodeScalars.allSatisfy({ scalar in
-            switch scalar.value {
-            case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
-            default: false
-            }
-        }) else { throw AidenBotContractError.invalidField("queued.submissionId") }
+        try AidenBotSessionWire.validateSubmissionID(submissionId, field: "queued.submissionId")
         mode = try values.decode(AidenStreamInputMode.self, forKey: .mode)
         text = try AidenBotWire.requiredString(values, forKey: .text, maxLength: AidenBotSessionWire.maxMessageLength)
     }

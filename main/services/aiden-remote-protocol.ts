@@ -1024,6 +1024,14 @@ export type AidenRemoteBotSessionEntry =
       label?: string;
       /** An assistant answer that was cut off. */
       interrupted?: true;
+      /**
+       * Contract revision 30, only for devices holding `bot:activity`: the
+       * submission this person's own message was sent as (the send receipt's
+       * and the queued list's `submissionId`), so a phone settles its
+       * optimistic bubble exactly. Never on a routine's input or a question
+       * answer, and omitted when the Mac no longer knows it.
+       */
+      submissionId?: string;
     }
   | {
       type: "connect_card";
@@ -5008,12 +5016,21 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
     case "message": {
       assertExactKeys(
         value,
-        ["type", "id", "role", "text", "createdAt", "label", "interrupted"],
+        ["type", "id", "role", "text", "createdAt", "label", "interrupted", "submissionId"],
         "Bot session message",
       );
       const role = enumMember(value.role, ["user", "assistant"] as const, "Bot session message role");
       if (hasOwn(value, "interrupted") && (value.interrupted !== true || role !== "assistant")) {
         throw new Error("Only an assistant message can be marked interrupted.");
+      }
+      if (hasOwn(value, "submissionId") && role !== "user") {
+        throw new Error("Only the person's message can carry a submissionId.");
+      }
+      const submissionId = hasOwn(value, "submissionId")
+        ? boundedText(value.submissionId, "Bot session message submissionId", 64)
+        : undefined;
+      if (submissionId !== undefined && !AIDEN_REMOTE_BOT_SUBMISSION_ID.test(submissionId)) {
+        throw new Error("Bot session message submissionId is invalid.");
       }
       return {
         type: "message",
@@ -5027,6 +5044,7 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           ? { label: boundedText(value.label, "Bot session message label", 120) }
           : {}),
         ...(hasOwn(value, "interrupted") ? { interrupted: true as const } : {}),
+        ...(submissionId !== undefined ? { submissionId } : {}),
       };
     }
     case "connect_card":
@@ -5709,6 +5727,8 @@ export interface AidenRemoteBotActivityFixture {
   elapsed: Array<{ startedAt: number; now: number; label: string | null }>;
   session: AidenRemoteBotSession;
   events: AidenRemoteBotSessionEvent[];
+  /** A queued message placed in the turn: its bubble carries the same `submissionId`. */
+  entryEvent: AidenRemoteBotSessionEvent;
   detail: AidenRemoteBotDetail;
   identityPatch: { request: AidenRemoteBotIdentityPatchRequest; response: AidenRemoteBotDetail };
   send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
@@ -5718,7 +5738,7 @@ function parseBotActivityFixture(value: unknown): AidenRemoteBotActivityFixture 
   if (!isRecord(value)) throw new Error("Bot activity fixture must be an object.");
   assertExactKeys(
     value,
-    ["phases", "thinkingKeeps", "app", "elapsed", "session", "events", "detail", "identityPatch", "send"],
+    ["phases", "thinkingKeeps", "app", "elapsed", "session", "events", "entryEvent", "detail", "identityPatch", "send"],
     "Bot activity fixture",
   );
   if (!Array.isArray(value.events)) throw new Error("Bot activity fixture events must be an array.");
@@ -5731,6 +5751,7 @@ function parseBotActivityFixture(value: unknown): AidenRemoteBotActivityFixture 
     elapsed: value.elapsed as AidenRemoteBotActivityFixture["elapsed"],
     session: parseAidenRemoteBotSession(value.session),
     events: value.events.map(parseAidenRemoteBotSessionEvent),
+    entryEvent: parseAidenRemoteBotSessionEvent(value.entryEvent),
     detail: parseAidenRemoteBotDetail(value.detail),
     identityPatch: {
       request: parseAidenRemoteBotIdentityPatchRequest(identity.request, { allowChatActivity: true }),

@@ -2460,6 +2460,42 @@ test("Bot activity frames carry only the §11 allow-list, and every privacy samp
   }
 });
 
+test("the person's own message carries its submissionId for bot:activity devices only, and every misuse is refused", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.botActivity!;
+  const sent = section.session.entries[0]!;
+  assert.equal(sent.type === "message" && sent.role === "user" && sent.submissionId, "17");
+  // The queued message 18 was placed in the turn: its bubble now carries the same id.
+  assert.deepEqual(section.entryEvent, raw.botActivity.entryEvent, "the entry frame round-trips");
+  const placed = section.entryEvent.type === "entry" ? section.entryEvent.payload.entry : undefined;
+  assert.equal(placed?.type === "message" && placed.submissionId, raw.botActivity.session.queued[0].submissionId);
+
+  // What a device without bot:activity is sent for the same session and frame: no new key anywhere.
+  const { nonHolder } = raw.botActivityPrivacy;
+  const legacy = parseAidenRemoteBotSession(nonHolder.session);
+  const legacyFrame = parseAidenRemoteBotSessionEvent(nonHolder.entryEvent);
+  for (const value of [legacy, legacyFrame]) {
+    assert.equal(JSON.stringify(value).includes("submissionId"), false);
+  }
+  assert.equal("activity" in legacy || "queued" in legacy, false);
+  const withoutId = (entry: Record<string, unknown>) => {
+    const { submissionId: _submissionId, ...rest } = entry;
+    return rest;
+  };
+  assert.deepEqual(legacy.entries, raw.botActivity.session.entries.map(withoutId), "the same messages, without their ids");
+  assert.equal(legacyFrame.seq, raw.botActivity.entryEvent.seq, "the same seq");
+  assert.deepEqual(nonHolder.entryEvent.payload.entry, withoutId(raw.botActivity.entryEvent.payload.entry));
+
+  for (const sample of raw.botActivityPrivacy.rejectedSubmissionIdEntries) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(sample), Error, JSON.stringify(sample));
+  }
+  assert.throws(
+    () => parseAidenRemoteBotSessionEntry(raw.botActivityPrivacy.rejectedSubmissionIdEntries[0]),
+    /Only the person's message can carry a submissionId/u,
+  );
+});
+
 test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const send = raw.botActivity.send.request;

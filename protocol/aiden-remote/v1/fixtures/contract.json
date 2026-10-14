@@ -2145,7 +2145,7 @@
       "state": "running",
       "interrupted": false,
       "entries": [
-        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z" }
+        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
       ],
       "hasOlder": false,
       "question": null,
@@ -2162,6 +2162,7 @@
       { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 10, "type": "activity", "payload": { "activity": { "phase": "teleporting", "startedAt": 1760450000000 } } },
       { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 11, "type": "activity", "payload": { "activity": null } }
     ],
+    "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z", "submissionId": "18" } } },
     "detail": {
       "id": "bot_fixture_01",
       "name": "Scout",
@@ -2199,6 +2200,30 @@
   },
   "botActivityPrivacy": {
     "note": "Every decoder must refuse each sample: only phase, app and startedAt cross the wire.",
+    "nonHolder": {
+      "note": "The same session and entry frame as botActivity, as a device without bot:activity receives them: no activity or queued keys, and no submissionId on any entry.",
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 7,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z" }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z" } } }
+    },
+    "rejectedSubmissionIdEntries": [
+      { "type": "message", "id": "entry_31", "role": "assistant", "text": "Here is a plan.", "submissionId": "17" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "17 18" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcde" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": 17 }
+    ],
     "rejectedActivities": [
       { "phase": "command", "startedAt": 1760450000000, "detail": "cat ~/Documents/plan.md" },
       { "phase": "reading", "startedAt": 1760450000000, "step": { "kind": "reading", "label": "Reading", "detail": "plan.md" } },

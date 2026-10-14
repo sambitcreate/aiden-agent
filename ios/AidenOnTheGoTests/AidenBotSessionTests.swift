@@ -1511,6 +1511,36 @@ final class AidenBotActivityContractTests: XCTestCase {
         }
     }
 
+    func testThePersonsMessageCarriesItsSubmissionIdAndEveryMisuseIsRefused() throws {
+        let activity = try section("botActivity")
+        let session = try decode(AidenBotSession.self, try XCTUnwrap(activity["session"]))
+        guard case let .message(sent) = try XCTUnwrap(session.entries.first) else { return XCTFail("a message") }
+        XCTAssertEqual(sent.submissionId, "17")
+
+        // The queued message 18 was placed in the turn: its bubble now names the same submission.
+        let frame = try decode(AidenBotSessionEvent.self, try XCTUnwrap(activity["entryEvent"]))
+        guard case let .entry(.message(placed)) = frame.kind else { return XCTFail("an entry frame") }
+        XCTAssertEqual(placed.submissionId, session.queued.first?.submissionId)
+        XCTAssertEqual(placed.submissionId, "18")
+
+        // A device without bot:activity is sent the same session and frame without the key.
+        let nonHolder = try XCTUnwrap(try section("botActivityPrivacy")["nonHolder"] as? [String: Any])
+        let legacy = try decode(AidenBotSession.self, try XCTUnwrap(nonHolder["session"]))
+        guard case let .message(untagged) = try XCTUnwrap(legacy.entries.first) else { return XCTFail("a message") }
+        XCTAssertNil(untagged.submissionId)
+        XCTAssertEqual(untagged.text, sent.text)
+        let legacyFrame = try decode(AidenBotSessionEvent.self, try XCTUnwrap(nonHolder["entryEvent"]))
+        guard case let .entry(.message(untaggedPlaced)) = legacyFrame.kind else { return XCTFail("an entry frame") }
+        XCTAssertNil(untaggedPlaced.submissionId)
+        XCTAssertEqual(legacyFrame.seq, frame.seq)
+
+        let rejected = try XCTUnwrap(try section("botActivityPrivacy")["rejectedSubmissionIdEntries"] as? [Any])
+        XCTAssertFalse(rejected.isEmpty)
+        for sample in rejected {
+            XCTAssertThrowsError(try decode(AidenBotSessionEntry.self, sample), "\(sample)")
+        }
+    }
+
     func testTextBoundsAreCountedInCodePoints() throws {
         let bounds = try XCTUnwrap(try section("botActivityPrivacy")["textBounds"] as? [String: Any])
         let queuedText = try XCTUnwrap(bounds["queuedText"] as? [String: Any])
