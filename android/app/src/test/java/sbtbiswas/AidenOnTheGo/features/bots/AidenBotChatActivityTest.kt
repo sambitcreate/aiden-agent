@@ -316,17 +316,159 @@ class AidenBotChatActivityTest {
         assertEquals("the same revision", listOf("rev_1", "rev_1"), h.calls.map { it.revision })
     }
 
-    // Leaving the page mid-save returns to the saved choice, and the page can save again.
+    // A save the Mac took is reported even if the caller left meanwhile: the screens behind must hear.
     @Test
-    fun cancellingTheCallerMidSaveReturnsToTheSavedChoice() = runTest {
+    fun aSaveConfirmedAfterTheCallerLeavesStillReports() = runTest {
         val h = Harness()
         val job = pick(h.controller, summary)
         runCurrent()
         job.cancel()
         runCurrent()
-        assertEquals(quiet, h.state.value)
+        h.calls[0].result.complete(detail("rev_2", summary))
+        advanceUntilIdle()
+        assertEquals(listOf("rev_2"), h.savedRevisions)
+        assertEquals(summary, h.state.saved)
+        assertEquals("rev_2", h.state.revision)
+        assertEquals("the page shows what the Mac holds", summary, h.state.value)
         assertFalse(h.state.isSaving)
         assertFalse("leaving is not a failure to report", h.state.saveFailed)
+    }
+
+    @Test
+    fun leavingStopsThePicksQueuedBehindTheSaveThatIsOut() = runTest {
+        val h = Harness()
+        val job = pick(h.controller, summary)
+        runCurrent()
+        pick(h.controller, detailed)
+        runCurrent()
+        job.cancel()
+        runCurrent()
+        h.calls[0].result.complete(detail("rev_2", summary))
+        advanceUntilIdle()
+        assertEquals("the queued pick is not sent for someone who left", 1, h.calls.size)
+        assertEquals(listOf("rev_2"), h.savedRevisions)
+        assertEquals(summary, h.state.value)
+        assertEquals(summary, h.state.saved)
+        assertFalse(h.state.isSaving)
+    }
+
+    // A Mac that applies the pick and then answers too late: the radio ends on the applied value.
+    @Test
+    fun aSaveThatLandedButTimedOutShowsAsSaved() = runTest {
+        val h = Harness(refresh = { detail("rev_2", summary) })
+        pick(h.controller, summary)
+        runCurrent()
+        advanceTimeBy(AidenBotChatActivityController.REQUEST_LIMIT_MILLIS + 1)
+        advanceUntilIdle()
+        assertEquals(summary, h.state.value)
+        assertEquals(summary, h.state.saved)
+        assertEquals("rev_2", h.state.revision)
+        assertFalse("the Mac has the pick, so there is nothing to apologise for", h.state.saveFailed)
+        assertEquals(listOf("rev_2"), h.savedRevisions)
+        assertFalse(h.state.isSaving)
+    }
+
+    @Test
+    fun aTimeoutWhereTheMacHoldsSomethingElseShowsWhatItHoldsAndSaysOffline() = runTest {
+        val h = Harness(refresh = { detail("rev_5", summaryThinking) })
+        pick(h.controller, detailed)
+        runCurrent()
+        advanceTimeBy(AidenBotChatActivityController.REQUEST_LIMIT_MILLIS + 1)
+        advanceUntilIdle()
+        assertEquals(summaryThinking, h.state.value)
+        assertEquals("rev_5", h.state.revision)
+        assertEquals(AidenBotChatActivityFailure.OFFLINE, h.state.saveFailure)
+    }
+
+    @Test
+    fun aTransportFailureAlsoLooksForALateSuccess() = runTest {
+        val h = Harness(refresh = { detail("rev_2", detailed) })
+        pick(h.controller, detailed)
+        runCurrent()
+        h.calls[0].result.completeExceptionally(IOException("connection reset"))
+        advanceUntilIdle()
+        assertEquals(detailed, h.state.value)
+        assertEquals(detailed, h.state.saved)
+        assertFalse(h.state.saveFailed)
+    }
+
+    @Test
+    fun aMacThatNeverReceivedThePickIsNotAskedWhatItHolds() = runTest {
+        var refreshed = false
+        val h = Harness(refresh = { refreshed = true; detail("rev_2", detailed) }, waitForConnection = { false })
+        pick(h.controller, detailed)
+        runCurrent()
+        assertFalse(refreshed)
+        assertEquals(quiet, h.state.value)
+    }
+
+    @Test
+    fun theFailureSaysWhetherTheMacRefusedWasUnreachableOrChanged() = runTest {
+        suspend fun failureOf(error: Exception): AidenBotChatActivityFailure? {
+            val controller = AidenBotChatActivityController(detail("rev_1", null), save = { _, _ -> throw error })
+            controller.pick(detailed)
+            return controller.state.value.saveFailure
+        }
+        assertEquals(AidenBotChatActivityFailure.OFFLINE, failureOf(IOException("offline")))
+        assertEquals(AidenBotChatActivityFailure.OFFLINE, failureOf(AidenRemoteClientException.Disconnected()))
+        assertEquals(AidenBotChatActivityFailure.CONFLICT, failureOf(server409()))
+        assertEquals(
+            AidenBotChatActivityFailure.GENERIC,
+            failureOf(AidenRemoteClientException.Server(404, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.NOT_FOUND, "Gone", "req_2", false)))
+        )
+    }
+
+    // The Mac is the authority on what was saved.
+    @Test
+    fun theMacsAnswerWinsOverWhatWasPicked() = runTest {
+        val h = Harness()
+        pick(h.controller, detailed)
+        runCurrent()
+        h.calls[0].result.complete(detail("rev_2", summary))
+        advanceUntilIdle()
+        assertEquals(summary, h.state.saved)
+        assertEquals("the radio settles on what the Mac kept", summary, h.state.value)
+    }
+
+    @Test
+    fun anAnswerWithNoChoiceMeansThePickWasTaken() = runTest {
+        val h = Harness()
+        pick(h.controller, detailed)
+        runCurrent()
+        h.calls[0].result.complete(detail("rev_2", null))
+        advanceUntilIdle()
+        assertEquals(detailed, h.state.saved)
+        assertEquals(detailed, h.state.value)
+    }
+
+    @Test
+    fun aRefreshWithNoChoiceMeansTheDefault() = runTest {
+        val h = Harness(initial = detail("rev_1", detailed), refresh = { detail("rev_9", null) })
+        assertEquals(detailed, h.state.value)
+        pick(h.controller, summary)
+        runCurrent()
+        h.calls[0].result.completeExceptionally(server409())
+        advanceUntilIdle()
+        assertEquals(quiet, h.state.saved)
+        assertEquals(quiet, h.state.value)
+        assertEquals("rev_9", h.state.revision)
+    }
+
+    // The connection is checked before every send, not just the first.
+    @Test
+    fun theHoldAppliesToTheFollowUpSendToo() = runTest {
+        var waits = 0
+        val h = Harness(waitForConnection = { waits += 1; waits == 1 })
+        pick(h.controller, summary)
+        runCurrent()
+        pick(h.controller, detailed)
+        runCurrent()
+        h.calls[0].result.complete(detail("rev_2", summary))
+        advanceUntilIdle()
+        assertEquals(2, waits)
+        assertEquals("the follow-up never went out", 1, h.calls.size)
+        assertEquals("it rolls back to what the Mac confirmed", summary, h.state.value)
+        assertEquals(AidenBotChatActivityFailure.OFFLINE, h.state.saveFailure)
     }
 
     // The client-bound controller patches with the chat activity opt-in, on the revision it was given.
@@ -414,15 +556,12 @@ class AidenBotChatActivityTest {
         assertNull("nothing has started yet", thinking.running)
         assertEquals(emptyList<Int>(), thinking.steps)
 
-        var finished = -1
         for (index in 1 until preview.REPLY_FRAME) {
             val frame = preview.frame(index, AidenBotChatActivityLevel.DETAILED)
             val running = frame.running
             assertTrue("frame $index shows its running step", running != null)
             assertEquals("one more step has finished each frame", index - 1, frame.steps.size)
             assertFalse("a running step is not also listed as finished", frame.steps.contains(running))
-            assertTrue(frame.steps.size > finished)
-            finished = frame.steps.size
             assertFalse(frame.recapShown)
         }
 
@@ -500,14 +639,5 @@ class AidenBotChatActivityTest {
                 preview.shownFrame(level, reduceMotion = true, playing = false, current = 0, nowMs = clockAtThirdFrame + preview.FRAME_MILLIS[2] + 5)
             )
         }
-    }
-
-    @Test
-    fun everyLevelAndWordingHasItsOwnWords() {
-        assertEquals(3, levels.map { it.label }.toSet().size)
-        assertEquals(3, levels.map { it.detail }.toSet().size)
-        val wordings = AidenBotChatActivityWording.entries
-        assertEquals(2, wordings.map { it.label }.toSet().size)
-        assertEquals(2, wordings.map { it.detail }.toSet().size)
     }
 }

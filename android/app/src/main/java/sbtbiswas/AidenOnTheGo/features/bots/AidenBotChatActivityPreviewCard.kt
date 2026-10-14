@@ -6,6 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -95,11 +100,15 @@ fun AidenBotChatActivityPreviewCard(
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         )
         if (frame.recapShown) {
-            Text(
-                (if (frame.recapOpen) "▾ " else "▸ ") + stringResource(R.string.bot_chat_activity_preview_recap),
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.secondary
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (frame.recapOpen) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = palette.secondary,
+                    modifier = Modifier.size(markSize)
+                )
+                Text(stringResource(R.string.bot_chat_activity_preview_recap), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+            }
         }
         frame.steps.forEach { step ->
             Text(stringResource(step), style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(start = 14.dp))

@@ -661,6 +661,8 @@
     <string name="bot_chat_activity_wording_thinking_detail">One calm word, whatever it’s doing.</string>
     <string name="bot_chat_activity_value">%1$s · %2$s</string>
     <string name="bot_chat_activity_save_failed">Aiden couldn’t save that choice.</string>
+    <string name="bot_chat_activity_save_conflict">This changed on your Mac. Showing what it has now.</string>
+    <string name="bot_chat_activity_save_unreachable">Aiden couldn’t reach your Mac to save that choice.</string>
     <string name="bot_chat_activity_preview">Preview</string>
     <string name="bot_chat_activity_preview_prompt">Plan dinners for this week</string>
     <string name="bot_chat_activity_preview_reply">Here’s a plan for the week.</string>
@@ -668,9 +670,6 @@
     <string name="bot_chat_activity_preview_step_read">Read 1 file</string>
     <string name="bot_chat_activity_preview_step_search">Searched the web</string>
     <string name="bot_chat_activity_preview_step_edit">Edited 1 file</string>
-    <string name="bot_chat_activity_preview_running_read">Reading 1 file…</string>
-    <string name="bot_chat_activity_preview_running_search">Searching the web…</string>
-    <string name="bot_chat_activity_preview_running_edit">Editing 1 file…</string>
     <string name="bot_session_queued">Queued</string>
     <string name="bot_session_queued_hint">Sends when the current reply finishes</string>
     <string name="bot_session_sending">Sending…</string>

@@ -4,10 +4,14 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenBotChatActivity
@@ -98,9 +102,9 @@ object AidenBotChatActivityPreview {
         R.string.bot_chat_activity_preview_step_edit
     )
     private val RUNNING = listOf(
-        R.string.bot_chat_activity_preview_running_read,
-        R.string.bot_chat_activity_preview_running_search,
-        R.string.bot_chat_activity_preview_running_edit
+        R.string.bot_activity_reading,
+        R.string.bot_activity_searching,
+        R.string.bot_activity_editing
     )
 
     /**
@@ -158,6 +162,16 @@ object AidenBotChatActivityPreview {
 
 // --- The controller: picks apply at once and save in the background ---
 
+/** Why a pick didn't stick, so the page can say so in the right words. */
+enum class AidenBotChatActivityFailure {
+    /** The Mac refused or failed the save. */
+    GENERIC,
+    /** The phone couldn't reach the Mac: offline, disconnected, or too slow. */
+    OFFLINE,
+    /** The Bot changed on the Mac; the page now shows what the Mac holds. */
+    CONFLICT
+}
+
 data class AidenBotChatActivityUiState(
     /** What the page shows: the last pick, saved or not. */
     val value: AidenBotChatActivity,
@@ -166,14 +180,26 @@ data class AidenBotChatActivityUiState(
     /** The revision the next save goes out on. */
     val revision: String,
     val isSaving: Boolean = false,
-    val saveFailed: Boolean = false
-)
+    /** Set when the last pick didn't stick; cleared by the next pick or [AidenBotChatActivityController.dismissError]. */
+    val saveFailure: AidenBotChatActivityFailure? = null
+) {
+    val saveFailed: Boolean get() = saveFailure != null
+}
 
 /** A save that outran its limit; the pick returns to the saved choice. */
 class AidenBotChatActivityTimeout : Exception("The save took too long.")
 
 /** The Mac stayed unreachable for the whole hold. */
 class AidenBotChatActivityUnreachable : Exception("The Mac could not be reached.")
+
+/** The save may or may not have reached the Mac: no answer came. A late success is possible. */
+fun aidenBotChatActivityTransportFailure(error: Throwable): Boolean =
+    error is AidenBotChatActivityTimeout || error is java.io.IOException
+
+/** The save never got an answer from the Mac: offline, disconnected, or too slow. */
+fun aidenBotChatActivityMacUnreachable(error: Throwable): Boolean =
+    aidenBotChatActivityTransportFailure(error) || error is AidenBotChatActivityUnreachable ||
+        error is AidenRemoteClientException.Disconnected
 
 /** The Bot changed on the Mac since this phone read it (a stale `If-Match`). */
 fun aidenBotIsRevisionConflict(error: Throwable): Boolean =
@@ -186,8 +212,12 @@ fun aidenBotIsRevisionConflict(error: Throwable): Boolean =
  * - A pick made while a save is in flight shows at once and goes out next (the last pick wins),
  *   on the revision that save returned. Picking back to the saved value is not special: the Mac
  *   ends on whatever was picked last.
- * - A stale revision refreshes the Bot, adopts the Mac's revision and choice, tells [onSaved]
- *   and reports the error once.
+ * - A stale revision, a timeout or a transport failure refreshes the Bot and adopts the Mac's
+ *   revision and choice, tells [onSaved], and rolls back to what the Mac holds. A save that
+ *   landed late therefore shows as saved, with no error.
+ * - A request that has gone out finishes, and reports through [onSaved], even if the caller
+ *   leaves meanwhile: the Mac took it, so the screens behind must hear. Leaving only stops the
+ *   picks queued behind it.
  * - While [waitForConnection] says the Mac is still connecting, a pick is held for up to
  *   [connectionHoldMillis], then sent or rolled back. Nothing is queued durably.
  * - Each request is bounded by [requestLimitMillis]: the phone's HTTP stack waits for
@@ -218,7 +248,7 @@ class AidenBotChatActivityController(
     suspend fun pick(next: AidenBotChatActivity) {
         val current = _state.value
         if (next == current.value) return
-        _state.value = current.copy(value = next, saveFailed = false)
+        _state.value = current.copy(value = next, saveFailure = null)
         if (current.isSaving) {
             pending = next
             return
@@ -233,25 +263,17 @@ class AidenBotChatActivityController(
     }
 
     fun dismissError() {
-        _state.update { it.copy(saveFailed = false) }
+        _state.update { it.copy(saveFailure = null) }
     }
 
     private suspend fun saveUntilSettled(first: AidenBotChatActivity) {
         var target = first
         while (true) {
-            val detail = try {
-                holdForConnection()
-                val revision = _state.value.revision
-                withTimeoutOrNull(requestLimitMillis) { save(target, revision) } ?: throw AidenBotChatActivityTimeout()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (aidenBotIsRevisionConflict(error)) adoptTheMacsChoice()
-                _state.update { it.copy(value = it.saved, saveFailed = true) }
-                return
-            }
-            _state.update { it.copy(revision = detail.revision, saved = detail.chatActivity ?: target) }
-            onSaved(detail)
+            // The request, and the report that follows it, are not cancelled with the caller.
+            // A caller that left stops here, so the picks queued behind the request aren't sent.
+            val saved = withContext(NonCancellable) { send(target) }
+            currentCoroutineContext().ensureActive()
+            if (!saved) return
             val following = pending ?: return
             pending = null
             if (following == _state.value.saved) return
@@ -259,23 +281,49 @@ class AidenBotChatActivityController(
         }
     }
 
+    /** One save: true when the Mac holds [target] afterwards; false when the pick didn't stick. */
+    private suspend fun send(target: AidenBotChatActivity): Boolean {
+        val detail = try {
+            holdForConnection()
+            val revision = _state.value.revision
+            withTimeoutOrNull(requestLimitMillis) { save(target, revision) } ?: throw AidenBotChatActivityTimeout()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val refreshes = aidenBotIsRevisionConflict(error) || aidenBotChatActivityTransportFailure(error)
+            val fresh = if (refreshes) adoptTheMacsChoice() else null
+            if (fresh != null && (fresh.chatActivity ?: AidenBotChatActivity.DEFAULT) == target) return true
+            val failure = when {
+                aidenBotIsRevisionConflict(error) -> AidenBotChatActivityFailure.CONFLICT
+                aidenBotChatActivityMacUnreachable(error) -> AidenBotChatActivityFailure.OFFLINE
+                else -> AidenBotChatActivityFailure.GENERIC
+            }
+            _state.update { it.copy(value = it.saved, saveFailure = failure) }
+            return false
+        }
+        _state.update { it.copy(revision = detail.revision, saved = detail.chatActivity ?: target) }
+        onSaved(detail)
+        return true
+    }
+
     private suspend fun holdForConnection() {
         val wait = waitForConnection ?: return
         if (withTimeoutOrNull(connectionHoldMillis) { wait() } != true) throw AidenBotChatActivityUnreachable()
     }
 
-    /** The Bot changed on the Mac: take its revision and choice, so the next pick can save. */
-    private suspend fun adoptTheMacsChoice() {
-        val refresh = refresh ?: return
+    /** The Mac may hold something else now: take its revision and choice, so the next pick can save. */
+    private suspend fun adoptTheMacsChoice(): AidenBotDetail? {
+        val refresh = refresh ?: return null
         val fresh = try {
             withTimeoutOrNull(requestLimitMillis) { refresh() }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             null
-        } ?: return
+        } ?: return null
         _state.update { it.copy(revision = fresh.revision, saved = fresh.chatActivity ?: AidenBotChatActivity.DEFAULT) }
         onSaved(fresh)
+        return fresh
     }
 
     companion object {
