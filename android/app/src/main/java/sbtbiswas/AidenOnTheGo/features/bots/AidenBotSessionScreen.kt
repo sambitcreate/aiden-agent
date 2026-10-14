@@ -135,7 +135,16 @@ fun AidenBotSessionScreen(
         return
     }
     val controller = remember(botId, cl) {
-        AidenBotSessionController(botId, AidenRemoteBotSessionTransport(cl), scope, knownState)
+        // The pairing names the chat's cached transcript and its unsent messages (R14, R17).
+        val sessionKey = coordinator.installationStore.activeInstallation?.let { AidenBotSessionKey(it.instanceId, it.deviceId, botId) }
+        AidenBotSessionController(
+            botId,
+            AidenRemoteBotSessionTransport(cl),
+            scope,
+            knownState,
+            sessionKey = sessionKey,
+            store = coordinator.botSessionStore
+        )
     }
     DisposableEffect(controller) {
         controller.start()

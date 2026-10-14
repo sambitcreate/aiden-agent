@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionStore
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentCatalogStore
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentInstallationRecord
 import sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord
@@ -46,13 +47,17 @@ class AidenRemoteCoordinator(
     private val draftStore: AidenChatDraftStore = AidenChatDraftStore(storageDir),
     private val navigationStore: AidenProductNavigationStore = AidenProductNavigationStore(storageDir),
     private val intentCatalogStore: AidenIntentCatalogStore? = null,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job()),
+    /** Where unsent Bot messages wait on disk; the app passes `noBackupFilesDir` so they never reach a backup. */
+    botOutboxDir: File = storageDir
 ) {
     val archiveStore = AidenWorkspaceArchiveStore(storageDir)
     val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
+    /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
+    val botSessionStore = AidenBotSessionStore(File(botOutboxDir, "BotOutbox-v1"))
     val modelPreferenceStore = AidenModelPreferenceStore(storageDir)
     val readSnapshotCache = AidenReadSnapshotCache(File(storageDir, "read_snapshots"))
     private val workspaceListSerializer = ListSerializer(AidenWorkspace.serializer())
@@ -356,6 +361,7 @@ class AidenRemoteCoordinator(
         usageCache.purge(installation.instanceId)
         readSnapshotCache.purge(installation.instanceId)
         botCache.purge(installation.instanceId, installation.deviceId)
+        botSessionStore.purgeInstance(installation.instanceId)
         chatCache.purge(installation.instanceId)
         draftStore.purge(installation.instanceId)
         modelPreferenceStore.purge(installation.instanceId)
