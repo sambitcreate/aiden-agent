@@ -202,13 +202,38 @@ test("under Reduce Motion a working Bot's face looks aside without moving, and a
   const idle = botFixture({ id: "bot-owl", name: "Night Owl" });
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }, fixtures) => {
-    for (const channel of ["bots:list", "bots:live:summary", "bots:getCanonicalPhoto"]) ipcMain.removeHandler(channel);
+    for (const channel of [
+      "bots:list",
+      "bots:get",
+      "bots:live:summary",
+      "bots:live:subscribe",
+      "bots:getCanonicalPhoto",
+      "bots:pendingApprovals",
+    ]) {
+      ipcMain.removeHandler(channel);
+    }
     ipcMain.handle("bots:list", () => fixtures);
+    // /bots opens one Bot's chat, so that Bot's own reads are answered too.
+    ipcMain.handle("bots:get", (_event, botId: string) => fixtures.find((bot) => bot.id === botId) ?? null);
+    ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      state: { kind: "idle" },
+      question: null,
+      activity: null,
+      queued: [],
+    }));
+    ipcMain.handle("bots:pendingApprovals", () => []);
     ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
       botId,
       preview: null,
       updatedAt: null,
       state: botId === "bot-chief" ? { kind: "running", submissionId: "s-1" } : { kind: "idle" },
+      needsYou: false,
+      lastReplyAt: null,
     }));
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
   }, [working, idle]);
@@ -222,7 +247,7 @@ test("under Reduce Motion a working Bot's face looks aside without moving, and a
       transform: getComputedStyle(eyes).transform,
       moving: eyes.getAnimations({ subtree: true }).length > 0,
     }));
-  await expect(page.getByRole("listitem").filter({ hasText: "Chief of Staff" }).getByText("Working")).toBeAttached();
+  await expect(page.getByRole("listitem").filter({ hasText: "Chief of Staff" }).getByText("Thinking…")).toBeAttached();
 
   await expect.poll(async () => (await pose("Chief of Staff")).transform).not.toBe("none");
   expect(await pose("Chief of Staff")).toMatchObject({ moving: false });

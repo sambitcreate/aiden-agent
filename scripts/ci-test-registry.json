@@ -854,7 +854,6 @@
         "renderer/main/bots/bot-model-choice.test.ts",
         "renderer/main/bots/bot-model-picker.test.tsx",
         "renderer/main/bots/bot-delete-dialog.test.tsx",
-        "renderer/main/bots/bot-list.test.tsx",
         "renderer/main/bots/bot-profile.test.tsx",
         "renderer/main/bots/bot-profile-photo.test.tsx",
         "renderer/main/bots/bots-home.test.tsx",
