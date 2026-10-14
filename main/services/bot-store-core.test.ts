@@ -322,6 +322,8 @@ test("a Bot's chat activity is saved with a new revision, and identity edits tha
     });
     assert.deepEqual(chosen.chatActivity, { level: "summary", wording: "thinking" });
     assert.notEqual(chosen.revision, created.revision);
+    const reopened = await createBotStore({ root: () => root, now: () => 500 }).get(created.id);
+    assert.equal(reopened?.revision, chosen.revision, "a saved record and the reloaded one share a revision");
     const renamed = await store.update({
       id: created.id,
       expectedRevision: chosen.revision,
