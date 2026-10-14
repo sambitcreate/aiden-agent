@@ -268,6 +268,29 @@ struct AidenBotEditorDraft: Equatable {
         visionModelID = suggestion?.modelId
     }
 
+    /// Picks the Bot's model and keeps a photo model only while it is needed.
+    /// A model the Mac can't run changes nothing and returns false.
+    @discardableResult
+    mutating func selectModel(providerID: String, modelID: String, catalog: AidenBotCapabilityCatalog) -> Bool {
+        guard let provider = catalog.providers.first(where: { $0.id == providerID }), provider.available,
+              provider.models.contains(where: { $0.id == modelID && $0.available }) else { return false }
+        customAccess.providerID = providerID
+        customAccess.modelID = modelID
+        reconcileVisionSelection(catalog: catalog)
+        return true
+    }
+
+    /// Picks the model photos and screenshots go to; only a usable model that reads images.
+    @discardableResult
+    mutating func selectVisionModel(providerID: String, modelID: String, catalog: AidenBotCapabilityCatalog) -> Bool {
+        guard let provider = catalog.providers.first(where: { $0.id == providerID }), provider.available,
+              provider.models.contains(where: { $0.id == modelID && $0.available && $0.supportsImages })
+        else { return false }
+        visionProviderID = providerID
+        visionModelID = modelID
+        return true
+    }
+
     func accessUpdate(catalog: AidenBotCapabilityCatalog) throws -> AidenBotAccessUpdate {
         let modelSelection = AidenBotModelSelection(
             providerId: customAccess.providerID,

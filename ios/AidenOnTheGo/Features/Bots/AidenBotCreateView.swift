@@ -111,6 +111,42 @@ struct AidenBotCreateView: View {
                 } footer: {
                     Text(accessNote)
                 }
+                if let catalog, let current = draft {
+                    Section {
+                        AidenBotModelRow(
+                            title: "Model",
+                            catalog: catalog,
+                            providerID: current.customAccess.providerID,
+                            modelID: current.customAccess.modelID,
+                            recommended: AidenBotCustomAccessDraft(catalog: catalog).map {
+                                AidenBotModelSelection(providerId: $0.providerID, modelId: $0.modelID)
+                            }
+                        ) { providerID, modelID in
+                            retainedAttempt = nil
+                            retainedCreatedBot = nil
+                            draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                        }
+                        if catalog.model(providerId: current.customAccess.providerID,
+                                         modelId: current.customAccess.modelID)?.supportsImages == false,
+                           current.visionProviderID != nil {
+                            AidenBotModelRow(
+                                title: "Photos",
+                                catalog: catalog,
+                                providerID: current.visionProviderID,
+                                modelID: current.visionModelID,
+                                imagesOnly: true
+                            ) { providerID, modelID in
+                                retainedAttempt = nil
+                                retainedCreatedBot = nil
+                                draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                            }
+                        }
+                    } header: {
+                        Text("AI model")
+                    } footer: {
+                        Text("You can change this later in Advanced.")
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(palette.canvas)

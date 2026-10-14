@@ -272,4 +272,52 @@ final class AidenBotHomeProfileTests: XCTestCase {
             "Couldn’t be read"
         )
     }
+
+    // MARK: Model choice (New Bot and Advanced)
+
+    private func fixtureCatalog() throws -> AidenBotCapabilityCatalog {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(object["botCapabilityCatalog"]))
+        )
+    }
+
+    /// The fixture has a text-only `model_fixture` and an image-reading
+    /// `vision_model_fixture` under `provider_fixture`.
+    func testChoosingAModelPairsAPhotoModelOnlyWhenItReadsTextOnly() throws {
+        let catalog = try fixtureCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertNil(draft.visionModelID)
+
+        XCTAssertFalse(draft.selectModel(providerID: "provider_fixture", modelID: "missing", catalog: catalog))
+        XCTAssertEqual(draft.customAccess.modelID, "vision_model_fixture", "an unknown model changes nothing")
+        XCTAssertFalse(draft.selectVisionModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog),
+                       "a text-only model can't read photos")
+
+        draft.name = "Seer"
+        let request = try draft.createRequest(catalog: catalog)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        let access = try XCTUnwrap(body["access"] as? [String: Any])
+        XCTAssertEqual(access["modelId"] as? String, "vision_model_fixture", "Create sends the chosen model")
+    }
+
+    func testModelListOffersOnlyImageModelsForPhotosAndFiltersBySearch() throws {
+        let catalog = try fixtureCatalog()
+        XCTAssertEqual(
+            aidenBotModelListSections(catalog: catalog, imagesOnly: true, query: "").flatMap { $0.models.map(\.id) },
+            ["vision_model_fixture"]
+        )
+        XCTAssertEqual(
+            aidenBotModelListSections(catalog: catalog, imagesOnly: false, query: "VISION").flatMap { $0.models.map(\.id) },
+            ["vision_model_fixture"]
+        )
+        XCTAssertTrue(aidenBotModelListSections(catalog: catalog, imagesOnly: false, query: "zzz").isEmpty)
+    }
 }

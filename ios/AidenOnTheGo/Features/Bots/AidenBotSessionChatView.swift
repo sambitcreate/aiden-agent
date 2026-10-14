@@ -136,7 +136,7 @@ struct AidenBotSessionChatView: View {
         "\(coordinator.activeInstanceId ?? "")|\(model?.entries.isEmpty == false)"
     }
 
-    /// Profile, Files, and Delete for this Bot.
+    /// Profile, Files, Memory, Advanced and Delete for this Bot.
     private var moreMenu: some View {
         Menu {
             Button {
@@ -150,6 +150,19 @@ struct AidenBotSessionChatView: View {
                 } label: {
                     Label("Files", systemImage: "folder")
                 }
+            }
+            if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator) {
+                Button {
+                    profileOpensMemory = true
+                    isShowingProfile = true
+                } label: {
+                    Label("Memory", systemImage: AidenBotMemorySymbol.name)
+                }
+            }
+            Button {
+                isShowingAdvanced = true
+            } label: {
+                Label("Advanced", systemImage: "slider.horizontal.3")
             }
             if AidenBotDeletion.isAvailable(coordinator: coordinator) {
                 Button(role: .destructive) {
