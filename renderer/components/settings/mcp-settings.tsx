@@ -871,7 +871,10 @@ function McpEditor({
             };
       // Sign-in uses the stored record: its header values are markers once saved.
       let stored = record;
-      if (isNew || storedForSignIn.current || mcpConnectionChanged(server, record)) {
+      // Header edits change the configured connection too: sign-in is admitted
+      // only against the saved record, so they must be saved first.
+      const headersChanged = JSON.stringify(server.headers ?? {}) !== JSON.stringify(record.headers ?? {});
+      if (isNew || storedForSignIn.current || headersChanged || mcpConnectionChanged(server, record)) {
         stored = await mcpApi.save(record);
         if (isNew) storedForSignIn.current = true;
       }
