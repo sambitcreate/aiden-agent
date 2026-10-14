@@ -302,8 +302,8 @@ test("text before a tool call folds under Updates, and only the final answer is 
       snapshot({
         entries: [
           userEntry("u1", "Am I free Friday?"),
-          { id: "a1", type: "assistant", text: "Let me check your calendar.", toolCalls: [{ id: "t1", name: "calendar" }], stopReason: "toolUse" },
-          { id: "r1", type: "tool_result", toolCallId: "t1", toolName: "calendar", isError: false },
+          { id: "a1", type: "assistant", text: "Let me check your calendar.", toolCalls: [{ id: "t1", name: "calendar", kind: "working", label: "Used a tool" }], stopReason: "toolUse" },
+          { id: "r1", type: "tool_result", toolCallId: "t1", toolName: "calendar", isError: false, status: "ok" },
           assistantEntry("a2", "You are free all day Friday."),
         ],
       }),
@@ -476,7 +476,7 @@ const FILE_HANDLERS = {
 };
 
 function toolStep(id: string, text: string): BotTranscriptEntry {
-  return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search" }], stopReason: "toolUse" };
+  return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" }], stopReason: "toolUse" };
 }
 
 test("Files in the ••• menu lists the Bot's folder and opens a file", async () => {

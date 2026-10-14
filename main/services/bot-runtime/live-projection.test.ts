@@ -20,7 +20,7 @@ import {
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
-import { recordingDeps } from "./test-support/fixtures.js";
+import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
@@ -339,6 +339,89 @@ test("files the Bot wrote in its folder and images it shared become chips; faile
       { id: "7", type: "shared_image", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" },
     ],
   );
+});
+
+test("tool calls carry a kind, a past-tense label and a short safe detail; results say ok, failed or blocked", () => {
+  const result = (id: number, toolCallId: string, toolName: string, timestamp: number, code?: string) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: code ? [{ severity: "error", code, message: code }] : [] },
+    model: [{ role: "toolResult", toolCallId, toolName, isError: code !== undefined, content: [], timestamp }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 1_000,
+        content: [
+          { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "/Users/sam/lists/grocery-list.md" } },
+          { type: "toolCall", id: "c2", name: "run_command", arguments: { command: "cat /Users/sam/.ssh/id_rsa" } },
+          { type: "toolCall", id: "c3", name: "web_search", arguments: { query: "lisbon trains" } },
+        ],
+      }],
+    },
+    result(3, "c1", "read_file", 1_400),
+    result(4, "c2", "run_command", 1_050, "blocked"),
+    result(5, "c3", "web_search", 2_000, "tool_error"),
+  ] as never);
+  const assistant = entries.find((entry) => entry.type === "assistant");
+  assert.ok(assistant?.type === "assistant");
+  assert.deepEqual(assistant.toolCalls[0], { id: "c1", name: "read_file", kind: "reading", label: "Read 1 file", detail: "grocery-list.md" });
+  assert.equal(assistant.toolCalls[1]!.kind, "command");
+  assert.doesNotMatch(assistant.toolCalls[1]!.detail ?? "", /\/Users|id_rsa/u);
+  assert.deepEqual(assistant.toolCalls[2], { id: "c3", name: "web_search", kind: "searching", label: "Searched the web", detail: "lisbon trains" });
+  const results = entries.flatMap((entry) =>
+    entry.type === "tool_result" ? [[entry.toolCallId, entry.status, entry.durationMs, entry.at]] : [],
+  );
+  assert.deepEqual(results, [
+    ["c1", "ok", 400, 1_400],
+    ["c2", "blocked", 50, 1_050],
+    ["c3", "failed", 1_000, 2_000],
+  ]);
+});
+
+test("a tool the Bot's access refused is blocked, a tool that broke is failed, and neither looks like the other", async () => {
+  const shell = countingTool("run_command");
+  const search = countingTool("web_search", async () => {
+    throw new Error("The search service is down.");
+  });
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "ls" }), fauxToolCall("web_search", { text: "trains" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("I couldn't do that one."),
+  ]);
+  const live = await start(fauxModels, {
+    service: {
+      extension: recordingDeps({
+        tools: [
+          { tool: shell, replay: "unsafe" },
+          { tool: search, replay: "unsafe" },
+        ],
+        policy: (name) => (name === "run_command" ? { allowed: false, reason: "The shell is off for this Bot." } : { allowed: true }),
+      }),
+    },
+  });
+  try {
+    const sent = await live.service.send("bot:a", { text: "go", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const view = await (await live.service.conversation("bot:a")).context(ctx);
+    const statuses = new Map(
+      projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "tool_result" ? [[entry.toolName, entry] as const] : [])),
+    );
+    assert.equal(statuses.get("run_command")?.status, "blocked");
+    assert.equal(statuses.get("web_search")?.status, "failed");
+    assert.deepEqual(shell.executions, [], "a refused tool never runs");
+    for (const entry of statuses.values()) {
+      assert.ok(typeof entry.durationMs === "number" && entry.durationMs >= 0);
+    }
+  } finally {
+    await live.close();
+  }
 });
 
 test("memory saves show one quiet line each: in-turn saves that changed something and reviews that added", () => {

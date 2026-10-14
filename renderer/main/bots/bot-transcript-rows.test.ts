@@ -8,11 +8,11 @@ const step = (id: string, text: string): BotTranscriptEntry => ({
   id,
   type: "assistant",
   text,
-  toolCalls: [{ id: `${id}-call`, name: "web_search" }],
+  toolCalls: [{ id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" }],
   stopReason: "toolUse",
 });
 const answer = (id: string, text: string): BotTranscriptEntry => ({ id, type: "assistant", text, toolCalls: [], stopReason: "stop" });
-const result = (id: string): BotTranscriptEntry => ({ id, type: "tool_result", toolCallId: `${id}-call`, toolName: "web_search", isError: false });
+const result = (id: string): BotTranscriptEntry => ({ id, type: "tool_result", toolCallId: `${id}-call`, toolName: "web_search", isError: false, status: "ok" });
 const failed = (id: string, retryText: string | null): BotTranscriptEntry => ({ id, type: "failed_turn", retryText });
 
 const kinds = (rows: ReturnType<typeof botTranscriptRows>) => rows.map((row) => row.kind);

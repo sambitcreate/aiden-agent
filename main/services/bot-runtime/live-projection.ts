@@ -33,6 +33,7 @@ import {
   type BotLiveEventBody,
   type BotLiveSnapshot,
   type BotLiveSummary,
+  type BotToolResultStatus,
   type BotTranscriptEntry,
 } from "../../../renderer/shared/bot-live.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
@@ -47,6 +48,7 @@ import {
   type BotRoutineProposalEntryData,
   type BotRoutineProposalStatusEntryData,
 } from "../../../renderer/shared/bot-routine-proposals.js";
+import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
@@ -174,6 +176,14 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
   return { type: "connect_card", pluginId: record.pluginId, reason: record.reason, status };
 }
 
+/** `blocked` when Pi's `beforeTool` refused the call (policy, a denied approval, ingress); any other error failed. */
+function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultStatus {
+  if (!isError) return "ok";
+  const diagnostics = (record.data as { diagnostics?: unknown } | undefined)?.diagnostics;
+  const blocked = Array.isArray(diagnostics) && diagnostics.some((item) => (item as { code?: unknown } | null)?.code === "blocked");
+  return blocked ? "blocked" : "failed";
+}
+
 /**
  * Map raw Pi Durable entries to what a Bot chat shows. Pure: the same entries
  * always give the same view, so a full re-projection can be diffed safely.
@@ -203,6 +213,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   let pendingHidden = false;
   /** File tool calls aimed at the default location (the Bot's folder), by call id. */
   const homeFileCalls = new Set<string>();
+  /** When the answer that made each call was written, for its duration. */
+  const callStartedAt = new Map<string, number>();
   let turn: Turn | null = null;
   /** The newest decision on each proposal: cards show what is true now. */
   const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
@@ -285,7 +297,10 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
           homeFileCalls.add(call.id);
         }
       }
-      const toolCalls = calls.map((call) => ({ id: call.id, name: call.name }));
+      for (const call of calls) {
+        if (typeof message.timestamp === "number") callStartedAt.set(call.id, message.timestamp);
+      }
+      const toolCalls = calls.map((call) => ({ id: call.id, name: call.name, ...botStepDescriptor(call.name, call.arguments) }));
       const stopReason = stopReasonOf(message);
       const text = textOf(message.content);
       if (stopReason === "error") {
@@ -329,6 +344,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         mapped.push({ entry: { id, type: "question_answer", text: answerText, at: message.timestamp }, turn });
         continue;
       }
+      const startedAt = callStartedAt.get(message.toolCallId);
+      const at = typeof message.timestamp === "number" ? message.timestamp : undefined;
       mapped.push({
         entry: {
           id,
@@ -336,6 +353,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
           toolCallId: message.toolCallId,
           toolName: message.toolName,
           isError: message.isError,
+          status: toolResultStatus(record, message.isError),
+          ...(startedAt !== undefined && at !== undefined ? { durationMs: Math.max(0, at - startedAt) } : {}),
+          ...(at === undefined ? {} : { at }),
         },
         turn,
       });

@@ -7,6 +7,7 @@
 // that sees a different epoch or a gap re-subscribes for a fresh snapshot.
 
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
+import type { BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
@@ -44,7 +45,18 @@ export function botQuestionAnswerText(details: unknown): string | undefined {
 export interface BotTranscriptToolCall {
   id: string;
   name: string;
+  /** The phase this call puts its Bot in (`botToolPhase`). */
+  kind: BotToolPhase;
+  /** Past tense, for recaps: "Read 1 file", "Used Notion". */
+  label: string;
+  /** A short, safe object of the action, built and redacted in main. */
+  detail?: string;
+  /** The connection's display label, for connection tools. */
+  app?: string;
 }
+
+/** How a tool call ended. `blocked`: the Bot's access or the person refused it before it ran. */
+export type BotToolResultStatus = "ok" | "failed" | "blocked";
 
 export type BotTranscriptEntry =
   | {
@@ -77,6 +89,10 @@ export type BotTranscriptEntry =
       toolCallId: string;
       toolName: string;
       isError: boolean;
+      status: BotToolResultStatus;
+      /** From the answer that made the call to its result. */
+      durationMs?: number;
+      at?: number;
     }
   | {
       id: string;
