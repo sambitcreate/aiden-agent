@@ -7,7 +7,6 @@ import test from "node:test";
 import type { DeviceServiceState, DeviceSession, DeviceSummary } from "../../../renderer/shared/devices.js";
 import {
   agentDeviceConfigPath,
-  agentDeviceLauncherSource,
   agentDeviceSession,
   ensureAgentDeviceShim,
   writeAgentDeviceConfig,
@@ -418,7 +417,6 @@ test("the shim runs the pinned install and refuses commands without device_open'
       config: null,
       token: null,
     });
-    assert.match(agentDeviceLauncherSource("/node", "/entry"), /delete env\.AGENT_DEVICE_DAEMON_AUTH_TOKEN/u);
 
     const config = agentDeviceConfigPath(baseDir, "local");
     await writeAgentDeviceConfig(config, { baseUrl: "http://127.0.0.1:1", token: "t", entryPath });

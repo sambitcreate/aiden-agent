@@ -235,6 +235,7 @@ import type {
   PeerRunTarget,
 } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
+import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -247,6 +248,23 @@ export interface AppInfo {
   capabilities: AppCapabilities;
 }
 
+
+/**
+ * Runs this Mac hosts but this window did not start (a paired phone's turn,
+ * another window's). Frames arrive batched, only for this window's own
+ * observations.
+ */
+export const localRunsApi = {
+  observe: (chatId: string, cursor?: LocalRunCursor) =>
+    invoke<PeerRunSubscription>("runs:observeLocal", chatId, cursor ?? null),
+  unobserve: (subscriptionId: string) => invoke<boolean>("runs:unobserveLocal", subscriptionId),
+  onFrame: (handler: (message: LocalRunFrameMessage) => void) =>
+    onNotification<LocalRunFrameMessage>("runs:local-frame", handler),
+  /** Host-authority Stop for a run this window observes; false when it already finished. */
+  stop: (runId: string) => invoke<boolean>("runs:stopLocal", runId),
+  /** The given runs that have finished for good on this Mac. */
+  settled: (runIds: readonly string[]) => invoke<string[]>("runs:settledLocal", [...runIds]),
+};
 
 export const peerHostsApi = {
   list: () => invoke<PeerHostView[]>("remote:peersList"),
