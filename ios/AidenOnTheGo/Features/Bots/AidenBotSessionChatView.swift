@@ -113,13 +113,13 @@ struct AidenBotSessionChatView: View {
         .alert(
             "Something Went Wrong",
             isPresented: Binding(
-                get: { deleteErrorMessage != nil || (model?.errorMessage != nil && model?.hasLoaded == true) },
+                get: { alertMessage != nil },
                 set: { if !$0 { clearErrors() } }
             )
         ) {
             Button("OK", role: .cancel) { clearErrors() }
         } message: {
-            Text(deleteErrorMessage ?? model?.errorMessage ?? "Please try again.")
+            Text(alertMessage ?? "Please try again.")
         }
         .task(id: coordinator.activeInstanceId) {
             await start()
@@ -144,9 +144,17 @@ struct AidenBotSessionChatView: View {
         }
     }
 
+    /// A failed delete, then unsent messages that couldn't be restored (shown
+    /// even before the first snapshot), then the chat's own error once loaded.
+    private var alertMessage: String? {
+        deleteErrorMessage ?? model?.restoreNotice ?? (model?.hasLoaded == true ? model?.errorMessage : nil)
+    }
+
     private func clearErrors() {
         deleteErrorMessage = nil
-        model?.errorMessage = nil
+        model?.restoreNotice = nil
+        // Before the first snapshot the chat's error is the connection hint, not this alert.
+        if model?.hasLoaded == true { model?.errorMessage = nil }
     }
 
     private var filesGrant: AidenBotConversationFileGrant? {
