@@ -27,15 +27,21 @@ function useClock(fixed: number | undefined): number {
   return fixed ?? now;
 }
 
-/** The text screen readers hear: the newest wording, at most once per gap. */
+/**
+ * The text screen readers hear: the newest wording, at most once per gap.
+ * A change inside the gap keeps the last text until a timer releases the newest.
+ */
 function useAnnouncement(text: string): string {
   const [shown, setShown] = React.useState<BotAnnouncement>(() => ({ text, at: Date.now() }));
-  React.useEffect(() => {
+  if (shown.text !== text) {
     const next = nextBotAnnouncement(shown, text, Date.now());
     if (next.shown !== shown) setShown(next.shown);
-    if (next.retryInMs === undefined) return;
-    const timer = window.setTimeout(() => setShown({ text, at: Date.now() }), next.retryInMs);
-    return () => window.clearTimeout(timer);
+  }
+  React.useEffect(() => {
+    if (shown.text === text) return;
+    const wait = nextBotAnnouncement(shown, text, Date.now()).retryInMs ?? 0;
+    const timer = setTimeout(() => setShown({ text, at: Date.now() }), wait);
+    return () => clearTimeout(timer);
   }, [text, shown]);
   return shown.text;
 }
@@ -45,6 +51,7 @@ export function BotStatusLine({
   wording,
   now: fixedNow,
   onStop,
+  onLayoutChange,
 }: {
   activity: BotLiveActivity;
   wording: BotChatActivityWording;
@@ -52,6 +59,8 @@ export function BotStatusLine({
   now?: number;
   /** Shown as Stop once the turn has run for 20 seconds. */
   onStop?(): void;
+  /** Reports which optional parts are showing, so a pinned scroll view can follow the height change. */
+  onLayoutChange?(key: string): void;
 }) {
   const display = botActivityDisplay(activity.phase, wording, activity.app);
   const now = useClock(fixedNow);
@@ -59,18 +68,27 @@ export function BotStatusLine({
   const elapsed = botElapsedLabel(activity.startedAt, now);
   const stillGoing = now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS;
   const announced = useAnnouncement(detail ? `${display.word}, ${detail}` : display.word);
+  const layoutKey = `${elapsed ? "e" : ""}${stillGoing ? "s" : ""}`;
+  React.useEffect(() => {
+    onLayoutChange?.(layoutKey);
+    return () => onLayoutChange?.("");
+  }, [layoutKey, onLayoutChange]);
+  const stoppable = Boolean(elapsed && onStop) && activity.phase !== "stopping";
   const shimmer = display.phase !== "waiting" && display.phase !== "stopping";
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-2">
         <div
           role="status"
-          aria-label={announced}
-          tabIndex={detail ? 0 : undefined}
+          tabIndex={wording === "follows" ? 0 : undefined}
           data-bot-status-phase={display.phase}
           className="group/status flex h-6 min-w-0 max-w-full items-center gap-2 rounded-control outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
+          {/* Live regions announce text changes, so the throttled wording lives here as text. */}
+          <span className="sr-only" data-bot-status-announcement>
+            {announced}
+          </span>
           <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
             <span className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
             {detail ? (
@@ -81,7 +99,7 @@ export function BotStatusLine({
             {elapsed ? <span className="shrink-0 tabular-nums text-tertiary">· {elapsed}</span> : null}
           </span>
         </div>
-        {elapsed && onStop ? (
+        {stoppable ? (
           <Button variant="transparent" size="small" onClick={onStop}>
             <Square aria-hidden="true" />
             Stop

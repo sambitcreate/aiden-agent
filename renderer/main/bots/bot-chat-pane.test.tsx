@@ -35,6 +35,12 @@ const COLOUR_QUESTION = {
   ],
 };
 
+/** What a screen reader is told by the status line, or null while it is not shown. */
+function announced(): string | null {
+  const line = screen.queryAllByRole("status").find((node) => node.querySelector("[data-bot-status-announcement]"));
+  return line?.querySelector("[data-bot-status-announcement]")?.textContent ?? null;
+}
+
 function userEntry(id: string, text: string): BotTranscriptEntry {
   return { id, type: "user", text, imageCount: 0 };
 }
@@ -403,7 +409,7 @@ test("a just-sent message shows the status line before any reply text arrives", 
       }),
   });
   assert.ok(await screen.findByText("Plan Lisbon"));
-  assert.ok(await screen.findByRole("status", { name: "Getting ready" }));
+  await waitFor(() => assert.equal(announced(), "Getting ready"));
 });
 
 test("the status line follows live activity, and hides while the reply's words stream", async () => {
@@ -415,7 +421,7 @@ test("the status line follows live activity, and hides while the reply's words s
         activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
       }),
   });
-  assert.ok(await screen.findByRole("status", { name: "Reading, groceries.md" }));
+  await waitFor(() => assert.equal(announced(), "Reading, groceries.md"));
   emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
@@ -437,7 +443,20 @@ test("a Bot set to Always Thinking says Thinking while it reads", async () => {
         activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "groceries.md" } },
       }),
   });
-  assert.ok(await screen.findByRole("status", { name: "Thinking" }));
+  await waitFor(() => assert.equal(announced(), "Thinking"));
+});
+
+test("the status line stays through a tool that follows narration, even while that narration is still the partial", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Tidy my notes")],
+        partial: "On it.",
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "notes.md" } },
+      }),
+  });
+  await waitFor(() => assert.equal(announced(), "Reading, notes.md"));
 });
 
 test("a deleted Bot's chat says it was not found instead of loading forever", async () => {

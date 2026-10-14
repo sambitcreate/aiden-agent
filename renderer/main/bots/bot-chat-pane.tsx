@@ -418,6 +418,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
   const [retrying, setRetrying] = React.useState(false);
   const [pausedBusy, setPausedBusy] = React.useState(false);
+  const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
   const state: BotSessionState | undefined = snapshot?.state;
@@ -471,6 +472,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         approvals.prompts.length,
         snapshot?.question?.waitId,
         snapshot?.activity?.phase,
+        statusLayout,
       ]}
       showScrollToBottomButton
       streaming={running}
@@ -537,8 +539,14 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const question = snapshot.question;
   const chatActivity = resolveBotChatActivity(current.chatActivity);
-  // While the reply's visible words stream, the words are the signal (§5.2).
-  const replyStreaming = running && (snapshot.partial?.trim().length ?? 0) > 0;
+  // While the reply's visible words stream, the words are the signal (§5.2). The
+  // partial text can outlast narration into a tool call, so a running step keeps the line.
+  const activityPhase = snapshot.activity?.phase;
+  const replyStreaming =
+    running &&
+    (snapshot.partial?.trim().length ?? 0) > 0 &&
+    (activityPhase === "writing" || activityPhase === "thinking") &&
+    !snapshot.activity?.step;
 
   const send = async (
     text: string,
@@ -732,7 +740,12 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       </MessageAttachmentPreviewProvider>
       {snapshot.activity && !replyStreaming ? (
-        <BotStatusLine activity={snapshot.activity} wording={chatActivity.wording} onStop={stop} />
+        <BotStatusLine
+          activity={snapshot.activity}
+          wording={chatActivity.wording}
+          onStop={stop}
+          onLayoutChange={setStatusLayout}
+        />
       ) : null}
       {state?.kind === "interrupted" ? (
         <BotInterruptedCard
