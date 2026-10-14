@@ -176,12 +176,20 @@ function connectCardOf(data: unknown): ConnectCardEntry | null {
   return { type: "connect_card", pluginId: record.pluginId, reason: record.reason, status };
 }
 
-/** `blocked` when Pi's `beforeTool` refused the call (policy, a denied approval, ingress); any other error failed. */
+/**
+ * `blocked` when Pi's `beforeTool` refused the call (policy, a denied approval,
+ * ingress); `stopped` when the run was stopped or interrupted mid-call; any
+ * other error failed.
+ */
 function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultStatus {
   if (!isError) return "ok";
   const diagnostics = (record.data as { diagnostics?: unknown } | undefined)?.diagnostics;
-  const blocked = Array.isArray(diagnostics) && diagnostics.some((item) => (item as { code?: unknown } | null)?.code === "blocked");
-  return blocked ? "blocked" : "failed";
+  const codes = new Set(
+    Array.isArray(diagnostics) ? diagnostics.map((item) => (item as { code?: unknown } | null)?.code) : [],
+  );
+  if (codes.has("blocked")) return "blocked";
+  if (codes.has("aborted") || codes.has("interrupted")) return "stopped";
+  return "failed";
 }
 
 /**

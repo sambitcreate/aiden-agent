@@ -17,20 +17,34 @@ test("a file step names only the file's base name", () => {
   assert.equal(botStepDescriptor("grep", { pattern: "tofu", path: "recipes" }).detail, "tofu");
 });
 
-test("a command step is bounded and never shows a secret or an absolute path", () => {
-  const secret = botStepDescriptor("run_command", {
-    command: "export OPENAI_API_KEY=sk-live1234567890abcdef && ls /Users/sam/Private",
+test("a command step shows only its description, bounded and redacted; the command never appears", () => {
+  const noDescription = botStepDescriptor("run_command", {
+    command: "curl -H 'X-Api-Key: hunter2hunter2' https://x.test && mysql -u root -pS3cretPass && cat ~/.ssh/id_rsa && ls /Taxes2025",
   });
-  assert.equal(secret.kind, "command");
-  assert.equal(secret.label, "Ran a command");
+  assert.deepEqual(noDescription, { kind: "command", label: "Ran a command" });
+  const secret = botStepDescriptor("run_command", {
+    command: "ls",
+    description: "Export OPENAI_API_KEY=sk-live1234567890abcdef then list /Users/sam/Private",
+  });
   assert.ok(secret.detail);
   assert.doesNotMatch(secret.detail, /sk-live/u);
   assert.doesNotMatch(secret.detail, /\/Users\/sam/u);
-  const long = botStepDescriptor("run_command", { command: "echo hi && ".repeat(20) }).detail ?? "";
+  const long = botStepDescriptor("run_command", { command: "ls", description: "Tidy the notes and ".repeat(20) }).detail ?? "";
   assert.ok([...long].length <= BOT_STEP_DETAIL_CHARS);
   assert.ok(long.endsWith("…"));
-  // The model's own description is preferred over the raw command.
   assert.equal(botStepDescriptor("run_command", { command: "ls -la", description: "List the folder" }).detail, "List the folder");
+});
+
+test("invisible format characters are stripped, and a secret-shaped search query is redacted", () => {
+  const spoofed = botStepDescriptor("web_search", { query: "invoice\u202Egpj.exe \u200Bnow" }).detail;
+  assert.equal(spoofed, "invoicegpj.exe now");
+  const leaky = botStepDescriptor("web_search", { query: "why does token=sk-live1234567890abcdef fail" }).detail;
+  assert.ok(leaky);
+  assert.doesNotMatch(leaky, /sk-live/u);
+  // A secret far past the shown length cannot leak through a long query either.
+  const far = botStepDescriptor("web_search", { query: `${"word ".repeat(5_000)}sk-live1234567890abcdef` }).detail ?? "";
+  assert.doesNotMatch(far, /sk-live/u);
+  assert.ok([...far].length <= BOT_STEP_DETAIL_CHARS);
 });
 
 test("a search step shows its query; a connection step names the app and shows no arguments", () => {

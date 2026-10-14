@@ -55,8 +55,12 @@ export interface BotTranscriptToolCall {
   app?: string;
 }
 
-/** How a tool call ended. `blocked`: the Bot's access or the person refused it before it ran. */
-export type BotToolResultStatus = "ok" | "failed" | "blocked";
+/**
+ * How a tool call ended. `blocked`: the Bot's access or the person refused it
+ * before it ran. `stopped`: the person stopped the reply, or the app restarted,
+ * while it ran; not a problem to report.
+ */
+export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
 
 export type BotTranscriptEntry =
   | {

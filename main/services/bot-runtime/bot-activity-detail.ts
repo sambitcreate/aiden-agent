@@ -1,9 +1,11 @@
 // One Bot tool call, as the chat may show it (spec §6 "Projection changes"):
 // its phase kind, a past-tense label and a short, safe detail. The detail is
 // built here in main and only from allow-listed arguments: a file's base name,
-// a search query or pattern, or a command (the model's own description when it
-// gave one). Text passes the diagnostic redactor before it is cut, so a secret
-// is never split past it. Arguments of connection tools are never shown.
+// a search query or pattern, or a command's own description (the model's
+// plain-words summary). The command itself is never shown: the redactor does
+// not know shell shapes (`curl -H 'X-Api-Key: …'`, `mysql -pSecret`). Text
+// passes the diagnostic redactor before it is cut to the display length.
+// Arguments of connection tools are never shown.
 
 import {
   botStepPhrase,
@@ -14,8 +16,14 @@ import {
 import { sanitizeDiagnosticText } from "../diagnostics-contract.js";
 
 export const BOT_STEP_DETAIL_CHARS = 80;
-/** Longest argument read before redaction; enough for any useful first 80 characters. */
-const RAW_DETAIL_CHARS = 4_000;
+/**
+ * Longest argument read before redaction. Far beyond the 80 characters shown,
+ * and cut at whitespace, so a secret straddling the cut cannot reach the
+ * visible part as a clipped prefix the redactor no longer recognises.
+ */
+const RAW_DETAIL_CHARS = 16_000;
+/** Invisible format characters (bidi overrides, zero-width marks) can disguise text. */
+const FORMAT_CHARACTERS = /\p{Cf}/gu;
 
 export interface BotStepDescriptor {
   kind: BotToolPhase;
@@ -41,11 +49,15 @@ function baseName(value: unknown): string | undefined {
 
 function bounded(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
-  const clean = sanitizeDiagnosticText([...value].slice(0, RAW_DETAIL_CHARS).join(""), RAW_DETAIL_CHARS);
+  const stripped = value.replace(FORMAT_CHARACTERS, "");
+  const points = [...stripped];
+  const window =
+    points.length > RAW_DETAIL_CHARS ? points.slice(0, RAW_DETAIL_CHARS).join("").replace(/\s+\S*$/u, "") : stripped;
+  const clean = sanitizeDiagnosticText(window, RAW_DETAIL_CHARS);
   if (!clean) return undefined;
-  const points = [...clean];
-  return points.length > BOT_STEP_DETAIL_CHARS
-    ? `${points.slice(0, BOT_STEP_DETAIL_CHARS - 1).join("").trimEnd()}…`
+  const shown = [...clean];
+  return shown.length > BOT_STEP_DETAIL_CHARS
+    ? `${shown.slice(0, BOT_STEP_DETAIL_CHARS - 1).join("").trimEnd()}…`
     : clean;
 }
 
@@ -57,7 +69,8 @@ function rawDetail(toolName: string, kind: BotToolPhase, args: Record<string, un
         ? stringOf(args.pattern)
         : baseName(args.path ?? args.filePath ?? args.directory);
     case "command":
-      return stringOf(args.description) ?? stringOf(args.command);
+      // Only the model's own description; never the command (see the header).
+      return stringOf(args.description);
     case "searching":
       return stringOf(args.query);
     default:

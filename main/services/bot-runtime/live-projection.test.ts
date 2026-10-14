@@ -361,18 +361,22 @@ test("tool calls carry a kind, a past-tense label and a short safe detail; resul
           { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "/Users/sam/lists/grocery-list.md" } },
           { type: "toolCall", id: "c2", name: "run_command", arguments: { command: "cat /Users/sam/.ssh/id_rsa" } },
           { type: "toolCall", id: "c3", name: "web_search", arguments: { query: "lisbon trains" } },
+          { type: "toolCall", id: "c4", name: "web_search", arguments: { query: "slow thing" } },
+          { type: "toolCall", id: "c5", name: "read_file", arguments: { path: "restart.md" } },
         ],
       }],
     },
     result(3, "c1", "read_file", 1_400),
     result(4, "c2", "run_command", 1_050, "blocked"),
     result(5, "c3", "web_search", 2_000, "tool_error"),
+    result(6, "c4", "web_search", 2_500, "aborted"),
+    result(7, "c5", "read_file", 2_600, "interrupted"),
   ] as never);
   const assistant = entries.find((entry) => entry.type === "assistant");
   assert.ok(assistant?.type === "assistant");
   assert.deepEqual(assistant.toolCalls[0], { id: "c1", name: "read_file", kind: "reading", label: "Read 1 file", detail: "grocery-list.md" });
-  assert.equal(assistant.toolCalls[1]!.kind, "command");
-  assert.doesNotMatch(assistant.toolCalls[1]!.detail ?? "", /\/Users|id_rsa/u);
+  // A command with no description shows no detail: the command itself never reaches the chat.
+  assert.deepEqual(assistant.toolCalls[1], { id: "c2", name: "run_command", kind: "command", label: "Ran a command" });
   assert.deepEqual(assistant.toolCalls[2], { id: "c3", name: "web_search", kind: "searching", label: "Searched the web", detail: "lisbon trains" });
   const results = entries.flatMap((entry) =>
     entry.type === "tool_result" ? [[entry.toolCallId, entry.status, entry.durationMs, entry.at]] : [],
@@ -381,16 +385,19 @@ test("tool calls carry a kind, a past-tense label and a short safe detail; resul
     ["c1", "ok", 400, 1_400],
     ["c2", "blocked", 50, 1_050],
     ["c3", "failed", 1_000, 2_000],
+    ["c4", "stopped", 1_500, 2_500],
+    ["c5", "stopped", 1_600, 2_600],
   ]);
 });
 
-test("a tool the Bot's access refused is blocked, a tool that broke is failed, and neither looks like the other", async () => {
+test("a tool the Bot's access or the person refused is blocked, a tool that broke is failed, and neither looks like the other", async () => {
   const shell = countingTool("run_command");
+  const gated = countingTool("send_email");
   const search = countingTool("web_search", async () => {
     throw new Error("The search service is down.");
   });
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "ls" }), fauxToolCall("web_search", { text: "trains" })], {
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "ls" }), fauxToolCall("web_search", { text: "trains" }), fauxToolCall("send_email", { text: "hi" })], {
       stopReason: "toolUse",
     }),
     fauxAssistantMessage("I couldn't do that one."),
@@ -401,8 +408,15 @@ test("a tool the Bot's access refused is blocked, a tool that broke is failed, a
         tools: [
           { tool: shell, replay: "unsafe" },
           { tool: search, replay: "unsafe" },
+          { tool: gated, replay: "unsafe" },
         ],
-        policy: (name) => (name === "run_command" ? { allowed: false, reason: "The shell is off for this Bot." } : { allowed: true }),
+        policy: (name) =>
+          name === "run_command"
+            ? { allowed: false, reason: "The shell is off for this Bot." }
+            : name === "send_email"
+              ? { allowed: true, approval: { summary: "Send an email" } }
+              : { allowed: true },
+        approve: async () => "deny",
       }),
     },
   });
@@ -415,7 +429,9 @@ test("a tool the Bot's access refused is blocked, a tool that broke is failed, a
     );
     assert.equal(statuses.get("run_command")?.status, "blocked");
     assert.equal(statuses.get("web_search")?.status, "failed");
+    assert.equal(statuses.get("send_email")?.status, "blocked", "a declined approval is blocked, not failed");
     assert.deepEqual(shell.executions, [], "a refused tool never runs");
+    assert.deepEqual(gated.executions, [], "a declined tool never runs");
     for (const entry of statuses.values()) {
       assert.ok(typeof entry.durationMs === "number" && entry.durationMs >= 0);
     }
