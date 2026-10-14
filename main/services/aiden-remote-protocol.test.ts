@@ -5,8 +5,13 @@ import path from "node:path";
 import test from "node:test";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionActivity,
+  parseAidenRemoteBotDetail,
+  parseAidenRemoteBotIdentityPatchRequest,
+  parseAidenRemoteBotMessageRequest,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
   AIDEN_REMOTE_BASE_PATH,
@@ -14,7 +19,7 @@ import {
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
-  AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
@@ -106,13 +111,13 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
 ];
 
 // Simulator control is a desktop-to-desktop grant that pairing never issues,
-// and the phone simulator viewer grant and the Bot card opt-in are negotiated
-// only after pairing.
+// and the phone simulator viewer grant and the Bot card and activity opt-ins are
+// negotiated only after pairing.
 const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
   (capability) =>
     !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
     !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
-    !(AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability),
+    !(AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
 );
 // Host-wide grants are issued to desktops only, so phones are never told they
 // exist either and the shared mobile fixture omits both families.
@@ -137,7 +142,7 @@ test("every server feature token the host can announce fits the server feature b
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 29);
+  assert.equal(fixture.contractRevision, 30);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
   const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
   const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
@@ -430,6 +435,9 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
+  // Bot chat activity is revision 30.
+  delete revision19.botActivity;
+  delete revision19.botActivityPrivacy;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -1124,7 +1132,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   const identityPatch = record(schemas.BotIdentityPatch, "BotIdentityPatch");
   assert.equal(identityPatch.minProperties, 1);
-  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar"]);
+  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "chatActivity"]);
 
   const conversationPageProperties = record(record(schemas.BotConversationPage, "BotConversationPage").properties, "BotConversationPage properties");
   assert.equal(record(conversationPageProperties.conversations, "conversations").maxItems, 50);
@@ -2391,4 +2399,65 @@ test("the shared Bot avatar palette fixture is exactly the desktop colour table"
   for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
     assert.match(value, /^#[0-9A-F]{6}$/u);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 30: Bot chat activity on phones
+// ---------------------------------------------------------------------------
+
+test("Bot activity frames carry only the §11 allow-list, and every privacy sample is refused", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.botActivity!;
+  assert.deepEqual(section.session, raw.botActivity.session, "the activity session round-trips");
+  assert.deepEqual(section.events, raw.botActivity.events, "every activity frame round-trips");
+  const shown = [section.session.activity, ...section.events.flatMap((event) => (event.type === "activity" ? [event.payload.activity] : []))];
+  for (const activity of shown) {
+    if (activity === null || activity === undefined) continue;
+    assert.deepEqual(Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)), []);
+  }
+  for (const sample of raw.botActivityPrivacy.rejectedActivities) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), Error, JSON.stringify(sample));
+    const frame = { ...raw.botActivity.events[0], payload: { activity: sample } };
+    assert.throws(() => parseAidenRemoteBotSessionEvent(frame), Error, JSON.stringify(sample));
+  }
+  for (const sample of raw.botActivityPrivacy.rejectedQueued) {
+    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: [sample] }), Error, JSON.stringify(sample));
+  }
+  for (const sample of raw.botActivityPrivacy.rejectedChatActivity) {
+    assert.throws(() => parseAidenRemoteBotDetail({ ...raw.botActivity.detail, chatActivity: sample }), Error, JSON.stringify(sample));
+    assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({ chatActivity: sample }, { allowChatActivity: true }));
+  }
+  const twentyOne = Array.from({ length: 21 }, (_, index) => ({ submissionId: String(index), mode: "queue", text: "x" }));
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOne }), /at most 20/u);
+});
+
+test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const send = raw.botActivity.send.request;
+  assert.throws(() => parseAidenRemoteBotMessageRequest(send), /unsupported field whenBusy/u);
+  assert.deepEqual(parseAidenRemoteBotMessageRequest(send, { allowWhenBusy: true }), send);
+  assert.deepEqual(parseAidenRemoteBotMessageRequest({ text: "Hi" }, { allowWhenBusy: true }), { text: "Hi" });
+  assert.throws(() => parseAidenRemoteBotMessageRequest({ text: "Hi", whenBusy: "followUp" }, { allowWhenBusy: true }));
+  const patch = raw.botActivity.identityPatch.request;
+  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest(patch), /unsupported field chatActivity/u);
+  assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(patch, { allowChatActivity: true }), patch);
+});
+
+test("the shared phase table is the one the Mac draws, and an unknown phase reads as Working", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const { phases, thinkingKeeps, app, elapsed } = raw.botActivity as {
+    phases: Array<{ id: string; word: string; mark: string }>;
+    thinkingKeeps: string[];
+    app: { app: string; word: string };
+    elapsed: Array<{ startedAt: number; now: number; label: string | null }>;
+  };
+  assert.deepEqual(phases.map((phase) => phase.id), [...BOT_ACTIVITY_PHASES]);
+  for (const phase of phases) {
+    assert.deepEqual(botActivityDisplay(phase.id, "follows"), { phase: phase.id, word: phase.word, mark: phase.mark });
+    assert.equal(botActivityDisplay(phase.id, "thinking").phase, thinkingKeeps.includes(phase.id) ? phase.id : "thinking");
+  }
+  assert.equal(botActivityDisplay("app", "follows", app.app).word, app.word);
+  assert.deepEqual(botActivityDisplay("teleporting", "follows"), botActivityDisplay("working", "follows"));
+  for (const row of elapsed) assert.equal(botElapsedLabel(row.startedAt, row.now), row.label, JSON.stringify(row));
 });

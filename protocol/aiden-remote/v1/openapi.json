@@ -6719,7 +6719,8 @@
                 "runs:observe",
                 "runs:control",
                 "simulators:mobile",
-                "bot:cards"
+                "bot:cards",
+                "bot:activity"
               ]
             },
             "uniqueItems": true
@@ -6753,7 +6754,8 @@
                 "runs:observe",
                 "runs:control",
                 "simulators:mobile",
-                "bot:cards"
+                "bot:cards",
+                "bot:activity"
               ]
             },
             "uniqueItems": true
@@ -6876,9 +6878,9 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1; host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity.",
             "minItems": 1,
-            "maxItems": 10,
+            "maxItems": 11,
             "items": {
               "enum": [
                 "tasks:read",
@@ -6890,7 +6892,8 @@
                 "runs:observe",
                 "runs:control",
                 "simulators:mobile",
-                "bot:cards"
+                "bot:cards",
+                "bot:activity"
               ]
             },
             "uniqueItems": true
@@ -6933,7 +6936,8 @@
                 "runs:observe",
                 "runs:control",
                 "simulators:mobile",
-                "bot:cards"
+                "bot:cards",
+                "bot:activity"
               ]
             },
             "uniqueItems": true
@@ -9428,6 +9432,10 @@
           "visionModelSelection": {
             "$ref": "#/components/schemas/BotModelSelection"
           },
+          "chatActivity": {
+            "description": "Contract revision 30, only for devices holding bot:activity.",
+            "$ref": "#/components/schemas/BotChatActivity"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -9530,6 +9538,10 @@
           },
           "avatar": {
             "$ref": "#/components/schemas/BotSemanticAvatar"
+          },
+          "chatActivity": {
+            "description": "Contract revision 30, only on hosts announcing bot-activity-v1. Absent keeps the saved choice.",
+            "$ref": "#/components/schemas/BotChatActivity"
           }
         },
         "additionalProperties": false
@@ -14694,6 +14706,99 @@
                 "type": "null"
               }
             ]
+          },
+          "activity": {
+            "description": "Contract revision 30, only for devices holding bot:activity: what the Bot is doing in its running turn, or null.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotSessionActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued": {
+            "description": "Contract revision 30, only for devices holding bot:activity: the person's messages waiting for the running turn.",
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/BotQueuedMessage"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotSessionActivity": {
+        "description": "Contract revision 30 (bot-activity-v1). Exactly these keys: never a step, detail, path, command, query or thinking. Clients render an unknown phase as working.",
+        "type": "object",
+        "required": [
+          "phase",
+          "startedAt"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]{0,31}$"
+          },
+          "app": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQueuedMessage": {
+        "type": "object",
+        "required": [
+          "submissionId",
+          "mode",
+          "text"
+        ],
+        "properties": {
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+          },
+          "mode": {
+            "enum": [
+              "steer",
+              "queue"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotChatActivity": {
+        "type": "object",
+        "required": [
+          "level",
+          "wording"
+        ],
+        "properties": {
+          "level": {
+            "enum": [
+              "quiet",
+              "summary",
+              "detailed"
+            ]
+          },
+          "wording": {
+            "enum": [
+              "follows",
+              "thinking"
+            ]
           }
         },
         "additionalProperties": false
@@ -14736,6 +14841,8 @@
               "state",
               "question",
               "approval",
+              "activity",
+              "queued",
               "closed"
             ]
           },
@@ -14755,6 +14862,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 32000
+          },
+          "whenBusy": {
+            "description": "Contract revision 30, only on hosts announcing bot-activity-v1: steer joins the running turn; queue (or no value) runs after it.",
+            "enum": [
+              "steer",
+              "queue"
+            ]
           }
         },
         "additionalProperties": false

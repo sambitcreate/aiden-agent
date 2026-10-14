@@ -1,5 +1,5 @@
 {
-  "contractRevision": 29,
+  "contractRevision": 30,
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
@@ -1491,7 +1491,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 29,
+    "contractRevision": 30,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2105,5 +2105,122 @@
     "hasOlder": false,
     "question": null,
     "approval": null
+  },
+  "botActivity": {
+    "phases": [
+      { "id": "preparing", "word": "Getting ready", "mark": "bounce" },
+      { "id": "thinking", "word": "Thinking", "mark": "tri-step" },
+      { "id": "reading", "word": "Reading", "mark": "scan-grid" },
+      { "id": "photo", "word": "Looking at your photo", "mark": "scan-grid" },
+      { "id": "searching", "word": "Searching the web", "mark": "scan-grid" },
+      { "id": "command", "word": "Running a command", "mark": "quad-shuffle" },
+      { "id": "editing", "word": "Editing files", "mark": "quad-shuffle" },
+      { "id": "app", "word": "Using an app", "mark": "quad-shuffle" },
+      { "id": "helper", "word": "Asking a helper", "mark": "quad-shuffle" },
+      { "id": "computer", "word": "Using your Mac", "mark": "quad-shuffle" },
+      { "id": "remembering", "word": "Remembering", "mark": "compose" },
+      { "id": "routine", "word": "Setting up a routine", "mark": "tri-step" },
+      { "id": "working", "word": "Working", "mark": "quad-shuffle" },
+      { "id": "writing", "word": "Writing", "mark": "compose" },
+      { "id": "waiting", "word": "Waiting for you", "mark": "glance" },
+      { "id": "tidying", "word": "Tidying up its notes", "mark": "bounce" },
+      { "id": "stopping", "word": "Stopping", "mark": "bounce" },
+      { "id": "resuming", "word": "Picking up where it left off", "mark": "bounce" },
+      { "id": "reconnecting", "word": "Reconnecting to your Mac", "mark": "bounce" }
+    ],
+    "thinkingKeeps": ["waiting", "stopping", "reconnecting"],
+    "app": { "app": "Notion", "word": "Using Notion" },
+    "elapsed": [
+      { "startedAt": 1760450000000, "now": 1760450019999, "label": null },
+      { "startedAt": 1760450000000, "now": 1760450020000, "label": "20s" },
+      { "startedAt": 1760450000000, "now": 1760450072000, "label": "1m 12s" },
+      { "startedAt": 1760450000000, "now": 1760450120000, "label": "2m" },
+      { "startedAt": 1760450000000, "now": 1760453720000, "label": "1h 2m" },
+      { "startedAt": 1760450060000, "now": 1760450000000, "label": null }
+    ],
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_02",
+      "seq": 7,
+      "state": "running",
+      "interrupted": false,
+      "entries": [
+        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z" }
+      ],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+      "queued": [
+        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
+        { "submissionId": "19", "mode": "steer", "text": "Keep it vegetarian." }
+      ]
+    },
+    "events": [
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 8, "type": "activity", "payload": { "activity": { "phase": "searching", "startedAt": 1760450000000 } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": [ { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." } ] } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 10, "type": "activity", "payload": { "activity": { "phase": "teleporting", "startedAt": 1760450000000 } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 11, "type": "activity", "payload": { "activity": null } }
+    ],
+    "detail": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+      "health": "ready",
+      "sessionState": "running",
+      "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+      "chatActivity": { "level": "summary", "wording": "thinking" },
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T18:46:00.000Z",
+      "revision": "bot_revision_8"
+    },
+    "identityPatch": {
+      "request": { "chatActivity": { "level": "detailed", "wording": "follows" } },
+      "response": {
+        "id": "bot_fixture_01",
+        "name": "Scout",
+        "purpose": "Finds the signal in a busy week",
+        "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+        "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+        "health": "ready",
+        "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+        "chatActivity": { "level": "detailed", "wording": "follows" },
+        "createdAt": "2026-08-18T17:00:00.000Z",
+        "updatedAt": "2026-08-18T18:47:00.000Z",
+        "revision": "bot_revision_9"
+      }
+    },
+    "send": {
+      "request": { "text": "Keep it vegetarian.", "whenBusy": "steer" },
+      "response": { "submissionId": "19", "deduped": false, "state": "running", "interrupted": false }
+    }
+  },
+  "botActivityPrivacy": {
+    "note": "Every decoder must refuse each sample: only phase, app and startedAt cross the wire.",
+    "rejectedActivities": [
+      { "phase": "command", "startedAt": 1760450000000, "detail": "cat ~/Documents/plan.md" },
+      { "phase": "reading", "startedAt": 1760450000000, "step": { "kind": "reading", "label": "Reading", "detail": "plan.md" } },
+      { "phase": "reading", "startedAt": 1760450000000, "path": "~/Documents/plan.md" },
+      { "phase": "command", "startedAt": 1760450000000, "command": "ls ~/Documents" },
+      { "phase": "searching", "startedAt": 1760450000000, "query": "dinner ideas near me" },
+      { "phase": "thinking", "startedAt": 1760450000000, "thinking": "The person wants a plan." },
+      { "phase": "app", "app": "abcdefghijabcdefghijabcdefghijabcdefghijX", "startedAt": 1760450000000 },
+      { "phase": "Reading!", "startedAt": 1760450000000 },
+      { "phase": "thinking", "startedAt": -1 },
+      { "phase": "thinking", "startedAt": "1760450000000" },
+      { "startedAt": 1760450000000 }
+    ],
+    "rejectedQueued": [
+      { "submissionId": "18", "mode": "followUp", "text": "Also add a shopping list." },
+      { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list.", "images": 1 },
+      { "submissionId": "18 19", "mode": "queue", "text": "Also add a shopping list." }
+    ],
+    "rejectedChatActivity": [
+      { "level": "verbose", "wording": "follows" },
+      { "level": "quiet" },
+      { "level": "quiet", "wording": "follows", "extra": true }
+    ]
   }
 }
