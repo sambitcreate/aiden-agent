@@ -778,6 +778,7 @@
         "renderer/lib/editor-preference.test.ts",
         "renderer/lib/environment-panel-layout.test.ts",
         "renderer/lib/environment-panel-state.test.ts",
+        "renderer/components/workbench-panel.test.tsx",
         "renderer/lib/gemini-live-media-core.test.ts",
         "renderer/lib/gemini-recorded-retry.test.ts",
         "renderer/lib/generation-stream.test.ts",

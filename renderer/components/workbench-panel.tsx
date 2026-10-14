@@ -1,4 +1,15 @@
 import * as React from "react";
+import { List, PanelRightClose, Plus, X } from "lucide-react";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui";
+import { cn } from "../lib/ui-utils";
+import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 import { storedWorkbenchWidth } from "../lib/environment-panel-layout";
 
 export interface WorkbenchWidthState {
@@ -26,4 +37,90 @@ export function useWorkbenchWidth(storageKey: string): WorkbenchWidthState {
     [storageKey],
   );
   return { preferredWidth, setPreferredWidth, commitPreferredWidth, resizing, setResizing };
+}
+
+/**
+ * One entry in the workbench tab strip. Several tabs may show the same view
+ * (each browser page and device viewer is its own tab over one view).
+ */
+export interface WorkbenchTab {
+  /** Unique in the strip: the React key and the "Open tabs" entry. */
+  id: string;
+  /** The view this tab shows; ids are `${idPrefix}-${viewId}-tab` and `-panel`. */
+  viewId: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  selected: boolean;
+  /** Defaults to true. A fixed tab gets no close button and ignores Delete. */
+  closable?: boolean;
+  /** Tooltip; defaults to the label. */
+  title?: string;
+  /** F2 and double-click call this. */
+  onRename?: () => void;
+  /** Replaces the tab button while a rename is in progress. */
+  editor?: React.ReactNode;
+  /** Wraps the tab button, for example in a context menu. */
+  wrap?: (tabButton: React.ReactElement) => React.ReactNode;
+  /** Extra `data-*` attributes on the tab's wrapper. */
+  dataAttributes?: Readonly<Record<`data-${string}`, string | undefined>>;
+}
+
+export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
+  tabs: readonly T[];
+  idPrefix: string;
+  tabListLabel: string;
+  /** A Git operation (or similar) is in flight: navigation is disabled, Close panel is not. */
+  busy?: boolean;
+  activeTabRef: React.RefObject<HTMLButtonElement | null>;
+  onSelectTab: (tab: T) => void;
+  onCloseTab: (tab: T) => void;
+  /** The launcher hook point. Without it the strip has no "+" button. */
+  newTab?: { label: string; onOpen: () => void };
+  closeLabel: string;
+  /** Shown as `${closeTitle} (${shortcut})` with the `environment.toggle` binding. */
+  closeTitle: string;
+  onClose: () => void;
+}
+
+export function WorkbenchTabStrip<T extends WorkbenchTab>({
+  tabs,
+  idPrefix,
+  tabListLabel,
+  busy = false,
+  activeTabRef,
+  onSelectTab,
+  onCloseTab,
+  newTab,
+  closeLabel,
+  closeTitle,
+  onClose,
+}: WorkbenchTabStripProps<T>) {
+  const toggleShortcut = useShortcutLabel("environment.toggle");
+  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
+  const tabMenuSelectionRef = React.useRef(false);
+  return (
+    <header className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2">
+      <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
+        {tabs.map((entry, index) => {
+          const Icon = entry.icon;
+          const closable = entry.closable !== false;
+          const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `${idPrefix}-${entry.viewId}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`${idPrefix}-${entry.viewId}-panel`} title={entry.title ?? entry.label} disabled={busy} onClick={() => onSelectTab(entry)} onDoubleClick={entry.onRename} onKeyDown={(event) => {
+              if (event.key === "Delete") { event.preventDefault(); if (closable) onCloseTab(entry); return; }
+              if (event.key === "F2" && entry.onRename) { event.preventDefault(); entry.onRename(); return; }
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+              onSelectTab(tabs[next]);
+            }}>{Icon ? <Icon className="size-4 shrink-0" /> : null}<span className="max-w-32 truncate">{entry.label}</span></Button>;
+          return <div key={entry.id} {...entry.dataAttributes} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
+            {entry.editor ?? (entry.wrap ? entry.wrap(tabButton) : tabButton)}
+            {closable ? <Button variant="transparent" size="small" iconOnly disabled={busy} aria-label={`Close ${entry.label} tab`} onClick={() => onCloseTab(entry)}><X className="size-3" /></Button> : null}
+          </div>;
+        })}
+      </div>
+      {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
+      <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+      <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
+    </header>
+  );
 }

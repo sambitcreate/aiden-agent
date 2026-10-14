@@ -2,11 +2,9 @@ import * as React from "react";
 import {
   Files,
   GitCompareArrows,
-  List,
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  X,
 } from "lucide-react";
 import {
   Button,
@@ -104,7 +102,7 @@ import {
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
-import { useWorkbenchWidth } from "./workbench-panel";
+import { WorkbenchTabStrip, useWorkbenchWidth, type WorkbenchTab } from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -1241,8 +1239,6 @@ function EnvironmentPanelSurface({
   persistWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
-  const toggleShortcut = useShortcutLabel("environment.toggle");
-  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
   const terminal = useWorkspaceTerminal();
@@ -1271,7 +1267,6 @@ function EnvironmentPanelSurface({
     navigationIntentRef.current++;
     setBrowserFocusRequest(null);
   }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
-  const tabMenuSelectionRef = React.useRef(false);
   const handledSubagentFocusRef = React.useRef(0);
   const widthRef = React.useRef(width);
   const activeFileRequest =
@@ -1303,12 +1298,14 @@ function EnvironmentPanelSurface({
       panel.setTab(tool);
     }
   };
-  type StripTab = { id: string; kind: EnvironmentPanelTab; label: string; selected: boolean; deviceKey?: string | null };
+  type StripTab = WorkbenchTab & { kind: EnvironmentPanelTab; deviceKey?: string | null };
+  const toolIcon = (kind: EnvironmentPanelTab) =>
+    WORKSPACE_TOOLS.find((tool) => tool.id === kind)?.icon ?? Plus;
   const stripTabs = panelTabs.flatMap<StripTab>((kind) => kind === "browser" && browser?.tabs.length
-    ? browser.tabs.map((page) => ({ id: page.id, kind, label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
+    ? browser.tabs.map((page) => ({ id: page.id, viewId: kind, kind, icon: toolIcon(kind), label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
     : kind === "devices"
-      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", kind, label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
-      : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
+      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", viewId: kind, kind, icon: toolIcon(kind), label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
+      : [{ id: kind, viewId: kind, kind, icon: toolIcon(kind), label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
   const selectStripTab = (entry: StripTab) => {
     if (entry.deviceKey !== undefined) {
       navigationIntentRef.current++;
@@ -1337,6 +1334,21 @@ function EnvironmentPanelSurface({
       }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
+  const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
+  const decoratedTabs = stripTabs.map<StripTab>((entry) => {
+    const deviceKey = entry.deviceKey;
+    if (!deviceKey) return entry;
+    return {
+      ...entry,
+      title: `${entry.label} — double-click to rename`,
+      onRename: () => setRenamingDevice(deviceKey),
+      dataAttributes: { "data-device-tab": deviceKey },
+      editor: renamingDevice === deviceKey
+        ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
+        : undefined,
+      wrap: (tabButton) => <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>,
+    };
+  });
   const openBrowserUrl = async (url: string) => {
     const intent = ++navigationIntentRef.current;
     const result = await runBrowser({ action: "create", url, show: false });
@@ -1475,35 +1487,19 @@ function EnvironmentPanelSurface({
         className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
       />
 
-      <header className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2">
-        <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label="Environment views">
-          {stripTabs.map((entry, index) => {
-            const Icon = WORKSPACE_TOOLS.find((tool) => tool.id === entry.kind)?.icon ?? Plus;
-            const deviceKey = entry.deviceKey;
-            const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `environment-${entry.kind}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`environment-${entry.kind}-panel`} title={deviceKey ? `${entry.label} — double-click to rename` : entry.label} disabled={panel.gitOperationBusy} onClick={() => selectStripTab(entry)} onDoubleClick={deviceKey ? () => setRenamingDevice(deviceKey) : undefined} onKeyDown={(event) => {
-                if (event.key === "Delete") { event.preventDefault(); closeStripTab(entry); return; }
-                if (event.key === "F2" && deviceKey) { event.preventDefault(); setRenamingDevice(deviceKey); return; }
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? 0 : event.key === "End" ? stripTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + stripTabs.length) % stripTabs.length;
-                selectStripTab(stripTabs[next]);
-              }}><Icon className="size-4 shrink-0" /><span className="max-w-32 truncate">{entry.label}</span></Button>;
-            const renaming = deviceKey && renamingDevice === deviceKey;
-            const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
-            return <div key={entry.id} data-device-tab={deviceKey ?? undefined} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
-              {renaming
-                ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
-                : deviceKey
-                  ? <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>
-                  : tabButton}
-              <Button variant="transparent" size="small" iconOnly disabled={panel.gitOperationBusy} aria-label={`Close ${entry.label} tab`} onClick={() => closeStripTab(entry)}><X className="size-3" /></Button>
-            </div>;
-          })}
-        </div>
-        <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={panel.gitOperationBusy} aria-label="New workspace tab" onClick={() => openTool("new-tab")}><Plus /></Button>
-        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{stripTabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={panel.gitOperationBusy} onSelect={() => { tabMenuSelectionRef.current = true; selectStripTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
-        <Button variant="transparent" size="small" iconOnly onClick={panel.closeTools} aria-label="Close environment panel" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Close workspace panel (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
-      </header>
+      <WorkbenchTabStrip
+        tabs={decoratedTabs}
+        idPrefix="environment"
+        tabListLabel="Environment views"
+        busy={panel.gitOperationBusy}
+        activeTabRef={activeTabRef}
+        onSelectTab={selectStripTab}
+        onCloseTab={closeStripTab}
+        newTab={{ label: "New workspace tab", onOpen: () => openTool("new-tab") }}
+        closeLabel="Close environment panel"
+        closeTitle="Close workspace panel"
+        onClose={panel.closeTools}
+      />
 
       <div className="min-h-0 flex-1 @container">
         <div id="environment-new-tab-panel" role="tabpanel" aria-labelledby="environment-new-tab-tab" hidden={panel.tab !== "new-tab"} className="h-full min-h-0">
