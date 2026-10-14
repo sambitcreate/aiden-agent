@@ -1,28 +1,89 @@
 import XCTest
 @testable import AidenOnTheGo
 
-/// Holds a scripted request until the test lets it go.
+/// Holds scripted requests until the test lets them go. A latch: a release
+/// that comes before its request is kept for it, several requests can wait at
+/// once, a cancelled request stops waiting, and none waits longer than
+/// `limit`, so no test can hang on it.
 private final class TestGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var holding = false
-    private var waiter: CheckedContinuation<Void, Never>?
+    private let limit: Duration
+    private var armed = false
+    private var permits = 0
+    private var order: [UUID] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    /// Waits that ended (cancelled or timed out) before they began.
+    private var ended: Set<UUID> = []
 
-    var isHolding: Bool { lock.withLock { waiter != nil } }
+    init(limit: Duration = .seconds(10)) { self.limit = limit }
 
-    func hold() { lock.withLock { holding = true } }
+    var isHolding: Bool { lock.withLock { !waiters.isEmpty } }
+    var holdingCount: Int { lock.withLock { waiters.count } }
+
+    /// From now on, each request waits for a `release()`.
+    func hold() { lock.withLock { armed = true } }
 
     func pass() async {
-        guard lock.withLock({ holding }) else { return }
-        await withCheckedContinuation { continuation in
-            lock.withLock { waiter = continuation }
+        let id = UUID()
+        let limit = limit
+        let timer = Task { [weak self] in
+            try? await Task.sleep(for: limit)
+            self?.end(id)
         }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let goNow = lock.withLock { () -> Bool in
+                    if !armed || ended.remove(id) != nil { return true }
+                    if permits > 0 {
+                        permits -= 1
+                        return true
+                    }
+                    order.append(id)
+                    waiters[id] = continuation
+                    return false
+                }
+                if goNow { continuation.resume() }
+            }
+        } onCancel: {
+            self.end(id)
+        }
+        timer.cancel()
     }
 
+    /// Lets the oldest waiting request go, or the next one if none waits yet.
     func release() {
         let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-            holding = false
-            defer { waiter = nil }
-            return waiter
+            guard !order.isEmpty else {
+                permits += 1
+                return nil
+            }
+            return waiters.removeValue(forKey: order.removeFirst())
+        }
+        waiting?.resume()
+    }
+
+    /// Stops holding and lets every waiting request go.
+    func releaseAll() {
+        let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            armed = false
+            permits = 0
+            defer {
+                order = []
+                waiters = [:]
+            }
+            return order.compactMap { waiters[$0] }
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    private func end(_ id: UUID) {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard let continuation = waiters.removeValue(forKey: id) else {
+                ended.insert(id)
+                return nil
+            }
+            order.removeAll { $0 == id }
+            return continuation
         }
         waiting?.resume()
     }
@@ -47,14 +108,24 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _connectionError: Error?
     private var _proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] = []
     private var _proposalResults: [Result<AidenBotRoutineProposalRespondResult, Error>] = []
-    private var resumeGate: CheckedContinuation<Void, Never>?
-    var holdResume = false
-    private var sendGate: CheckedContinuation<Void, Never>?
+    let resumeGate = TestGate()
+    let sendGate = TestGate()
+    let stopGate = TestGate()
+    /// Holds each Resume until `releaseResume()`.
+    var holdResume: Bool {
+        get { false }
+        set { if newValue { resumeGate.hold() } else { resumeGate.releaseAll() } }
+    }
     /// Holds each message request until `releaseSend()`.
-    var holdSend = false
-    private var stopGate: CheckedContinuation<Void, Never>?
+    var holdSend: Bool {
+        get { false }
+        set { if newValue { sendGate.hold() } else { sendGate.releaseAll() } }
+    }
     /// Holds each Stop until `releaseStop()`.
-    var holdStop = false
+    var holdStop: Bool {
+        get { false }
+        set { if newValue { stopGate.hold() } else { stopGate.releaseAll() } }
+    }
     private var _stopResults: [Result<AidenBotSessionStateView, Error>] = []
     private var _stopKeys: [UUID] = []
     private var _receiptIDs: [String] = []
@@ -81,12 +152,12 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     func failConnections(with error: Error) { locked { _connectionError = error } }
     func failNextSend(with error: Error) { locked { _sendErrors.append(error) } }
     func queueStop(_ result: Result<AidenBotSessionStateView, Error>) { locked { _stopResults.append(result) } }
-    var isHoldingSend: Bool { locked { sendGate != nil } }
-    var isHoldingResume: Bool { locked { resumeGate != nil } }
+    var isHoldingSend: Bool { sendGate.isHolding }
+    var isHoldingResume: Bool { resumeGate.isHolding }
     /// The submission ids the next receipts carry, in order; "17" once they run out.
     func queueReceiptID(_ id: String) { locked { _receiptIDs.append(id) } }
     func queueDismiss(_ result: Result<AidenBotSessionStateView, Error>) { locked { _dismissResults.append(result) } }
-    var isHoldingStop: Bool { locked { stopGate != nil } }
+    var isHoldingStop: Bool { stopGate.isHolding }
     var stopKeys: [UUID] { locked { _stopKeys } }
     func queueProposalResult(_ result: Result<AidenBotRoutineProposalRespondResult, Error>) {
         locked { _proposalResults.append(result) }
@@ -103,29 +174,9 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     var sendModes: [AidenStreamInputMode?] { locked { _sendModes } }
     var connectionKeys: [UUID] { locked { _connectionKeys } }
 
-    func releaseResume() {
-        let gate = locked { () -> CheckedContinuation<Void, Never>? in
-            defer { resumeGate = nil }
-            return resumeGate
-        }
-        gate?.resume()
-    }
-
-    func releaseSend() {
-        let gate = locked { () -> CheckedContinuation<Void, Never>? in
-            defer { sendGate = nil }
-            return sendGate
-        }
-        gate?.resume()
-    }
-
-    func releaseStop() {
-        let gate = locked { () -> CheckedContinuation<Void, Never>? in
-            defer { stopGate = nil }
-            return stopGate
-        }
-        gate?.resume()
-    }
+    func releaseResume() { resumeGate.release() }
+    func releaseSend() { sendGate.release() }
+    func releaseStop() { stopGate.release() }
 
     func botSession(botId: String) async throws -> AidenBotSession {
         let next = locked { () -> Result<AidenBotSession, Error>? in
@@ -166,11 +217,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _sendModes.append(request.whenBusy)
             return _sendErrors.isEmpty ? nil : _sendErrors.removeFirst()
         }
-        if holdSend {
-            await withCheckedContinuation { continuation in
-                locked { sendGate = continuation }
-            }
-        }
+        await sendGate.pass()
         if let error { throw error }
         let id = locked { _receiptIDs.isEmpty ? "17" : _receiptIDs.removeFirst() }
         return try AidenRemoteJSONDecoder.decode(
@@ -181,11 +228,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
 
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         locked { _resumeKeys.append(idempotencyKey) }
-        if holdResume {
-            await withCheckedContinuation { continuation in
-                locked { resumeGate = continuation }
-            }
-        }
+        await resumeGate.pass()
         let next = locked { _resumeResults.isEmpty ? nil : _resumeResults.removeFirst() }
         return try (next ?? .success(try AidenBotSessionStateView(state: .running))).get()
     }
@@ -198,11 +241,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
 
     func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         locked { _stopKeys.append(idempotencyKey) }
-        if holdStop {
-            await withCheckedContinuation { continuation in
-                locked { stopGate = continuation }
-            }
-        }
+        await stopGate.pass()
         let next = locked { _stopResults.isEmpty ? nil : _stopResults.removeFirst() }
         return try (next ?? .success(try AidenBotSessionStateView(state: .idle))).get()
     }
@@ -503,7 +542,11 @@ final class AidenBotSessionTests: XCTestCase {
         transport.holdResume = true
 
         let first = Task { await model.resume() }
-        while transport.resumeKeys.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.isHoldingResume {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for the Resume request") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
         XCTAssertTrue(model.inFlight.contains(.resume), "The card disables its buttons while resuming.")
         await model.resume()
         XCTAssertEqual(transport.resumeKeys.count, 1, "A second tap while in flight sends nothing.")
@@ -1948,6 +1991,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         cache: AidenBotSessionCache? = nil,
         store: AidenBotOutboxStore? = nil,
         retryDelays: [Duration] = [.seconds(60)],
+        requestLimit: Duration = .seconds(12),
         now: @escaping () -> Date = { Date() }
     ) -> AidenBotSessionModel {
         let model = AidenBotSessionModel(
@@ -1957,6 +2001,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
             cache: cache ?? AidenBotSessionCache(),
             outboxStore: store,
             retryDelays: retryDelays,
+            requestLimit: requestLimit,
             now: now
         )
         model.activitySupported = supported
@@ -2767,6 +2812,234 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.releaseStop()
         await stopping.value
         XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Searching the web")
+    }
+
+    // MARK: Fix round 3
+
+    func testOutOfTriesAMessageEchoedByAnotherSubmissionSaysCouldntSendAndStays() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle), retryDelays: [.milliseconds(20)])
+        for _ in 0..<AidenBotSessionModel.maxConnectionAttempts {
+            transport.failNextSend(with: try serverError(status: 500, code: "internal_error"))
+        }
+        transport.holdSend = true
+        let sending = Task { await model.send("Hi") }
+        try await waitUntil({ transport.isHoldingSend }, what: "the first try")
+        // Another submission's Hi lands while this one is unsettled.
+        _ = await model.apply(event(seq: 5, .entry(user("entry_1", "Hi", submissionId: "99"))))
+        XCTAssertEqual(bubbles("Hi", in: model), 1)
+        transport.holdSend = false
+        _ = await sending.value
+        try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the last try")
+        XCTAssertEqual(bubbles("Hi", in: model), 2, "the bubble says Couldn't send instead of vanishing")
+
+        // The same tagged entry again doesn't settle it.
+        _ = await model.apply(event(seq: 6, .entry(user("entry_1", "Hi", submissionId: "99"))))
+        _ = await model.apply(event(seq: 7, .partial("Typing")))
+        XCTAssertEqual(model.outgoing.map { model.look(of: $0) }, [.failed])
+        let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(Set(transport.sendKeys).count, 1, "Try again keeps the key: the Mac may hold it")
+    }
+
+    func testTwentyOfTheLargestMessagesAllSurviveOnDisk() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        let transport = FakeBotSessionTransport()
+        let model = model(transport, key: key, store: store)
+        let largest = String(repeating: "😀", count: AidenBotSessionWire.maxMessageLength)
+        for index in 0..<AidenBotOutboxStore.maxMessages {
+            let taken = await model.send("\(index)" + largest.dropFirst(String(index).count))
+            XCTAssertTrue(taken, "message \(index)")
+        }
+        try await stored(store, key, count: AidenBotOutboxStore.maxMessages)
+        let restored = await store.load(key)
+        XCTAssertEqual(restored.map(\.text), model.outgoing.map(\.text), "none dropped for size")
+        let refused = await model.send("One more")
+        XCTAssertFalse(refused)
+        XCTAssertEqual(model.errorMessage, "Too many messages are waiting. Send or remove some, then try again.")
+    }
+
+    func testLeavingDuringTheFirstLoadSpendsNoTry() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = model(transport)
+        _ = await model.send("Plan my week.")
+        transport.holdSend = true
+        transport.queueSession(.success(try session(.idle)))
+        let loading = Task { await model.load() }
+        try await waitUntil({ transport.isHoldingSend }, what: "the first try")
+        loading.cancel() // the chat is dismissed
+        await loading.value
+        transport.holdSend = false
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sending)
+
+        // All of its tries are still left.
+        for seq in 5..<(5 + AidenBotSessionModel.maxConnectionAttempts - 1) {
+            transport.failNextSend(with: URLError(.networkConnectionLost))
+            transport.queueSession(.success(try session(.idle, seq: seq)))
+            await model.load()
+            XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sending, "try \(seq - 4)")
+        }
+        transport.queueSession(.success(try session(.idle, seq: 9)))
+        await model.load()
+        XCTAssertEqual(model.outgoing.first?.status, .sent(submissionId: "17"))
+        XCTAssertEqual(Set(transport.sendKeys).count, 1)
+    }
+
+    func testClosingTheChatCancelsTheRequestAFrameStarted() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = model(transport)
+        _ = await model.send("Plan my week.")
+        transport.holdSend = true
+        _ = await model.apply(event(seq: 4, .snapshot(try session(.idle))))
+        try await waitUntil({ transport.isHoldingSend }, what: "the request the snapshot started")
+        XCTAssertTrue(model.inFlight.contains(.send))
+        model.release()
+        try await waitUntil({ !model.inFlight.contains(.send) }, what: "the cancelled request")
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sending, "it waits for the next visit")
+        transport.holdSend = false
+    }
+
+    func testAMessageThatExpiresWhileItsEchoWaitsLeavesOneBubble() async throws {
+        var clock = Date()
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.idle)))
+        let model = model(transport, supported: false, now: { clock })
+        await model.load()
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+        _ = await model.send("Hi")
+        // An older Mac's entry with its text lands while it waits to retry.
+        _ = await model.apply(event(seq: 5, .entry(user("entry_1", "Hi"))))
+        XCTAssertEqual(bubbles("Hi", in: model), 1)
+        clock = clock.addingTimeInterval(25 * 60 * 60)
+        transport.queueSession(.success(try session(.idle, seq: 5, entries: [user("entry_1", "Hi")])))
+        await model.load()
+        _ = await model.apply(event(seq: 6, .partial("…")))
+        XCTAssertEqual(bubbles("Hi", in: model), 1, "the entry still stands for it, not a second failed bubble")
+        XCTAssertEqual(transport.sendKeys.count, 1, "nothing a day old goes out")
+    }
+
+    func testTheMacsAnswerToResumeStandsAfterAnUnrelatedFrame() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.interrupted))
+        transport.holdResume = true
+        transport.queueResume(.success(try AidenBotSessionStateView(state: .idle)))
+        let resuming = Task { await model.resume() }
+        try await waitUntil({ transport.isHoldingResume }, what: "the Resume request")
+        _ = await model.apply(event(seq: 5, .entry(assistant("entry_1", "Still here."))))
+        transport.releaseResume()
+        await resuming.value
+        XCTAssertEqual(model.state, .idle, "the Mac's answer replaces the optimistic state")
+    }
+
+    func testResumeFollowsTheMacsFirstWordAboutTheResumedRun() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.interrupted))
+        transport.holdResume = true
+        let resuming = Task { await model.resume() }
+        try await waitUntil({ transport.isHoldingResume }, what: "the Resume request")
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Picking up where it left off")
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "searching", startedAt: started))))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Searching the web")
+        transport.releaseResume()
+        await resuming.value
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Searching the web")
+    }
+
+    func testAHungRequestBecomesARetryNotEndlessSending() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started))))
+        let model = model(transport, retryDelays: [.milliseconds(20)], requestLimit: .milliseconds(100))
+        await model.load()
+        transport.holdSend = true // the link is dead: no request ever answers
+        let began = ContinuousClock.now
+        _ = await model.send("Plan my week.")
+        try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the tries to run out")
+        XCTAssertLessThan(ContinuousClock.now - began, .seconds(3))
+        XCTAssertEqual(transport.sendKeys.count, AidenBotSessionModel.maxConnectionAttempts)
+        XCTAssertEqual(Set(transport.sendKeys).count, 1, "a hung request may have arrived: the key is kept")
+
+        // Stop is bounded too, and keeps its key for the next tap.
+        transport.holdStop = true
+        await model.stop()
+        XCTAssertFalse(model.isStopping, "a Stop that never answers goes back")
+        XCTAssertNotNil(model.errorMessage)
+        await model.stop()
+        XCTAssertEqual(transport.stopKeys.count, 2)
+        XCTAssertEqual(transport.stopKeys[0], transport.stopKeys[1])
+        transport.holdSend = false
+        transport.holdStop = false
+    }
+
+    func testAnUnpairedChatIsNeverWrittenAgainAndAQueuedRemovalAlwaysRuns() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        let transport = FakeBotSessionTransport()
+        let open = model(transport, key: key, store: store)
+        _ = await open.send("First")
+        try await stored(store, key, count: 1)
+
+        await store.purge(instanceId: "mac_a")
+        _ = await open.send("Second") // a chat still on screen after the unpair
+        try await Task.sleep(for: .milliseconds(200))
+        let afterUnpair = await store.load(key)
+        XCTAssertEqual(afterUnpair, [], "a late write never brings the file back")
+
+        // A removal handed to the store runs even after the chat that asked for it is gone.
+        let other = AidenBotSessionKey(instanceId: "mac_b", deviceId: "device_1", botID: botID)
+        var closing: AidenBotSessionModel? = model(transport, key: other, store: store)
+        transport.queueSession(.success(try session(.idle)))
+        await closing?.load()
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+        _ = await closing?.send("Plan my week.")
+        try await stored(store, other, count: 1)
+        transport.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        transport.queueSession(.success(try session(.idle, seq: 5)))
+        await closing?.load()
+        closing = nil
+        try await stored(store, other, count: 0)
+    }
+
+    func testAMessageCutOffByLeavingAndThenRefusedForAStateReasonKeepsItsKey() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
+        transport.holdSend = true
+        let sending = Task { await model.send("Plan my week.") }
+        try await waitUntil({ transport.isHoldingSend }, what: "the request")
+        sending.cancel() // leaving the chat cuts the request off; it may have arrived
+        _ = await sending.value
+        transport.holdSend = false
+
+        // On the next connection the Bot needs a model: the message says it couldn't be sent.
+        _ = await model.apply(event(seq: 5, .snapshot(try session(.needsModel, seq: 5))))
+        try await waitUntil({ model.outgoing.first.map { model.look(of: $0) } == .failed }, what: "the failure")
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        let retried = await model.retrySend(try XCTUnwrap(model.outgoing.first).id)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "Try again replays the key the cut-off request used")
+
+        // And a definite refusal after an attempt that may have arrived keeps it too.
+        transport.failNextSend(with: URLError(.timedOut))
+        transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
+        _ = await model.send("Second")
+        transport.queueSession(.success(try session(.idle, seq: 7)))
+        await model.load()
+        let refused = try XCTUnwrap(model.outgoing.last)
+        XCTAssertEqual(model.look(of: refused), .failed)
+        _ = await model.retrySend(refused.id)
+        XCTAssertEqual(Set(transport.sendKeys.suffix(3)).count, 1)
+    }
+
+    func testAGateReleasedBeforeItsRequestKeepsTheRelease() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
+        transport.holdSend = true
+        transport.releaseSend() // before the request arrives
+        let taken = await model.send("Hi")
+        XCTAssertTrue(taken)
+        XCTAssertEqual(model.outgoing.first?.status, .sent(submissionId: "17"), "the early release was not lost")
+        transport.holdSend = false
     }
 }
 
