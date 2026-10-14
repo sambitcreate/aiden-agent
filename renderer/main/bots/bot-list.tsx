@@ -220,7 +220,8 @@ function BotListSkeleton() {
 
 /**
  * The identity-first Bots home: one row per Bot, and a tap opens its chat.
- * Profile and Delete Bot live in each row's ••• menu and context menu.
+ * Profile, Memory, Advanced and Delete Bot live in each row's ••• menu and
+ * context menu.
  */
 export function BotList({
   rows,

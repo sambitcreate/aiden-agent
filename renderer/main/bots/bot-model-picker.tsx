@@ -79,7 +79,6 @@ export function BotModelPicker({
           size="medium"
           disabled={disabled}
           aria-label={label}
-          aria-haspopup="listbox"
           className="w-full min-w-0 max-w-full flex-nowrap justify-start gap-2 whitespace-nowrap"
         >
           {selected ? (
@@ -130,7 +129,7 @@ export function BotModelPicker({
                       <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 shrink-0 text-tertiary" />
                       <span className="min-w-0 flex-1 truncate">{model.label}</span>
                       <InlineMetadata className="shrink-0">{botModelCapabilityLabel(model.supportsImages)}</InlineMetadata>
-                      {isSelected ? <Check className="size-4 shrink-0" aria-label="Selected" /> : null}
+                      {isSelected ? <Check className="size-4 shrink-0" role="img" aria-label="Selected" /> : null}
                     </CommandItem>
                   );
                 })}

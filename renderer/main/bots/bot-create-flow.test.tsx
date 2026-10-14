@@ -129,6 +129,45 @@ test("a chosen model that is gone by Create stops on the first step and creates 
   const step1 = await screen.findByRole("dialog", { name: "New Bot" });
   assert.ok(await within(step1).findByText("That model isn’t available any more. Choose another one."));
   assert.equal(calls.some((call) => call.channel === "bots:create"), false);
+
+  // Choosing another model answers the message, so it goes away, and stays gone on the next step.
+  fireEvent.click(within(step1).getByRole("button", { name: "AI model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^Writer/u }));
+  await waitFor(() => assert.equal(within(step1).queryByRole("alert") === null, true));
+  fireEvent.click(within(step1).getByRole("button", { name: "Next" }));
+  const step2 = await screen.findByRole("dialog", { name: "Connections" });
+  assert.equal(within(step2).queryByRole("alert") === null, true);
+});
+
+test("a refresh of the models that fails keeps the last list on screen", async () => {
+  let catalog = catalogFixture();
+  let catalogCalls = 0;
+  installBotTestIpc({
+    "bots:list": () => [],
+    "bots:getCapabilityCatalog": () => {
+      catalogCalls += 1;
+      // The dialog's load and Create's own check succeed; the refresh after it fails.
+      if (catalogCalls > 2) throw new Error("offline");
+      return catalog;
+    },
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const dialog = await fillNameStep("Seer Bot", "", async (step) => {
+    fireEvent.click(await within(step).findByRole("button", { name: "AI model" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
+  });
+  catalog = {
+    ...catalog,
+    providers: catalog.providers.map((provider) =>
+      provider.id === "prov-vision" ? { ...provider, available: false } : provider),
+  };
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+
+  const step1 = await screen.findByRole("dialog", { name: "New Bot" });
+  assert.ok(await within(step1).findByText("That model isn’t available any more. Choose another one."));
+  await waitFor(() => assert.equal(catalogCalls > 2, true));
+  assert.ok(within(step1).getByRole("button", { name: "AI model" }));
+  assert.equal(within(step1).queryByText("Aiden couldn’t load your models.") === null, true);
 });
 
 test("if the models can't be loaded the field says so, and the Bot is still created with the recommended model", async () => {

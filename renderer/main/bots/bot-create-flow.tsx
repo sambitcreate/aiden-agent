@@ -15,7 +15,6 @@ import {
 } from "../../shared/bots";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
-  type BotAccessUpdate,
   type BotCapabilityCatalog,
 } from "../../shared/bot-capabilities";
 import { firstAvailableModel } from "./bot-access-draft";
@@ -59,18 +58,6 @@ function truncate(value: string, maximum: number): string {
   return characters.length > maximum ? characters.slice(0, maximum).join("") : characters.join("");
 }
 
-/**
- * Full access with the recommended model: the first available model, plus an
- * image model when that one reads text only. With no model at all the Bot is
- * still created and asks for one when opened.
- */
-export function recommendedFullAccess(catalog: BotCapabilityCatalog): {
-  access: BotAccessUpdate;
-  hasModel: boolean;
-} {
-  return botFullAccess(catalog, recommendedBotModelChoice(catalog));
-}
-
 export const BOT_MODEL_GONE_MESSAGE = "That model isn’t available any more. Choose another one.";
 
 /** Step 1's AI model: the recommended model by default, changeable before Create. */
@@ -100,7 +87,8 @@ function CreateModelField({
       </div>
     );
   }
-  if (catalog.isError || !catalog.data) {
+  // A failed refetch keeps the last catalog, so the field stays usable.
+  if (!catalog.data) {
     return (
       <div className="flex flex-col gap-1.5">
         {title}
@@ -324,7 +312,14 @@ export function BotCreateFlow({
           ? { cancelLabel: "Back", cancelKeepsOpen: true, onCancel: () => setStep(1) }
           : {})}
         allowCancelWhileBusy={false}
-        onConfirm={step === 1 ? () => setStep(2) : create}
+        onConfirm={
+          step === 1
+            ? () => {
+                setError(null);
+                setStep(2);
+              }
+            : create
+        }
         submitOnEnter
       >
         {step === 1 ? (
@@ -362,7 +357,11 @@ export function BotCreateFlow({
               catalog={catalogQuery}
               choice={shownChoice}
               disabled={busy}
-              onChange={setChoice}
+              onChange={(next) => {
+                // A new choice answers "that model isn't available any more".
+                setError(null);
+                setChoice(next);
+              }}
               onSetUp={openProviders}
             />
             <Text as="p" variant="small" color="secondary">

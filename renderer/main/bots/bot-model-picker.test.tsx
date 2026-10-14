@@ -1,7 +1,7 @@
 import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { BotCapabilityCatalog } from "../../shared/bot-capabilities";
 import { catalogFixture } from "./test-fixtures";
 import { BotModelPicker } from "./bot-model-picker";
@@ -64,11 +64,15 @@ test("models are grouped by service; choosing one reports it and closes, unusabl
   assert.equal(screen.queryByRole("option", { name: /^Seer/u }), null);
 });
 
-test("each option says whether the model reads images", async () => {
+test("each option says whether the model reads images, and the current model is marked selected", async () => {
   mount();
   fireEvent.click(screen.getByRole("button", { name: "AI model" }));
-  assert.match((await screen.findByRole("option", { name: /^Writer/u })).textContent ?? "", /Text only/u);
-  assert.match(screen.getByRole("option", { name: /^Seer/u }).textContent ?? "", /Reads images/u);
+  const writer = await screen.findByRole("option", { name: /^Writer/u });
+  const seer = screen.getByRole("option", { name: /^Seer/u });
+  assert.match(writer.textContent ?? "", /Text only/u);
+  assert.match(seer.textContent ?? "", /Reads images/u);
+  assert.ok(within(writer).getByRole("img", { name: "Selected" }));
+  assert.equal(within(seer).queryByRole("img", { name: "Selected" }) === null, true);
 });
 
 test("the photo picker lists only models that read images", async () => {
