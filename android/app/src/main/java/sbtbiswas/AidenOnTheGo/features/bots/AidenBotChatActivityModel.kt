@@ -65,11 +65,20 @@ fun aidenBotChatActivitySummary(value: AidenBotChatActivity?): String {
 }
 
 /**
+ * Whether the Mac offers Bot activity (`bot-activity-v1`) and this phone holds `bot:activity`.
+ * Before `/server` has answered (a cold start, or offline), the grant negotiated and persisted
+ * for the pairing stands in: it is only ever requested from a Mac that announced the feature.
+ * Once `/server` answers it decides.
+ */
+fun aidenBotActivitySupported(server: AidenServer?, cachedGrant: Boolean): Boolean =
+    server?.supportsBotActivity ?: cachedGrant
+
+/**
  * Advanced offers Chat activity on a Mac that announces `bot-activity-v1` to a phone that
  * holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen.
  */
-fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean): Boolean =
-    hasBaseline && server?.supportsBotActivity == true
+fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean, cachedGrant: Boolean = false): Boolean =
+    hasBaseline && aidenBotActivitySupported(server, cachedGrant)
 
 // --- The previews' script: what each level shows on the Mac ---
 
@@ -291,10 +300,14 @@ class AidenBotChatActivityController(
             throw error
         } catch (error: Exception) {
             val refreshes = aidenBotIsRevisionConflict(error) || aidenBotChatActivityTransportFailure(error)
+            val before = _state.value.saved
             val fresh = if (refreshes) adoptTheMacsChoice() else null
-            if (fresh != null && (fresh.chatActivity ?: AidenBotChatActivity.DEFAULT) == target) return true
+            val macHolds = fresh?.let { it.chatActivity ?: AidenBotChatActivity.DEFAULT }
+            if (macHolds == target) return true
             val failure = when {
                 aidenBotIsRevisionConflict(error) -> AidenBotChatActivityFailure.CONFLICT
+                // The answer never came, but the Mac now holds something nobody here picked.
+                macHolds != null && macHolds != before -> AidenBotChatActivityFailure.CONFLICT
                 aidenBotChatActivityMacUnreachable(error) -> AidenBotChatActivityFailure.OFFLINE
                 else -> AidenBotChatActivityFailure.GENERIC
             }

@@ -145,8 +145,8 @@ fun aidenBotFaceGlance(timeMs: Long): AidenBotFaceGlance {
  * `bot-activity-v1` and this phone holds `bot:activity` now. A detail cached from another
  * pairing or before an older Mac was restored never decides what the chat shows.
  */
-fun aidenBotChatActivity(server: AidenServer?, detail: AidenBotDetail?): AidenBotChatActivity? =
-    if (server?.supportsBotActivity == true) detail?.chatActivity else null
+fun aidenBotChatActivity(server: AidenServer?, detail: AidenBotDetail?, cachedGrant: Boolean = false): AidenBotChatActivity? =
+    if (aidenBotActivitySupported(server, cachedGrant)) detail?.chatActivity else null
 
 // --- The chat's presentation (R14, R19): pure, so the JVM suite can hold it ---
 

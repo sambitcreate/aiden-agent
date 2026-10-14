@@ -147,9 +147,36 @@ class AidenRemoteCoordinator(
      * Runs [block] on the coordinator's own scope, which outlives every screen. For work a
      * person started and may leave behind: a settings pick still saving after they back out.
      */
-    fun launchDetached(block: suspend () -> Unit) {
-        scope.launch { block() }
+    fun launchDetached(block: suspend () -> Unit): Job {
+        val entry = DetachedWork(activeInstanceId)
+        val job = scope.launch { block() }
+        entry.job = job
+        detachedWork += entry
+        job.invokeOnCompletion { detachedWork.remove(entry) }
+        return job
     }
+
+    private class DetachedWork(val instanceId: String?) {
+        lateinit var job: Job
+    }
+
+    private val detachedWork = java.util.concurrent.CopyOnWriteArrayList<DetachedWork>()
+
+    /** Work started for one pairing doesn't run on for another, or for none. */
+    private fun cancelDetachedWork(keep: (String?) -> Boolean) {
+        detachedWork.filterNot { keep(it.instanceId) }.forEach { it.job.cancel() }
+    }
+
+    private val pairingMemos = mutableMapOf<Pair<String?, String>, Any>()
+
+    /** One [create]d object per pairing and [key], for state that must be shared across screens. */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> pairingMemo(key: String, create: () -> T): T =
+        pairingMemos.getOrPut(activeInstanceId to key) { create() } as T
+
+    /** What Chat activity persisted for the active pairing; stands in until `/server` answers. */
+    val cachedBotActivityGrant: Boolean
+        get() = installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY) == true
 
     /**
      * True while [client] is still the active client of installation [instanceId]. A read
@@ -193,6 +220,7 @@ class AidenRemoteCoordinator(
         activationGeneration += 1
         val generation = activationGeneration
         val installation = installationStore.activeInstallation
+        cancelDetachedWork { it == installation?.instanceId }
         if (installation == null) {
             _client.value = null
             _serverInfo.value = null
@@ -358,6 +386,8 @@ class AidenRemoteCoordinator(
                     .orEmpty()
             )
         }
+        cancelDetachedWork { it != installation.instanceId }
+        pairingMemos.keys.removeAll { it.first == installation.instanceId }
         archiveStore.purge(installation.instanceId)
         workspaceCache.purge(installation.instanceId, knownWorkspaceIds)
         scheduledCache.purge(installation.instanceId)

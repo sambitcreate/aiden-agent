@@ -345,26 +345,21 @@ fun AidenBotAdvancedSheet(
                 // Chat activity opens from the cached Bot: it doesn't wait for the catalog, a
                 // connection, or a clean Advanced form, so it stays reachable offline.
                 if (showsChatActivityRow) {
-                    AidenBotAdvancedSection(title = stringResource(R.string.bot_chat_activity_title)) {
-                        AidenConnectedColumn {
-                            AidenGroupCard(
-                                index = 0,
-                                count = 1,
-                                onClick = {
-                                    // A controller still saving keeps its own revision: reopening must not fork a second writer.
-                                    if (chatActivityController?.state?.value?.isSaving != true) {
-                                        chatActivityController = chatActivityHost?.controller(latestBot) { saved ->
-                                            latestBot = saved
-                                            reporter.saved(saved)
-                                        }
-                                    }
-                                    showingChatActivity = true
+                    AidenConnectedColumn {
+                        AidenGroupCard(
+                            index = 0,
+                            count = 1,
+                            onClick = {
+                                chatActivityController = chatActivityHost?.controller(latestBot) { saved ->
+                                    latestBot = saved
+                                    reporter.saved(saved)
                                 }
-                            ) {
-                                Text(stringResource(R.string.bot_chat_activity_title), color = palette.foreground, modifier = Modifier.weight(1f))
-                                Text(aidenBotChatActivitySummary(latestBot.chatActivity), color = palette.secondary, style = MaterialTheme.typography.bodyMedium)
-                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                                showingChatActivity = true
                             }
+                        ) {
+                            Text(stringResource(R.string.bot_chat_activity_title), color = palette.foreground, modifier = Modifier.weight(1f))
+                            Text(aidenBotChatActivitySummary(latestBot.chatActivity), color = palette.secondary, style = MaterialTheme.typography.bodyMedium)
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
                         }
                     }
                 }
@@ -385,18 +380,26 @@ fun AidenBotAdvancedSheet(
     }
 }
 
-/** Model and Access placeholders while the capability catalog arrives. */
+/**
+ * Model and Access placeholders while the capability catalog arrives, sized like the real
+ * sections (label, picker and its "Use recommended" button; label, the access choice and its
+ * footer) so the page doesn't jump when they land.
+ */
 @Composable
 private fun AidenBotAdvancedPlaceholder(loadingDescription: String) {
     Column(
         verticalArrangement = Arrangement.spacedBy(AidenUi.SectionGap),
         modifier = Modifier.clearAndSetSemantics { contentDescription = loadingDescription }
     ) {
-        repeat(2) { section ->
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                AidenSkeletonBlock(width = 96.dp, height = 12.dp)
-                AidenSkeletonBlock(height = if (section == 0) 96.dp else 72.dp, shape = MaterialTheme.shapes.large)
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+            AidenSkeletonBlock(height = 56.dp, shape = MaterialTheme.shapes.large)
+            AidenSkeletonBlock(width = 160.dp, height = 40.dp, shape = MaterialTheme.shapes.large)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+            AidenSkeletonBlock(height = 48.dp, shape = MaterialTheme.shapes.extraLarge)
+            AidenSkeletonBlock(height = 32.dp)
         }
     }
 }

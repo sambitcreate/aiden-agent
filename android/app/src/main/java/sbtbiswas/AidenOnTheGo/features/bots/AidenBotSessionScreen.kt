@@ -129,6 +129,7 @@ fun AidenBotSessionScreen(
     val knownState = coordinator.botCache.botList.value?.bots?.firstOrNull { it.id == botId }?.sessionState
         ?: coordinator.botCache.getBotDetail(botId)?.sessionState
     val cl = client
+    val activitySupportedNow = aidenBotActivitySupported(serverInfo, coordinator.cachedBotActivityGrant)
     if (cl == null) {
         Box(Modifier.fillMaxSize().background(palette.canvas), contentAlignment = Alignment.Center) {
             Text(stringResource(R.string.bot_session_connect), color = palette.secondary)
@@ -143,7 +144,7 @@ fun AidenBotSessionScreen(
             AidenRemoteBotSessionTransport(cl),
             scope,
             knownState,
-            activitySupported = serverInfo?.supportsBotActivity == true,
+            activitySupported = activitySupportedNow,
             sessionKey = sessionKey,
             store = coordinator.botSessionStore
         )
@@ -153,12 +154,12 @@ fun AidenBotSessionScreen(
         onDispose { controller.stopFollowing() }
     }
     val ui by controller.state.collectAsStateWithLifecycle()
-    val activitySupported = serverInfo?.supportsBotActivity == true
+    val activitySupported = activitySupportedNow
     LaunchedEffect(controller, activitySupported) { controller.setActivitySupported(activitySupported) }
     // The wording comes from the Bot's detail: cached first, then the Mac's. Only a Mac that
     // offers Chat activity now decides it, and the feed never waits for this read.
     val botDetails by coordinator.botCache.botDetails.collectAsStateWithLifecycle()
-    val chatActivity = aidenBotChatActivity(serverInfo, botDetails[botId])
+    val chatActivity = aidenBotChatActivity(serverInfo, botDetails[botId], coordinator.cachedBotActivityGrant)
     LaunchedEffect(controller, chatActivity) {
         controller.setWording(chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
     }
@@ -281,10 +282,10 @@ fun AidenBotSessionScreen(
                 advancedBot = null
                 scope.launch { controller.refetch() }
             },
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true),
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedGrant = coordinator.cachedBotActivityGrant),
             chatActivityHost = chatActivityHost,
+            // The host has already cached the pick (pinned to its pairing); this only refreshes the chat.
             onChatActivitySaved = { saved ->
-                coordinator.botCache.putBotDetail(saved)
                 controller.setWording(saved.chatActivity?.wording ?: AidenBotChatActivityWording.FOLLOWS)
                 scope.launch { controller.refetch() }
             }

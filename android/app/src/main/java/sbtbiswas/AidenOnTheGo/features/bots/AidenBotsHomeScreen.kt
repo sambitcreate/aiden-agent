@@ -448,9 +448,8 @@ fun AidenBotsHomeScreen(
                 advancedClient = null
                 scope.launch { viewModel.loadBots(force = true) }
             },
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true),
-            chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() },
-            onChatActivitySaved = { saved -> coordinator.botCache.putBotDetail(saved) }
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedGrant = coordinator.cachedBotActivityGrant),
+            chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
         )
     }
 

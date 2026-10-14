@@ -4,10 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
@@ -60,11 +58,13 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 // `AidenBotChatActivityModel.kt`; the looping preview in `AidenBotChatActivityPreviewCard.kt`.
 
 /**
- * What Chat activity needs from its surroundings, bound to one pairing.
+ * What Chat activity needs from its surroundings, bound to one pairing and shared by every
+ * Advanced sheet opened for it.
  *
  * A pick is saved from [launch]'s scope, which outlives the page (and Advanced, and the screen
- * behind it), so leaving mid-save doesn't cancel the request. A pick that finishes after the
- * person has gone is written to the Bot cache through [cache], not to a view that is gone.
+ * behind it), so leaving mid-save doesn't cancel the request. [cache] is the one place a
+ * confirmed pick is written to the Bot cache, so a pick that finishes after the person has gone
+ * (or after the pairing changed, which [cache] checks) never depends on a view.
  */
 class AidenBotChatActivityHost(
     /** The pairing's client now, or null once that pairing is gone or the phone is offline. */
@@ -74,16 +74,33 @@ class AidenBotChatActivityHost(
     val launch: (suspend () -> Unit) -> Unit,
     val cache: (AidenBotDetail) -> Unit
 ) {
-    fun controller(bot: AidenBotDetail, onSaved: (AidenBotDetail) -> Unit): AidenBotChatActivityController =
-        aidenBotChatActivityController(
+    private class Live(val controller: AidenBotChatActivityController, var listener: (AidenBotDetail) -> Unit)
+
+    private val live = mutableMapOf<String, Live>()
+
+    /**
+     * The controller for [bot]. One still saving is reused, so a sheet reopened mid-save never
+     * forks a second writer on a stale revision; [onSaved] then goes to the newest sheet.
+     */
+    fun controller(bot: AidenBotDetail, onSaved: (AidenBotDetail) -> Unit): AidenBotChatActivityController {
+        live[bot.id]?.takeIf { it.controller.state.value.isSaving }?.let {
+            it.listener = onSaved
+            return it.controller
+        }
+        lateinit var entry: Live
+        val controller = aidenBotChatActivityController(
             bot,
             client = client,
             onSaved = { saved ->
                 cache(saved)
-                onSaved(saved)
+                entry.listener(saved)
             },
             waitForConnection = waitForConnection
         )
+        entry = Live(controller, onSaved)
+        live[bot.id] = entry
+        return controller
+    }
 }
 
 /**
@@ -97,10 +114,10 @@ suspend fun <C : Any> aidenBotAwaitConnected(connection: Flow<AidenConnectionSta
         .first == AidenConnectionState.CONNECTED
 
 /** The host for the pairing that is active now; a pick never reaches another pairing's Mac. */
-fun AidenRemoteCoordinator.botChatActivityHost(): AidenBotChatActivityHost {
+fun AidenRemoteCoordinator.botChatActivityHost(): AidenBotChatActivityHost = pairingMemo("bot-chat-activity-host") {
     val instance = activeInstanceId
     fun samePairing() = activeInstanceId == instance
-    return AidenBotChatActivityHost(
+    AidenBotChatActivityHost(
         client = { if (samePairing()) client.value else null },
         waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client) && samePairing() },
         launch = { block -> launchDetached(block) },
@@ -279,7 +296,6 @@ private fun AidenBotChatActivityChoice(
         verticalAlignment = Alignment.Top
     ) {
         RadioButton(selected = selected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = palette.accent))
-        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(title, color = palette.foreground, style = MaterialTheme.typography.bodyLarge)
