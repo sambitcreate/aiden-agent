@@ -153,6 +153,26 @@ enum AidenBotEditorMode: Identifiable, Sendable {
     }
 }
 
+/// Whether the Bot's model needs a separate model for photos and screenshots.
+/// New Bot and Advanced both show the Photos row, or the reason there is none, from this.
+enum AidenBotPhotoModelNeed: Equatable {
+    /// The Bot's model reads images itself.
+    case none
+    /// The Bot's model reads text only and the Mac has a model that reads images.
+    case choose
+    /// The Bot's model reads text only and no model that reads images is set up on the Mac.
+    case unavailable
+}
+
+extension AidenBotCapabilityCatalog {
+    /// A model that reads images and that the Mac can run now.
+    var hasUsableImageModel: Bool {
+        providers.contains { provider in
+            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
+        }
+    }
+}
+
 struct AidenBotEditorDraft: Equatable {
     var name: String
     var purpose: String
@@ -228,11 +248,26 @@ struct AidenBotEditorDraft: Equatable {
         return AidenBotModelSelection(providerId: provider.id, modelId: model.id)
     }
 
+    func photoModelNeed(catalog: AidenBotCapabilityCatalog) -> AidenBotPhotoModelNeed {
+        guard catalog.model(providerId: customAccess.providerID, modelId: customAccess.modelID)?.supportsImages == false
+        else { return .none }
+        return catalog.hasUsableImageModel ? .choose : .unavailable
+    }
+
+    /// Why New Bot shows no Photos row for a text-only model (`photoModelNeed == .unavailable`).
+    func noImageModelNote(catalog: AidenBotCapabilityCatalog) -> String {
+        let label = catalog.model(providerId: customAccess.providerID, modelId: customAccess.modelID)?.label
+            ?? "This model"
+        return "\(label) reads text only, and no model that reads images is set up on your Mac."
+    }
+
     func visionSelection(catalog: AidenBotCapabilityCatalog) throws -> AidenBotModelSelection? {
         guard catalog.model(
             providerId: customAccess.providerID,
             modelId: customAccess.modelID
         )?.supportsImages != true else { return nil }
+        // With nothing on the Mac that reads images the Bot reads text only, as on the desktop.
+        guard catalog.hasUsableImageModel else { return nil }
         guard let visionProviderID, let visionModelID,
               let model = catalog.model(providerId: visionProviderID, modelId: visionModelID),
               model.available, model.supportsImages,
@@ -251,7 +286,9 @@ struct AidenBotEditorDraft: Equatable {
             visionModelID = nil
             return
         }
+        // Keep a photo model only while the Mac can still run it.
         if let visionProviderID, let visionModelID,
+           catalog.containsAvailable(providerId: visionProviderID, modelId: visionModelID),
            catalog.model(providerId: visionProviderID, modelId: visionModelID)?.supportsImages == true {
             return
         }

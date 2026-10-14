@@ -165,6 +165,7 @@ struct AidenBotSessionChatView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
             if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+                Divider()
                 Button(role: .destructive) {
                     isConfirmingDelete = true
                 } label: {

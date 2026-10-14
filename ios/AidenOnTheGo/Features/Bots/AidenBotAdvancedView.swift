@@ -170,20 +170,21 @@ struct AidenBotAdvancedView: View {
             ) { providerID, modelID in
                 draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
             }
-            if selectedPrimaryModel(in: catalog)?.supportsImages == false {
-                if visionProviders(in: catalog).isEmpty {
-                    Text("To look at photos, add an AI that can see images on your Mac.")
-                        .foregroundStyle(palette.secondary)
-                } else {
-                    AidenBotModelRow(
-                        title: "Photos",
-                        catalog: catalog,
-                        providerID: draft?.visionProviderID,
-                        modelID: draft?.visionModelID,
-                        imagesOnly: true
-                    ) { providerID, modelID in
-                        draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
-                    }
+            switch draft?.photoModelNeed(catalog: catalog) ?? .none {
+            case .none:
+                EmptyView()
+            case .unavailable:
+                Text("To look at photos, add an AI that can see images on your Mac.")
+                    .foregroundStyle(palette.secondary)
+            case .choose:
+                AidenBotModelRow(
+                    title: "Photos",
+                    catalog: catalog,
+                    providerID: draft?.visionProviderID,
+                    modelID: draft?.visionModelID,
+                    imagesOnly: true
+                ) { providerID, modelID in
+                    draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
                 }
             }
             Button("Use recommended") { useRecommendedModels(catalog) }
@@ -264,20 +265,6 @@ struct AidenBotAdvancedView: View {
                 draft = next
             }
         )
-    }
-
-    private func selectedProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
-        catalog.providers.first { $0.id == draft?.customAccess.providerID }
-    }
-
-    private func selectedPrimaryModel(in catalog: AidenBotCapabilityCatalog) -> AidenBotModelOption? {
-        selectedProvider(in: catalog)?.models.first { $0.id == draft?.customAccess.modelID }
-    }
-
-    private func visionProviders(in catalog: AidenBotCapabilityCatalog) -> [AidenBotProviderOption] {
-        catalog.providers.filter { provider in
-            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
-        }
     }
 
     private func recommendedDraft(_ catalog: AidenBotCapabilityCatalog) -> AidenBotEditorDraft? {

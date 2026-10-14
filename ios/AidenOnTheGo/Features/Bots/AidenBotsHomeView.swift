@@ -209,11 +209,16 @@ func aidenBotHomeRows(
 private enum AidenBotsHomeSheet: Identifiable {
     case create
     case profile(AidenBotSummary)
+    /// Profile, opened straight to Memory or Advanced from a row's menu.
+    case memory(AidenBotSummary)
+    case advanced(AidenBotSummary)
 
     var id: String {
         switch self {
         case .create: "create"
         case let .profile(bot): "profile-\(bot.id)"
+        case let .memory(bot): "memory-\(bot.id)"
+        case let .advanced(bot): "advanced-\(bot.id)"
         }
     }
 }
@@ -385,6 +390,20 @@ struct AidenBotsHomeView: View {
                     coordinator: coordinator,
                     initialSummary: bot,
                     onChanged: { Task { await load() } }
+                )
+            case let .memory(bot):
+                AidenBotProfileView(
+                    coordinator: coordinator,
+                    initialSummary: bot,
+                    onChanged: { Task { await load() } },
+                    opensMemory: true
+                )
+            case let .advanced(bot):
+                AidenBotProfileView(
+                    coordinator: coordinator,
+                    initialSummary: bot,
+                    onChanged: { Task { await load() } },
+                    opensAdvanced: true
                 )
             }
         }
@@ -628,7 +647,16 @@ struct AidenBotsHomeView: View {
         Button("Profile", systemImage: "person.crop.circle") {
             presentProfile(bot)
         }
+        if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator) {
+            Button("Memory", systemImage: AidenBotMemorySymbol.name) {
+                presentedSheet = .memory(bot)
+            }
+        }
+        Button("Advanced", systemImage: "slider.horizontal.3") {
+            presentedSheet = .advanced(bot)
+        }
         if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+            Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {
                 pendingDelete = bot
             }

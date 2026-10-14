@@ -126,11 +126,13 @@ struct AidenBotCreateView: View {
                             retainedCreatedBot = nil
                             draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
                         }
-                        if catalog.model(providerId: current.customAccess.providerID,
-                                         modelId: current.customAccess.modelID)?.supportsImages == false,
-                           catalog.providers.contains(where: { provider in
-                               provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
-                           }) {
+                        switch current.photoModelNeed(catalog: catalog) {
+                        case .none:
+                            EmptyView()
+                        case .unavailable:
+                            Text(current.noImageModelNote(catalog: catalog))
+                                .foregroundStyle(palette.secondary)
+                        case .choose:
                             AidenBotModelRow(
                                 title: "Photos",
                                 catalog: catalog,
