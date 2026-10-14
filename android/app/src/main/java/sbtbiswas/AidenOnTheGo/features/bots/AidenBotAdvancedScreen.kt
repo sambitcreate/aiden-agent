@@ -152,6 +152,56 @@ data class AidenBotAdvancedDraft(
         try { accessUpdate(catalog); true } catch (_: Exception) { false }
 }
 
+/**
+ * The Bot as it will be once [this] draft saves (R15): the model and access show at once, until
+ * the Mac's own Bot replaces it. A Bot that needed a model doesn't any more.
+ */
+fun AidenBotAdvancedDraft.optimistic(bot: AidenBotDetail, catalog: AidenBotCapabilityCatalog): AidenBotDetail {
+    val update = accessUpdate(catalog)
+    return bot.copy(
+        access = bot.access.copy(accessMode = update.accessMode, custom = update.custom),
+        modelSelection = AidenBotModelSelection(customAccess.providerID, customAccess.modelID),
+        sessionState = if (bot.sessionState == AidenBotSessionState.NEEDS_MODEL) AidenBotSessionState.IDLE else bot.sessionState
+    )
+}
+
+/**
+ * Advanced's Save, applied at once (R15): [show] gets the optimistic Bot now, and the save runs
+ * on [host] (outliving the sheet), waiting for the connection and bounded. The Mac's Bot then
+ * replaces it through [settled]; a failure puts back what was there, unless something newer
+ * replaced it, and says why through [failed].
+ */
+fun aidenBotSaveAdvancedOptimistically(
+    host: AidenBotSaveHost,
+    bot: AidenBotDetail,
+    draft: AidenBotAdvancedDraft,
+    catalog: AidenBotCapabilityCatalog,
+    show: (AidenBotDetail) -> Unit,
+    settled: (AidenBotDetail) -> Unit,
+    failed: (AidenBotChatActivityFailure) -> Unit
+) {
+    if (!draft.changesAccess(bot, catalog)) {
+        show(bot)
+        return
+    }
+    val optimistic = draft.optimistic(bot, catalog)
+    host.cache(optimistic)
+    show(optimistic)
+    host.launch {
+        try {
+            val saved = aidenBotHeldRequest(host.waitForConnection) { aidenBotSaveAdvanced(host.connected(), bot, draft, catalog) }
+            host.cache(saved)
+            settled(saved)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (host.cached(bot.id)?.let { it == optimistic } != false) host.cache(bot)
+            settled(bot)
+            failed(aidenBotSaveFailure(error))
+        }
+    }
+}
+
 /** Saves an Advanced draft's access and returns the fresh Bot. */
 suspend fun aidenBotSaveAdvanced(
     client: AidenRemoteClient,
@@ -201,7 +251,15 @@ fun AidenBotAdvancedSheet(
     /** What Chat activity saves with; the row is offered only when this is set too. */
     chatActivityHost: AidenBotChatActivityHost? = null,
     /** The newest Bot after Chat activity picks: once when Advanced closes, or at once for a pick that finishes later. */
-    onChatActivitySaved: (AidenBotDetail) -> Unit = {}
+    onChatActivitySaved: (AidenBotDetail) -> Unit = {},
+    /**
+     * Where Save runs (R15). With it, Save applies at once: [onSaved] gets the optimistic Bot and
+     * the sheet's caller closes it; the Mac's Bot (or, after a failure, the Bot as it was) follows
+     * through [onSaveSettled], and a failure is said through [onSaveFailed].
+     */
+    saveHost: AidenBotSaveHost? = null,
+    onSaveSettled: (AidenBotDetail) -> Unit = {},
+    onSaveFailed: (String) -> Unit = {}
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -225,11 +283,10 @@ fun AidenBotAdvancedSheet(
     var saveError by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
 
+    // While the Mac connects, the sections show their placeholders; they fill in once it does (R15).
     LaunchedEffect(bot.id, client) {
-        val cl = client ?: run {
-            loadError = resources.getString(R.string.bot_advanced_connect)
-            return@LaunchedEffect
-        }
+        val cl = client ?: return@LaunchedEffect
+        loadError = null
         try {
             val cat = cl.botCapabilityCatalog(bot.id)
             catalog = cat
@@ -260,8 +317,20 @@ fun AidenBotAdvancedSheet(
                             text = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                             enabled = !isSaving && cat != null && current != null && current.isSaveable(cat),
                             onClick = {
-                                val cl = client ?: return@AidenPrimaryButton
                                 if (cat == null || current == null) return@AidenPrimaryButton
+                                val host = saveHost
+                                if (host != null) {
+                                    // The screen behind gets this Bot, which already holds any Chat activity pick.
+                                    reporter.settle()
+                                    aidenBotSaveAdvancedOptimistically(
+                                        host, latestBot, current, cat,
+                                        show = onSaved,
+                                        settled = onSaveSettled,
+                                        failed = { onSaveFailed(resources.getString(aidenBotSaveFailureText(it))) }
+                                    )
+                                    return@AidenPrimaryButton
+                                }
+                                val cl = client ?: return@AidenPrimaryButton
                                 scope.launch {
                                     isSaving = true
                                     saveError = null

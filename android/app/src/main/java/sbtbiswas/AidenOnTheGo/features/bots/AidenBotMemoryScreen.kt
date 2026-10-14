@@ -59,9 +59,14 @@ fun AidenBotMemoryScreen(
     val client by coordinator.client.collectAsStateWithLifecycle()
     val name = rememberAidenBotChatIdentity(coordinator, botId, "").name
     val cl = client
-    val controller = remember(botId, cl) { cl?.let { AidenBotMemoryController(botId, AidenRemoteBotMemoryTransport(it)) } }
-    LaunchedEffect(controller) { controller?.load() }
-    val ui = controller?.state?.collectAsStateWithLifecycle()?.value
+    // One page per pairing; it reads the client at each request and waits for the Mac, so it
+    // opens on skeletons, never a "connect" screen, and its edits apply at once (R15).
+    val saveHost = remember(cl) { coordinator.botSaveHost() }
+    val controller = remember(botId, saveHost) {
+        AidenBotMemoryController(botId, AidenRemoteBotMemoryTransport(saveHost.client), waitForConnection = saveHost.waitForConnection)
+    }
+    LaunchedEffect(controller, cl) { controller.load() }
+    val ui = controller.state.collectAsStateWithLifecycle().value
     var confirmingErase by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -78,14 +83,8 @@ fun AidenBotMemoryScreen(
             )
         }
     ) { padding ->
-        val view = ui?.view
+        val view = ui.view
         when {
-            controller == null || ui == null -> AidenEmptyState(
-                icon = Icons.Default.CloudOff,
-                title = stringResource(R.string.bot_memory_title),
-                body = stringResource(R.string.bot_memory_connect),
-                modifier = Modifier.fillMaxSize().padding(padding)
-            )
             view == null && ui.isLoading -> AidenBotMemorySkeleton(Modifier.padding(padding))
             view == null -> AidenEmptyState(
                 icon = Icons.Default.CloudOff,
@@ -152,8 +151,8 @@ fun AidenBotMemoryScreen(
         }
     }
 
-    val editing = ui?.editing
-    if (controller != null && editing != null) {
+    val editing = ui.editing
+    if (editing != null) {
         val groupName = when (editing.target) {
             AidenBotMemoryTarget.USER -> stringResource(R.string.bot_memory_about_you)
             AidenBotMemoryTarget.MEMORY -> stringResource(R.string.bot_memory_notes, name)
@@ -212,7 +211,7 @@ fun AidenBotMemoryScreen(
         )
     }
 
-    if (controller != null && confirmingErase) {
+    if (confirmingErase) {
         AlertDialog(
             onDismissRequest = { confirmingErase = false },
             title = { Text(stringResource(R.string.bot_memory_erase_title, name)) },
@@ -221,7 +220,7 @@ fun AidenBotMemoryScreen(
                 AidenDialogConfirmButton(
                     text = stringResource(R.string.bot_memory_erase),
                     destructive = true,
-                    enabled = ui?.isErasing != true,
+                    enabled = !ui.isErasing,
                     onClick = {
                         confirmingErase = false
                         scope.launch { controller.erase() }

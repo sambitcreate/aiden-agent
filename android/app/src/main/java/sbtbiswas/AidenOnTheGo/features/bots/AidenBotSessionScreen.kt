@@ -311,17 +311,20 @@ private fun AidenBotSessionContent(
 
     advancedBot?.let { bot ->
         val chatActivityHost = remember(cl) { coordinator.botChatActivityHost() }
-        val pinnedCache = remember(cl) { coordinator.pinnedBotCache() }
+        val saveHost = remember(cl) { coordinator.botSaveHost() }
         AidenBotAdvancedSheet(
             bot = bot,
             client = cl,
             onDismiss = { advancedBot = null },
-            // A save that lands after an unpair or re-pair never reaches the other pairing's cache.
-            onSaved = { saved ->
-                pinnedCache(saved)
+            // Save applies at once (R15) and writes through the pinned cache, so a save that lands
+            // after an unpair or re-pair never reaches the other pairing's cache.
+            onSaved = {
                 advancedBot = null
                 scope.launch { controller.refetch() }
             },
+            saveHost = saveHost,
+            onSaveSettled = { scope.launch { controller.refetch() } },
+            onSaveFailed = coordinator::presentError,
             chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = chatActivityHost,
             // The host has already cached the pick (pinned to its pairing); this only refreshes the chat.

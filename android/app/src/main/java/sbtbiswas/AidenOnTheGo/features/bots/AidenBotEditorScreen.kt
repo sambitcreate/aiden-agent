@@ -10,6 +10,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -200,7 +203,9 @@ private fun AidenBotCreateScreen(
     var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // The Mac's models; if they don't load the field is absent and Create sends no access.
+    // Until the Mac answers (or while it connects) the field is a placeholder, never a spinner.
     var catalog by remember { mutableStateOf<AidenBotCapabilityCatalog?>(null) }
+    var catalogSettled by remember { mutableStateOf(false) }
     LaunchedEffect(client) {
         val cl = client ?: return@LaunchedEffect
         // A failed refetch keeps the catalog already loaded.
@@ -209,39 +214,47 @@ private fun AidenBotCreateScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
+        } finally {
+            catalogSettled = true
         }
     }
+    // Create never waits on the connection to be tapped: it waits for the Mac, then sends (R15).
+    val saveHost = remember(client) { coordinator.botSaveHost() }
     // A retried Create never makes two Bots, and a changed one never reuses a refused key.
     val attempts = remember { AidenBotCreateAttempts() }
 
     AidenBotEditorScaffold(
         title = stringResource(R.string.bot_editor_new_title),
         actionLabel = if (isSaving) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
-        actionEnabled = !isSaving && client != null && (attempts.replays(draft) || draft.request(catalog) != null),
+        actionEnabled = !isSaving && (attempts.replays(draft) || draft.request(catalog) != null),
         onNavigateBack = onNavigateBack,
         onAction = {
-            val cl = client ?: return@AidenBotEditorScaffold
             val attempt = attempts.begin(draft, catalog) ?: return@AidenBotEditorScaffold
             scope.launch {
                 isSaving = true
                 error = null
                 try {
-                    val created = cl.createBot(attempt.request, attempt.key)
-                    coordinator.botCache.putBotDetail(created)
+                    val created = aidenBotHeldRequest(saveHost.waitForConnection) { saveHost.connected().createBot(attempt.request, attempt.key) }
+                    saveHost.cache(created)
                     onBotSaved(created.id)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    // No answer (offline, too slow) keeps the attempt, so Create replays its key.
                     attempts.failed(attempt, e)
                     // The Mac may have refused the model (its service was signed out); a fresh
                     // catalog lets the field say so instead of only the generic message.
                     try {
-                        catalog = cl.botCapabilityCatalog()
+                        saveHost.client()?.let { catalog = it.botCapabilityCatalog() }
                     } catch (c: CancellationException) {
                         throw c
                     } catch (_: Exception) {
                     }
-                    error = if (draft.modelIsGone(catalog)) null else resources.getString(R.string.bot_editor_create_failed)
+                    error = when {
+                        draft.modelIsGone(catalog) -> null
+                        aidenBotChatActivityMacUnreachable(e) -> resources.getString(R.string.bot_editor_create_unreachable)
+                        else -> resources.getString(R.string.bot_editor_create_failed)
+                    }
                 } finally {
                     isSaving = false
                 }
@@ -268,6 +281,17 @@ private fun AidenBotCreateScreen(
             placeholder = stringResource(R.string.bot_editor_help_placeholder),
             singleLine = false
         )
+        if (catalog == null && !catalogSettled) {
+            // The model field's place while the Mac's models arrive.
+            val loading = stringResource(R.string.bot_advanced_loading)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.clearAndSetSemantics { contentDescription = loading }
+            ) {
+                AidenSkeletonBlock(width = 96.dp, height = 12.dp)
+                AidenSkeletonBlock(height = 56.dp, shape = MaterialTheme.shapes.large)
+            }
+        }
         catalog?.let { cat ->
             val providers = remember(cat) { aidenBotModelPickerProviders(cat) }
             val modelGone = draft.modelIsGone(cat)
@@ -314,12 +338,10 @@ private fun AidenBotInstructionsEditorScreen(
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
-    val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
     var bot by remember { mutableStateOf<AidenBotDetail?>(coordinator.botCache.getBotDetail(botId)) }
     var text by remember { mutableStateOf(bot?.instructions.orEmpty()) }
     var loaded by remember { mutableStateOf(bot != null) }
-    var isSaving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(botId, client) {
@@ -344,33 +366,35 @@ private fun AidenBotInstructionsEditorScreen(
     val trimmed = text.trim()
     AidenBotEditorScaffold(
         title = stringResource(R.string.bot_profile_instructions),
-        actionLabel = if (isSaving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
-        actionEnabled = !isSaving && current != null && trimmed.isNotEmpty(),
+        actionLabel = stringResource(R.string.action_save),
+        actionEnabled = current != null && trimmed.isNotEmpty(),
         onNavigateBack = onNavigateBack,
         onAction = {
-            val cl = client ?: return@AidenBotEditorScaffold
             val b = current ?: return@AidenBotEditorScaffold
             if (trimmed == b.instructions) {
                 onBotSaved(b.id)
                 return@AidenBotEditorScaffold
             }
-            scope.launch {
-                isSaving = true
-                error = null
-                try {
-                    val saved = cl.updateBotIdentity(b.id, b.revision, AidenBotIdentityPatch(instructions = trimmed))
-                    coordinator.botCache.putBotDetail(saved)
-                    onBotSaved(saved.id)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    error = resources.getString(R.string.bot_save_failed)
-                } finally {
-                    isSaving = false
-                }
+            // Saved at once (R15): Profile shows the new instructions now, the save runs on the
+            // pairing's scope, and a failure puts them back and says so wherever the person is.
+            val editor = coordinator.botIdentityEditor(b)
+            coordinator.botSaveHost().launch {
+                editor.edit(AidenBotIdentityPatch(instructions = trimmed))
+                editor.state.value.failure?.let { coordinator.presentError(resources.getString(aidenBotSaveFailureText(it))) }
             }
+            onBotSaved(b.id)
         }
     ) {
+        if (!loaded && error == null) {
+            // The instructions' place while they arrive, never a spinner.
+            val loading = stringResource(R.string.bot_advanced_loading)
+            AidenSkeletonBlock(
+                height = 200.dp,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = loading }
+            )
+            return@AidenBotEditorScaffold
+        }
         TextField(
             value = text,
             onValueChange = { text = it.take(AidenBotWire.MAX_INSTRUCTIONS_LENGTH) },

@@ -475,6 +475,7 @@
     <string name="bot_field_name">Name</string>
     <string name="bot_name_fallback_your_bot">your Bot</string>
     <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
+    <string name="bot_save_unreachable">Aiden couldn’t reach your Mac to save that. Try again.</string>
     <string name="bot_delete_confirm">Delete Bot</string>
     <string name="bot_delete_connect">Connect to your Mac to delete this Bot.</string>
     <string name="bot_delete_failed">Aiden couldn’t delete this Bot. Try again.</string>
@@ -491,8 +492,6 @@
     <string name="bot_profile_unavailable_failed">Aiden couldn’t load this Bot.</string>
     <string name="bot_profile_instructions">Instructions</string>
     <string name="bot_profile_loading">Loading Bot</string>
-    <string name="bot_profile_connect_to_save">Connect to your Mac to save changes.</string>
-    <string name="bot_profile_character_save_failed">Aiden couldn’t save the new look. Try again.</string>
     <string name="bot_profile_change_photo">Change photo</string>
     <string name="bot_profile_photo_options">Photo options</string>
     <string name="bot_profile_choose_photo">Choose from Gallery</string>
@@ -573,7 +572,6 @@
     <string name="bot_memory_error_failed">Aiden couldn’t save this memory. Try again.</string>
     <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
     <string name="bot_memory_load_failed">Aiden couldn’t load this memory. Make sure your Mac is on and nearby.</string>
-    <string name="bot_memory_connect">Connect to your Mac to see this memory.</string>
     <string name="bot_memory_loading">Loading memory</string>
     <string name="bot_memory_erase">Erase memory</string>
     <string name="bot_memory_erase_title">Erase everything %1$s remembers?</string>
@@ -604,7 +602,6 @@
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
     <string name="bot_advanced_loading">Loading settings</string>
-    <string name="bot_advanced_connect">Connect to your Mac to change these settings.</string>
     <string name="bot_advanced_needs_model">Set up an AI model on your Mac first.</string>
     <string name="bot_advanced_load_failed">Aiden couldn’t load these settings. Try again.</string>
     <string name="bot_advanced_model">AI model</string>
@@ -716,6 +713,7 @@
     <string name="bot_editor_new_title">New Bot</string>
     <string name="bot_editor_creating">Creating…</string>
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
+    <string name="bot_editor_create_unreachable">Aiden couldn’t reach your Mac to create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
     <string name="bot_editor_model_gone">That model isn’t available any more. Choose another one.</string>

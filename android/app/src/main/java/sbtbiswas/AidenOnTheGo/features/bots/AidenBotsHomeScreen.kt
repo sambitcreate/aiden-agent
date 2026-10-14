@@ -268,7 +268,16 @@ private fun AidenBotsHomeContent(
     var advancedClient by remember { mutableStateOf<AidenRemoteClient?>(null) }
     var openingAdvanced by remember { mutableStateOf(false) }
     fun openAdvanced(botId: String) {
-        val cl = client ?: return
+        // Opens at once from the cached Bot, connected or not (R15); a Bot never seen here is read first.
+        coordinator.botCache.getBotDetail(botId)?.let { cached ->
+            advancedClient = client
+            advancedBot = cached
+            return
+        }
+        val cl = client ?: run {
+            coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+            return
+        }
         if (openingAdvanced) return
         openingAdvanced = true
         scope.launch {
@@ -299,8 +308,11 @@ private fun AidenBotsHomeContent(
         }
     }
     // The sheet belongs to the pairing it was opened in; a switched or revoked client closes it.
+    // Opened before the Mac connected, it takes the pairing's first client.
     LaunchedEffect(client) {
-        if (advancedClient != null && advancedClient !== client) {
+        if (advancedBot != null && advancedClient == null && client != null) {
+            advancedClient = client
+        } else if (advancedClient != null && advancedClient !== client) {
             advancedBot = null
             advancedClient = null
         }
@@ -464,12 +476,14 @@ private fun AidenBotsHomeContent(
                 advancedBot = null
                 advancedClient = null
             },
-            onSaved = { saved ->
-                coordinator.botCache.putBotDetail(saved)
+            // Save applies at once (R15); the list rereads when the Mac answers.
+            onSaved = {
                 advancedBot = null
                 advancedClient = null
-                scope.launch { viewModel.loadBots(force = true) }
             },
+            saveHost = remember(advancedClient) { coordinator.botSaveHost() },
+            onSaveSettled = { viewModel.loadBots(force = true) },
+            onSaveFailed = coordinator::presentError,
             chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
         )

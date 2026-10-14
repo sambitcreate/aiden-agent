@@ -879,9 +879,10 @@ class AidenBotSessionController(
      * Mac), for a request still unsettled, or for a Queued bubble that beats the receipt. Each
      * entry settles one message for the life of the epoch. An unsettled message is never
      * removed: it hides and settles on its receipt. On a Mac that sends its queue, a taken
-     * message that is neither queued nor in the transcript goes once a later snapshot still
-     * finds it so, or [unheldGraceMillis] after the first one did (FR-m5): the Mac's Queued list
-     * may be full, or may leave a message out while it can't yet tell whose it is.
+     * message that is neither queued nor in the transcript is marked unheld by a snapshot and
+     * goes only once [unheldGraceMillis] have passed since (FR-m5, as on iOS): the Mac's Queued
+     * list may be full, or may leave it out while it can't yet tell whose it is. Showing up
+     * queued again clears the mark.
      */
     private fun reconcileOutbox(snapshot: Boolean) {
         val current = _state.value
@@ -891,7 +892,6 @@ class AidenBotSessionController(
             claimedEntries.clear()
         }
         if (current.outbox.isEmpty()) return
-        val queueFull = current.queued.size >= AidenBotQueuedMessage.MAX_COUNT
         val entries = current.session?.entries.orEmpty()
         val owned = current.outbox.mapNotNull { it.submissionId }.toSet()
         val queuedIds = current.queued.map { it.submissionId }.toSet()
@@ -919,12 +919,10 @@ class AidenBotSessionController(
                         message = message.copy(queuedId = id, unheld = false)
                     } else if (current.activitySupported) {
                         // Taken, not queued and not in the transcript: nothing on the Mac shows it.
+                        // Marked on a snapshot; it goes once its 10 s grace ran out ([unheldTimers]), as on iOS.
                         when {
-                            // A full queue can't show it; it stays until the Mac's view has room.
-                            queueFull -> message = message.copy(unheld = false)
-                            // A second snapshot agrees, or the grace period ran out ([unheldTimers]).
-                            message.unheld && (snapshot || message.key in unheldExpired) -> continue
-                            snapshot -> message = message.copy(unheld = true)
+                            message.unheld && message.key in unheldExpired -> continue
+                            snapshot && !message.unheld -> message = message.copy(unheld = true)
                         }
                     }
                 } else if (message.queuedId == null) {

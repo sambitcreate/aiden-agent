@@ -41,6 +41,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -52,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.models.*
@@ -128,8 +131,15 @@ fun AidenBotProfileScreen(
     var showAdvanced by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
-    var isSavingCharacter by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    // Name, subtitle and character edits apply at once and save in the background (R15).
+    val saveHost = remember(client) { coordinator.botSaveHost() }
+    var editor by remember(botId) { mutableStateOf<AidenBotIdentityEditor?>(null) }
+    LaunchedEffect(botId, bot != null, client) {
+        val current = bot ?: return@LaunchedEffect
+        editor = coordinator.botIdentityEditor(current)
+    }
+    val editState = editor?.state?.collectAsStateWithLifecycle()?.value
     val avatarModel = remember(botId) { AidenBotGeneratedAvatarModel(coordinator, botId, coordinator.botCache) }
     val photoPhase by avatarModel.phase.collectAsStateWithLifecycle()
     val photoError by avatarModel.errorMessage.collectAsStateWithLifecycle()
@@ -139,8 +149,27 @@ fun AidenBotProfileScreen(
         bot = detail
         nameText = detail.name
         subtitleText = detail.purpose
-        coordinator.botCache.putBotDetail(detail)
+        // Pinned: a Bot from another pairing's save never lands in this one's cache.
+        saveHost.cache(detail)
+        editor?.adopt(detail)
         onBotMutated()
+    }
+
+    // What the editor shows (an edit, a rollback, the Mac's Bot) is what the page shows. Text the
+    // person hasn't touched since follows it; what they are typing stays.
+    LaunchedEffect(editState?.bot) {
+        val shown = editState?.bot ?: return@LaunchedEffect
+        val before = bot
+        if (before == null || nameText == before.name) nameText = shown.name
+        if (before == null || subtitleText == before.purpose) subtitleText = shown.purpose
+        bot = shown
+    }
+    // A save the Mac confirmed: the list behind rereads.
+    var wasSaving by remember { mutableStateOf(false) }
+    LaunchedEffect(editState?.isSaving) {
+        val saving = editState?.isSaving == true
+        if (wasSaving && !saving && editState?.failure == null) onBotMutated()
+        wasSaving = saving
     }
 
     LaunchedEffect(client, botId, connectionState, readAttempt) {
@@ -155,11 +184,14 @@ fun AidenBotProfileScreen(
         try {
             val fresh = cl.bot(botId)
             if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@LaunchedEffect
+            loadFailed = false
+            // An edit still saving shows over the read; it settles on the Mac's own answer.
+            if (editor?.isBusy == true) return@LaunchedEffect
             bot = fresh
             nameText = fresh.name
             subtitleText = fresh.purpose
-            coordinator.botCache.putBotDetail(fresh)
-            loadFailed = false
+            saveHost.cache(fresh)
+            editor?.adopt(fresh)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -188,6 +220,7 @@ fun AidenBotProfileScreen(
         onPauseOrDispose { job?.cancel() }
     }
 
+    // Each edit shows at once and saves when the Mac is reachable; a failed one goes back (R15).
     fun saveText() {
         val current = bot ?: return
         val patch = aidenBotIdentityTextPatch(current, nameText, subtitleText)
@@ -195,45 +228,17 @@ fun AidenBotProfileScreen(
             if (nameText.isBlank()) nameText = current.name
             return
         }
-        val cl = client ?: run {
-            actionError = resources.getString(R.string.bot_profile_connect_to_save)
-            return
-        }
-        scope.launch {
-            try {
-                accept(cl.updateBotIdentity(current.id, current.revision, patch))
-                actionError = null
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                actionError = resources.getString(R.string.bot_save_failed)
-            }
-        }
+        val ed = editor ?: return
+        actionError = null
+        saveHost.launch { ed.edit(patch) }
     }
 
     fun saveCharacter(recipe: AidenBotAvatarRecipe) {
         val current = bot ?: return
         val patch = aidenBotCharacterPatch(current, recipe) ?: return
-        val cl = client ?: run {
-            actionError = resources.getString(R.string.bot_profile_connect_to_save)
-            return
-        }
-        // Show the new look right away; roll back if the Mac says no.
-        bot = current.copy(avatar = current.avatar.copy(semantic = AidenBotSemanticAvatar.Recipe(recipe)))
-        scope.launch {
-            isSavingCharacter = true
-            try {
-                accept(cl.updateBotIdentity(current.id, current.revision, patch))
-                actionError = null
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                bot = current
-                actionError = resources.getString(R.string.bot_profile_character_save_failed)
-            } finally {
-                isSavingCharacter = false
-            }
-        }
+        val ed = editor ?: return
+        actionError = null
+        saveHost.launch { ed.edit(patch) }
     }
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -304,7 +309,8 @@ fun AidenBotProfileScreen(
         val presentation = AidenReadPresentation.of(
             hasContent = current != null,
             isFetching = isLoading,
-            hasSettled = loadFailed || client == null,
+            // Connecting is not settled: skeletons, never a "connect" screen, until it fails (R14).
+            hasSettled = loadFailed || connectionState == AidenConnectionState.NEEDS_PAIRING,
             failed = loadFailed
         )
         when {
@@ -344,6 +350,16 @@ fun AidenBotProfileScreen(
                             name = current.name,
                             size = 120.dp
                         )
+                        // A photo on its way shimmers over the face, never a spinner (R15).
+                        if (photoPhase == AidenBotGeneratedAvatarPhase.UPLOADING || photoPhase == AidenBotGeneratedAvatarPhase.REVERTING) {
+                            val saving = stringResource(R.string.bot_avatar_saving)
+                            AidenSkeletonBlock(
+                                width = 120.dp,
+                                height = 120.dp,
+                                shape = CircleShape,
+                                modifier = Modifier.alpha(0.7f).semantics { stateDescription = saving }
+                            )
+                        }
                     }
                     Surface(
                         onClick = { showPhotoMenu = true },
@@ -383,9 +399,6 @@ fun AidenBotProfileScreen(
                         }
                     }
                 }
-                if (photoPhase == AidenBotGeneratedAvatarPhase.UPLOADING || photoPhase == AidenBotGeneratedAvatarPhase.REVERTING) {
-                    LinearProgressIndicator(color = palette.accent, modifier = Modifier.width(120.dp))
-                }
                 photoError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
 
                 Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
@@ -410,10 +423,10 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                // Never held back while a save runs: each pick shows at once and saves after the last.
                 AidenBotCharacterCard(
                     recipe = AidenBotCharacter.recipe(current.avatar.semantic),
-                    onChange = ::saveCharacter,
-                    enabled = !isSavingCharacter
+                    onChange = ::saveCharacter
                 )
 
                 Surface(
@@ -473,7 +486,9 @@ fun AidenBotProfileScreen(
                     )
                 }
 
-                actionError?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+                (editState?.failure?.let { stringResource(aidenBotSaveFailureText(it)) } ?: actionError)?.let {
+                    Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -484,10 +499,14 @@ fun AidenBotProfileScreen(
             bot = current,
             client = client,
             onDismiss = { showAdvanced = false },
+            // Save applies at once (R15): the optimistic Bot now, the Mac's when it answers.
             onSaved = {
                 accept(it)
                 showAdvanced = false
             },
+            saveHost = saveHost,
+            onSaveSettled = ::accept,
+            onSaveFailed = coordinator::presentError,
             chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = remember(client) { coordinator.botChatActivityHost() },
             // The baseline only: unsaved name or subtitle edits stay, and the host has cached the pick.

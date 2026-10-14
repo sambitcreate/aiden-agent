@@ -1519,7 +1519,7 @@ class AidenBotSessionControllerTest {
     }
 
     @Test
-    fun aCachedChatShowsItsTranscriptWithConnectingAndAMissingBotShowsNeither() = runTest {
+    fun aCachedChatShowsItsTranscriptNotSkeletonsAndAMissingBotShowsNeitherHintNorSkeletons() = runTest {
         val sessions = AidenBotSessionStore(null, io = { it.run() })
         val transport = FakeTransport(runningSession)
         val first = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
@@ -1542,7 +1542,7 @@ class AidenBotSessionControllerTest {
     }
 
     @Test
-    fun aDroppedFeedSaysReconnectingOnceOnTheLineAndConnectingWhenIdle() = runTest {
+    fun aDroppedFeedSaysReconnectingOnTheLineAloneAndConnectingWhenIdle() = runTest {
         val dropped = flow<AidenBotSessionEvent> { throw IOException("Wi-Fi dropped") }
         val working = FakeTransport(activitySession)
         working.feeds += flow {
@@ -2125,11 +2125,11 @@ class AidenBotSessionControllerTest {
         assertEquals("the Mac's newer state wins over the older answer", AidenBotSessionState.IDLE, controller.state.value.state)
     }
 
-    // FR-m5: a taken message nothing on the Mac shows goes only on a second look, or after the grace period.
+    // FR-m5: a taken message nothing on the Mac shows is marked unheld and goes only once 10 s have passed.
     @Test
-    fun aTakenMessageNothingOnTheMacShowsGoesOnlyOnASecondLookOrAfterItsGrace() = runTest {
+    fun aTakenMessageNothingOnTheMacShowsGoesOnlyAfterItsGrace() = runTest {
         val transport = FakeTransport(runningSession)
-        transport.receiptIds += listOf("21", "22", "23")
+        transport.receiptIds += listOf("21", "22")
         val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
         controller.refetch()
         var seq = runningSession.seq
@@ -2138,31 +2138,25 @@ class AidenBotSessionControllerTest {
             controller.handle(snapshotOf(runningSession.copy(seq = seq, queued = queued)))
         }
 
-        // A second snapshot agrees: it goes.
         assertTrue(controller.send("Plan lunch"))
         snapshot()
-        assertEquals("one look may miss it", listOf("Plan lunch"), controller.state.value.outgoing.map { it.text })
         snapshot()
-        assertTrue(controller.state.value.outbox.isEmpty())
-
-        // Or the grace period runs out.
-        assertTrue(controller.send("And dinner"))
-        snapshot()
+        assertEquals("a second look within the grace keeps it", listOf("Plan lunch"), controller.state.value.outgoing.map { it.text })
         advanceTimeBy(AidenBotSessionController.UNHELD_GRACE_MILLIS - 1)
         runCurrent()
-        assertEquals(listOf("And dinner"), controller.state.value.outgoing.map { it.text })
+        assertEquals(listOf("Plan lunch"), controller.state.value.outgoing.map { it.text })
         advanceTimeBy(2)
         runCurrent()
         assertTrue(controller.state.value.outbox.isEmpty())
 
-        // A full queue can't show it: it stays.
-        assertTrue(controller.send("And breakfast"))
-        val full = List(AidenBotQueuedMessage.MAX_COUNT) { AidenBotQueuedMessage("q$it", AidenStreamInputMode.QUEUE, "Other $it") }
-        snapshot(full)
-        snapshot(full)
+        // Showing up queued again clears the mark.
+        assertTrue(controller.send("And dinner"))
+        snapshot()
+        snapshot(listOf(AidenBotQueuedMessage("22", AidenStreamInputMode.QUEUE, "And dinner")))
         advanceTimeBy(AidenBotSessionController.UNHELD_GRACE_MILLIS + 1)
         runCurrent()
-        assertEquals(listOf("And breakfast"), controller.state.value.outgoing.map { it.text })
+        assertEquals("22", controller.state.value.outbox.single().queuedId)
+        assertFalse(controller.state.value.outbox.single().unheld)
     }
 
     // Controller polish: a frozen request refused for the Bot's state keeps its key for Try again.

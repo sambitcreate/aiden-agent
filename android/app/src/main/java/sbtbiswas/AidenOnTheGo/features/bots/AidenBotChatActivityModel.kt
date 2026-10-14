@@ -195,8 +195,11 @@ data class AidenBotChatActivityUiState(
     val saveFailed: Boolean get() = saveFailure != null
 }
 
-/** A save that outran its limit; the pick returns to the saved choice. */
-class AidenBotChatActivityTimeout : Exception("The save took too long.")
+/**
+ * A save that outran its limit; the pick returns to the saved choice. It may have reached the
+ * Mac, so it counts as a transport failure everywhere (a Create replays its key after one).
+ */
+class AidenBotChatActivityTimeout : java.io.IOException("The save took too long.")
 
 /** The Mac stayed unreachable for the whole hold. */
 class AidenBotChatActivityUnreachable : Exception("The Mac could not be reached.")
