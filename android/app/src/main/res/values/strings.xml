@@ -470,6 +470,8 @@
     <string name="bots_row_yesterday">Yesterday</string>
     <string name="bot_menu_profile">Profile</string>
     <string name="bot_menu_files">Files</string>
+    <string name="bot_menu_memory">Memory</string>
+    <string name="bot_menu_advanced">Advanced</string>
     <string name="bot_field_name">Name</string>
     <string name="bot_name_fallback_your_bot">your Bot</string>
     <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
