@@ -1,13 +1,14 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
-import type { BotAvatar, BotDefinition } from "../../shared/bots";
+import type { BotAvatar, BotChatActivity, BotDefinition } from "../../shared/bots";
 
 export type BotIdentityPatch = Partial<{
   name: string;
   description: string;
   instructions: string;
   avatar: BotAvatar;
+  chatActivity: BotChatActivity;
 }>;
 
 /**
@@ -30,6 +31,7 @@ export async function updateBotIdentity(
     ...(description ? { description } : {}),
     instructions: next.instructions,
     avatar: next.avatar,
+    ...(patch.chatActivity ? { chatActivity: patch.chatActivity } : {}),
   });
   qc.setQueryData(queryKeys.bot(saved.id), saved);
   await qc.invalidateQueries({ queryKey: queryKeys.bots });

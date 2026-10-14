@@ -97,6 +97,35 @@ export const BOT_LIMITS = {
   instructionsChars: 32_000,
 } as const;
 
+export const BOT_CHAT_ACTIVITY_LEVELS = ["quiet", "summary", "detailed"] as const;
+export type BotChatActivityLevel = (typeof BOT_CHAT_ACTIVITY_LEVELS)[number];
+export const BOT_CHAT_ACTIVITY_WORDINGS = ["follows", "thinking"] as const;
+export type BotChatActivityWording = (typeof BOT_CHAT_ACTIVITY_WORDINGS)[number];
+
+/** How much a Bot chat shows while the Bot works, and what its status line says (spec §7). */
+export interface BotChatActivity {
+  level: BotChatActivityLevel;
+  wording: BotChatActivityWording;
+}
+
+/** What an absent setting means; new Bots never store it. */
+export const DEFAULT_BOT_CHAT_ACTIVITY: BotChatActivity = { level: "quiet", wording: "follows" };
+
+/** Exact check: both keys, current values, nothing else. */
+export function parseBotChatActivity(value: unknown): BotChatActivity | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.every((key) => key === "level" || key === "wording")) return undefined;
+  if (!includes(BOT_CHAT_ACTIVITY_LEVELS, record.level) || !includes(BOT_CHAT_ACTIVITY_WORDINGS, record.wording))
+    return undefined;
+  return { level: record.level, wording: record.wording };
+}
+
+export function resolveBotChatActivity(value: BotChatActivity | undefined): BotChatActivity {
+  return value ? { level: value.level, wording: value.wording } : { ...DEFAULT_BOT_CHAT_ACTIVITY };
+}
+
 export interface BotDefinition {
   id: string;
   /** Main-owned optimistic concurrency token for identity/archive mutations. */
@@ -106,6 +135,8 @@ export interface BotDefinition {
   /** The Bot's soul: person-authored personality and how it helps (Profile → Instructions). */
   instructions: string;
   avatar: BotAvatar;
+  /** Absent: Quiet, Follows the work. */
+  chatActivity?: BotChatActivity;
   createdAt: number;
   updatedAt: number;
 }
@@ -126,6 +157,8 @@ export interface BotCreateInput {
 export interface BotUpdateInput extends BotCreateInput {
   id: string;
   expectedRevision: string;
+  /** Absent keeps the stored choice, so identity edits never reset it. */
+  chatActivity?: BotChatActivity;
 }
 
 export interface TelegramBotBindingView {

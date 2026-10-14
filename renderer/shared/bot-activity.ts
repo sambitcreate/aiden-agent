@@ -4,6 +4,7 @@
 // it, and the CLI bundles it as is.
 
 import type { ActivityMark } from "./activity-marks.js";
+import type { BotChatActivityWording } from "./bots.js";
 
 export const BOT_ACTIVITY_PHASES = [
   "preparing",
@@ -45,8 +46,7 @@ export type BotToolPhase = Extract<
   | "waiting"
 >;
 
-/** What the status line says: the work, or always "Thinking". */
-export type BotChatActivityWording = "follows" | "thinking";
+export type { BotChatActivityWording } from "./bots.js";
 
 const PHASES: Record<BotActivityPhase, { word: string; mark: ActivityMark }> = {
   preparing: { word: "Getting ready", mark: "bounce" },

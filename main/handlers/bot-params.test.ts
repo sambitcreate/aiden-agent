@@ -188,3 +188,25 @@ test("a Bot approval answer names its waitId and allow or deny, nothing else", (
   assert.throws(() => parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), /fields/u);
   assert.throws(() => parseBotApprovalDecision(null), /fields/u);
 });
+
+test("a Bot update may carry an exact chat activity choice, and nothing else new", () => {
+  const fields = {
+    id: "bot-1",
+    expectedRevision: "botrev:one",
+    name: "Planner",
+    instructions: "Plan.",
+    avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
+  };
+  assert.deepEqual(parseBotUpdate({ ...fields, chatActivity: { level: "detailed", wording: "thinking" } }), {
+    ...fields,
+    description: undefined,
+    chatActivity: { level: "detailed", wording: "thinking" },
+  });
+  assert.equal("chatActivity" in parseBotUpdate(fields), false);
+  assert.throws(() => parseBotUpdate({ ...fields, chatActivity: { level: "loud", wording: "follows" } }), /chat activity/u);
+  assert.throws(
+    () => parseBotUpdate({ ...fields, chatActivity: { level: "quiet", wording: "follows", extra: 1 } }),
+    /chat activity/u,
+  );
+  assert.throws(() => parseBotUpdate({ ...fields, chatActivity: "quiet" }), /chat activity/u);
+});
