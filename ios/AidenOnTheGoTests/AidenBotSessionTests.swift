@@ -112,6 +112,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _sendModes: [AidenStreamInputMode?] = []
     private var _streamErrors: [Error] = []
     private var _sendErrors: [Error] = []
+    private var _keyErrors: [UUID: Error] = [:]
     private var _connectionKeys: [UUID] = []
     private var _resumeResults: [Result<AidenBotSessionStateView, Error>] = []
     private var _connectionError: Error?
@@ -162,6 +163,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     func queueResume(_ result: Result<AidenBotSessionStateView, Error>) { locked { _resumeResults.append(result) } }
     func failConnections(with error: Error) { locked { _connectionError = error } }
     func failNextSend(with error: Error) { locked { _sendErrors.append(error) } }
+    /// Every request under `key` fails with `error` from now on, as the Mac's ledger replays it.
+    func answerKey(_ key: UUID, with error: Error) { locked { _keyErrors[key] = error } }
     func queueStop(_ result: Result<AidenBotSessionStateView, Error>) { locked { _stopResults.append(result) } }
     var isHoldingSend: Bool { sendGate.isHolding }
     var isHoldingResume: Bool { resumeGate.isHolding }
@@ -227,6 +230,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _sendKeys.append(idempotencyKey)
             _sendTexts.append(request.text)
             _sendModes.append(request.whenBusy)
+            if let replayed = _keyErrors[idempotencyKey] { return replayed }
             return _sendErrors.isEmpty ? nil : _sendErrors.removeFirst()
         }
         await sendGate.pass()
@@ -3030,17 +3034,31 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertTrue(retried)
         XCTAssertEqual(transport.sendKeys.count, 2)
         XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "Try again replays the key the cut-off request used")
+    }
 
-        // And a definite refusal after an attempt that may have arrived keeps it too.
+    func testARefusedMessageRetriesOnANewKeyOnceTheBotIsFixed() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
         transport.failNextSend(with: URLError(.timedOut))
-        transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
-        _ = await model.send("Second")
-        transport.queueSession(.success(try session(.idle, seq: 7)))
+        _ = await model.send("Plan my week.")
+        // Meanwhile the Bot was paused: the Mac refuses the replay before running it.
+        transport.failNextSend(with: try serverError(status: 409, code: "operation_stale"))
+        transport.queueSession(.success(try session(.idle, seq: 5)))
         await model.load()
-        let refused = try XCTUnwrap(model.outgoing.last)
+        let refused = try XCTUnwrap(model.outgoing.first)
         XCTAssertEqual(model.look(of: refused), .failed)
-        _ = await model.retrySend(refused.id)
-        XCTAssertEqual(Set(transport.sendKeys.suffix(3)).count, 1)
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "the timed-out try was replayed under its key")
+        // The Mac's ledger now answers that key with an error, whatever the Bot's state.
+        transport.answerKey(transport.sendKeys[0], with: try serverError(status: 500, code: "internal_error"))
+
+        // The person fixes the Bot and taps Try again.
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        let retried = await model.retrySend(refused.id)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(transport.sendKeys.count, 3)
+        XCTAssertNotEqual(transport.sendKeys[2], transport.sendKeys[0], "Try again is a new request")
+        XCTAssertEqual(model.outgoing.first?.status, .sent(submissionId: "17"), "and it goes through")
     }
 
     func testAGateReleasedBeforeItsRequestKeepsTheRelease() async throws {
@@ -3129,7 +3147,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(Set(transport.sendKeys).count, 1, "Try again replays the key")
     }
 
-    func testARequestCutOffByLeavingThenRefusedAfterARelaunchKeepsItsKey() async throws {
+    func testARequestCutOffByLeavingIsReplayedAfterARelaunchAndARefusalRetriesOnANewKey() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, root) = temporaryStore()
         let transport = FakeBotSessionTransport()
@@ -3149,14 +3167,17 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
         transport.queueSession(.success(try session(.idle, seq: 9)))
         await relaunched.load()
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "the next launch replays the key the cut-off request used")
         let refused = try XCTUnwrap(relaunched.outgoing.first)
         XCTAssertEqual(relaunched.look(of: refused), .failed)
         _ = await relaunched.retrySend(refused.id)
         XCTAssertEqual(transport.sendKeys.count, 3)
-        XCTAssertEqual(Set(transport.sendKeys).count, 1, "Try again replays the key the cut-off request used")
+        XCTAssertNotEqual(transport.sendKeys[2], transport.sendKeys[1], "a refusal is definite: Try again is a new request")
+        XCTAssertEqual(relaunched.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
-    func testARequestThatTimedOutThenRefusedAfterARelaunchKeepsItsKey() async throws {
+    func testARequestThatTimedOutIsReplayedAfterARelaunchAndARefusalRetriesOnANewKey() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, root) = temporaryStore()
         let transport = FakeBotSessionTransport()
@@ -3172,14 +3193,17 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
         transport.queueSession(.success(try session(.idle, seq: 9)))
         await relaunched.load()
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "the next launch replays the key the timed-out request used")
         let refused = try XCTUnwrap(relaunched.outgoing.first)
         XCTAssertEqual(relaunched.look(of: refused), .failed)
         _ = await relaunched.retrySend(refused.id)
         XCTAssertEqual(transport.sendKeys.count, 3)
-        XCTAssertEqual(Set(transport.sendKeys).count, 1, "Try again replays the key the timed-out request used")
+        XCTAssertNotEqual(transport.sendKeys[2], transport.sendKeys[1], "a refusal is definite: Try again is a new request")
+        XCTAssertEqual(relaunched.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
-    func testARequestCutOffByClosingTheChatThenRefusedOnTheNextVisitKeepsItsKey() async throws {
+    func testARequestCutOffByClosingTheChatIsReplayedOnTheNextVisitAndARefusalRetriesOnANewKey() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let cache = AidenBotSessionCache()
         let transport = FakeBotSessionTransport()
@@ -3196,11 +3220,14 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
         transport.queueSession(.success(try session(.idle, seq: 9)))
         await second.load()
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "the next visit replays the key the cut-off request used")
         let refused = try XCTUnwrap(second.outgoing.first)
         XCTAssertEqual(second.look(of: refused), .failed)
         _ = await second.retrySend(refused.id)
         XCTAssertEqual(transport.sendKeys.count, 3)
-        XCTAssertEqual(Set(transport.sendKeys).count, 1, "Try again replays the key the cut-off request used")
+        XCTAssertNotEqual(transport.sendKeys[2], transport.sendKeys[1], "a refusal is definite: Try again is a new request")
+        XCTAssertEqual(second.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
     func testACancelledCallerNeverLeavesItsRequestRunning() async throws {
@@ -3287,6 +3314,37 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
             try await stored(store, key, count: 1)
             XCTAssertEqual(files().filter { $0.pathExtension != "json" }.count, 1, name)
         }
+    }
+
+    func testAnOutboxFileThatCantBeOpenedIsSetAsideAndNeverOverwritten() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, root) = temporaryStore()
+        let transport = FakeBotSessionTransport()
+        let writer = model(transport, key: key, store: store)
+        _ = await writer.send("Plan my week.")
+        try await stored(store, key, count: 1)
+        writer.release()
+        let files = { (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? [])
+            .filter { !$0.hasDirectoryPath } }
+        let file = try XCTUnwrap(files().first)
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer {
+            for unreadable in files() { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: unreadable.path) }
+        }
+
+        let reader = model(transport, key: key, cache: AidenBotSessionCache(), store: store)
+        await reader.load()
+        XCTAssertEqual(reader.restoreNotice, AidenBotSessionCopy.outboxUnrestorable)
+        XCTAssertEqual(reader.outgoing, [])
+        let aside = try XCTUnwrap(files().first { $0.pathExtension != "json" }, "set aside, never deleted")
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: aside.path)[.size] as? Int, size)
+
+        // The chat's next write starts a new file; the one it couldn't read is left as it was.
+        _ = await reader.send("Again")
+        try await stored(store, key, count: 1)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: aside.path)[.size] as? Int, size)
+        XCTAssertEqual(files().filter { $0.pathExtension != "json" }.count, 1)
     }
 
     func testAHungSessionRequestGivesUpInTime() async throws {

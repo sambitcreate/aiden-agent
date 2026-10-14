@@ -283,9 +283,6 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     fileprivate var connectionAttempts = 0
     /// The last failure may have reached the Mac, so Try again keeps the key.
     fileprivate var keepsKey = false
-    /// An earlier attempt went out and ended without an answer (cut off, timed out
-    /// or cancelled): the Mac may hold it, whatever a later attempt says.
-    fileprivate var mayHaveArrived = false
 
     fileprivate var submissionId: String? {
         if case let .sent(id) = status { return id }
@@ -359,15 +356,9 @@ final class AidenBotSessionCache {
     }
 
     /// Stores the outbox when `owner` writes this chat; false when another model does.
-    /// `mustOwn` also refuses a chat nobody holds any more (after an unpair).
     @discardableResult
-    func storeOutbox(
-        _ outbox: [AidenBotOutgoingMessage],
-        for key: AidenBotSessionKey,
-        owner: ObjectIdentifier,
-        mustOwn: Bool = false
-    ) -> Bool {
-        guard owners[key] == owner || (!mustOwn && owners[key] == nil) else { return false }
+    func storeOutbox(_ outbox: [AidenBotOutgoingMessage], for key: AidenBotSessionKey, owner: ObjectIdentifier) -> Bool {
+        guard owners[key] == nil || owners[key] == owner else { return false }
         owners[key] = owner
         outboxes[key] = outbox.isEmpty ? nil : outbox
         return true
@@ -420,7 +411,18 @@ actor AidenBotOutboxStore {
             }
         }
 
-        func take(_ key: AidenBotSessionKey) -> Write? { lock.withLock { writes.removeValue(forKey: key) } }
+        /// The waiting write, if any. A pairing with nothing left waiting is forgotten
+        /// here; the store's own record of what it wrote covers it from now on.
+        func take(_ key: AidenBotSessionKey) -> Write? {
+            lock.withLock {
+                let write = writes.removeValue(forKey: key)
+                if !writes.keys.contains(where: { $0.instanceId == key.instanceId && $0.deviceId == key.deviceId }) {
+                    pairings[key.instanceId]?.remove(key.deviceId)
+                    if pairings[key.instanceId]?.isEmpty == true { pairings[key.instanceId] = nil }
+                }
+                return write
+            }
+        }
 
         /// Drops this Mac's waiting writes; returns the pairings they were handed in for.
         func drop(instanceId: String) -> Set<String> {
@@ -435,6 +437,8 @@ actor AidenBotOutboxStore {
     /// Pairings seen per Mac, and those an unpair purged: a late write never recreates their files.
     private var knownDevices: [String: Set<String>] = [:]
     private var revokedDevices: Set<String> = []
+    /// Chats whose unreadable file couldn't be moved aside: it is never written over.
+    private var stuckFiles: Set<AidenBotSessionKey> = []
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "sbtbiswas.AidenOnTheGo", category: "BotOutbox")
 
     private struct Record: Codable {
@@ -451,7 +455,6 @@ actor AidenBotOutboxStore {
         let connectionAttempts: Int
         let keepsKey: Bool
         /// Absent in records written before fix round 4.
-        let mayHaveArrived: Bool?
         let foreignSubmissionIDs: [String]?
     }
 
@@ -505,18 +508,28 @@ actor AidenBotOutboxStore {
     func restore(_ key: AidenBotSessionKey) -> (messages: [AidenBotOutgoingMessage], unreadable: Bool) {
         knownDevices[key.instanceId, default: []].insert(key.deviceId)
         let url = fileURL(key)
-        guard let data = try? Data(contentsOf: url) else { return ([], false) }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return ([], false)
+        } catch {
+            // There, but it can't be opened: it is set aside unread, never written over.
+            Self.log.error("event=outbox_unopenable outcome=set_aside")
+            setAside(url, for: key, keepingOriginal: false)
+            return ([], true)
+        }
         guard data.count <= 2 * Self.maxBytes else {
             // Never written this large.
             Self.log.error("event=outbox_oversized outcome=set_aside")
-            setAside(url, keepingOriginal: false)
+            setAside(url, for: key, keepingOriginal: false)
             return ([], true)
         }
         guard let envelope = try? JSONDecoder().decode(ReadEnvelope.self, from: data),
               envelope.version == 1, envelope.instanceId == key.instanceId,
               envelope.deviceId == key.deviceId, envelope.botID == key.botID else {
             Self.log.error("event=outbox_unreadable outcome=set_aside")
-            setAside(url, keepingOriginal: false)
+            setAside(url, for: key, keepingOriginal: false)
             return ([], true)
         }
         let readable = envelope.messages.compactMap(\.record)
@@ -524,7 +537,7 @@ actor AidenBotOutboxStore {
         if lostSome {
             // The readable ones are written back; the file as it was is kept beside them.
             Self.log.error("event=outbox_record_unreadable outcome=set_aside count=\(envelope.messages.count - readable.count, privacy: .public)")
-            setAside(url, keepingOriginal: true)
+            setAside(url, for: key, keepingOriginal: true)
         }
         let cutoff = now().addingTimeInterval(-Self.lifetime)
         var changed = readable.count != envelope.messages.count
@@ -548,7 +561,6 @@ actor AidenBotOutboxStore {
             message.baseline = Set(record.baseline)
             message.connectionAttempts = record.connectionAttempts
             message.keepsKey = record.keepsKey
-            message.mayHaveArrived = record.mayHaveArrived ?? false
             message.foreignSubmissionIDs = Set(record.foreignSubmissionIDs ?? [])
             if expired, message.status == .sending {
                 message.expire()
@@ -561,7 +573,8 @@ actor AidenBotOutboxStore {
     }
 
     /// Moves (or copies) a file this build can't fully read out of the chat's way.
-    private func setAside(_ url: URL, keepingOriginal: Bool) {
+    /// If it can't be moved, the chat never writes over it.
+    private func setAside(_ url: URL, for key: AidenBotSessionKey, keepingOriginal: Bool) {
         let aside = url.deletingPathExtension().appendingPathExtension("\(UUID().uuidString).unreadable")
         do {
             if keepingOriginal {
@@ -571,6 +584,7 @@ actor AidenBotOutboxStore {
             }
         } catch {
             Self.log.error("event=outbox_set_aside outcome=failed")
+            if !keepingOriginal { stuckFiles.insert(key) }
         }
     }
 
@@ -584,6 +598,7 @@ actor AidenBotOutboxStore {
 
     private func drain(_ key: AidenBotSessionKey) {
         guard let write = pending.take(key) else { return }
+        knownDevices[key.instanceId, default: []].insert(key.deviceId)
         switch write {
         case .remove:
             remove(key)
@@ -611,10 +626,13 @@ actor AidenBotOutboxStore {
                 baseline: Array(message.baseline),
                 connectionAttempts: message.connectionAttempts,
                 keepsKey: message.keepsKey,
-                mayHaveArrived: message.mayHaveArrived,
                 // The entry it waited on goes with it too, as adopting it in memory does.
                 foreignSubmissionIDs: message.foreignSubmissionIDs.union(message.echoSubmissionID.map { [$0] } ?? []).sorted()
             )
+        }
+        guard !stuckFiles.contains(key) else {
+            Self.log.error("event=outbox_write outcome=skipped_unread_file")
+            return
         }
         if records.isEmpty {
             remove(key)
@@ -639,6 +657,7 @@ actor AidenBotOutboxStore {
         for device in (knownDevices[instanceId] ?? []).union(waiting) {
             revokedDevices.insert(Self.pairing(AidenBotSessionKey(instanceId: instanceId, deviceId: device, botID: "")))
         }
+        stuckFiles = stuckFiles.filter { $0.instanceId != instanceId }
         try? fileManager.removeItem(at: root.appending(path: digest(instanceId), directoryHint: .isDirectory))
     }
 
@@ -904,9 +923,6 @@ final class AidenBotSessionModel {
     /// stale, and one still unsent after 24 hours says it couldn't be sent.
     private static func adopted(_ message: AidenBotOutgoingMessage, now: Date) -> AidenBotOutgoingMessage {
         var message = message
-        // Frozen and still unsettled: an attempt went out with no answer this
-        // visit saw (cut off, timed out, or still on its way), so the Mac may hold it.
-        if message.status == .sending, message.request != nil { message.mayHaveArrived = true }
         message.deferred = false
         message.dropEcho()
         message.queuedID = nil
@@ -918,11 +934,10 @@ final class AidenBotSessionModel {
         now.timeIntervalSince(message.createdAt) >= AidenBotOutboxStore.lifetime
     }
 
-    /// The chat closed: sending and retry timers stop at once, and the unsent
-    /// messages stay for the next visit. What the cut-off request leaves behind
-    /// (it may have arrived) is still written, unless a newer visit holds the
-    /// chat. The store's own writer finishes a write already handed to it, so
-    /// the next launch sees the latest outbox.
+    /// The chat closed: sending and retry timers stop at once, nothing more is
+    /// written, and the unsent messages stay for the next visit. The store's own
+    /// writer finishes a write already handed to it, so the next launch sees
+    /// the latest outbox.
     func release() {
         released = true
         backoffTask?.cancel()
@@ -1269,13 +1284,11 @@ final class AidenBotSessionModel {
     // MARK: The outbox
 
     /// Writes the outbox to the cache and disk while this model owns the chat;
-    /// an older model left open never overwrites a newer one's messages. Once
-    /// released it still records what its cut-off request left (it may have
-    /// arrived), but only while it still holds the chat. The store keeps one
-    /// ordered writer per chat.
+    /// an older model left open never overwrites a newer one's messages. The
+    /// store keeps one ordered writer per chat.
     private func outboxDidChange() {
-        guard let cacheKey,
-              cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self), mustOwn: released) else { return }
+        guard let cacheKey, !released,
+              cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
         outboxStore?.submit(.save(outbox), for: cacheKey)
     }
 
@@ -1398,9 +1411,6 @@ final class AidenBotSessionModel {
             // A closed chat, or a cancelled send (leaving the chat), leaves the message
             // as it was, with no try spent, for the next visit or connection. The
             // cancelled request may still have arrived.
-            if let current = outbox.firstIndex(where: { $0.key == key }), released || error is CancellationError || Task.isCancelled {
-                outbox[current].mayHaveArrived = true
-            }
             guard !released, !(error is CancellationError), !Task.isCancelled,
                   let current = outbox.firstIndex(where: { $0.key == key }) else { return }
             if Self.isAccessLoss(error) {
@@ -1408,15 +1418,15 @@ final class AidenBotSessionModel {
                 return
             }
             guard Self.messageFailureIsAmbiguous(error) else {
-                // Refused outright. Unless an earlier attempt may have arrived, the
-                // Mac never took it, and Try again is a new request.
+                // Refused outright (R22): the Mac answered this key without running it,
+                // and replays that answer for as long as it keeps the key, so Try again
+                // is a new request with a new key, as on Android.
                 outbox[current].status = .failed
-                outbox[current].keepsKey = outbox[current].keepsKey || outbox[current].mayHaveArrived
+                outbox[current].keepsKey = false
                 releaseEcho(at: current)
                 return
             }
             outbox[current].keepsKey = true
-            outbox[current].mayHaveArrived = true
             outbox[current].connectionAttempts += 1
             let attempts = outbox[current].connectionAttempts
             if attempts < Self.maxConnectionAttempts {
@@ -1636,8 +1646,7 @@ final class AidenBotSessionModel {
             request: outbox[index].request,
             baseline: outbox[index].baseline,
             foreignSubmissionIDs: outbox[index].foreignSubmissionIDs,
-            keepsKey: outbox[index].keepsKey,
-            mayHaveArrived: outbox[index].keepsKey && outbox[index].mayHaveArrived
+            keepsKey: outbox[index].keepsKey
         )
         await runFlush()
         return true
