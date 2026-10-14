@@ -724,6 +724,38 @@ test("Files opens a requested file only for its own Bot, once, and not again aft
   assert.equal(reads(), 2);
 });
 
+test("a file the Bot wrote is a chip that opens the panel's Files tab on that file, again after going back", async () => {
+  await mountBotChat({
+    ...FILE_HANDLERS,
+    "bots:live:subscribe": () =>
+      chatSnapshot([
+        { id: "u1", type: "user", text: "Write my grocery list", imageCount: 0 },
+        { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
+        { id: "a1", type: "assistant", text: "Done.", toolCalls: [], stopReason: "stop" },
+      ]),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
+  assert.equal(botPanel().getAttribute("data-state"), "open");
+  assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
+  assert.equal((await within(botPanel()).findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
+  fireEvent.click(within(botPanel()).getByRole("button", { name: "All files" }));
+  await within(botPanel()).findByRole("list", { name: "Files" });
+  fireEvent.click(screen.getByRole("button", { name: "Open groceries.md" }));
+  assert.ok(await within(botPanel()).findByLabelText("Contents of lists/groceries.md"), "the same chip selects its file again");
+  assert.equal(screen.queryByRole("dialog"), null, "no Files dialog any more");
+});
+
+test("Files and Memory in the chat's ••• menu open the panel on that tab", async () => {
+  await mountBotChat({ ...FILE_HANDLERS, "bots:memory:get": () => memoryView([]) });
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
+  assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
+  assert.ok(await within(botPanel()).findByRole("button", { name: "groceries.md" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Memory" }));
+  assert.equal(panelTab("Memory").getAttribute("aria-selected"), "true");
+});
+
 function memoryView(entries: { id: string; text: string }[]): BotMemoryView {
   const store = (list: { id: string; text: string }[], limitChars: number) => ({
     entries: list,

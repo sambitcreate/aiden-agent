@@ -1,6 +1,6 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
@@ -9,6 +9,7 @@ import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
@@ -563,53 +564,9 @@ test("a renderer reload mid-reply shows the partial reply from the fresh snapsho
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });
 
-const FILE_HANDLERS = {
-  "bots:files:list": () => ({
-    entries: [
-      { path: "lists", name: "lists", parentPath: "", depth: 0, kind: "directory" },
-      { path: "lists/groceries.md", name: "groceries.md", parentPath: "lists", depth: 1, kind: "file" },
-    ],
-    truncated: false,
-    skippedDirectories: 0,
-  }),
-  "bots:files:read": (_botId: unknown, path: unknown) => ({
-    path,
-    content: "eggs\nmilk",
-    size: 9,
-    modifiedAt: 1,
-    version: "v1",
-  }),
-};
-
 function toolStep(id: string, text: string): BotTranscriptEntry {
   return { id, type: "assistant", text, toolCalls: [{ id: `${id}-call`, name: "web_search", kind: "searching", label: "Searched the web" }], stopReason: "toolUse" };
 }
-
-test("Files in the ••• menu lists the Bot's folder and opens a file", async () => {
-  const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), ...FILE_HANDLERS });
-  fireEvent.keyDown(screen.getByRole("button", { name: "More for Planner" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
-  fireEvent.click(await screen.findByRole("button", { name: "groceries.md" }));
-  const contents = await screen.findByLabelText("Contents of lists/groceries.md");
-  assert.equal(contents.textContent, "eggs\nmilk");
-  assert.deepEqual(calls.find((call) => call.channel === "bots:files:read")?.args, ["bot-1", "lists/groceries.md"]);
-});
-
-test("a file the Bot wrote shows as a chip that opens that file", async () => {
-  await mountChat({
-    "bots:live:subscribe": () =>
-      snapshot({
-        entries: [
-          userEntry("u1", "Write my grocery list"),
-          { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
-          assistantEntry("a1", "Done."),
-        ],
-      }),
-    ...FILE_HANDLERS,
-  });
-  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
-  assert.equal((await screen.findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
-});
 
 test("each round's narration is its own bubble before the answer", async () => {
   await mountChat({
@@ -825,7 +782,7 @@ function proposalEntry(status: "pending" | "accepted" | "dismissed", routineId?:
   return { id: "p1", type: "routine_proposal", proposal: CHECK_IN_PROPOSAL, status, ...(routineId ? { routineId } : {}) };
 }
 
-test("Memory updated is a quiet caption, that opens this Bot's Memory page", async () => {
+test("Memory updated is a quiet caption, outside Updates, that opens the panel's Memory tab", async () => {
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -844,8 +801,9 @@ test("Memory updated is a quiet caption, that opens this Bot's Memory page", asy
   const captions = screen.getAllByRole("button", { name: "Memory updated. Open Memory" });
   assert.equal(captions.length, 1, "back-to-back saves read as one line");
   fireEvent.click(captions[0]!);
-  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
-  assert.equal((router.state.location.search as { page?: string }).page, "memory");
+  const panel = screen.getByRole("complementary", { name: "Bot panel" });
+  assert.equal(within(panel).getByRole("tab", { name: "Memory" }).getAttribute("aria-selected"), "true");
+  assert.equal(router.state.location.pathname, "/bots/bot-1/chat", "the chat stays open beside it");
 });
 
 test("a routine proposal shows its name, schedule and prompt, and Add routine accepts it once", async () => {

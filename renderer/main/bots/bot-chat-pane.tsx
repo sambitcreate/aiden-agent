@@ -33,8 +33,8 @@ import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
 import { BotActivityRecap } from "./bot-activity-recap";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
-import { BotFilesDialog } from "./bot-files-dialog";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
+import { useBotPanelActions } from "./bot-panel-context";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
@@ -252,7 +252,7 @@ export function BotModelErrorCard({
   );
 }
 
-/** A file the Bot wrote: a chip that opens Files at that file. */
+/** A file the Bot wrote: a chip that opens the panel's Files tab at that file. */
 function BotFileChip({ path, operation, onOpen }: { path: string; operation: "written" | "edited"; onOpen(): void }) {
   const name = path.split("/").pop() || path;
   return (
@@ -273,7 +273,7 @@ function BotFileChip({ path, operation, onOpen }: { path: string; operation: "wr
   );
 }
 
-/** "Memory updated": a quiet, centred caption that opens Profile → Memory. */
+/** "Memory updated": a quiet, centred caption that opens the panel's Memory tab. */
 function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   return (
     <div className="flex justify-center py-1">
@@ -474,7 +474,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const bot = useBot(botId);
   const live = useSharedBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
-  const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
+  const panel = useBotPanelActions();
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
   const [pausedBusy, setPausedBusy] = React.useState(false);
@@ -491,7 +491,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
   const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
-  const openMemory = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "memory" } });
+  // Memory, Files and Routines live in the side panel beside the chat (spec §8).
+  const openMemory = () => panel.show("memory");
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
@@ -519,7 +520,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             <BotChatActions
               bot={current}
               onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
-              onOpenFiles={() => setFiles({ open: true, path: null })}
+              onOpenFiles={() => panel.show("files")}
               onOpenMemory={openMemory}
               onOpenAdvanced={openAdvanced}
               onDelete={() => setDeleteOpen(true)}
@@ -545,16 +546,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     >
       {body}
       {current ? (
-        <>
-          <BotDeleteDialog bot={current} open={deleteOpen} onOpenChange={setDeleteOpen} />
-          <BotFilesDialog
-            botId={current.id}
-            botName={current.name}
-            open={files.open}
-            initialPath={files.path}
-            onOpenChange={(open) => setFiles((value) => ({ ...value, open }))}
-          />
-        </>
+        <BotDeleteDialog bot={current} open={deleteOpen} onOpenChange={setDeleteOpen} />
       ) : null}
       {connectionSetup.dialog}
     </ScrollArea>
@@ -822,7 +814,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
-          onOpenFile={(path) => setFiles({ open: true, path })}
+          onOpenFile={(path) => panel.show("files", { path, botId })}
           onReply={reply}
           onRetry={(text) => void retry(text)}
           onOpenMemory={openMemory}
