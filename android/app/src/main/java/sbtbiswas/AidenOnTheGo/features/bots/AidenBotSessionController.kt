@@ -437,6 +437,8 @@ class AidenBotSessionController(
     private val unheldExpired = mutableSetOf<UUID>()
     /** What a previous launch left on disk has been read (or there is nothing to read): deliveries wait for it. */
     private var restored: Boolean
+    /** Bumped by every access-loss purge: a disk restore that started before it is stale and is dropped, not merged. */
+    private var purgeGeneration = 0
     private var released = false
     private var isFlushing = false
     private val inFlight = mutableSetOf<String>()
@@ -521,6 +523,7 @@ class AidenBotSessionController(
         if (restored || restoreJob?.isActive == true) return
         val key = sessionKey ?: return
         val store = store ?: return
+        val generation = purgeGeneration
         restoreJob = scope.launch {
             val restore = try {
                 store.restoreOutbox(key, this@AidenBotSessionController)
@@ -529,6 +532,12 @@ class AidenBotSessionController(
             } catch (_: Exception) {
                 // The read itself failed: nothing came back, and the person hears so.
                 AidenBotOutboxRestore(emptyList(), unreadable = true)
+            }
+            // Access ended while the disk was read: what came back is from before the purge. Merging it
+            // would bring the purged text back into the outbox and onto disk, so it is dropped.
+            if (generation != purgeGeneration) {
+                wakeOutbox()
+                return@launch
             }
             val now = nowMs()
             val stored = restore.messages
@@ -1138,6 +1147,10 @@ class AidenBotSessionController(
     /** Access ended: nothing unsent is kept for this chat, in memory or on disk, and the person is told. */
     private fun purgeForAccessLoss() {
         val hadUnsent = _state.value.outbox.any { it.status != AidenBotOutgoingStatus.SENT }
+        // A disk restore still under way is stale from here on, and the chat has nothing on disk left to wait for.
+        purgeGeneration += 1
+        restoreJob?.cancel()
+        restored = true
         backoffJob?.cancel()
         setOutbox(emptyList())
         sessionKey?.let { store?.purge(it) }

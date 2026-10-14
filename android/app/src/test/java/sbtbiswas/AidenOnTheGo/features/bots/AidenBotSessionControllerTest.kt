@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -1437,6 +1438,72 @@ class AidenBotSessionControllerTest {
             assertTrue("nothing unsent stays on disk after $status", root.walkTopDown().none { it.isFile })
             assertNull(sessions.transcript(chatKey))
         }
+    }
+
+    // PR #479 review: a disk restore whose result lands after an access-loss purge must not bring the purged text back.
+    @Test
+    fun aRestoreThatLandsAfterAnAccessLossPurgeBringsBackNothingUnsent() = runTest {
+        val root = tempFolder.newFolder()
+        val offline = object : AidenBotSessionTransport by FakeTransport(runningSession) {
+            override suspend fun session(botId: String): AidenBotSession = throw IOException("offline")
+        }
+        val before = AidenBotSessionController(
+            runningSession.botId, offline, backgroundScope, sessionKey = chatKey, store = store(root, { started }), nowMs = { started }
+        )
+        assertTrue(before.send("Plan lunch"))
+        runCurrent()
+        before.stopFollowing()
+        assertTrue("the unsent message is on disk", root.walkTopDown().any { it.isFile })
+
+        // A fresh controller and store: the disk read waits on [io], and the session read on [reply].
+        val io = ArrayDeque<Runnable>()
+        val fresh = AidenBotSessionStore(root, io = { io.addLast(it) }, nowMs = { started })
+        val reply = CompletableDeferred<AidenBotSession>()
+        val gated = object : AidenBotSessionTransport by FakeTransport(runningSession) {
+            override suspend fun session(botId: String): AidenBotSession = reply.await()
+        }
+        val controller = AidenBotSessionController(
+            runningSession.botId, gated, backgroundScope, sessionKey = chatKey, store = fresh, nowMs = { started }
+        )
+        backgroundScope.launch { controller.refetch() }
+        runCurrent()
+        assertEquals("the restore is queued behind the disk", 1, io.size)
+
+        // The Mac answers 403, so its purge is queued on the main thread first. Then the disk read
+        // finishes, and its result queues behind that purge.
+        reply.completeExceptionally(serverError(403, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED))
+        while (io.isNotEmpty()) io.removeFirst().run()
+        runCurrent()
+        while (io.isNotEmpty()) io.removeFirst().run()
+        runCurrent()
+
+        assertTrue(controller.state.value.accessLost)
+        assertTrue("nothing unsent is shown", controller.state.value.outgoing.isEmpty())
+        assertTrue("nothing unsent is kept on disk", root.walkTopDown().none { it.isFile })
+    }
+
+    // PR #479 review: a purge leaves the chat read and empty, so a restore queued before it reads and writes nothing.
+    @Test
+    fun aRestoreQueuedBeforeAStorePurgeReadsNothingBackAndLeavesNoFile() = runTest {
+        val root = tempFolder.newFolder()
+        val owner = Any()
+        val seeded = store(root, { started })
+        seeded.adoptOutbox(chatKey, owner)
+        seeded.restoreOutbox(chatKey, owner)
+        seeded.storeOutbox(chatKey, owner, listOf(AidenBotOutgoingMessage.create("Plan lunch", null, false, null, started)))
+        assertTrue(root.walkTopDown().any { it.isFile })
+
+        val io = ArrayDeque<Runnable>()
+        val later = AidenBotSessionStore(root, io = { io.addLast(it) }, nowMs = { started })
+        later.adoptOutbox(chatKey, owner)
+        val restore = async { later.restoreOutbox(chatKey, owner) }
+        runCurrent()
+        later.purge(chatKey)
+        while (io.isNotEmpty()) io.removeFirst().run()
+        runCurrent()
+
+        assertTrue(restore.await().messages.isEmpty())
+        assertTrue("no file survives the purge", root.walkTopDown().none { it.isFile })
     }
 
     @Test
