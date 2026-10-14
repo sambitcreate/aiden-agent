@@ -144,6 +144,7 @@ struct AidenBotAdvancedView: View {
             }
             modelSection(catalog)
             accessSection(catalog)
+            chatActivitySection
             if draft?.usesFullAccess == false {
                 optionSection(title: "Connections", options: catalog.connections, keyPath: \.connectionIDs)
                 optionSection(title: "Skills", options: catalog.skills, keyPath: \.skillIDs)
@@ -208,6 +209,39 @@ struct AidenBotAdvancedView: View {
                 Text("It can use everything your Mac allows. Your Mac still asks before risky steps.")
             } else {
                 Text("Turn on only what this Bot needs.")
+            }
+        }
+    }
+
+    /// Revision 30: hidden unless the Mac announces `bot-activity-v1` and this phone holds `bot:activity`.
+    @ViewBuilder
+    private var chatActivitySection: some View {
+        if coordinator.server?.supportsBotActivity == true, let baselineBot {
+            Section {
+                NavigationLink {
+                    AidenBotChatActivityView(
+                        bot: baselineBot,
+                        canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                        model: AidenBotChatActivityModel(bot: baselineBot, save: { next, revision in
+                            let context = try coordinator.requestContext()
+                            let client = try coordinator.remoteClient(for: context)
+                            return try await client.updateBotIdentity(
+                                id: baselineBot.id,
+                                revision: revision,
+                                patch: try AidenBotIdentityPatch(chatActivity: next)
+                            )
+                        }, onSaved: { saved in
+                            // Advanced's own Save, and the screens behind it, move to the newest revision.
+                            self.baselineBot = saved
+                            onSaved(saved)
+                        })
+                    )
+                } label: {
+                    LabeledContent(AidenBotChatActivityCopy.title, value: AidenBotChatActivityCopy.summary(baselineBot.chatActivity))
+                }
+                .disabled(isDirty)
+            } footer: {
+                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your Mac while it works.")
             }
         }
     }
@@ -638,5 +672,338 @@ struct AidenBotModelListView: View {
             }
         }
         .disabled(!usable)
+    }
+}
+
+// MARK: - Chat activity (spec §7, contract revision 30)
+
+/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android.
+enum AidenBotChatActivityCopy {
+    static let title = "Chat activity"
+    static let levelTitle = "How much to show"
+    static let wordingTitle = "What the status line says"
+    static let phonesTitle = "On iPhone and Android"
+    static let phonesFooter = "Always just the line, with the same words."
+    static let recommended = "Recommended"
+    static let saveFailed = "Aiden couldn’t save that choice."
+
+    static func label(_ level: AidenBotChatActivityLevel) -> String {
+        switch level {
+        case .quiet: "Quiet"
+        case .summary: "Summary"
+        case .detailed: "Detailed"
+        }
+    }
+
+    static func detail(_ level: AidenBotChatActivityLevel) -> String {
+        switch level {
+        case .quiet: "One line that says what it’s doing."
+        case .summary: "Adds a short recap above each reply."
+        case .detailed: "Also shows its last few steps while it works."
+        }
+    }
+
+    static func label(_ wording: AidenBotChatActivityWording) -> String {
+        switch wording {
+        case .follows: "Follows the work"
+        case .thinking: "Always “Thinking”"
+        }
+    }
+
+    static func detail(_ wording: AidenBotChatActivityWording) -> String {
+        switch wording {
+        case .follows: "Says what it’s doing, like Reading or Searching the web."
+        case .thinking: "One calm word, whatever it’s doing."
+        }
+    }
+
+    /// Advanced's trailing value: "Quiet · Follows the work".
+    static func summary(_ value: AidenBotChatActivity?) -> String {
+        let resolved = value ?? .standard
+        return "\(label(resolved.level)) · \(label(resolved.wording))"
+    }
+
+    static func description(botName: String) -> String {
+        "What you see in \(botName)’s chat on your Mac while it works. Changes save as you pick them."
+    }
+}
+
+/// One scripted turn, as each level shows it on the Mac: think, read, search, edit, reply.
+enum AidenBotChatActivityPreview {
+    struct Frame: Equatable {
+        /// The line's phase, or nil on the reply frame.
+        let phase: String?
+        /// Step rows: Detailed while live, or the open recap after the reply.
+        let steps: [String]
+        let recap: String?
+        let recapOpen: Bool
+    }
+
+    static let durations: [TimeInterval] = [1.4, 1.6, 1.6, 1.4, 2.8]
+    /// Reduce Motion's still frame: mid-turn, with the line showing.
+    static let stillFrame = 2
+    static let prompt = "Plan dinners for this week"
+    static let reply = "Here’s a plan for the week."
+    static let recap = "Worked for 18s · read 1 file, searched the web, edited 1 file"
+
+    private static let phases: [String?] = ["thinking", "reading", "searching", "editing", nil]
+    private static let stepLabels = ["Read 1 file", "Searched the web", "Edited 1 file"]
+
+    static func frameIndex(elapsed: TimeInterval) -> Int {
+        let total = durations.reduce(0, +)
+        var time = elapsed.truncatingRemainder(dividingBy: total)
+        if time < 0 { time += total }
+        for (index, duration) in durations.enumerated() {
+            if time < duration { return index }
+            time -= duration
+        }
+        return durations.count - 1
+    }
+
+    static func frame(index: Int, level: AidenBotChatActivityLevel) -> Frame {
+        let clamped = min(max(index, 0), phases.count - 1)
+        if let phase = phases[clamped] {
+            return Frame(phase: phase, steps: level == .detailed ? Array(stepLabels.prefix(clamped)) : [], recap: nil, recapOpen: false)
+        }
+        switch level {
+        case .quiet: return Frame(phase: nil, steps: [], recap: nil, recapOpen: false)
+        case .summary: return Frame(phase: nil, steps: [], recap: recap, recapOpen: false)
+        case .detailed: return Frame(phase: nil, steps: stepLabels, recap: recap, recapOpen: true)
+        }
+    }
+}
+
+/// Applies each pick at once and saves it with no Save button, like the Mac page.
+/// A failed save returns to the last choice the Mac confirmed. A pick made while a
+/// save is in flight shows at once and goes out next, on the revision that save returned.
+@MainActor
+@Observable
+final class AidenBotChatActivityModel {
+    /// What the page shows: the last pick, saved or not.
+    private(set) var value: AidenBotChatActivity
+    private(set) var isSaving = false
+    var errorMessage: String?
+
+    @ObservationIgnored private var saved: AidenBotChatActivity
+    @ObservationIgnored private var pending: AidenBotChatActivity?
+    @ObservationIgnored private var revision: String
+    @ObservationIgnored private let save: @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail
+    @ObservationIgnored private let onSaved: @MainActor (AidenBotDetail) -> Void
+
+    init(
+        bot: AidenBotDetail,
+        save: @escaping @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail,
+        onSaved: @escaping @MainActor (AidenBotDetail) -> Void
+    ) {
+        let current = bot.chatActivity ?? .standard
+        value = current
+        saved = current
+        revision = bot.revision
+        self.save = save
+        self.onSaved = onSaved
+    }
+
+    func pick(_ next: AidenBotChatActivity) async {
+        guard next != value else { return }
+        value = next
+        errorMessage = nil
+        if isSaving {
+            pending = next
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        var target = next
+        while true {
+            do {
+                let detail = try await save(target, revision)
+                revision = detail.revision
+                saved = detail.chatActivity ?? target
+                onSaved(detail)
+            } catch {
+                pending = nil
+                value = saved
+                if !(error is CancellationError) { errorMessage = AidenBotChatActivityCopy.saveFailed }
+                return
+            }
+            guard let following = pending else { break }
+            pending = nil
+            if following == saved { break }
+            target = following
+        }
+        value = saved
+    }
+}
+
+struct AidenBotChatActivityView: View {
+    let botName: String
+    let canWrite: Bool
+    @State private var model: AidenBotChatActivityModel
+    @Environment(\.aidenPalette) private var palette
+
+    init(bot: AidenBotDetail, canWrite: Bool, model: AidenBotChatActivityModel) {
+        botName = bot.name
+        self.canWrite = canWrite
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        Form {
+            if !canWrite {
+                Section {
+                    Label("This phone can look but not change Bots.", systemImage: "lock.fill")
+                        .foregroundStyle(palette.secondary)
+                }
+            }
+            Section {
+                Text(AidenBotChatActivityCopy.description(botName: botName))
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .listRowBackground(palette.raised)
+            }
+            Section(AidenBotChatActivityCopy.levelTitle) {
+                ForEach(AidenBotChatActivityLevel.allCases, id: \.self) { level in
+                    choiceRow(
+                        title: AidenBotChatActivityCopy.label(level),
+                        detail: AidenBotChatActivityCopy.detail(level),
+                        recommended: level == .quiet,
+                        selected: model.value.level == level,
+                        preview: AidenBotChatActivityPreviewView(level: level, wording: model.value.wording)
+                    ) { Task { await model.pick(AidenBotChatActivity(level: level, wording: model.value.wording)) } }
+                }
+            }
+            Section(AidenBotChatActivityCopy.wordingTitle) {
+                ForEach(AidenBotChatActivityWording.allCases, id: \.self) { wording in
+                    choiceRow(
+                        title: AidenBotChatActivityCopy.label(wording),
+                        detail: AidenBotChatActivityCopy.detail(wording),
+                        recommended: false,
+                        selected: model.value.wording == wording,
+                        preview: AidenBotChatActivityPreviewView(level: .quiet, wording: wording)
+                    ) { Task { await model.pick(AidenBotChatActivity(level: model.value.level, wording: wording)) } }
+                }
+            }
+            Section {
+                AidenBotChatActivityPreviewView(level: .quiet, wording: model.value.wording)
+                    .listRowBackground(palette.raised)
+            } header: {
+                Text(AidenBotChatActivityCopy.phonesTitle)
+            } footer: {
+                Text(AidenBotChatActivityCopy.phonesFooter)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
+        .navigationTitle(AidenBotChatActivityCopy.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .disabled(!canWrite)
+        .alert(
+            "Couldn’t Save",
+            isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? AidenBotChatActivityCopy.saveFailed)
+        }
+    }
+
+    /// A radio row: the radio and the row's background show the choice; there is no border.
+    private func choiceRow(
+        title: String,
+        detail: String,
+        recommended: Bool,
+        selected: Bool,
+        preview: AidenBotChatActivityPreviewView,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? palette.accent : palette.secondary)
+                    .font(.title3)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(title).foregroundStyle(palette.foreground)
+                        if recommended {
+                            Text(AidenBotChatActivityCopy.recommended)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(palette.secondary)
+                        }
+                    }
+                    Text(detail).font(.footnote).foregroundStyle(palette.secondary)
+                    preview
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(
+            ZStack {
+                palette.raised
+                if selected { palette.accent.opacity(0.12) }
+            }
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(detail)
+    }
+}
+
+/// A small chat replaying one scripted turn. It holds its still frame under Reduce Motion.
+struct AidenBotChatActivityPreviewView: View {
+    let level: AidenBotChatActivityLevel
+    let wording: AidenBotChatActivityWording
+
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.aidenReduceMotion) private var appReduceMotion
+
+    private var still: Bool { systemReduceMotion || appReduceMotion }
+
+    var body: some View {
+        // One shared clock, so every preview on the page is on the same step of the turn.
+        TimelineView(.animation(minimumInterval: 0.2, paused: still)) { context in
+            let index = still
+                ? AidenBotChatActivityPreview.stillFrame
+                : AidenBotChatActivityPreview.frameIndex(elapsed: context.date.timeIntervalSinceReferenceDate)
+            content(AidenBotChatActivityPreview.frame(index: index, level: level))
+        }
+        .padding(10)
+        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func content(_ frame: AidenBotChatActivityPreview.Frame) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(AidenBotChatActivityPreview.prompt)
+                .font(.caption)
+                .foregroundStyle(palette.foreground)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            if let recap = frame.recap {
+                Label(recap, systemImage: frame.recapOpen ? "chevron.down" : "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary)
+            }
+            ForEach(frame.steps, id: \.self) { step in
+                Text(step).font(.caption2).foregroundStyle(palette.secondary).padding(.leading, 14)
+            }
+            if let phase = frame.phase {
+                let shown = AidenBotActivityPhase.display(phase: phase, wording: wording, app: nil)
+                HStack(spacing: 6) {
+                    AidenActivityMark(mark: shown.mark, size: 14, active: !still, color: palette.secondary)
+                    Text(shown.word).font(.caption)
+                }
+                .foregroundStyle(palette.secondary)
+            } else {
+                Text(AidenBotChatActivityPreview.reply).font(.caption).foregroundStyle(palette.foreground)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
