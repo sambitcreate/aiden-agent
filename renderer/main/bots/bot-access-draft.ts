@@ -11,11 +11,6 @@ import {
 /** One model selection shared by Full and Custom access, as on iOS. */
 export type BotAccessDraft = BotEditorAccessDraft;
 
-export interface BotModelChoice {
-  providerId: string;
-  modelId: string;
-}
-
 export function botFullAccessAccepted(catalog: BotCapabilityCatalog): boolean {
   return catalog.notice.requiresAcknowledgement === false
     && catalog.notice.acceptedDecision === "continue_full";

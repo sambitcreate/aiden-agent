@@ -44,16 +44,20 @@ export function BotChatNamePill({
   );
 }
 
-/** The action side of a Bot chat: one ••• menu with Profile, Files, and Delete Bot. */
+/** The action side of a Bot chat: one ••• menu with Profile, Files, Memory, Advanced and Delete Bot. */
 export function BotChatActions({
   bot,
   onOpenProfile,
   onOpenFiles,
+  onOpenMemory,
+  onOpenAdvanced,
   onDelete,
 }: {
   bot: Pick<BotDefinition, "name">;
   onOpenProfile(): void;
   onOpenFiles?(): void;
+  onOpenMemory?(): void;
+  onOpenAdvanced?(): void;
   onDelete(): void;
 }) {
   return (
@@ -66,6 +70,8 @@ export function BotChatActions({
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onOpenProfile}>Profile</DropdownMenuItem>
         {onOpenFiles ? <DropdownMenuItem onSelect={onOpenFiles}>Files</DropdownMenuItem> : null}
+        {onOpenMemory ? <DropdownMenuItem onSelect={onOpenMemory}>Memory</DropdownMenuItem> : null}
+        {onOpenAdvanced ? <DropdownMenuItem onSelect={onOpenAdvanced}>Advanced</DropdownMenuItem> : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem color="status-red" onSelect={onDelete}>
           Delete Bot

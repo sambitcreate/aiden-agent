@@ -68,6 +68,7 @@ function BotsHome() {
           onRetry={() => void bots.refetch()}
           onOpen={openChat}
           onOpenProfile={(bot) => void navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
+          onOpenPage={(bot, page) => void navigate({ to: "/bots/$botId", params: { botId: bot.id }, search: { page } })}
           onDelete={setDeleting}
           onCreate={() => setCreating(true)}
           emptyState={<BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />}
