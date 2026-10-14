@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea } from "../components/ui";
+import { botChatPath } from "../lib/bot-routes";
 import { botsApi } from "../lib/ipc";
 import { useBot, useBots } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
@@ -19,10 +20,7 @@ import { BotProfile } from "./bots/bot-profile";
 import { BotStarterCarousel } from "./bots/bot-starter-carousel";
 import { RemoteBots } from "./remote-bots";
 
-/** The Bot's one conversation, addressed by Bot id only. */
-export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: { botId: string } } {
-  return { to: "/bots/$botId/chat", params: { botId } };
-}
+export { botChatPath } from "../lib/bot-routes";
 
 function BotsHome() {
   const navigate = useNavigate();

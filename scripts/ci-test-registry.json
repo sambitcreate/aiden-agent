@@ -864,6 +864,7 @@
         "renderer/main/bots/bot-chat-activity-page.test.tsx",
         "renderer/main/bots/bot-routines.test.tsx",
         "renderer/main/bots/bot-memory-page.test.tsx",
+        "renderer/lib/bot-routes.test.ts",
         "main/handlers/bot-live.test.ts",
         "main/handlers/bot-questions.test.ts",
         "main/handlers/bot-files.test.ts",
