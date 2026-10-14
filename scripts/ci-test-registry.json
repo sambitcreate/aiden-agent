@@ -876,6 +876,7 @@
         "renderer/shared/assistant.test.ts",
         "renderer/shared/attachment-contract.test.ts",
         "renderer/shared/bot-capabilities.test.ts",
+        "renderer/shared/bot-activity.test.ts",
         "renderer/shared/bot-routine-label.test.ts",
         "renderer/shared/btw.test.ts",
         "renderer/shared/chat-message-contract.test.ts",
