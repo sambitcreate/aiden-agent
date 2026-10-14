@@ -364,6 +364,13 @@ class AidenBotRevision25ClientTest {
         assertEquals(key.toString(), steer.getHeader("Idempotency-Key"))
         assertEquals(activity.jsonObject.getValue("request"), Json.parseToJsonElement(steer.body.readUtf8()))
 
+        // The session transport sends what the controller froze, whatever the Mac announces now,
+        // so a retry under the same key is the same request.
+        server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
+        sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotSessionTransport(client)
+            .send("bot_fixture_01", "Keep it vegetarian.", UUID.randomUUID(), AidenStreamInputMode.STEER)
+        assertEquals(activity.jsonObject.getValue("request"), Json.parseToJsonElement(server.takeRequest().body.readUtf8()))
+
         // Without a mode, or to a Mac that doesn't take one, the body is the revision-29 body.
         for (mode in listOf(null, AidenStreamInputMode.STEER)) {
             server.enqueue(ok(activity.jsonObject.getValue("response"), 202))

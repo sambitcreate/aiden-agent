@@ -1380,7 +1380,8 @@ class AidenRemoteClient(
 
     /**
      * `PATCH /bots/{id}`. The patch's `chatActivity` goes out only when [supportsBotActivity]:
-     * an older Mac refuses the key, so a patch that changes nothing else is refused here.
+     * an older Mac refuses the key, so a patch that changes nothing else is refused here with
+     * [AidenBotContractException.InvalidCombination] before anything is sent.
      */
     suspend fun updateBotIdentity(
         id: String,
@@ -1393,7 +1394,7 @@ class AidenRemoteClient(
         ifMatchRevision = revision,
         bodyJson = botJson.encodeToString(
             AidenBotIdentityPatch.serializer(),
-            requireNotNull(patch.forHost(supportsBotActivity)) { "This Mac doesn’t offer Chat activity." }
+            patch.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
         ),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
@@ -1439,9 +1440,9 @@ class AidenRemoteClient(
         }
     }
 
-    /** Sends one turn. Control writes never auto-retry; a manual retry reuses [idempotencyKey]. */
     /**
-     * `POST /bots/{id}/messages`. [whenBusy] goes out only when [supportsBotActivity] (the Mac
+     * `POST /bots/{id}/messages`: sends one turn. Control writes never auto-retry; a manual retry
+     * reuses [idempotencyKey]. [whenBusy] goes out only when [supportsBotActivity] (the Mac
      * announces `bot-activity-v1` and this phone holds `bot:activity`): an older Mac refuses the key.
      */
     suspend fun sendBotMessage(

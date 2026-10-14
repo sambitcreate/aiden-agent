@@ -44,15 +44,16 @@ interface AidenBotSessionTransport {
     ): AidenBotRoutineProposalRespondResult
 }
 
-/** [supportsBotActivity] reads whether the Mac takes `whenBusy` now; an older Mac refuses it. */
-class AidenRemoteBotSessionTransport(
-    private val client: AidenRemoteClient,
-    private val supportsBotActivity: () -> Boolean = { false }
-) : AidenBotSessionTransport {
+/**
+ * The Remote routes. A message goes out exactly as the controller froze it at its first attempt:
+ * the controller decides `whenBusy` once (only for a Mac offering `bot-activity-v1`), so a retry
+ * under the same Idempotency-Key is byte-identical even if the Mac's announcement changed since.
+ */
+class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : AidenBotSessionTransport {
     override suspend fun session(botId: String) = client.botSession(botId)
     override fun events(botId: String) = client.botSessionEvents(botId)
     override suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode?) =
-        client.sendBotMessage(botId, text, key, whenBusy, supportsBotActivity())
+        client.sendBotMessage(botId, text, key, whenBusy, supportsBotActivity = whenBusy != null)
     override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
     override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
     override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
@@ -403,6 +404,9 @@ class AidenBotSessionController(
     private var flushJob: Job? = null
     private var backoffJob: Job? = null
     private var downJob: Job? = null
+    private var restoreJob: Job? = null
+    /** What a previous launch left on disk has been read (or there is nothing to read): deliveries wait for it. */
+    private var restored: Boolean
     private var released = false
     private var isFlushing = false
     private val inFlight = mutableSetOf<String>()
@@ -419,10 +423,13 @@ class AidenBotSessionController(
     private var stopStartedAt: Long? = null
 
     init {
-        val now = nowMs()
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
-        val stored = sessionKey?.let { store?.adoptOutbox(it, this) }.orEmpty()
-        val adopted = stored.map { it.adopted(now) }
+        // Memory only: a chat already read in this run of the app opens on its messages at once;
+        // otherwise [start] reads the disk off the main thread.
+        val held = sessionKey?.let { store?.adoptOutbox(it, this) }
+        restored = sessionKey == null || store == null || held != null
+        val now = nowMs()
+        val adopted = held.orEmpty().map { it.adopted(now) }
         _state = MutableStateFlow(
             AidenBotSessionUiState(
                 knownState = knownState,
@@ -432,7 +439,7 @@ class AidenBotSessionController(
             )
         )
         state = _state.asStateFlow()
-        if (adopted != stored && sessionKey != null) store?.storeOutbox(sessionKey, this, adopted)
+        if (held != null && adopted != held && sessionKey != null) store?.storeOutbox(sessionKey, this, adopted)
     }
 
     fun setActivitySupported(supported: Boolean) {
@@ -443,14 +450,18 @@ class AidenBotSessionController(
         _state.update { it.copy(wording = wording) }
     }
 
-    /** Starts loading and following the session; safe to call once per screen. */
+    /** Starts restoring the outbox, loading and following the session; safe to call once per screen. */
     fun start() {
         released = false
+        ensureRestored()
         if (feedJob?.isActive == true) return
         feedJob = scope.launch { follow() }
     }
 
-    /** The chat closed: the feed and retry timers stop, and unsent messages stay for the next visit. */
+    /**
+     * The chat closed: the feed, retry timers and any delivery under way stop, and unsent
+     * messages stay, key and body, for the next visit.
+     */
     fun stopFollowing() {
         released = true
         feedJob?.cancel()
@@ -458,10 +469,33 @@ class AidenBotSessionController(
         flushJob?.cancel()
         backoffJob?.cancel()
         downJob?.cancel()
+        restoreJob?.cancel()
+    }
+
+    /**
+     * Reads what a previous launch left on disk, once, on the store's io thread. Those messages
+     * are older than anything sent since, so they go first, and nothing is delivered before them.
+     */
+    private fun ensureRestored() {
+        if (restored || restoreJob?.isActive == true) return
+        val key = sessionKey ?: return
+        val store = store ?: return
+        restoreJob = scope.launch {
+            val stored = store.restoreOutbox(key, this@AidenBotSessionController)
+            val now = nowMs()
+            val known = stored.mapTo(HashSet()) { it.key }
+            restored = true
+            setOutbox(stored.map { it.adopted(now) } + _state.value.outbox.filterNot { it.key in known }, force = true)
+            reconcileOutbox(snapshot = false)
+            wakeOutbox()
+        }
     }
 
     /** Reloads `GET /bots/{id}/session`; returns false when it could not. One older than frames already shown is dropped. */
-    suspend fun refetch(): Boolean = load(authoritative = false)
+    suspend fun refetch(): Boolean {
+        ensureRestored()
+        return load(authoritative = false)
+    }
 
     private suspend fun load(authoritative: Boolean): Boolean {
         return try {
@@ -565,7 +599,8 @@ class AidenBotSessionController(
 
     /**
      * The Mac's own word now stands for a Stop or Resume it has heard, and a new run (another
-     * `startedAt`, or a first activity after a Stop pressed before any) has nothing to stop.
+     * `startedAt`, or a first activity after a Stop pressed before any) has nothing to stop. Any
+     * activity after a Resume tap says what the resumed run is doing.
      */
     private fun activityArrived(next: AidenBotSessionActivity?) {
         val stopRun = stopStartedAt
@@ -574,7 +609,7 @@ class AidenBotSessionController(
                 (next != null && (stopRun == null || next.startedAt != stopRun))
             current.copy(
                 stopIntent = if (clearStop) AidenBotTurnIntent.NONE else current.stopIntent,
-                resumeIntent = if (current.resumeIntent == AidenBotTurnIntent.ACKNOWLEDGED) AidenBotTurnIntent.NONE else current.resumeIntent
+                resumeIntent = AidenBotTurnIntent.NONE
             )
         }
     }
@@ -665,18 +700,25 @@ class AidenBotSessionController(
         _state.update { it.copy(actionError = null) }
         val mode = if (current.offersBusyModes) whenBusy ?: AidenStreamInputMode.QUEUE else null
         if (!enqueue(trimmed, mode, retryOf = null)) return false
-        flushOutbox()
+        ensureRestored()
+        flushNow()
         return true
     }
 
-    /** Adds a message, unless the chat already holds as many as it can keep: then it says so. */
+    /**
+     * Adds a message, unless the chat already holds as many (or as much) as it can keep for a
+     * later launch: then it says so, and nothing is stored that the next launch couldn't read.
+     */
     private fun enqueue(text: String, mode: AidenStreamInputMode?, retryOf: String?): Boolean {
         val current = _state.value
-        if (current.outbox.size >= AidenBotSessionStore.MAX_MESSAGES) {
+        val next = current.outbox + AidenBotOutgoingMessage.create(text, mode, current.isRunning, retryOf, nowMs())
+        val fits = next.size <= AidenBotSessionStore.MAX_MESSAGES &&
+            (sessionKey == null || store == null || store.fits(sessionKey, next))
+        if (!fits) {
             _state.update { it.copy(actionError = OUTBOX_FULL) }
             return false
         }
-        setOutbox(current.outbox + AidenBotOutgoingMessage.create(text, mode, current.isRunning, retryOf, nowMs()))
+        setOutbox(next)
         return true
     }
 
@@ -697,7 +739,7 @@ class AidenBotSessionController(
             queuedId = null
         )
         setOutbox(_state.value.outbox.map { if (it.id == id) again else it })
-        flushOutbox()
+        flushNow()
         return true
     }
 
@@ -719,15 +761,25 @@ class AidenBotSessionController(
         val text = failed.retryText?.trim() ?: return false
         current.outbox.firstOrNull { it.retryOf == failed.id }?.let { return retrySend(it.id) }
         if (!enqueue(text, if (current.offersBusyModes) AidenStreamInputMode.QUEUE else null, retryOf = failed.id)) return false
-        flushOutbox()
+        flushNow()
         return true
     }
 
-    private fun setOutbox(next: List<AidenBotOutgoingMessage>) {
-        if (_state.value.outbox == next) return
+    /**
+     * Shows [next] and writes it through to the store, which holds it in memory until the disk
+     * copy was read, so a message sent meanwhile never overwrites what a previous launch left. A store
+     * that refuses the write (another controller adopted the chat, or the Mac was unpaired) ends
+     * this controller's sending, like closing the chat.
+     */
+    private fun setOutbox(next: List<AidenBotOutgoingMessage>, force: Boolean = false) {
+        if (!force && _state.value.outbox == next) return
         _state.update { it.copy(outbox = next) }
         val key = sessionKey ?: return
-        store?.storeOutbox(key, this, next)
+        val store = store ?: return
+        if (!store.storeOutbox(key, this, next)) {
+            released = true
+            backoffJob?.cancel()
+        }
     }
 
     /** Replaces the message with [key]; a null result removes it. */
@@ -808,9 +860,12 @@ class AidenBotSessionController(
             if (sent.role != AidenBotMessageRole.USER || sent.id in claimedEntries) continue
             if (message.submissionId != null && sent.submissionId == message.submissionId) return sent
             if (byText != null || sent.id in message.baseline || sent.text.trim() != message.text) continue
-            // An entry that names its submission belongs to that submission.
+            // An entry that names its submission belongs to that submission. Only a request still
+            // unsettled may wait on one (its receipt says whose it is); a failed one never takes it.
             val theirs = sent.submissionId
-            if (theirs != null && (message.submissionId != null || theirs in owned)) continue
+            if (theirs != null &&
+                (message.submissionId != null || theirs in owned || message.status == AidenBotOutgoingStatus.FAILED)
+            ) continue
             byText = sent
         }
         return byText
@@ -822,16 +877,28 @@ class AidenBotSessionController(
         scheduleFlush()
     }
 
-    /** Sends the outbox beside whatever called this (a frame, a snapshot, a backoff), never holding up the feed. */
+    /**
+     * Sends the outbox in its own job beside whatever called this (a frame, a snapshot, a
+     * backoff), never holding up the feed; [stopFollowing] cancels it mid-request.
+     */
     private fun scheduleFlush() {
         if (released || isFlushing || nextToDeliver() == null) return
         flushJob = scope.launch { flushOutbox() }
     }
 
-    /** The oldest unsettled message, unless it waits for a retry: nothing overtakes it, so messages arrive in order. */
+    /** Sends now and waits until the outbox has gone as far as it can. */
+    private suspend fun flushNow() {
+        scheduleFlush()
+        flushJob?.join()
+    }
+
+    /**
+     * The oldest unsettled message, unless it waits for a retry: nothing overtakes it, so
+     * messages arrive in order. Nothing goes before a previous launch's messages are read.
+     */
     private fun nextToDeliver(): UUID? {
         val current = _state.value
-        if (!current.isConnected || released) return null
+        if (!current.isConnected || released || !restored) return null
         val head = current.outbox.firstOrNull { it.status == AidenBotOutgoingStatus.SENDING } ?: return null
         return if (head.deferred) null else head.key
     }
@@ -858,8 +925,9 @@ class AidenBotSessionController(
             return
         }
         if (message.isExpired(nowMs())) {
-            // Unsent for a day: it says so instead of going out late.
-            updateMessage(key) { it.expired() }
+            // Unsent for a day: it says so instead of going out late, and lets go of any entry it held.
+            message.echoEntryId?.let { claimedEntries -= it }
+            updateMessage(key) { it.expired().copy(echoEntryId = null, echoSubmissionId = null) }
             return
         }
         val request = if (message.frozen) message else message.copy(
@@ -914,9 +982,23 @@ class AidenBotSessionController(
                 updateMessage(key) { it.copy(keepsKey = true, connectionAttempts = attempts, deferred = true) }
                 scheduleBackoff(attempts)
             } else {
-                // The Mac's transcript may already show it; otherwise "Couldn't send · Try again", key kept.
                 updateMessage(key) {
-                    if (it.echoed) null else it.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = true, connectionAttempts = attempts)
+                    if (it.echoed && it.echoSubmissionId == null) {
+                        // An untagged entry of its text already shows it.
+                        null
+                    } else {
+                        // An entry naming another submission is not its echo: "Couldn't send · Try
+                        // again" with its key, and the entry goes back to whoever it belongs to.
+                        it.echoEntryId?.let { entry -> claimedEntries -= entry }
+                        it.copy(
+                            status = AidenBotOutgoingStatus.FAILED,
+                            keepsKey = true,
+                            connectionAttempts = attempts,
+                            echoed = false,
+                            echoEntryId = null,
+                            echoSubmissionId = null
+                        )
+                    }
                 }
             }
         } finally {
@@ -1274,7 +1356,7 @@ class AidenBotSessionController(
         const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
         const val ACCESS_LOST = "That message wasn’t sent. Please try again."
-        const val OUTBOX_FULL = "Too many messages are waiting to send. Try again once they’ve gone."
+        const val OUTBOX_FULL = "Too many messages are waiting or didn’t send. Send or remove some, then try again."
     }
 }
 

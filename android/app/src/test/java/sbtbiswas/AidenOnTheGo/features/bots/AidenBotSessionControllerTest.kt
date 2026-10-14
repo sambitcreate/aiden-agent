@@ -21,7 +21,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -32,6 +34,9 @@ import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AidenBotSessionControllerTest {
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     private val json = AidenBotWireJson.json
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json"))
@@ -1234,14 +1239,14 @@ class AidenBotSessionControllerTest {
         assertEquals(AidenBotSessionState.IDLE, controller.state.value.state)
     }
 
-    private fun store(root: java.io.File, clock: () -> Long) =
-        AidenBotSessionStore(root, io = { it.run() }, nowMs = clock)
+    private fun store(root: java.io.File, clock: () -> Long, maxBytes: Int = AidenBotSessionStore.MAX_BYTES) =
+        AidenBotSessionStore(root, io = { it.run() }, nowMs = clock, maxBytes = maxBytes)
 
     private val chatKey = AidenBotSessionKey("instance_fixture_01", "device_fixture_01", "bot_fixture_01")
 
     @Test
     fun anOutboxOutlivesLeavingTheChatAndProcessDeathAndGoesOutUnderItsKey() = runTest {
-        val root = kotlin.io.path.createTempDirectory("bot-outbox").toFile()
+        val root = tempFolder.newFolder()
         var clock = started
         val transport = FakeTransport(runningSession)
         val first = store(root, { clock })
@@ -1249,36 +1254,128 @@ class AidenBotSessionControllerTest {
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = first, nowMs = { clock }
         )
         assertTrue(leaving.send("Plan lunch"))
-        assertTrue(leaving.send("And dinner"))
+        val key = leaving.state.value.outbox.single().key
+        // Left before the disk was even read: the messages wait in the store, not lost.
         leaving.stopFollowing()
+        val offline = object : AidenBotSessionTransport by transport {
+            override suspend fun session(botId: String): AidenBotSession = throw IOException("offline")
+        }
+        val early = AidenBotSessionController(
+            runningSession.botId, offline, backgroundScope, sessionKey = chatKey, store = first, nowMs = { clock }
+        )
+        early.start()
+        runCurrent()
+        assertEquals(listOf("Plan lunch"), early.state.value.outgoing.map { it.text })
+        early.stopFollowing()
 
-        // Back to the chat in the same run: the same messages, still unsent.
+        // Back to the chat in the same run: shown at once, from memory.
         val back = AidenBotSessionController(
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = first, nowMs = { clock }
         )
-        assertEquals(listOf("Plan lunch", "And dinner"), back.state.value.outgoing.map { it.text })
+        assertEquals(listOf("Plan lunch"), back.state.value.outgoing.map { it.text })
         // The chat left behind can no longer write it.
         assertFalse(first.storeOutbox(chatKey, leaving, emptyList()))
         back.stopFollowing()
 
-        // The process died: a new store reads them from disk.
+        // The process died: a new store reads it from disk, off the main thread, before anything goes out.
         clock += 60_000
         val relaunched = AidenBotSessionController(
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(root, { clock }), nowMs = { clock }
         )
-        val restored = relaunched.state.value.outgoing
-        assertEquals(listOf("Plan lunch", "And dinner"), restored.map { it.text })
-        assertEquals(back.state.value.outbox.map { it.key }, restored.map { it.key })
+        assertTrue("nothing is read during composition", relaunched.state.value.outbox.isEmpty())
+        assertTrue(relaunched.send("And dinner"))
         relaunched.refetch()
         runCurrent()
+        assertEquals("the older message goes first", listOf("Plan lunch", "And dinner"), relaunched.state.value.outbox.map { it.text })
         assertEquals(listOf("Plan lunch", "And dinner"), transport.sends.map { it.first })
-        assertEquals(restored.map { it.key }, transport.sends.map { it.second })
-        root.deleteRecursively()
+        assertEquals("under the key it was given before the process died", key, transport.sends[0].second)
+    }
+
+    @Test
+    fun aRestoreForAnotherPairingIsRefused() = runTest {
+        val root = tempFolder.newFolder()
+        val transport = FakeTransport(runningSession)
+        val first = store(root, { started })
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = first)
+        assertTrue(controller.send("Plan lunch"))
+        runCurrent()
+        // The same chat after a re-pair (another deviceId) finds this file where its own would be.
+        val repaired = chatKey.copy(deviceId = "device_fixture_02")
+        val theirs = first.fileFor(repaired)!!
+        theirs.parentFile!!.mkdirs()
+        first.fileFor(chatKey)!!.copyTo(theirs)
+        val other = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, sessionKey = repaired, store = store(root, { started })
+        )
+        other.start()
+        runCurrent()
+        assertTrue(other.state.value.outbox.isEmpty())
+        assertFalse("the misplaced file is dropped", theirs.exists())
+        other.stopFollowing()
+    }
+
+    @Test
+    fun aControllerThatLostTheChatToAnotherStopsSending() = runTest {
+        val sessions = AidenBotSessionStore(null)
+        val transport = FakeTransport(runningSession)
+        val older = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        older.refetch()
+        runCurrent()
+        AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        assertTrue(older.send("From the old screen"))
+        assertTrue("its write was refused, so it sends nothing", transport.sends.isEmpty())
+    }
+
+    @Test
+    fun leavingTheChatCancelsTheRequestUnderWayAndTheNextVisitReplaysItsKey() = runTest {
+        val sessions = AidenBotSessionStore(null)
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        controller.refetch()
+        runCurrent()
+        transport.sendGate = CompletableDeferred()
+        val sending = async { controller.send("Plan lunch") }
+        runCurrent()
+        controller.stopFollowing()
+        runCurrent()
+        assertTrue(sending.isCompleted)
+        assertEquals(AidenBotOutgoingStatus.SENDING, controller.state.value.outbox.single().status)
+        transport.sendGate = null
+        val next = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        next.refetch()
+        runCurrent()
+        assertEquals(2, transport.sends.size)
+        assertEquals("the same request again", transport.sends[0].second, transport.sends[1].second)
+        assertEquals(AidenBotOutgoingStatus.SENT, next.state.value.outbox.single().status)
+    }
+
+    @Test
+    fun aMessageThatWouldOverflowTheStoredOutboxIsRefusedNotWritten() = runTest {
+        val root = tempFolder.newFolder()
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(root, { started }, maxBytes = 1_500)
+        )
+        val text = "x".repeat(400)
+        var taken = 0
+        while (controller.send(text) && taken < 20) taken += 1
+        runCurrent()
+        assertTrue("some fit, then one was refused", taken in 1..5)
+        assertEquals(AidenBotSessionController.OUTBOX_FULL, controller.state.value.actionError)
+        assertEquals(taken, controller.state.value.outbox.size)
+        // What was kept reads back whole.
+        val relaunched = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(root, { started }, maxBytes = 1_500)
+        )
+        relaunched.start()
+        runCurrent()
+        assertEquals(taken, relaunched.state.value.outbox.size)
+        relaunched.stopFollowing()
     }
 
     @Test
     fun aMessageUnsentForADayComesBackAsCouldntSendAndABadRecordCostsOnlyItself() = runTest {
-        val root = kotlin.io.path.createTempDirectory("bot-outbox").toFile()
+        val root = tempFolder.newFolder()
         var clock = started
         val transport = FakeTransport(runningSession)
         val controller = AidenBotSessionController(
@@ -1286,6 +1383,7 @@ class AidenBotSessionControllerTest {
         )
         assertTrue(controller.send("Plan lunch"))
         assertTrue(controller.send("And dinner"))
+        runCurrent()
         controller.stopFollowing()
         // Corrupt the second record on disk.
         val file = root.walkTopDown().single { it.isFile }
@@ -1295,11 +1393,11 @@ class AidenBotSessionControllerTest {
         val later = AidenBotSessionController(
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(root, { clock }), nowMs = { clock }
         )
+        later.refetch()
+        runCurrent()
         val restored = later.state.value.outgoing
         assertEquals(listOf("Plan lunch"), restored.map { it.text })
         assertEquals(AidenBotOutgoingLook.Failed, later.state.value.look(restored.single()))
-        later.refetch()
-        runCurrent()
         assertTrue("an expired message never goes out late", transport.sends.isEmpty())
 
         // In memory too: a message deferred for a day says so on the next try.
@@ -1310,38 +1408,40 @@ class AidenBotSessionControllerTest {
         runCurrent()
         assertEquals(AidenBotOutgoingStatus.FAILED, inMemory.state.value.outbox.single().status)
         assertTrue(transport.sends.isEmpty())
-        root.deleteRecursively()
     }
 
     @Test
     fun losingAccessOnTheStreamPurgesTheOutboxEverywhereAndSaysSo() = runTest {
-        val root = kotlin.io.path.createTempDirectory("bot-outbox").toFile()
-        val sessions = store(root, { started })
-        val transport = FakeTransport(runningSession)
-        transport.feeds += flow { throw serverError(401, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED) }
-        val controller = AidenBotSessionController(
-            runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions, nowMs = { started }
-        )
-        assertTrue(controller.send("Plan lunch"))
-        assertTrue(root.walkTopDown().any { it.isFile })
-        controller.start()
-        runCurrent()
-        assertTrue(controller.state.value.outbox.isEmpty())
-        assertEquals("That message wasn’t sent. Please try again.", controller.state.value.actionError)
-        assertTrue("nothing unsent stays on disk", root.walkTopDown().none { it.isFile })
-        assertNull(sessions.transcript(chatKey))
-        root.deleteRecursively()
+        for (status in listOf(401, 403)) {
+            val root = tempFolder.newFolder()
+            val sessions = store(root, { started })
+            val transport = FakeTransport(runningSession)
+            transport.feeds += flow { throw serverError(status, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED) }
+            val controller = AidenBotSessionController(
+                runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions, nowMs = { started }
+            )
+            assertTrue(controller.send("Plan lunch"))
+            runCurrent()
+            assertTrue(root.walkTopDown().any { it.isFile })
+            controller.start()
+            runCurrent()
+            assertTrue("$status", controller.state.value.outbox.isEmpty())
+            assertEquals("That message wasn’t sent. Please try again.", controller.state.value.actionError)
+            assertTrue("nothing unsent stays on disk after $status", root.walkTopDown().none { it.isFile })
+            assertNull(sessions.transcript(chatKey))
+        }
     }
 
     @Test
     fun aBotWhoseAccessChangedAndAnUnpairedMacKeepNothingUnsent() = runTest {
-        val root = kotlin.io.path.createTempDirectory("bot-outbox").toFile()
+        val root = tempFolder.newFolder()
         val sessions = store(root, { started })
         val transport = FakeTransport(runningSession)
         val controller = AidenBotSessionController(
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions, nowMs = { started }
         )
         controller.refetch()
+        runCurrent()
         transport.sendFailures += IOException("dropped")
         assertTrue(controller.send("Plan lunch"))
         controller.frame(
@@ -1357,11 +1457,12 @@ class AidenBotSessionControllerTest {
             "bot_fixture_02", transport, backgroundScope, sessionKey = chatKey.copy(botId = "bot_fixture_02"), store = sessions
         )
         assertTrue(other.send("Hello"))
+        runCurrent()
+        assertTrue(root.walkTopDown().any { it.isFile })
         sessions.purgeInstance(chatKey.instanceId)
         assertTrue(root.walkTopDown().none { it.isFile })
         assertTrue(other.send("Still there?"))
         assertTrue(root.walkTopDown().none { it.isFile })
-        root.deleteRecursively()
     }
 
     @Test
@@ -1670,5 +1771,84 @@ class AidenBotSessionControllerTest {
         assertNull(aidenBotStatusLine(controller.state.value, started))
         controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)))
         assertEquals(AidenBotActivityPhase.PREPARING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+    }
+
+    // Fix round 1: a frozen request goes out exactly as frozen.
+    @Test
+    fun aFrozenSteerKeepsItsModeWhenTheMacsAnnouncementChanges() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        transport.sendFailures += IOException("dropped")
+        assertTrue(controller.send("Keep it vegetarian.", AidenStreamInputMode.STEER))
+        controller.setActivitySupported(false)
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertEquals(listOf(AidenStreamInputMode.STEER, AidenStreamInputMode.STEER), transport.sendModes)
+        assertEquals("one request under one key", 1, transport.sends.map { it.second }.toSet().size)
+    }
+
+    // Fix round 1: an entry naming another submission never makes an exhausted message vanish.
+    @Test
+    fun anExhaustedMessageWhoseLookAlikeEntryIsAnothersFailsVisibly() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        transport.sendFailures += listOf(IOException("one"), IOException("two"), IOException("three"))
+        assertTrue(controller.send("Yes."))
+        // Another device's "Yes." lands while this one waits for its retry.
+        controller.frame(AidenBotSessionEventPayload.Entry(userEntry("entry_45", "Yes.", "99")))
+        assertTrue("an unsettled request may wait on it", controller.state.value.outgoing.isEmpty())
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(3, transport.sends.size)
+        val failed = controller.state.value.outgoing.single()
+        assertEquals(AidenBotOutgoingLook.Failed, controller.state.value.look(failed))
+        controller.frame(AidenBotSessionEventPayload.Partial("Sure"))
+        assertEquals("still there after the next frame", listOf(failed.id), controller.state.value.outgoing.map { it.id })
+        assertTrue(controller.retrySend(failed.id))
+        assertEquals("Try again replays the key", transport.sends[0].second, transport.sends[3].second)
+    }
+
+    @Test
+    fun anActivityFrameAfterAResumeTapSaysWhatTheRunIsDoing() = runTest {
+        val transport = FakeTransport(interruptedSession.copy(partial = null))
+        val controller = AidenBotSessionController(interruptedSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        transport.resumeGate = CompletableDeferred()
+        val resuming = async { controller.resume() }
+        runCurrent()
+        assertEquals(AidenBotActivityPhase.RESUMING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("reading", null, started)))
+        assertEquals(AidenBotActivityPhase.READING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+        transport.resumeGate!!.complete(Unit)
+        assertTrue(resuming.await())
+        assertEquals(AidenBotActivityPhase.READING, aidenBotStatusLine(controller.state.value, started)!!.display.phase)
+    }
+
+    // Fix round 1: the disk is read on the io thread, and nothing goes out before it.
+    @Test
+    fun aSlowDiskReadHoldsBackNewMessagesUntilTheOlderOnesAreBack() = runTest {
+        val root = tempFolder.newFolder()
+        val transport = FakeTransport(runningSession)
+        val offline = object : AidenBotSessionTransport by transport {
+            override suspend fun session(botId: String): AidenBotSession = throw IOException("offline")
+        }
+        val before = AidenBotSessionController(runningSession.botId, offline, backgroundScope, sessionKey = chatKey, store = store(root, { started }))
+        assertTrue(before.send("Plan lunch"))
+        runCurrent()
+        before.stopFollowing()
+
+        val io = ArrayDeque<Runnable>()
+        val slow = AidenBotSessionStore(root, io = { io.addLast(it) }, nowMs = { started })
+        val relaunched = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = slow)
+        assertTrue(relaunched.send("And dinner"))
+        relaunched.refetch()
+        runCurrent()
+        assertTrue("connected, but the older message isn't back yet", transport.sends.isEmpty())
+        while (io.isNotEmpty()) io.removeFirst().run()
+        runCurrent()
+        while (io.isNotEmpty()) io.removeFirst().run()
+        assertEquals(listOf("Plan lunch", "And dinner"), transport.sends.map { it.first })
     }
 }
