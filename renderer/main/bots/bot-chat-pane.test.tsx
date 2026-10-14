@@ -581,6 +581,37 @@ test("all tool rounds before an answer fold into one Updates line", async () => 
   assert.ok(await screen.findByText(/Searching airlines\.\s+Comparing prices\./u));
 });
 
+test("a Summary Bot shows one recap above its answer that opens to the steps", async () => {
+  await mountChat({
+    "bots:get": () => botFixture({ chatActivity: { level: "summary", wording: "follows" } }),
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          { ...userEntry("u1", "Find flights"), at: 1_000 } as BotTranscriptEntry,
+          toolStep("a1", ""),
+          { id: "r1", type: "tool_result", toolCallId: "a1-call", toolName: "web_search", isError: false, status: "ok", at: 5_000 },
+          { ...assistantEntry("a2", "TAP on Friday is cheapest."), at: 19_000 } as BotTranscriptEntry,
+        ],
+      }),
+  });
+  const recap = await screen.findByRole("button", { name: "Worked for 18s · searched the web" });
+  fireEvent.click(recap);
+  assert.ok(await screen.findByText("Searched the web"));
+});
+
+test("a reply the person stopped says so in a quiet centred line", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [
+          userEntry("u1", "Tell me a story"),
+          { id: "a1", type: "assistant", text: "Once upon", toolCalls: [], stopReason: "aborted" },
+        ],
+      }),
+  });
+  assert.ok(await screen.findByText("You stopped this reply."));
+});
+
 test("Reply quotes a message at the start of the composer", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon"), assistantEntry("a1", "Day one: Alfama.")] }),

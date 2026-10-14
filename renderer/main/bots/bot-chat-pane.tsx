@@ -20,7 +20,7 @@ import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
-import { resolveBotChatActivity } from "../../shared/bots";
+import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotTranscriptEntry } from "../../shared/bot-live";
@@ -31,6 +31,7 @@ import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-h
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
+import { BotActivityRecap } from "./bot-activity-recap";
 import { BotStatusLine } from "./bot-status-line";
 import { BotFilesDialog } from "./bot-files-dialog";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
@@ -296,6 +297,7 @@ function TranscriptEntries({
   entries,
   partial,
   running,
+  level,
   retrying,
   onConnect,
   onDismissConnection,
@@ -309,6 +311,7 @@ function TranscriptEntries({
   entries: readonly BotTranscriptEntry[];
   partial: string | null;
   running: boolean;
+  level: BotChatActivityLevel;
   retrying: boolean;
   onConnect(pluginId: string): void;
   onDismissConnection(pluginId: string): void;
@@ -321,7 +324,7 @@ function TranscriptEntries({
     decision: BotRoutineProposalDecision,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
 }) {
-  const rows = botTranscriptRows(entries, partial, running);
+  const rows = botTranscriptRows(entries, partial, { running, level });
   return (
     <>
       {rows.map((row) => {
@@ -351,6 +354,14 @@ function TranscriptEntries({
             );
           case "updates":
             return <BotUpdates key={row.id} progressText={row.progressText} timeline={null} active={row.active} />;
+          case "recap":
+            return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} />;
+          case "stopped":
+            return (
+              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
+                You stopped this reply.
+              </Text>
+            );
           case "file":
             return <BotFileChip key={row.id} path={row.path} operation={row.operation} onOpen={() => onOpenFile(row.path)} />;
           case "image":
@@ -729,6 +740,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           entries={snapshot.entries}
           partial={snapshot.partial}
           running={running}
+          level={chatActivity.level}
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}

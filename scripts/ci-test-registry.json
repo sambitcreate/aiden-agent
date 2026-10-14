@@ -859,6 +859,7 @@
         "renderer/main/bots/bot-chat-pane.test.tsx",
         "renderer/main/bots/bot-transcript-rows.test.ts",
         "renderer/main/bots/bot-status-line.test.tsx",
+        "renderer/main/bots/bot-activity-recap.test.tsx",
         "renderer/main/bots/bot-routines.test.tsx",
         "renderer/main/bots/bot-memory-page.test.tsx",
         "main/handlers/bot-live.test.ts",

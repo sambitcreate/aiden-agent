@@ -1,17 +1,24 @@
 // What a Bot chat shows, row by row, from the durable projection.
 //
-// Everything a Bot did on the way to its answer folds into ONE "Updates" line
-// per reply: narration written before tool calls, and the in-flight partial
-// while the reply runs. A reply's turn starts at the person's message (or a
-// routine, or their answer to a question) and ends at the next one.
+// A reply's turn starts at the person's message (or a routine, or their answer
+// to a question) and ends at the next one. Narration written before tool calls,
+// and the in-flight partial while the reply runs, fold into ONE "Updates" line
+// per reply. With Summary or Detailed chat activity, a turn that used tools
+// also gets one recap of its steps just above its answer; Detailed shows it,
+// live, while the turn runs. A reply the person stopped ends with a "stopped"
+// line that is derived here and never stored.
 
-import {
-  botRetryableFailedTurn,
-  type BotTranscriptEntry,
-} from "../../shared/bot-live";
+import { botRetryableFailedTurn, type BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotRecapStep } from "./bot-activity-steps";
 import { resolveBotReplyProjection } from "./bot-reply-projection";
+
+export interface BotTranscriptRowOptions {
+  running: boolean;
+  level: BotChatActivityLevel;
+}
 
 export type BotTranscriptRow =
   | { kind: "user"; id: string; text: string }
@@ -19,6 +26,10 @@ export type BotTranscriptRow =
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** The one collapsed progress line of a reply; `active` while it runs. */
   | { kind: "updates"; id: string; progressText: string; active: boolean }
+  /** One turn's steps; `live` while the turn runs (Detailed only). */
+  | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
+  /** "You stopped this reply." */
+  | { kind: "stopped"; id: string }
   | { kind: "file"; id: string; path: string; operation: "written" | "edited" }
   | { kind: "image"; id: string; name: string; mimeType: string; size: number; data: string }
   | { kind: "notice"; id: string; notice: "interrupted" | "session_reset" }
@@ -37,6 +48,20 @@ export type BotTranscriptRow =
 
 type UpdatesRow = Extract<BotTranscriptRow, { kind: "updates" }>;
 
+interface Turn {
+  id: string;
+  startAt?: number;
+  lastAt?: number;
+  /** Index of the turn's answer bubble in `rows`, once it has one. */
+  answerRow: number | null;
+  steps: BotRecapStep[];
+  byCall: Map<string, BotRecapStep>;
+  /** The person pressed Stop during this reply. */
+  stopped: boolean;
+  /** The app restarted mid-turn; a call with no result was cut short, not failed. */
+  interrupted: boolean;
+}
+
 function joinProgress(parts: readonly string[]): string {
   return parts.map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
@@ -44,43 +69,105 @@ function joinProgress(parts: readonly string[]): string {
 export function botTranscriptRows(
   entries: readonly BotTranscriptEntry[],
   partial: string | null,
-  running: boolean,
+  { running, level }: BotTranscriptRowOptions,
 ): BotTranscriptRow[] {
   const rows: BotTranscriptRow[] = [];
   const retryable = running ? null : botRetryableFailedTurn(entries);
-  // The current reply's Updates row and the narration folded into it so far.
-  let updates: { row: UpdatesRow; parts: string[] } | null = null;
+  // The current turn, and its reply's Updates row with the narration folded into it so far.
+  const state: { turn: Turn | null; updates: { row: UpdatesRow; parts: string[] } | null } = {
+    turn: null,
+    updates: null,
+  };
+
   const fold = (id: string, text: string) => {
-    if (!updates) {
+    if (!state.updates) {
       const row: UpdatesRow = { kind: "updates", id: `${id}:updates`, progressText: "", active: false };
       rows.push(row);
-      updates = { row, parts: [] };
+      state.updates = { row, parts: [] };
     }
-    updates.parts.push(text);
-    updates.row.progressText = joinProgress(updates.parts);
+    state.updates.parts.push(text);
+    state.updates.row.progressText = joinProgress(state.updates.parts);
   };
-  const endTurn = () => {
-    updates = null;
+
+  const endTurn = (live: boolean) => {
+    state.updates = null;
+    const turn = state.turn;
+    state.turn = null;
+    if (!turn) return;
+    const steps = turn.steps.filter((step) => step.kind !== "waiting");
+    if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
+      // A finished turn has no running step: a call that never reported back
+      // was cut short by Stop or a restart, or else it failed.
+      const unfinished = turn.stopped || turn.interrupted ? "stopped" : "failed";
+      const recap: BotTranscriptRow = {
+        kind: "recap",
+        id: `${turn.id}:recap`,
+        steps: live ? steps : steps.map((step) => (step.status === "running" ? { ...step, status: unfinished } : step)),
+        durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
+        live,
+      };
+      if (live || turn.answerRow === null) rows.push(recap);
+      else rows.splice(turn.answerRow, 0, recap);
+    }
+    if (turn.stopped && !live) rows.push({ kind: "stopped", id: `${turn.id}:stopped` });
+  };
+
+  const beginTurn = (id: string, at: number | undefined) => {
+    endTurn(false);
+    state.turn = {
+      id,
+      ...(at === undefined ? {} : { startAt: at, lastAt: at }),
+      answerRow: null,
+      steps: [],
+      byCall: new Map(),
+      stopped: false,
+      interrupted: false,
+    };
+  };
+
+  const touch = (at: number | undefined) => {
+    if (state.turn && at !== undefined) state.turn.lastAt = at;
   };
 
   for (const entry of entries) {
     switch (entry.type) {
       case "user":
-        endTurn();
+        beginTurn(entry.id, entry.at);
         rows.push({ kind: "user", id: entry.id, text: entry.text });
         break;
       case "question_answer":
-        endTurn();
+        beginTurn(entry.id, entry.at);
         rows.push({ kind: "user", id: entry.id, text: entry.text });
         break;
       case "routine":
-        endTurn();
+        beginTurn(entry.id, entry.at);
         rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
         break;
-      case "assistant":
+      case "assistant": {
+        // A reply with no visible input (the self-intro) still gets a turn.
+        if (!state.turn) beginTurn(entry.id, entry.at);
+        const turn = state.turn!;
+        touch(entry.at);
+        for (const call of entry.toolCalls) {
+          const recapStep: BotRecapStep = {
+            id: call.id,
+            kind: call.kind,
+            label: call.label,
+            ...(call.detail ? { detail: call.detail } : {}),
+            ...(call.app ? { app: call.app } : {}),
+            status: "running",
+          };
+          turn.steps.push(recapStep);
+          turn.byCall.set(call.id, recapStep);
+        }
+        if (entry.stopReason === "aborted") turn.stopped = true;
         if (entry.toolCalls.length > 0) fold(entry.id, entry.text);
-        else if (entry.text.trim()) rows.push({ kind: "assistant", id: entry.id, text: entry.text });
+        else if (entry.text.trim()) {
+          turn.answerRow = rows.length;
+          rows.push({ kind: "assistant", id: entry.id, text: entry.text });
+        }
         break;
+      }
       case "file":
         rows.push({ kind: "file", id: entry.id, path: entry.path, operation: entry.operation });
         break;
@@ -88,7 +175,12 @@ export function botTranscriptRows(
         rows.push({ kind: "image", id: entry.id, name: entry.name, mimeType: entry.mimeType, size: entry.size, data: entry.data });
         break;
       case "notice":
-        endTurn();
+        // A restart cut the turn short; the person did not stop it.
+        if (entry.notice === "interrupted" && state.turn) {
+          state.turn.stopped = false;
+          state.turn.interrupted = true;
+        }
+        endTurn(false);
         rows.push({ kind: "notice", id: entry.id, notice: entry.notice });
         break;
       case "connect_card":
@@ -115,8 +207,12 @@ export function botTranscriptRows(
           ...(entry.routineId ? { routineId: entry.routineId } : {}),
         });
         break;
-      case "tool_result":
+      case "tool_result": {
+        touch(entry.at);
+        const recapStep = state.turn?.byCall.get(entry.toolCallId);
+        if (recapStep) recapStep.status = entry.status;
         break;
+      }
     }
   }
 
@@ -124,17 +220,18 @@ export function botTranscriptRows(
     // Everything streamed so far is progress until the reply commits.
     const { progressText } = partial === null ? { progressText: "" } : resolveBotReplyProjection(partial, null, true);
     // The reply's existing Updates line carries it, even with chips below it.
-    const current = updates as { row: UpdatesRow; parts: string[] } | null;
+    const current = state.updates;
     if (current) {
       current.row.active = true;
       if (progressText) current.row.progressText = joinProgress([...current.parts, progressText]);
     } else {
       rows.push({ kind: "updates", id: "working", progressText, active: true });
     }
-  } else if (partial !== null) {
+    endTurn(true);
+  } else {
+    endTurn(false);
     // A paused reply keeps what it wrote, as a bubble.
-    const text = partial.trim();
-    if (text) rows.push({ kind: "assistant", id: "partial", text: partial });
+    if (partial !== null && partial.trim()) rows.push({ kind: "assistant", id: "partial", text: partial });
   }
   return rows;
 }
