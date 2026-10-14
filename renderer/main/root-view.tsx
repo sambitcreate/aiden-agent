@@ -40,7 +40,7 @@ import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
-import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 
@@ -310,18 +310,7 @@ function RootContent() {
     });
   }, [queryClient]);
 
-  React.useEffect(() => {
-    return onNotification("bots:changed", () => {
-      invalidateBotCanonicalPhotos();
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
-        queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
-      ]);
-    });
-  }, [queryClient]);
+  useBotNotificationsSync(queryClient);
 
   React.useEffect(
     () =>

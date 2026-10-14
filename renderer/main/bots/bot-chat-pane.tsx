@@ -21,7 +21,7 @@ import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
-import { useBot } from "../../lib/queries";
+import { queryKeys, useBot } from "../../lib/queries";
 import { useSharedBotLive } from "../../lib/use-bot-live";
 import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
@@ -486,12 +486,20 @@ export function BotChatPane({ botId }: { botId: string }) {
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
   const entryCount = snapshot?.entries.length ?? 0;
+  const botFound = Boolean(bot.data);
   // Seeing the chat, every message that arrives while it is open, and leaving
   // it all clear its unread dot: a reply's time can be when it began streaming.
+  // A Bot that is gone (not found, or just deleted) is never marked: its
+  // preferences were forgotten with it.
   React.useEffect(() => {
-    markViewed(botId);
-  }, [botId, entryCount, markViewed]);
-  React.useEffect(() => () => markViewed(botId), [botId, markViewed]);
+    if (botFound) markViewed(botId);
+  }, [botFound, botId, entryCount, markViewed]);
+  React.useEffect(
+    () => () => {
+      if (qc.getQueryData(queryKeys.bot(botId))) markViewed(botId);
+    },
+    [botId, markViewed, qc],
+  );
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
 

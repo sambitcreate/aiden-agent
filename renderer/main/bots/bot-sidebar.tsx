@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
-import { ChevronLeft, Plug, Plus, RotateCcw, Search, UserRound, X } from "lucide-react";
+import { ChevronLeft, Plug, Plus, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
@@ -17,13 +17,15 @@ import {
   SidebarFooter,
   SidebarListItem,
   SplitView,
+  Text,
 } from "../../components/ui";
 import { botChatPath, botRouteBotId, lastNonBotRoute } from "../../lib/bot-routes";
 import { isBotUnread } from "../../lib/bot-sidebar-preferences";
 import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
-import { RemoteBots } from "../remote-bots";
+import { RemoteBotsSection, remoteBotGroupsMatching } from "../../components/remote-bots-section";
+import { useRemoteBots } from "../remote-bots";
 import { BotCreateFlow } from "./bot-create-flow";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotRowMenus, useBotMenuActions, type BotMenuAction } from "./bot-menu";
@@ -33,6 +35,13 @@ import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
 const ROW_FOCUS =
   "outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
 
+/** A row's second line is its description, cut to a sentence's length: never a whole message. */
+const ROW_LINE_LIMIT = 80;
+
+function boundedLine(text: string): string {
+  return text.length > ROW_LINE_LIMIT ? `${text.slice(0, ROW_LINE_LIMIT - 1).trimEnd()}…` : text;
+}
+
 interface RowProps {
   row: BotSidebarRow;
   selected: boolean;
@@ -40,6 +49,23 @@ interface RowProps {
   pinned: boolean;
   onOpen(bot: BotDefinition): void;
   onAction(bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null): void;
+}
+
+/** A row re-renders only when what it shows changes, not on every sidebar render. */
+function sameRowProps(previous: RowProps, next: RowProps): boolean {
+  const a = previous.row;
+  const b = next.row;
+  return (
+    a.bot === b.bot &&
+    a.state === b.state &&
+    a.preview === b.preview &&
+    a.needsYou === b.needsYou &&
+    previous.selected === next.selected &&
+    previous.unread === next.unread &&
+    previous.pinned === next.pinned &&
+    previous.onOpen === next.onOpen &&
+    previous.onAction === next.onAction
+  );
 }
 
 /** "Needs you" outranks the unread dot; a row that is both still says "Unread" to a screen reader. */
@@ -62,8 +88,9 @@ function RowMarkers({ row, unread }: { row: BotSidebarRow; unread: boolean }) {
   );
 }
 
-function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
+const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
   const line = botRowLine(row);
+  const lineId = React.useId();
   const rowRef = React.useRef<HTMLButtonElement>(null);
   return (
     <li className="group relative">
@@ -77,7 +104,9 @@ function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
         <button
           ref={rowRef}
           type="button"
+          data-bot-row={row.bot.id}
           aria-current={selected ? "page" : undefined}
+          aria-describedby={line ? lineId : undefined}
           className={cn(
             "flex w-full min-w-0 items-center gap-2.5 rounded-control py-1.5 pl-2 pr-9 text-left transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover motion-reduce:transition-none",
             ROW_FOCUS,
@@ -85,24 +114,29 @@ function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
           )}
           onClick={() => onOpen(row.bot)}
         >
-          <BotAvatar
-            botId={row.bot.id}
-            avatar={row.bot.avatar}
-            name={row.bot.name}
-            photoLoading="visible"
-            size="medium"
-            working={row.state?.kind === "running"}
-          />
+          <span aria-hidden="true" className="shrink-0">
+            <BotAvatar
+              botId={row.bot.id}
+              avatar={row.bot.avatar}
+              name={row.bot.name}
+              photoLoading="visible"
+              size="medium"
+              working={row.state?.kind === "running"}
+            />
+          </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-regular font-medium text-primary">{row.bot.name}</span>
             {line ? (
+              // Read as the row's description, so its name stays the Bot's name and status.
               <span
+                id={lineId}
+                aria-hidden="true"
                 className={cn(
                   "mt-0.5 block truncate text-small text-secondary",
                   line.kind === "working" && "agent-thinking-shimmer",
                 )}
               >
-                {line.text}
+                {boundedLine(line.text)}
               </span>
             ) : null}
           </span>
@@ -111,9 +145,9 @@ function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
       </BotRowMenus>
     </li>
   );
-}
+}, sameRowProps);
 
-function PinnedBot({ row, selected, unread, onOpen, onAction }: Omit<RowProps, "pinned">) {
+const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen, onAction }: RowProps) {
   const rowRef = React.useRef<HTMLButtonElement>(null);
   return (
     <section aria-label="Pinned Bot" className="group relative mb-2">
@@ -127,6 +161,7 @@ function PinnedBot({ row, selected, unread, onOpen, onAction }: Omit<RowProps, "
         <button
           ref={rowRef}
           type="button"
+          data-bot-row={row.bot.id}
           aria-current={selected ? "page" : undefined}
           className={cn(
             "flex w-full min-w-0 flex-col items-center gap-2 rounded-card px-3 py-3 transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover motion-reduce:transition-none",
@@ -135,14 +170,20 @@ function PinnedBot({ row, selected, unread, onOpen, onAction }: Omit<RowProps, "
           )}
           onClick={() => onOpen(row.bot)}
         >
-          <BotAvatar
-            botId={row.bot.id}
-            avatar={row.bot.avatar}
-            name={row.bot.name}
-            photoLoading="visible"
-            size="large"
-            working={row.state?.kind === "running"}
-          />
+          <span aria-hidden="true" className="relative shrink-0">
+            <BotAvatar
+              botId={row.bot.id}
+              avatar={row.bot.avatar}
+              name={row.bot.name}
+              photoLoading="visible"
+              size="large"
+              working={row.state?.kind === "running"}
+            />
+            {/* The pin mark; "Pinned Bot" names the region for screen readers. */}
+            <span className="absolute -bottom-1 -right-1 grid size-4.5 place-items-center rounded-full bg-status-warning-surface text-status-warning">
+              <Star className="size-2.5 fill-current" />
+            </span>
+          </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
             <RowMarkers row={row} unread={unread} />
@@ -151,7 +192,7 @@ function PinnedBot({ row, selected, unread, onOpen, onAction }: Omit<RowProps, "
       </BotRowMenus>
     </section>
   );
-}
+}, sameRowProps);
 
 function RowsSkeleton() {
   return (
@@ -188,15 +229,28 @@ export function BotSidebar() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const currentBotId = botRouteBotId(pathname);
   const profile = useProfile();
+  const profileName = profile.data?.name?.trim() ?? "";
   const { bots, rows } = useBotRows();
+  const remote = useRemoteBots();
   const { preferences, prune } = useBotSidebarPreferences();
   const [query, setQuery] = React.useState("");
   const [searchOpen, setSearchOpen] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const searchButtonRef = React.useRef<HTMLButtonElement>(null);
+  const newBotRef = React.useRef<HTMLButtonElement>(null);
+  const navRef = React.useRef<HTMLElement>(null);
   const [creating, setCreating] = React.useState(false);
-  const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
-  const act = useBotMenuActions(setDeleting);
+  const [deleting, setDeleting] = React.useState<{ bot: BotDefinition; neighbours: string[] } | null>(null);
+  const rowsRef = React.useRef(rows);
+  rowsRef.current = rows;
+  // Deleting a row's Bot leaves focus on the nearest row (below, then above), else New Bot.
+  const startDelete = React.useCallback((bot: BotDefinition) => {
+    const ids = rowsRef.current.map((row) => row.bot.id);
+    const at = ids.indexOf(bot.id);
+    const neighbours = at < 0 ? [] : [...ids.slice(at + 1), ...ids.slice(0, at).reverse()];
+    setDeleting({ bot, neighbours });
+  }, []);
+  const act = useBotMenuActions(startDelete);
 
   // Prune only on a settled, successful read: a loading, failed or refreshing
   // list may not show a Bot that exists, and pruning then would drop its pin.
@@ -213,24 +267,40 @@ export function BotSidebar() {
   const pinnedBotId = preferences.pinnedBotId;
   const pinnedRow = searching ? undefined : rows.find((row) => row.bot.id === pinnedBotId);
   const visible = rows.filter((row) => row !== pinnedRow && matchesBotSearch(row, query));
-  const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
+  const remoteShown = remoteBotGroupsMatching(remote.groups, query);
+  const openChat = React.useCallback((bot: BotDefinition) => void navigate(botChatPath(bot.id)), [navigate]);
   const closeSearch = () => {
     setQuery("");
     setSearchOpen(false);
     searchButtonRef.current?.focus();
   };
+  const rowFor = (botId: string) =>
+    Array.from(navRef.current?.querySelectorAll<HTMLElement>("[data-bot-row]") ?? []).find(
+      (element) => element.dataset.botRow === botId,
+    ) ?? null;
+  const deleteReturnFocus = () => {
+    if (!deleting) return null;
+    // Cancelled: the row is still there. Deleted: the nearest remaining row, else New Bot.
+    for (const botId of [deleting.bot.id, ...deleting.neighbours]) {
+      const element = rowFor(botId);
+      if (element) return element;
+    }
+    return newBotRef.current;
+  };
   const rowProps = (row: BotSidebarRow) => ({
     row,
     selected: row.bot.id === currentBotId,
     unread: row.bot.id !== currentBotId && isBotUnread(preferences, row.bot.id, row.lastReplyAt),
+    pinned: row.bot.id === pinnedBotId,
     onOpen: openChat,
     onAction: act,
   });
 
+  const retry = <SidebarListItem icon={<RotateCcw />} title="Try again" onClick={() => void bots.refetch()} />;
   let list: React.ReactNode;
   if (bots.isPending) {
     list = <RowsSkeleton />;
-  } else if (bots.isError) {
+  } else if (bots.isError && !bots.data) {
     list = (
       <div role="alert" className="flex flex-col gap-1">
         <EmptyState
@@ -238,26 +308,29 @@ export function BotSidebar() {
           title="Your Bots couldn’t be loaded"
           description="Check that Aiden finished starting, then try again."
         />
-        <SidebarListItem icon={<RotateCcw />} title="Try again" onClick={() => void bots.refetch()} />
+        {retry}
       </div>
     );
   } else if (rows.length === 0) {
-    list = (
-      <EmptyState
-        placement="inline"
-        title="No Bots yet"
-        description="A Bot is a helper with its own name, look, and instructions."
-      />
-    );
+    // Bots on a paired Mac below are Bots too; the empty state is only for no Bots anywhere.
+    list =
+      remote.groups.length > 0 ? null : (
+        <EmptyState
+          placement="inline"
+          title="No Bots yet"
+          description="A Bot is a helper with its own name, look, and instructions."
+        />
+      );
   } else if (searching && visible.length === 0) {
-    list = (
-      <EmptyState
-        role="status"
-        placement="inline"
-        title="No matching Bots"
-        description={`Nothing matches “${query.trim()}”.`}
-      />
-    );
+    list =
+      remoteShown.length > 0 ? null : (
+        <EmptyState
+          role="status"
+          placement="inline"
+          title="No matching Bots"
+          description={`Nothing matches “${query.trim()}”.`}
+        />
+      );
   } else {
     list = (
       <>
@@ -265,13 +338,23 @@ export function BotSidebar() {
         {visible.length > 0 ? (
           <ul aria-label="Your Bots" className="flex flex-col gap-0.5">
             {visible.map((row) => (
-              <BotRow key={row.bot.id} {...rowProps(row)} pinned={row.bot.id === pinnedBotId} />
+              <BotRow key={row.bot.id} {...rowProps(row)} />
             ))}
           </ul>
         ) : null}
       </>
     );
   }
+  // A failed refresh keeps the Bots already shown, with a way to try again.
+  const refreshFailed =
+    bots.isError && bots.data ? (
+      <div role="alert" className="mb-2 flex flex-col gap-0.5">
+        <Text as="p" variant="small" color="secondary" className="px-2.5">
+          Your Bots couldn’t be updated.
+        </Text>
+        {retry}
+      </div>
+    ) : null;
 
   return (
     <>
@@ -285,9 +368,10 @@ export function BotSidebar() {
           <SidebarFooter>
             <div className="flex min-w-0 items-center gap-0.5">
               <SidebarListItem
-                icon={<ProfileFace name={profile.data?.name ?? ""} />}
-                title={profile.data?.name?.trim() || "Profile"}
-                aria-label="Profile"
+                icon={<ProfileFace name={profileName} />}
+                title={profileName || "Profile"}
+                // Starts with the visible name, so speech and voice control agree.
+                aria-label={profileName ? `${profileName}, Profile` : undefined}
                 selected={pathname === "/profile"}
                 className="min-w-0 flex-1"
                 onClick={() => void navigate({ to: "/profile" })}
@@ -329,7 +413,15 @@ export function BotSidebar() {
           >
             <Search />
           </Button>
-          <Button iconOnly variant="bar" size="small" aria-label="New Bot" title="New Bot" onClick={() => setCreating(true)}>
+          <Button
+            ref={newBotRef}
+            iconOnly
+            variant="bar"
+            size="small"
+            aria-label="New Bot"
+            title="New Bot"
+            onClick={() => setCreating(true)}
+          >
             <Plus />
           </Button>
         </div>
@@ -368,16 +460,18 @@ export function BotSidebar() {
             ) : null}
           </div>
         ) : null}
-        <nav aria-label="Bots" className="flex flex-col px-2.5 pb-3">
+        <nav ref={navRef} aria-label="Bots" className="flex flex-col px-2.5 pb-3">
+          {refreshFailed}
           {list}
-          <RemoteBots query={query} />
+          <RemoteBotsSection groups={remoteShown} opening={remote.opening} onOpen={remote.open} />
         </nav>
       </Sidebar>
       <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
       {deleting ? (
         <BotDeleteDialog
-          bot={deleting}
+          bot={deleting.bot}
           open
+          returnFocus={deleteReturnFocus}
           onOpenChange={(open) => {
             if (!open) setDeleting(null);
           }}

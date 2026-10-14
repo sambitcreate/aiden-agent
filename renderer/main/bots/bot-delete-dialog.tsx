@@ -21,10 +21,13 @@ export function BotDeleteDialog({
   bot,
   open,
   onOpenChange,
+  returnFocus,
 }: {
   bot: Pick<BotDefinition, "id" | "name">;
   open: boolean;
   onOpenChange(open: boolean): void;
+  /** Where focus goes when the dialog closes, such as the next row once this Bot's row is gone. */
+  returnFocus?: () => HTMLElement | null;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -56,6 +59,7 @@ export function BotDeleteDialog({
       confirmVariant="destructive"
       keepOpenOnConfirm
       busy={busy}
+      returnFocus={returnFocus}
       onConfirm={confirm}
     />
   );

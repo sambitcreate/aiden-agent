@@ -978,7 +978,7 @@ test("an open chat keeps its Bot read: a reply that arrives while it is open, an
     "bots:live:unsubscribe": () => undefined,
     "bots:pendingApprovals": () => [],
   });
-  await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
+  const { router } = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
   await screen.findByText("Plan Lisbon");
   await waitFor(() => assert.ok(viewedAt() > 0, "opening the chat views it"));
   const opened = viewedAt();
@@ -996,7 +996,7 @@ test("an open chat keeps its Bot read: a reply that arrives while it is open, an
   const replied = viewedAt();
 
   await new Promise((resolve) => setTimeout(resolve, 5));
-  // Leaving the chat unmounts it.
-  cleanup();
+  await router.navigate({ to: "/scheduled" });
+  await waitFor(() => assert.equal(screen.queryByText("Plan Lisbon") === null, true, "the chat is gone"));
   assert.ok(viewedAt() > replied, "leaving the chat");
 });

@@ -1,10 +1,9 @@
 import * as React from "react";
 import { skipToken, useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { RemoteBotsSection } from "../components/remote-bots-section";
 import { toast } from "../components/ui";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
-import { remoteBotGroups } from "../lib/hosts/new-chat-targets";
+import { remoteBotGroups, type RemoteBotGroup } from "../lib/hosts/new-chat-targets";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import { RemoteNewChatControl } from "../lib/hosts/remote-new-chat";
 import type { PeerHostFeedSnapshot, PeerHostStatus, PeerHostView } from "../shared/peer-host";
@@ -21,12 +20,17 @@ function grantsOf(view: PeerHostView): string {
 }
 
 /**
- * The Bots sidebar's paired-Mac section; `query` is the sidebar's search. Bots come from each host's last-known
+ * The Bots on paired Macs, for the Bots sidebar. Bots come from each host's last-known
  * feed; opening one asks that host for the Bot's chat and opens it there.
  * One control per host is kept while the view is open, so a retry after a
  * lost answer reuses its key.
  */
-export function RemoteBots({ query = "" }: { query?: string } = {}) {
+export function useRemoteBots(): {
+  groups: RemoteBotGroup[];
+  /** `hostId/botId` of the Bot whose chat is being opened. */
+  opening: string | null;
+  open(hostId: string, botId: string): void;
+} {
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
@@ -82,7 +86,5 @@ export function RemoteBots({ query = "" }: { query?: string } = {}) {
     }
   };
 
-  return (
-    <RemoteBotsSection groups={groups} opening={opening} query={query} onOpen={(hostId, botId) => void open(hostId, botId)} />
-  );
+  return { groups, opening, open: (hostId, botId) => void open(hostId, botId) };
 }

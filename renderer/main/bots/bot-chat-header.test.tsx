@@ -1,7 +1,7 @@
 import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
 import { BotChatActions, BotChatNamePill } from "./bot-chat-header";
 
@@ -9,14 +9,17 @@ afterEach(cleanup);
 
 const bot = { id: "b1", name: "SLMob", avatar: { ...DEFAULT_BOT_AVATAR } };
 
-function renderHeader(pinned = false) {
+/** Renders inside an async act, so the avatar's photo read settles before the test goes on. */
+async function renderHeader(pinned = false) {
   const calls: string[] = [];
-  render(
+  await act(async () => {
+    render(
     <>
       <BotChatNamePill bot={bot} onOpenProfile={() => calls.push("profile")} />
       <BotChatActions bot={bot} pinned={pinned} onAction={(action) => calls.push(action)} />
     </>,
-  );
+    );
+  });
   return calls;
 }
 
@@ -25,21 +28,21 @@ const openMenu = async () => {
   return (await screen.findAllByRole("menuitem")).map((item) => item.textContent);
 };
 
-test("the name pill opens the Bot's profile", () => {
-  const calls = renderHeader();
+test("the name pill opens the Bot's profile", async () => {
+  const calls = await renderHeader();
   fireEvent.click(screen.getByRole("button", { name: "SLMob profile" }));
   assert.deepEqual(calls, ["profile"]);
 });
 
 test("the ••• menu offers Profile, Files, Memory, Routines, Advanced, Pin to top and Delete Bot, in that order", async () => {
-  const calls = renderHeader();
+  const calls = await renderHeader();
   assert.deepEqual(await openMenu(), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Routines" }));
   assert.deepEqual(calls, ["routines"]);
 });
 
 test("a pinned Bot's menu offers Unpin instead", async () => {
-  const calls = renderHeader(true);
+  const calls = await renderHeader(true);
   const items = await openMenu();
   assert.equal(items.includes("Unpin"), true);
   assert.equal(items.includes("Pin to top"), false);
@@ -48,7 +51,7 @@ test("a pinned Bot's menu offers Unpin instead", async () => {
 });
 
 test("the ••• menu opens from the keyboard, moves with arrows and runs the highlighted item on Enter", async () => {
-  const calls = renderHeader();
+  const calls = await renderHeader();
   const more = screen.getByRole("button", { name: "More for SLMob" });
   more.focus();
   fireEvent.keyDown(more, { key: "ArrowDown" });
@@ -61,7 +64,7 @@ test("the ••• menu opens from the keyboard, moves with arrows and runs the
 });
 
 test("Delete Bot is the last item, set apart from the others by a separator", async () => {
-  renderHeader();
+  await renderHeader();
   await openMenu();
   const separator = screen.getByRole("separator");
   const deleteItem = screen.getByRole("menuitem", { name: "Delete Bot" });
@@ -71,7 +74,7 @@ test("Delete Bot is the last item, set apart from the others by a separator", as
 });
 
 test("after Files hands focus to the panel, the next close by Pin to top or Escape gives focus back to •••", async () => {
-  renderHeader();
+  await renderHeader();
   const more = screen.getByRole("button", { name: "More for SLMob" });
   more.focus();
   fireEvent.keyDown(more, { key: "Enter" });

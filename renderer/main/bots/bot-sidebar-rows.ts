@@ -1,12 +1,13 @@
 // The Bots sidebar's rows (spec §9): one per Bot, newest activity first, read
-// from the same live summaries main projects for the chat. A question or an
-// approval appearing or settling (`bots:attention`) re-reads that one Bot's
-// row; state changes already re-read every row through `bots:changed`.
+// from the same live summaries main projects for the chat. The window's one
+// `useBotNotificationsSync` re-reads a single Bot's row on its `bots:attention`
+// and on its session state change (`bots:changed`).
 
 import * as React from "react";
 import { useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { botsApi, onNotification } from "../../lib/ipc";
-import { useBots } from "../../lib/queries";
+import { botsApi } from "../../lib/ipc";
+import { queryKeys, useBots } from "../../lib/queries";
+import { matchesSearch } from "../../lib/search-fold";
 import type { BotLiveSummary } from "../../shared/bot-live";
 import type { BotDefinition } from "../../shared/bots";
 import { botRowStatusLabel, type BotSessionState } from "./bot-session-state";
@@ -25,7 +26,7 @@ export interface BotSidebarRow {
 export const BOT_WORKING_LINE = "Thinking…";
 export const BOT_WAITING_LINE = "Waiting for you";
 
-export const botLiveSummaryKey = (botId: string) => ["bot-live-summary", botId] as const;
+export const botLiveSummaryKey = queryKeys.botLiveSummary;
 
 export function botSidebarRows(
   bots: readonly BotDefinition[],
@@ -47,11 +48,7 @@ export function botSidebarRows(
 }
 
 export function matchesBotSearch(row: BotSidebarRow, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return true;
-  return [row.bot.name, row.bot.description ?? "", row.preview ?? ""].some((value) =>
-    value.toLocaleLowerCase().includes(needle),
-  );
+  return matchesSearch([row.bot.name, row.bot.description ?? "", row.preview ?? ""], query);
 }
 
 export type BotRowLine = { kind: "working" | "waiting" | "status" | "preview"; text: string };
@@ -88,15 +85,12 @@ export function useBotRows() {
       retry: false,
     })),
   });
-  React.useEffect(
-    () =>
-      onNotification<{ botId?: unknown }>("bots:attention", (payload) => {
-        // "Re-read this Bot", never the whole list.
-        const botId = payload?.botId;
-        if (typeof botId === "string" && botId) void queryClient.invalidateQueries({ queryKey: botLiveSummaryKey(botId) });
-      }),
-    [queryClient],
-  );
+  React.useEffect(() => {
+    // Forget read numbers of Bots no longer listed, so the map tracks only live Bots.
+    if (!bots.data) return;
+    const live = new Set(bots.data.map((bot) => bot.id));
+    for (const botId of latestSummaryRead.keys()) if (!live.has(botId)) latestSummaryRead.delete(botId);
+  }, [bots.data]);
   const rows = botSidebarRows(
     list,
     summaries.map((result) => result.data),

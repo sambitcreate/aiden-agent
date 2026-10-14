@@ -1,3 +1,5 @@
+// Must stay the first import: it selects TanStack Router's client behaviour.
+import "./test-env";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 
@@ -32,6 +34,7 @@ const GLOBAL_KEYS = [
   "ResizeObserver",
   "DOMRect",
   "getComputedStyle",
+  "scrollTo",
   "requestAnimationFrame",
   "cancelAnimationFrame",
   "matchMedia",

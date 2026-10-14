@@ -112,6 +112,19 @@ export function BotMenuItems({
 }
 
 /**
+ * Shift+F10 and the Menu key open a row's right-click menu where the platform
+ * doesn't (macOS sends no contextmenu for them), anchored under the row.
+ */
+function openContextMenuFromKeyboard(event: React.KeyboardEvent<HTMLElement>): void {
+  if (!((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")) return;
+  event.preventDefault();
+  const rect = event.currentTarget.getBoundingClientRect();
+  event.currentTarget.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 16, clientY: rect.bottom }),
+  );
+}
+
+/**
  * A Bot row's right-click menu and its hover ••• button, with the same items.
  * The row is `children` (the right-click target); `rowRef` points at it, so a
  * panel opened from the right-click menu hands focus back to the row.
@@ -136,7 +149,9 @@ export function BotRowMenus({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
+          {children}
+        </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={contextGuard.onCloseAutoFocus}>
           <BotMenuItems
             pinned={pinned}

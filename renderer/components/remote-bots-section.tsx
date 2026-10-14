@@ -1,7 +1,15 @@
 import { Bot, Loader2 } from "lucide-react";
 import type { RemoteBotGroup } from "../lib/hosts/new-chat-targets";
+import { matchesSearch } from "../lib/search-fold";
 import { RemoteHostMarker } from "./sidebar-remote";
 import { Text } from "./ui";
+
+/** The paired Macs' Bots that match the sidebar's search; a Mac with none is left out. */
+export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query: string): RemoteBotGroup[] {
+  return groups
+    .map(({ host, bots }) => ({ host, bots: bots.filter((bot) => matchesSearch([bot.name, bot.purpose ?? ""], query)) }))
+    .filter((group) => group.bots.length > 0);
+}
 
 /**
  * Bots that live on paired Macs, grouped by Mac, as rows in the Bots sidebar.
@@ -20,15 +28,7 @@ export function RemoteBotsSection({
   onOpen(hostId: string, botId: string): void;
   query?: string;
 }) {
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = groups
-    .map(({ host, bots }) => ({
-      host,
-      bots: needle
-        ? bots.filter((bot) => [bot.name, bot.purpose ?? ""].some((value) => value.toLocaleLowerCase().includes(needle)))
-        : bots,
-    }))
-    .filter((group) => group.bots.length > 0);
+  const shown = remoteBotGroupsMatching(groups, query);
   if (shown.length === 0) return null;
   return (
     <div className="mt-5 flex flex-col gap-5" data-remote-bots="true">
