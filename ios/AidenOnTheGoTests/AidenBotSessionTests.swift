@@ -2862,11 +2862,35 @@ final class AidenBotChatActivityTests: XCTestCase {
         return try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
+    private func conflict() throws -> Error {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"revision_conflict","message":"changed","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        return AidenRemoteClientError.server(statusCode: 409, body: body)
+    }
+
+    /// A model whose Mac accepts every save, with the calls it saw.
+    private func model(
+        revision: String = "rev_1",
+        _ activity: AidenBotChatActivity? = nil,
+        save: @escaping @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail,
+        refresh: @escaping @MainActor () async throws -> AidenBotDetail = { throw SaveFailure() },
+        onSaved: @escaping @MainActor (AidenBotDetail) -> Void = { _ in },
+        waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        connectionHold: Duration = .seconds(8),
+        requestLimit: Duration = .seconds(12)
+    ) throws -> AidenBotChatActivityModel {
+        AidenBotChatActivityModel(
+            bot: try detail(revision: revision, activity), save: save, refresh: refresh, onSaved: onSaved,
+            waitForConnection: waitForConnection, connectionHold: connectionHold, requestLimit: requestLimit
+        )
+    }
+
     func testAPickSavesAtOnceWithTheBotsRevisionAndTheNextPickUsesTheNewOne() async throws {
         var calls: [(AidenBotChatActivity, String)] = []
         var saved: [AidenBotDetail] = []
-        let start = try detail(revision: "rev_1", nil)
-        let model = AidenBotChatActivityModel(bot: start, save: { next, revision in
+        let model = try model(save: { next, revision in
             calls.append((next, revision))
             return try self.detail(revision: revision == "rev_1" ? "rev_2" : "rev_3", next)
         }, onSaved: { saved.append($0) })
@@ -2885,11 +2909,11 @@ final class AidenBotChatActivityTests: XCTestCase {
     func testAFailedSaveReturnsToTheSavedChoiceAndSaysSo() async throws {
         var revisions: [String] = []
         var fail = true
-        let model = AidenBotChatActivityModel(bot: try detail(revision: "rev_1", AidenBotChatActivity(level: .quiet, wording: .follows)), save: { next, revision in
+        let model = try model(AidenBotChatActivity(level: .quiet, wording: .follows), save: { next, revision in
             revisions.append(revision)
             if fail { throw SaveFailure() }
             return try self.detail(revision: "rev_2", next)
-        }, onSaved: { _ in })
+        })
         await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
         XCTAssertEqual(model.value, AidenBotChatActivity(level: .quiet, wording: .follows))
         XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
@@ -2901,14 +2925,43 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertEqual(model.value.level, .detailed)
     }
 
+    func testAConflictRefreshesTheBotAndTheNextPickCarriesTheRefreshedRevision() async throws {
+        var revisions: [String] = []
+        var adopted: [AidenBotDetail] = []
+        var conflicts = true
+        let macsChoice = AidenBotChatActivity(level: .summary, wording: .thinking)
+        let model = try model(save: { next, revision in
+            revisions.append(revision)
+            if conflicts { conflicts = false; throw try self.conflict() }
+            return try self.detail(revision: "rev_6", next)
+        }, refresh: { try self.detail(revision: "rev_5", macsChoice) }, onSaved: { adopted.append($0) })
+
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
+        XCTAssertEqual(model.value, macsChoice, "the radio shows what the Mac has now")
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
+        XCTAssertEqual(adopted.map(\.revision), ["rev_5"], "the screens behind hear about the Mac's version")
+        XCTAssertFalse(model.isSaving)
+
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .thinking))
+        XCTAssertEqual(revisions, ["rev_1", "rev_5"])
+        XCTAssertEqual(model.value.level, .detailed)
+    }
+
+    func testAConflictWhoseRefreshFailsStillRollsBack() async throws {
+        let model = try model(AidenBotChatActivity(level: .quiet, wording: .follows), save: { _, _ in throw try self.conflict() })
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
+        XCTAssertEqual(model.value.level, .quiet)
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
+    }
+
     func testAPickShowsAtOnceAndASecondTapWhileSavingIsNeitherLostNorSentOnAStaleRevision() async throws {
         var calls: [(AidenBotChatActivity, String)] = []
         var release: CheckedContinuation<Void, Never>?
-        let model = AidenBotChatActivityModel(bot: try detail(revision: "rev_1", nil), save: { next, revision in
+        let model = try model(save: { next, revision in
             calls.append((next, revision))
             if calls.count == 1 { await withCheckedContinuation { release = $0 } }
             return try self.detail(revision: "rev_\(calls.count + 1)", next)
-        }, onSaved: { _ in })
+        })
 
         let first = Task { await model.pick(AidenBotChatActivity(level: .summary, wording: .follows)) }
         while release == nil { await Task.yield() }
@@ -2927,17 +2980,103 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testThreeTapsDuringOneSaveSendTheFirstAndTheLastOnly() async throws {
+        var calls: [AidenBotChatActivity] = []
+        var release: CheckedContinuation<Void, Never>?
+        let model = try model(save: { next, _ in
+            calls.append(next)
+            if calls.count == 1 { await withCheckedContinuation { release = $0 } }
+            return try self.detail(revision: "rev_\(calls.count + 1)", next)
+        })
+        let first = Task { await model.pick(AidenBotChatActivity(level: .summary, wording: .follows)) }
+        while release == nil { await Task.yield() }
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .thinking))
+        await model.pick(AidenBotChatActivity(level: .quiet, wording: .thinking))
+        release?.resume()
+        await first.value
+        XCTAssertEqual(calls, [
+            AidenBotChatActivity(level: .summary, wording: .follows),
+            AidenBotChatActivity(level: .quiet, wording: .thinking),
+        ])
+        XCTAssertEqual(model.value, AidenBotChatActivity(level: .quiet, wording: .thinking))
+    }
+
+    func testPickingBackToTheSavedChoiceMidFlightEndsOnThatChoiceOnTheMacToo() async throws {
+        var calls: [AidenBotChatActivity] = []
+        var release: CheckedContinuation<Void, Never>?
+        let original = AidenBotChatActivity(level: .quiet, wording: .follows)
+        let model = try model(original, save: { next, _ in
+            calls.append(next)
+            if calls.count == 1 { await withCheckedContinuation { release = $0 } }
+            return try self.detail(revision: "rev_\(calls.count + 1)", next)
+        })
+        let first = Task { await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows)) }
+        while release == nil { await Task.yield() }
+        await model.pick(original)
+        XCTAssertEqual(model.value, original, "the page already shows the choice they went back to")
+        release?.resume()
+        await first.value
+        XCTAssertEqual(calls.last, original, "the Mac ends on it too, not on the abandoned pick")
+        XCTAssertEqual(model.value, original)
+    }
+
     func testAFailedFollowUpReturnsToTheLastSavedChoice() async throws {
         var count = 0
-        let model = AidenBotChatActivityModel(bot: try detail(revision: "rev_1", nil), save: { next, _ in
+        let model = try model(save: { next, _ in
             count += 1
             if count == 2 { throw SaveFailure() }
             return try self.detail(revision: "rev_2", next)
-        }, onSaved: { _ in })
+        })
         await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
         await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
         XCTAssertEqual(model.value.level, .summary, "back to what the Mac last confirmed")
         XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
+    }
+
+    func testAPickMadeWhileConnectingGoesOutOnceTheMacIsReachable() async throws {
+        var asked: [Duration] = []
+        var calls = 0
+        let model = try model(save: { next, _ in
+            calls += 1
+            return try self.detail(revision: "rev_2", next)
+        }, waitForConnection: { hold in asked.append(hold); return true }, connectionHold: .seconds(8))
+        await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
+        XCTAssertEqual(asked, [.seconds(8)], "it holds the pick for about 8 seconds")
+        XCTAssertEqual(calls, 1)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testAPickThatNeverGetsAConnectionRollsBackWithoutSending() async throws {
+        var calls = 0
+        let model = try model(save: { next, _ in
+            calls += 1
+            return try self.detail(revision: "rev_2", next)
+        }, waitForConnection: { _ in false })
+        await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(model.value, .standard)
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
+    }
+
+    func testARequestOnADeadLinkIsBoundedAndTheNextPickStillUsesTheSameRevision() async throws {
+        var revisions: [String] = []
+        var hang = true
+        let model = try model(save: { next, revision in
+            revisions.append(revision)
+            if hang { try await Task.sleep(for: .seconds(60)) }
+            return try self.detail(revision: "rev_2", next)
+        }, requestLimit: .milliseconds(50))
+        let started = ContinuousClock.now
+        await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5), "it does not wait out the URLSession timeout")
+        XCTAssertEqual(model.value, .standard)
+        XCTAssertEqual(model.errorMessage, "Aiden couldn’t save that choice.")
+
+        hang = false
+        await model.pick(AidenBotChatActivity(level: .summary, wording: .follows))
+        XCTAssertEqual(revisions, ["rev_1", "rev_1"])
+        XCTAssertEqual(model.value.level, .summary)
     }
 
     func testPreviewsShowWhatEachLevelLooksLikeOnTheMac() {
@@ -2949,8 +3088,16 @@ final class AidenBotChatActivityTests: XCTestCase {
             XCTAssertNil(AidenBotChatActivityPreview.frame(index: reply, level: level).phase, "the reply has landed")
         }
         XCTAssertEqual(AidenBotChatActivityPreview.frame(index: reading, level: .quiet).steps, [])
+        XCTAssertNil(AidenBotChatActivityPreview.frame(index: searching, level: .quiet).running)
         XCTAssertEqual(AidenBotChatActivityPreview.frame(index: searching, level: .summary).steps, [])
-        XCTAssertEqual(AidenBotChatActivityPreview.frame(index: searching, level: .detailed).steps.count, searching, "Detailed lists each finished step while it works")
+        // Detailed lists each finished step and the one in progress, which is the one the line names.
+        for index in 1...3 {
+            let frame = AidenBotChatActivityPreview.frame(index: index, level: .detailed)
+            XCTAssertEqual(frame.steps.count, index - 1, "finished steps")
+            XCTAssertNotNil(frame.running, "the step in progress shows as running")
+        }
+        XCTAssertNil(AidenBotChatActivityPreview.frame(index: 0, level: .detailed).running, "thinking has no step yet")
+        XCTAssertNil(AidenBotChatActivityPreview.frame(index: reply, level: .detailed).running)
 
         XCTAssertNil(AidenBotChatActivityPreview.frame(index: reply, level: .quiet).recap)
         let summary = AidenBotChatActivityPreview.frame(index: reply, level: .summary)
@@ -2966,12 +3113,41 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertEqual(AidenBotChatActivityPreview.frameIndex(elapsed: 1.5), 1)
         XCTAssertEqual(AidenBotChatActivityPreview.frameIndex(elapsed: 6.5), reply)
         XCTAssertEqual(AidenBotChatActivityPreview.frameIndex(elapsed: 8.8), 0, "the turn loops")
-        XCTAssertNotNil(AidenBotChatActivityPreview.frame(index: AidenBotChatActivityPreview.stillFrame, level: .quiet).phase,
-                        "Reduce Motion's still frame shows the line mid-turn")
+    }
+
+    func testReduceMotionStillFramesShowWhatMakesEachLevelDifferent() {
+        func still(_ level: AidenBotChatActivityLevel) -> AidenBotChatActivityPreview.Frame {
+            AidenBotChatActivityPreview.frame(index: AidenBotChatActivityPreview.stillIndex(for: level), level: level)
+        }
+        XCTAssertNotNil(still(.quiet).phase, "Quiet holds the line mid-turn")
+        XCTAssertNil(still(.quiet).recap)
+        XCTAssertNil(still(.summary).phase, "Summary holds the reply")
+        XCTAssertNotNil(still(.summary).recap, "with its recap above it, so it never looks like Quiet")
+        XCTAssertNotNil(still(.detailed).phase)
+        XCTAssertFalse(still(.detailed).steps.isEmpty && still(.detailed).running == nil, "Detailed shows its steps")
+        XCTAssertNotEqual(still(.quiet), still(.summary))
+        XCTAssertNotEqual(still(.quiet), still(.detailed))
+        XCTAssertNotEqual(still(.summary), still(.detailed))
     }
 
     func testTheAdvancedRowSummarizesTheChoice() {
         XCTAssertEqual(AidenBotChatActivityCopy.summary(nil), "Quiet · Follows the work")
         XCTAssertEqual(AidenBotChatActivityCopy.summary(AidenBotChatActivity(level: .detailed, wording: .thinking)), "Detailed · Always “Thinking”")
+    }
+
+    func testAdvancedOffersChatActivityOnlyForAMacThatAnnouncesItAndAGrantedPhoneWithABot() {
+        func server(features: [String], grants: [AidenRemoteCapability]) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "i", name: "Mac", appVersion: "1.0", capabilities: grants,
+                serverCapabilities: grants, connectionMode: .lan, minimumClientVersion: nil,
+                serverTime: Date(timeIntervalSince1970: 0), features: features
+            )
+        }
+        let announced = [AidenServer.botActivityFeature]
+        XCTAssertTrue(aidenBotShowsChatActivity(server: server(features: announced, grants: [.botActivity]), hasBaseline: true))
+        XCTAssertFalse(aidenBotShowsChatActivity(server: server(features: [], grants: [.botActivity]), hasBaseline: true), "an older Mac")
+        XCTAssertFalse(aidenBotShowsChatActivity(server: server(features: announced, grants: []), hasBaseline: true), "no grant")
+        XCTAssertFalse(aidenBotShowsChatActivity(server: nil, hasBaseline: true), "no server read yet")
+        XCTAssertFalse(aidenBotShowsChatActivity(server: server(features: announced, grants: [.botActivity]), hasBaseline: false), "no Bot detail yet")
     }
 }

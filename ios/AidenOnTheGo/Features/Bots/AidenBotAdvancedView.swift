@@ -29,6 +29,10 @@ struct AidenBotAdvancedView: View {
     @State private var saveError: String?
     @State private var activeAttempt: AidenBotAdvancedSaveAttempt?
     @State private var isConfirmingDiscard = false
+    @State private var chatActivityModel: AidenBotChatActivityModel?
+    @State private var isShowingChatActivity = false
+    /// A Chat activity pick saved here, not yet reported to the screens behind Advanced.
+    @State private var chatActivityChanged = false
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
@@ -82,6 +86,13 @@ struct AidenBotAdvancedView: View {
                 reset(for: expectedSession)
                 await load(for: expectedSession)
             }
+            .onDisappear {
+                // Closing Advanced (not opening Chat activity) reports a saved pick once.
+                if chatActivityChanged, !isShowingChatActivity, let baselineBot {
+                    chatActivityChanged = false
+                    onSaved(baselineBot)
+                }
+            }
             .alert(
                 "Couldn’t Save",
                 isPresented: Binding(
@@ -134,6 +145,9 @@ struct AidenBotAdvancedView: View {
         }
     }
 
+    /// Editing waits for a connection and for a save; Chat activity has its own rules.
+    private var isLocked: Bool { isSaving || !canWrite }
+
     private func form(_ catalog: AidenBotCapabilityCatalog) -> some View {
         Form {
             if !canWrite {
@@ -142,20 +156,31 @@ struct AidenBotAdvancedView: View {
                         .foregroundStyle(palette.secondary)
                 }
             }
-            modelSection(catalog)
-            accessSection(catalog)
+            modelSection(catalog).disabled(isLocked)
+            accessSection(catalog).disabled(isLocked)
             chatActivitySection
-            if draft?.usesFullAccess == false {
-                optionSection(title: "Connections", options: catalog.connections, keyPath: \.connectionIDs)
-                optionSection(title: "Skills", options: catalog.skills, keyPath: \.skillIDs)
-                filesAndCommandsSection(catalog)
-                optionSection(title: "Other", options: catalog.otherCapabilities, keyPath: \.otherCapabilityIDs)
+            Group {
+                if draft?.usesFullAccess == false {
+                    optionSection(title: "Connections", options: catalog.connections, keyPath: \.connectionIDs)
+                    optionSection(title: "Skills", options: catalog.skills, keyPath: \.skillIDs)
+                    filesAndCommandsSection(catalog)
+                    optionSection(title: "Other", options: catalog.otherCapabilities, keyPath: \.otherCapabilityIDs)
+                }
             }
+            .disabled(isLocked)
         }
         .scrollContentBackground(.hidden)
         .background(palette.canvas)
-        .disabled(isSaving || !canWrite)
         .scrollDismissesKeyboard(.interactively)
+        .navigationDestination(isPresented: $isShowingChatActivity) {
+            if let chatActivityModel, let baselineBot {
+                AidenBotChatActivityView(
+                    bot: baselineBot,
+                    canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                    model: chatActivityModel
+                )
+            }
+        }
     }
 
     private func modelSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
@@ -213,35 +238,72 @@ struct AidenBotAdvancedView: View {
         }
     }
 
-    /// Revision 30: hidden unless the Mac announces `bot-activity-v1` and this phone holds `bot:activity`.
+    /// Revision 30: hidden unless the Mac announces `bot-activity-v1` and this phone holds
+    /// `bot:activity`. It opens from the cached Bot, so it stays reachable offline.
     @ViewBuilder
     private var chatActivitySection: some View {
-        if coordinator.server?.supportsBotActivity == true, let baselineBot {
+        if aidenBotShowsChatActivity(server: coordinator.server, hasBaseline: baselineBot != nil), let baselineBot {
             Section {
-                NavigationLink {
-                    AidenBotChatActivityView(
-                        bot: baselineBot,
-                        canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true,
-                        model: AidenBotChatActivityModel(bot: baselineBot, save: { next, revision in
-                            let context = try coordinator.requestContext()
-                            let client = try coordinator.remoteClient(for: context)
-                            return try await client.updateBotIdentity(
-                                id: baselineBot.id,
-                                revision: revision,
-                                patch: try AidenBotIdentityPatch(chatActivity: next)
-                            )
-                        }, onSaved: { saved in
-                            // Advanced's own Save, and the screens behind it, move to the newest revision.
-                            self.baselineBot = saved
-                            onSaved(saved)
-                        })
-                    )
+                Button {
+                    openChatActivity(baselineBot)
                 } label: {
-                    LabeledContent(AidenBotChatActivityCopy.title, value: AidenBotChatActivityCopy.summary(baselineBot.chatActivity))
+                    HStack {
+                        LabeledContent(AidenBotChatActivityCopy.title, value: AidenBotChatActivityCopy.summary(baselineBot.chatActivity))
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(palette.secondary.opacity(0.6))
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .disabled(isDirty)
+                .buttonStyle(.plain)
+                .disabled(isDirty || isSaving)
             } footer: {
                 Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your Mac while it works.")
+            }
+        }
+    }
+
+    private func openChatActivity(_ bot: AidenBotDetail) {
+        // A model still saving keeps its own revision; reopening it must not fork a second writer.
+        if chatActivityModel?.isSaving != true {
+            let botID = bot.id
+            chatActivityModel = AidenBotChatActivityModel(
+                bot: bot,
+                save: { next, revision in
+                    let client = try coordinator.remoteClient(for: try coordinator.requestContext())
+                    return try await client.updateBotIdentity(
+                        id: botID,
+                        revision: revision,
+                        patch: try AidenBotIdentityPatch(chatActivity: next)
+                    )
+                },
+                refresh: {
+                    let client = try coordinator.remoteClient(for: try coordinator.requestContext())
+                    return try await client.bot(id: botID)
+                },
+                onSaved: { saved in
+                    // Advanced's own Save, and its summary row, move to the newest revision.
+                    // The screens behind hear about it once, when Advanced closes.
+                    baselineBot = saved
+                    chatActivityChanged = true
+                    cacheDetail(saved)
+                },
+                waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
+            )
+        }
+        isShowingChatActivity = true
+    }
+
+    private func cacheDetail(_ detail: AidenBotDetail) {
+        guard let context = try? coordinator.requestContext() else { return }
+        Task {
+            _ = await coordinator.withRetainedInstallationData(for: context) {
+                _ = try? await AidenBotCache.shared.upsertDetailAndStore(
+                    detail,
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId
+                )
             }
         }
     }
@@ -377,6 +439,9 @@ struct AidenBotAdvancedView: View {
         saveError = nil
         activeAttempt = nil
         isConfirmingDiscard = false
+        chatActivityModel = nil
+        isShowingChatActivity = false
+        chatActivityChanged = false
     }
 
     @MainActor
@@ -484,6 +549,7 @@ struct AidenBotAdvancedView: View {
                 self.baselineBot = latest
             }
             guard isCurrent(attempt) else { return }
+            chatActivityChanged = false
             onSaved(latest)
             dismiss()
         } catch is CancellationError {
@@ -510,6 +576,7 @@ struct AidenBotAdvancedView: View {
                 self.catalog = refreshedCatalog
                 self.draft = rebasedDraft
                 if (try? rebasedDraft.isSatisfied(by: authoritative, catalog: refreshedCatalog)) == true {
+                    chatActivityChanged = false
                     onSaved(authoritative)
                     dismiss()
                 } else {
@@ -677,6 +744,32 @@ struct AidenBotModelListView: View {
 
 // MARK: - Chat activity (spec §7, contract revision 30)
 
+/// Advanced offers Chat activity on a Mac that announces `bot-activity-v1` to a phone that
+/// holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen.
+func aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Bool) -> Bool {
+    hasBaseline && server?.supportsBotActivity == true
+}
+
+/// The Bot changed on the Mac since this phone read it (a stale `If-Match`).
+func aidenBotIsRevisionConflict(_ error: Error) -> Bool {
+    guard case let AidenRemoteClientError.server(status, body) = error else { return false }
+    return status == 409 || body.code == AidenRemoteErrorCode(rawValue: "revision_conflict")
+}
+
+/// Waits for the Mac connection to come up, so an optimistic pick made while connecting
+/// still goes out. False once `hold` runs out, or when no Mac is paired.
+@MainActor
+func aidenBotWaitForConnection(_ coordinator: AidenRemoteCoordinator, hold: Duration) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: hold)
+    while coordinator.connectionState != .connected {
+        if coordinator.connectionState == .needsPairing || clock.now >= deadline || Task.isCancelled { return false }
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+    return true
+}
+
+
 /// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android.
 enum AidenBotChatActivityCopy {
     static let title = "Chat activity"
@@ -733,21 +826,28 @@ enum AidenBotChatActivityPreview {
     struct Frame: Equatable {
         /// The line's phase, or nil on the reply frame.
         let phase: String?
-        /// Step rows: Detailed while live, or the open recap after the reply.
+        /// Finished step rows: Detailed while live, or the open recap after the reply.
         let steps: [String]
+        /// The step in progress, listed while the line says its phase (Detailed only).
+        let running: String?
         let recap: String?
         let recapOpen: Bool
     }
 
     static let durations: [TimeInterval] = [1.4, 1.6, 1.6, 1.4, 2.8]
-    /// Reduce Motion's still frame: mid-turn, with the line showing.
-    static let stillFrame = 2
     static let prompt = "Plan dinners for this week"
     static let reply = "Here’s a plan for the week."
     static let recap = "Worked for 18s · read 1 file, searched the web, edited 1 file"
 
     private static let phases: [String?] = ["thinking", "reading", "searching", "editing", nil]
     private static let stepLabels = ["Read 1 file", "Searched the web", "Edited 1 file"]
+    private static let runningLabels = ["Reading 1 file…", "Searching the web…", "Editing 1 file…"]
+
+    /// Reduce Motion's still frame. Summary's whole point is the recap above the reply, so it
+    /// holds the reply; Quiet and Detailed hold the line (and Detailed's steps) mid-turn.
+    static func stillIndex(for level: AidenBotChatActivityLevel) -> Int {
+        level == .summary ? phases.count - 1 : 2
+    }
 
     static func frameIndex(elapsed: TimeInterval) -> Int {
         let total = durations.reduce(0, +)
@@ -763,19 +863,33 @@ enum AidenBotChatActivityPreview {
     static func frame(index: Int, level: AidenBotChatActivityLevel) -> Frame {
         let clamped = min(max(index, 0), phases.count - 1)
         if let phase = phases[clamped] {
-            return Frame(phase: phase, steps: level == .detailed ? Array(stepLabels.prefix(clamped)) : [], recap: nil, recapOpen: false)
+            let live = level == .detailed && clamped >= 1
+            return Frame(
+                phase: phase,
+                steps: live ? Array(stepLabels.prefix(clamped - 1)) : [],
+                running: live ? runningLabels[clamped - 1] : nil,
+                recap: nil,
+                recapOpen: false
+            )
         }
         switch level {
-        case .quiet: return Frame(phase: nil, steps: [], recap: nil, recapOpen: false)
-        case .summary: return Frame(phase: nil, steps: [], recap: recap, recapOpen: false)
-        case .detailed: return Frame(phase: nil, steps: stepLabels, recap: recap, recapOpen: true)
+        case .quiet: return Frame(phase: nil, steps: [], running: nil, recap: nil, recapOpen: false)
+        case .summary: return Frame(phase: nil, steps: [], running: nil, recap: recap, recapOpen: false)
+        case .detailed: return Frame(phase: nil, steps: stepLabels, running: nil, recap: recap, recapOpen: true)
         }
     }
 }
 
+/// A save that outran its limit; the pick returns to the saved choice.
+struct AidenBotChatActivityTimeout: Error {}
+/// The Mac stayed unreachable for the whole hold.
+struct AidenBotChatActivityUnreachable: Error {}
+
 /// Applies each pick at once and saves it with no Save button, like the Mac page.
 /// A failed save returns to the last choice the Mac confirmed. A pick made while a
-/// save is in flight shows at once and goes out next, on the revision that save returned.
+/// save is in flight shows at once and goes out next (the last pick wins), on the
+/// revision that save returned. A stale revision refreshes the Bot and adopts the Mac's choice.
+/// Nothing is queued durably: a pick is held only for `connectionHold` while the Mac connects.
 @MainActor
 @Observable
 final class AidenBotChatActivityModel {
@@ -788,19 +902,33 @@ final class AidenBotChatActivityModel {
     @ObservationIgnored private var pending: AidenBotChatActivity?
     @ObservationIgnored private var revision: String
     @ObservationIgnored private let save: @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail
+    @ObservationIgnored private let refresh: @MainActor () async throws -> AidenBotDetail
     @ObservationIgnored private let onSaved: @MainActor (AidenBotDetail) -> Void
+    @ObservationIgnored private let waitForConnection: (@MainActor (Duration) async -> Bool)?
+    @ObservationIgnored private let connectionHold: Duration
+    @ObservationIgnored private let requestLimit: Duration
 
+    /// `requestLimit` bounds each request: the phone's URLSession waits for connectivity
+    /// for minutes, which a settings pick must not.
     init(
         bot: AidenBotDetail,
         save: @escaping @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail,
-        onSaved: @escaping @MainActor (AidenBotDetail) -> Void
+        refresh: @escaping @MainActor () async throws -> AidenBotDetail,
+        onSaved: @escaping @MainActor (AidenBotDetail) -> Void,
+        waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        connectionHold: Duration = .seconds(8),
+        requestLimit: Duration = .seconds(12)
     ) {
         let current = bot.chatActivity ?? .standard
         value = current
         saved = current
         revision = bot.revision
         self.save = save
+        self.refresh = refresh
         self.onSaved = onSaved
+        self.waitForConnection = waitForConnection
+        self.connectionHold = connectionHold
+        self.requestLimit = requestLimit
     }
 
     func pick(_ next: AidenBotChatActivity) async {
@@ -816,14 +944,28 @@ final class AidenBotChatActivityModel {
         var target = next
         while true {
             do {
-                let detail = try await save(target, revision)
+                if let waitForConnection, await waitForConnection(connectionHold) == false {
+                    throw AidenBotChatActivityUnreachable()
+                }
+                let save = save
+                let sending = target
+                let sentRevision = revision
+                let detail = try await Self.within(requestLimit) { try await save(sending, sentRevision) }
                 revision = detail.revision
                 saved = detail.chatActivity ?? target
                 onSaved(detail)
             } catch {
                 pending = nil
+                if error is CancellationError {
+                    value = saved
+                    return
+                }
+                if aidenBotIsRevisionConflict(error) {
+                    await adoptTheMacsChoice()
+                }
+                pending = nil
                 value = saved
-                if !(error is CancellationError) { errorMessage = AidenBotChatActivityCopy.saveFailed }
+                errorMessage = AidenBotChatActivityCopy.saveFailed
                 return
             }
             guard let following = pending else { break }
@@ -832,6 +974,31 @@ final class AidenBotChatActivityModel {
             target = following
         }
         value = saved
+    }
+
+    /// The Bot changed on the Mac: take its revision and choice, so the next pick can save.
+    private func adoptTheMacsChoice() async {
+        let refresh = refresh
+        guard let fresh = try? await Self.within(requestLimit, { try await refresh() }) else { return }
+        revision = fresh.revision
+        saved = fresh.chatActivity ?? .standard
+        onSaved(fresh)
+    }
+
+    nonisolated private static func within<T: Sendable>(
+        _ limit: Duration,
+        _ operation: @escaping @MainActor () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: limit)
+                throw AidenBotChatActivityTimeout()
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw AidenBotChatActivityTimeout() }
+            return first
+        }
     }
 }
 
@@ -862,23 +1029,27 @@ struct AidenBotChatActivityView: View {
                     .listRowBackground(palette.raised)
             }
             Section(AidenBotChatActivityCopy.levelTitle) {
-                ForEach(AidenBotChatActivityLevel.allCases, id: \.self) { level in
+                let levels = AidenBotChatActivityLevel.allCases
+                ForEach(Array(levels.enumerated()), id: \.element) { index, level in
                     choiceRow(
                         title: AidenBotChatActivityCopy.label(level),
                         detail: AidenBotChatActivityCopy.detail(level),
                         recommended: level == .quiet,
                         selected: model.value.level == level,
+                        neighbors: neighbors(levels.map { model.value.level == $0 }, index),
                         preview: AidenBotChatActivityPreviewView(level: level, wording: model.value.wording)
                     ) { Task { await model.pick(AidenBotChatActivity(level: level, wording: model.value.wording)) } }
                 }
             }
             Section(AidenBotChatActivityCopy.wordingTitle) {
-                ForEach(AidenBotChatActivityWording.allCases, id: \.self) { wording in
+                let wordings = AidenBotChatActivityWording.allCases
+                ForEach(Array(wordings.enumerated()), id: \.element) { index, wording in
                     choiceRow(
                         title: AidenBotChatActivityCopy.label(wording),
                         detail: AidenBotChatActivityCopy.detail(wording),
                         recommended: false,
                         selected: model.value.wording == wording,
+                        neighbors: neighbors(wordings.map { model.value.wording == $0 }, index),
                         preview: AidenBotChatActivityPreviewView(level: .quiet, wording: wording)
                     ) { Task { await model.pick(AidenBotChatActivity(level: model.value.level, wording: wording)) } }
                 }
@@ -907,12 +1078,21 @@ struct AidenBotChatActivityView: View {
         }
     }
 
+    /// Which separators touch the selected row; those are hidden so no sliver shows above it.
+    private func neighbors(_ selected: [Bool], _ index: Int) -> (top: Bool, bottom: Bool) {
+        let above = index > 0 && selected[index - 1]
+        let below = index < selected.count - 1 && selected[index + 1]
+        return (selected[index] || above, selected[index] || below)
+    }
+
     /// A radio row: the radio and the row's background show the choice; there is no border.
+    /// The row reads as one element (title, Recommended, detail); the preview is decoration.
     private func choiceRow(
         title: String,
         detail: String,
         recommended: Bool,
         selected: Bool,
+        neighbors: (top: Bool, bottom: Bool),
         preview: AidenBotChatActivityPreviewView,
         action: @escaping () -> Void
     ) -> some View {
@@ -939,19 +1119,22 @@ struct AidenBotChatActivityView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // No dedicated selection token exists; the accent wash is what Appearance and onboarding use.
         .listRowBackground(
             ZStack {
                 palette.raised
                 if selected { palette.accent.opacity(0.12) }
             }
         )
+        .listRowSeparator(neighbors.top ? .hidden : .automatic, edges: .top)
+        .listRowSeparator(neighbors.bottom ? .hidden : .automatic, edges: .bottom)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityHint(detail)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
-/// A small chat replaying one scripted turn. It holds its still frame under Reduce Motion.
+/// A small chat replaying one scripted turn. It holds its still frame under Reduce Motion,
+/// and stops while the app is inactive or the preview is scrolled out of view.
 struct AidenBotChatActivityPreviewView: View {
     let level: AidenBotChatActivityLevel
     let wording: AidenBotChatActivityWording
@@ -959,19 +1142,24 @@ struct AidenBotChatActivityPreviewView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.aidenReduceMotion) private var appReduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var onScreen = true
+    @ScaledMetric(relativeTo: .caption) private var markSize: CGFloat = 14
 
     private var still: Bool { systemReduceMotion || appReduceMotion }
+    private var paused: Bool { still || scenePhase != .active || !onScreen }
 
     var body: some View {
         // One shared clock, so every preview on the page is on the same step of the turn.
-        TimelineView(.animation(minimumInterval: 0.2, paused: still)) { context in
+        TimelineView(.animation(minimumInterval: 0.2, paused: paused)) { context in
             let index = still
-                ? AidenBotChatActivityPreview.stillFrame
+                ? AidenBotChatActivityPreview.stillIndex(for: level)
                 : AidenBotChatActivityPreview.frameIndex(elapsed: context.date.timeIntervalSinceReferenceDate)
             content(AidenBotChatActivityPreview.frame(index: index, level: level))
         }
         .padding(10)
         .background(palette.canvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onScrollVisibilityChange(threshold: 0.05) { onScreen = $0 }
         .accessibilityHidden(true)
     }
 
@@ -986,17 +1174,24 @@ struct AidenBotChatActivityPreviewView: View {
                 .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             if let recap = frame.recap {
-                Label(recap, systemImage: frame.recapOpen ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(palette.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: frame.recapOpen ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                    Text(recap).fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption2)
+                .foregroundStyle(palette.secondary)
             }
             ForEach(frame.steps, id: \.self) { step in
                 Text(step).font(.caption2).foregroundStyle(palette.secondary).padding(.leading, 14)
             }
+            if let running = frame.running {
+                Text(running).font(.caption2.weight(.medium)).foregroundStyle(palette.foreground).padding(.leading, 14)
+            }
             if let phase = frame.phase {
                 let shown = AidenBotActivityPhase.display(phase: phase, wording: wording, app: nil)
                 HStack(spacing: 6) {
-                    AidenActivityMark(mark: shown.mark, size: 14, active: !still, color: palette.secondary)
+                    AidenActivityMark(mark: shown.mark, size: markSize, active: !paused, color: palette.secondary)
                     Text(shown.word).font(.caption)
                 }
                 .foregroundStyle(palette.secondary)
