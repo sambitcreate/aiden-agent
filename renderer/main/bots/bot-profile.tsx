@@ -208,7 +208,7 @@ export function BotProfile({
     <BotPageShell
       scrollId={`bot-profile:${bot.id}`}
       title={bot.name}
-      backLabel="All Bots"
+      backLabel="Chat"
       onBack={onBack}
       actions={
         <DropdownMenu>

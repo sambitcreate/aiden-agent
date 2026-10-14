@@ -67,8 +67,8 @@ These are the owner's decisions from 2026-10-14.
 - **Environment panel** (`renderer/components/environment-panel.tsx`, about 2,100 lines):
   - `EnvironmentWorkbench` wraps every route, including `/bots/*`.
   - Its tabs are tightly coupled to the workspace and the active chat.
-  - Bots use `bot-files-dialog.tsx` instead.
-- **Sidebar:** `renderer/components/chat-sidebar.tsx` and `sidebar-primary-nav.tsx`. Bots are one nav item, and no Bot rows appear in the sidebar.
+  - (was) Bots use `bot-files-dialog.tsx` instead. C2 replaced it with the Bot panel's Files tab.
+- **Sidebar:** `renderer/components/chat-sidebar.tsx` and `sidebar-primary-nav.tsx`. (was) Bots are one nav item, and no Bot rows appear in the sidebar. C2 gives Bots pages their own sidebar.
 - **••• menus:**
   - Chat header: Profile, Files, Delete Bot.
   - List rows: Profile, Delete Bot.
@@ -242,6 +242,7 @@ chatActivity?: { level: "quiet" | "summary" | "detailed"; wording: "follows" | "
   - **Memory:** the Memory page's content in compact form. Edit and delete behave exactly as in Profile → Memory, which stays.
   - **Routines:** the Routines group's content, with Add routine.
 - **Opening it.** A panel toggle sits in the Bot chat header. Files, Memory and Routines in the ••• menu open the panel on that tab.
+  - Implemented in C2 on the chat route `/bots/$botId/chat` (`renderer/main/bots/bot-workbench.tsx`), with its own state and keys (`aiden-agent.bot-panel.*`, `BotPanelProvider`). `environment.toggle` toggles it in a Bot chat and does nothing on other Bots pages. The workspace Environment, Quick View and device mini player are suppressed on every Bots path and come back unchanged (the workspace panel reads `data-state="covered"` while Bots pages show).
 
 ## 9. Bots sidebar
 
@@ -379,3 +380,33 @@ Every new test file is registered in the matching `package.json` script and `scr
   - The Chat activity page saves on pick through a serial queue (a failed save returns the radio to the saved choice with a toast). Each level has its own Reduce Motion still frame, and Reduce Motion is read live.
   - Faces glance through `data-working` on the avatar, with one shared off-screen observer.
   - The Bots onboarding tile needed no redraw: it shows neither the list nor the Updates line (it draws the name pill, one exchange and a routine chip).
+
+- **Slice C2 rulings (2026-10-14):**
+  - The Bot panel lives on the chat route only; Profile and its sub-pages stay full pages.
+  - Bots on paired Macs are listed in the Bots sidebar under "On {Mac}", and search filters them.
+  - "Most recently used" is the Bot last viewed on this Mac, else the newest activity (chat activity once the summaries answer, else the Bot's own `updatedAt` after 800 ms, so a summary that never answers cannot leave `/bots` blank). While the list loads, or a Bot is about to open, `/bots` shows a skeleton; an open create flow suppresses the redirect.
+  - Unread compares the Bot's last reply with the newest reply its chat showed on this Mac (`seenReplyAt`, both main's times), or with when the preference record began for a Bot whose chat showed none, so updating lights up nothing. Main times a reply from when it starts streaming, so a reply that started before the person left and finished after is still unread. `lastViewed` (this Mac's clock) only picks the Bot `/bots` opens.
+  - The pinned Bot shows only as the hero; deleting it clears the pin.
+  - The footer shows the profile name's initial (Aiden has no profile photo) and Connect apps opens Settings → Plugins.
+  - The chat header has no "All Bots" back; Profile's back reads "Chat". The exceptions keep "All Bots", because there is no Bot whose chat they could go back to: Profile's loading and "not found" shells, and the chat's "not found" shell.
+  - "Memory updated" opens the panel's Memory tab.
+  - A waiting Bot's row reads "Waiting for you"; a working one "Thinking…".
+  - `bots:live:summary` gained `needsYou` and `lastReplyAt`; `bots:attention` refreshes a row when a question or approval changes. Desktop IPC only.
+  - Deviations from the plan as written, all accepted:
+    - One refcounted live store per Bot per window (`useBotLive`) instead of a context-only provider, so every consumer (the chat, the panel tabs) shares the single `bots:live:subscribe`. The chat holds it while it is shown.
+    - C1's `WorkbenchPanel` gained two optional props: `surface` (the `data-environment-surface` name, default `"tools"`, so the Bot panel is not treated as the workspace surface by focus and Escape rules) and `tabMenu` (default true; the Bot panel hides the "Open tabs" menu because its tabs are fixed).
+    - Back to Aiden, Search and New Bot sit at the top of the sidebar body rather than in the title bar, which the window controls overlap.
+    - `bots:changed` and `bots:attention` are synced once per window (`useBotNotificationsSync`) and re-read only the Bot they name.
+    - The Activity tab always shows the full log. The Chat activity level governs only the in-chat recap, since opening the panel is an explicit ask.
+    - Bot renderer suites run with `NODE_ENV=test` (`renderer/main/bots/test-env.ts`, imported first by `test-dom.ts`) so TanStack Router uses its client behaviour and routed pages re-render; navigation tests are real.
+  - Final fix wave: the Bot panel has its own width range (400–720, default 440) so it sits beside the chat, reflowing it, wherever the chat keeps a 560px column, and floats only where the workspace panel would float too. Deleting a Bot that is not on screen stays on the current page. A consumer joining a failed live store keeps the last view while it retries. Search folds only Latin accents.
+  - Parked, not fixed in C2:
+    - The workspace sidebar's local state is lost when Bots pages remount it.
+    - A batched summaries IPC (one `bots:live:summary` read per Bot on mount today).
+    - Profile → Chat pushes a history entry (pre-existing).
+    - A list with only paired Macs' Bots still shows "Meet your first Bot" on `/bots`.
+    - The device mini player reconnects while the workspace surface is suppressed (pre-existing, shared with the paired-host path).
+    - Closing the Bot panel returns focus to the panel toggle, not the composer (as briefed).
+    - A file chip names only the file's basename (pre-existing).
+    - Test debt: the `lastNonBotRoute` test depends on pristine module state and lacks edge cases (trailing slash, `/chat/extra`, a query on a Bots path, `/botsy`); dead `deferred()` lines in the Files keep-on-refresh test; the render probe never uninstalls (each suite is its own process); Task 2 review minors 3, 4 and 6 on the preference store.
+  - The Bots onboarding tile keeps its content; only its header changed from a back chevron to the panel toggle.

@@ -27,6 +27,7 @@ import {
   BOT_SILENT_REPLY,
   botFailedTurnId,
   botQuestionAnswerText,
+  botLastReplyAt,
   botTranscriptPreview,
   type BotLiveActivity,
   type BotLiveEvent,
@@ -1082,17 +1083,37 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     },
 
     async summary(botId) {
+      // Read right before each return, so a slow summary never reports a stale wait. It uses the
+      // same sources as the chat, so a row agrees with it whether or not a chat is open.
+      const needsYouNow = () => (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
         const preview = botTranscriptPreview(feed.entries);
-        return { botId, preview: preview?.text ?? null, updatedAt: preview?.at ?? null, state: feed.state };
+        return {
+          botId,
+          preview: preview?.text ?? null,
+          updatedAt: preview?.at ?? null,
+          state: feed.state,
+          needsYou: needsYouNow(),
+          lastReplyAt: botLastReplyAt(feed.entries),
+        };
       }
       const state = await deps.state(botId);
-      if (state.kind === "unavailable") return { botId, preview: null, updatedAt: null, state };
+      if (state.kind === "unavailable") {
+        return { botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null };
+      }
       const view = await (await deps.conversation(botId)).context(BACKGROUND_CONTEXT);
-      const preview = botTranscriptPreview(projectBotTranscript(view.entries));
-      return { botId, preview: preview?.text ?? null, updatedAt: preview?.at ?? null, state };
+      const entries = projectBotTranscript(view.entries);
+      const preview = botTranscriptPreview(entries);
+      return {
+        botId,
+        preview: preview?.text ?? null,
+        updatedAt: preview?.at ?? null,
+        state,
+        needsYou: needsYouNow(),
+        lastReplyAt: botLastReplyAt(entries),
+      };
     },
 
     async close(botId) {

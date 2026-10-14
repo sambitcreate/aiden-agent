@@ -51,7 +51,14 @@ function fakeProjection() {
     notifyResuming: () => undefined,
     cancelStopping: () => undefined,
     refreshActivity: async () => undefined,
-    summary: async (botId) => ({ botId, preview: "hi", updatedAt: 1, state: { kind: "idle" } }),
+    summary: async (botId) => ({
+      botId,
+      preview: "hi",
+      updatedAt: 1,
+      state: { kind: "idle" },
+      needsYou: true,
+      lastReplyAt: 1,
+    }),
     close: async () => undefined,
   };
   return {
@@ -130,6 +137,8 @@ test("the list summary comes from the projection", async () => {
     preview: "hi",
     updatedAt: 1,
     state: { kind: "idle" },
+    needsYou: true,
+    lastReplyAt: 1,
   });
 });
 

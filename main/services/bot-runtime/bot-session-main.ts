@@ -41,6 +41,7 @@ import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals } from "./bot-approvals-main.js";
+import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
@@ -331,6 +332,14 @@ botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
     logger.warn("bots", `Bot ${botId} activity view report.`, error),
   );
+});
+
+// "Needs you" in the Bots sidebar follows questions and approvals as they
+// appear and settle; the renderer re-reads that Bot's summary.
+wireBotAttention({
+  questions: botQuestions,
+  approvals: botApprovals,
+  broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
 /** The process-wide live projection that renderer windows subscribe to. */

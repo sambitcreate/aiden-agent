@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { ChevronLeft, Ellipsis } from "lucide-react";
+import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
   Button,
@@ -9,16 +9,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui";
+import { useShortcutBinding, useShortcutLabel } from "../../lib/command-system";
+import { ariaKeyShortcut } from "../../shared/keybindings";
 import type { BotDefinition } from "../../shared/bots";
-
-/** Back to the Bots list, in the chat toolbar's leading slot. */
-export function BotChatBackButton({ onBack }: { onBack(): void }) {
-  return (
-    <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
-      <ChevronLeft />
-    </Button>
-  );
-}
+import { BotMenuItems, useBotMenuFocusGuard, type BotMenuAction } from "./bot-menu";
+import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
 
 /** The chat toolbar's title: the Bot's avatar and name, which open its Profile. */
 export function BotChatNamePill({
@@ -47,22 +42,17 @@ export function BotChatNamePill({
   );
 }
 
-/** The action side of a Bot chat: one ••• menu with Profile, Files, Memory, Advanced and Delete Bot. */
+/** The action side of a Bot chat: the shared Bot ••• menu (spec §10). */
 export function BotChatActions({
   bot,
-  onOpenProfile,
-  onOpenFiles,
-  onOpenMemory,
-  onOpenAdvanced,
-  onDelete,
+  pinned,
+  onAction,
 }: {
   bot: Pick<BotDefinition, "name">;
-  onOpenProfile(): void;
-  onOpenFiles?(): void;
-  onOpenMemory?(): void;
-  onOpenAdvanced?(): void;
-  onDelete(): void;
+  pinned: boolean;
+  onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
 }) {
+  const focusGuard = useBotMenuFocusGuard();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -70,16 +60,38 @@ export function BotChatActions({
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onOpenProfile}>Profile</DropdownMenuItem>
-        {onOpenFiles ? <DropdownMenuItem onSelect={onOpenFiles}>Files</DropdownMenuItem> : null}
-        {onOpenMemory ? <DropdownMenuItem onSelect={onOpenMemory}>Memory</DropdownMenuItem> : null}
-        {onOpenAdvanced ? <DropdownMenuItem onSelect={onOpenAdvanced}>Advanced</DropdownMenuItem> : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem color="status-red" onSelect={onDelete}>
-          Delete Bot
-        </DropdownMenuItem>
+      <DropdownMenuContent align="end" onCloseAutoFocus={focusGuard.onCloseAutoFocus}>
+        <BotMenuItems
+          pinned={pinned}
+          Item={DropdownMenuItem}
+          Separator={DropdownMenuSeparator}
+          focusGuard={focusGuard}
+          onAction={onAction}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** Shows and hides the Bot side panel; `environment.toggle` does the same from the keyboard. */
+export function BotPanelToggle() {
+  const panel = useBotPanel();
+  const shortcut = useShortcutLabel("environment.toggle");
+  const binding = useShortcutBinding("environment.toggle");
+  return (
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      onClick={panel.toggle}
+      aria-label={panel.open ? "Hide panel" : "Show panel"}
+      aria-pressed={panel.open}
+      aria-controls={BOT_PANEL_ID}
+      aria-keyshortcuts={ariaKeyShortcut(binding)}
+      title={`Toggle panel (${shortcut})`}
+      data-bot-panel-toggle
+    >
+      {panel.open ? <PanelRightClose /> : <PanelRightOpen />}
+    </Button>
   );
 }

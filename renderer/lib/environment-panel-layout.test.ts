@@ -13,6 +13,7 @@ import {
   resolveQuickViewLayout,
   resolveChatCardInset,
   storedWorkbenchWidth,
+  BOT_PANEL_WIDTH_BOUNDS,
   MIN_DOCKED_CHAT_COLUMN_WIDTH,
   SURFACE_GAP,
 } from "./environment-panel-layout.js";
@@ -219,4 +220,37 @@ test("a saved workbench width is used only when it is a number inside the saved 
   assert.equal(storedWorkbenchWidth(""), 560);
   assert.equal(storedWorkbenchWidth("wide"), 560);
   assert.equal(storedWorkbenchWidth("Infinity"), 560);
+});
+
+test("the Bot panel sits beside the chat on a 1280px window with the sidebar open, where the workspace panel floats", () => {
+  // A 1280px window less the 272px sidebar.
+  const chatArea = 1008;
+  assert.equal(resolveEnvironmentPanelLayout(DEFAULT_PANEL_WIDTH, chatArea).inline, false);
+  const bot = resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, chatArea, BOT_PANEL_WIDTH_BOUNDS);
+  assert.equal(bot.inline, true);
+  assert.equal(bot.width, BOT_PANEL_WIDTH_BOUNDS.default);
+  assert.ok(chatArea - bot.width >= MIN_CONVERSATION_WIDTH, "the chat keeps a usable column");
+  // A wide saved width shrinks to leave that column rather than floating.
+  const wide = resolveEnvironmentPanelLayout(MAX_PANEL_WIDTH, chatArea, BOT_PANEL_WIDTH_BOUNDS);
+  assert.deepEqual(wide, { width: chatArea - MIN_CONVERSATION_WIDTH, inline: true });
+});
+
+test("the Bot panel floats only where the workspace panel would float too", () => {
+  for (let containerWidth = 300; containerWidth <= 1800; containerWidth += 10) {
+    const bot = resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, containerWidth, BOT_PANEL_WIDTH_BOUNDS);
+    const workspace = resolveEnvironmentPanelLayout(DEFAULT_PANEL_WIDTH, containerWidth);
+    if (!bot.inline) assert.equal(workspace.inline, false, `at ${containerWidth}px`);
+    if (bot.inline) assert.ok(containerWidth - bot.width >= MIN_CONVERSATION_WIDTH, `at ${containerWidth}px`);
+  }
+  assert.equal(resolveEnvironmentPanelLayout(BOT_PANEL_WIDTH_BOUNDS.default, 900, BOT_PANEL_WIDTH_BOUNDS).inline, false);
+});
+
+test("a saved Bot panel width narrower than the workspace's range survives, and its resize stops at its own minimum", () => {
+  assert.equal(storedWorkbenchWidth("420", BOT_PANEL_WIDTH_BOUNDS), 420);
+  assert.equal(storedWorkbenchWidth("420"), DEFAULT_PANEL_WIDTH, "the workspace range is unchanged");
+  assert.equal(storedWorkbenchWidth(null, BOT_PANEL_WIDTH_BOUNDS), BOT_PANEL_WIDTH_BOUNDS.default);
+  assert.deepEqual(resolveEnvironmentPanelResizeBounds(1600, true, BOT_PANEL_WIDTH_BOUNDS), {
+    min: BOT_PANEL_WIDTH_BOUNDS.min,
+    max: MAX_PANEL_WIDTH,
+  });
 });

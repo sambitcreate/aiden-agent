@@ -23,10 +23,18 @@ function toneClass(tone: "normal" | "warning" | "error"): string {
   return "text-secondary";
 }
 
-function RecapStepRow({ step }: { step: BotRecapStep }) {
+const STEP_ROW_SIZE = {
+  /** The in-chat recap. */
+  mini: "min-h-5 py-px text-mini",
+  /** The side panel's Activity log. */
+  small: "min-h-6 py-0.5 text-small",
+} as const;
+
+/** One step as a list item, in B's wording and tones; the live step shimmers (only with motion allowed). */
+export function BotStepRow({ step, size = "mini" }: { step: BotRecapStep; size?: keyof typeof STEP_ROW_SIZE }) {
   const line = botStepLine(step);
   return (
-    <div role="listitem" className="flex min-h-5 min-w-0 items-start py-px text-mini">
+    <div role="listitem" className={`flex min-w-0 items-start ${STEP_ROW_SIZE[size]}`}>
       <span className={`min-w-0 break-words ${line.active ? "agent-thinking-shimmer" : ""}`}>
         <span className={`${toneClass(line.tone)} font-medium`}>{line.text}</span>
         {line.detail ? <span className="text-tertiary"> · {line.detail}</span> : null}
@@ -76,7 +84,7 @@ export function BotActivityRecap({
       {open ? (
         <div id={regionId} role="list" aria-label="Steps" className="mt-1 flex flex-col pl-6">
           {shown.map((step) => (
-            <RecapStepRow key={step.id} step={step} />
+            <BotStepRow key={step.id} step={step} />
           ))}
         </div>
       ) : null}

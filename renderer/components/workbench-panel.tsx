@@ -10,7 +10,11 @@ import {
 import { cn } from "../lib/ui-utils";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
-import { resolveEnvironmentPanelResizeBounds, storedWorkbenchWidth } from "../lib/environment-panel-layout";
+import {
+  resolveEnvironmentPanelResizeBounds,
+  storedWorkbenchWidth,
+  type PanelWidthBounds,
+} from "../lib/environment-panel-layout";
 
 export interface WorkbenchWidthState {
   /** The person's preferred width; the rendered width is resolved against the container. */
@@ -24,9 +28,9 @@ export interface WorkbenchWidthState {
 }
 
 /** Preferred width and drag state for a workbench, persisted under `storageKey`. */
-export function useWorkbenchWidth(storageKey: string): WorkbenchWidthState {
+export function useWorkbenchWidth(storageKey: string, bounds?: PanelWidthBounds): WorkbenchWidthState {
   const [preferredWidth, setPreferredWidth] = React.useState(() =>
-    storedWorkbenchWidth(localStorage.getItem(storageKey)),
+    storedWorkbenchWidth(localStorage.getItem(storageKey), bounds),
   );
   const [resizing, setResizing] = React.useState(false);
   const commitPreferredWidth = React.useCallback(
@@ -76,6 +80,8 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
   onCloseTab: (tab: T) => void;
   /** The launcher hook point. Without it the strip has no "+" button. */
   newTab?: { label: string; onOpen: () => void };
+  /** The "Open tabs" list, for strips whose tabs can overflow. Defaults to shown. */
+  tabMenu?: boolean;
   closeLabel: string;
   /** Shown as `${closeTitle} (${shortcut})` with the `environment.toggle` binding. */
   closeTitle: string;
@@ -91,6 +97,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   onSelectTab,
   onCloseTab,
   newTab,
+  tabMenu = true,
   closeLabel,
   closeTitle,
   onClose,
@@ -119,7 +126,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
         })}
       </div>
       {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
-      <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+      {tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
       <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
     </header>
   );
@@ -146,6 +153,11 @@ export interface WorkbenchView {
 export interface WorkbenchPanelProps<T extends WorkbenchTab>
   extends Omit<WorkbenchTabStripProps<T>, "activeTabRef"> {
   id: string;
+  /**
+   * `data-environment-surface`: the workspace's focus and Escape rules act on
+   * "tools". Another workbench (the Bot panel) names its own surface.
+   */
+  surface?: string;
   label: string;
   resizeLabel: string;
   open: boolean;
@@ -154,6 +166,8 @@ export interface WorkbenchPanelProps<T extends WorkbenchTab>
   inline: boolean;
   width: number;
   containerWidth: number;
+  /** The surface's own width range; the workspace Environment panel's by default. */
+  widthBounds?: PanelWidthBounds;
   resizing: boolean;
   onResizingChange: (resizing: boolean) => void;
   /** Live width while dragging, already clamped. */
@@ -170,6 +184,7 @@ export interface WorkbenchPanelProps<T extends WorkbenchTab>
 
 export function WorkbenchPanel<T extends WorkbenchTab>({
   id,
+  surface = "tools",
   label,
   resizeLabel,
   open,
@@ -177,6 +192,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   inline,
   width,
   containerWidth,
+  widthBounds,
   resizing,
   onResizingChange,
   onWidthChange,
@@ -193,6 +209,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   onSelectTab,
   onCloseTab,
   newTab,
+  tabMenu,
   closeLabel,
   closeTitle,
   onClose,
@@ -204,7 +221,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   const widthRef = React.useRef(width);
   widthRef.current = width;
 
-  const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline);
+  const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline, widthBounds);
   const clampToResizeBounds = React.useCallback(
     (nextWidth: number) => Math.min(resizeBounds.max, Math.max(resizeBounds.min, nextWidth)),
     [resizeBounds.max, resizeBounds.min],
@@ -261,7 +278,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
     <aside
       ref={surfaceRef}
       id={id}
-      data-environment-surface="tools"
+      data-environment-surface={surface}
       data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
       data-state={open ? (presented ? "open" : "covered") : "closed"}
       inert={!presented ? true : undefined}
@@ -309,6 +326,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         newTab={newTab}
+        tabMenu={tabMenu}
         closeLabel={closeLabel}
         closeTitle={closeTitle}
         onClose={onClose}

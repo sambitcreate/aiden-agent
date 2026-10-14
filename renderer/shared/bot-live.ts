@@ -237,12 +237,25 @@ export type BotLiveEventBody =
 
 export type BotLiveEvent = { botId: string; epoch: string; seq: number } & BotLiveEventBody;
 
-/** What a Bot list row shows, read from the same projection. */
+/** What a Bots sidebar row shows, read from the same projection. */
 export interface BotLiveSummary {
   botId: string;
   preview: string | null;
   updatedAt: number | null;
   state: BotSessionState;
+  /** An approval or an A–E question is waiting on the person ("Needs you"). */
+  needsYou: boolean;
+  /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
+  lastReplyAt: number | null;
+}
+
+/** When the newest reply with visible text arrived, or null when none has a time. */
+export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "assistant" && entry.text.trim() && entry.at !== undefined) return entry.at;
+  }
+  return null;
 }
 
 /** The last thing worth previewing in a list row: the newest visible message text. */

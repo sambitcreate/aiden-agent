@@ -18,7 +18,14 @@ type Editing = BotRoutine | "new" | "suggestion" | null;
  * routines yet, "Try a daily check-in" opens the editor prefilled; nothing is
  * created until the person saves it.
  */
-export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }) {
+export function BotRoutines({
+  bot,
+  compact = false,
+}: {
+  bot: Pick<BotDefinition, "id" | "name">;
+  /** The side panel's narrower column: the same smaller heading as Memory there. */
+  compact?: boolean;
+}) {
   const qc = useQueryClient();
   const routines = useQuery({
     queryKey: botRoutinesKey(bot.id),
@@ -38,8 +45,15 @@ export function BotRoutines({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }
     "relative flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none";
 
   return (
-    <section aria-labelledby={titleId} className="settings-group mb-7">
-      <h2 id={titleId} className="settings-group-title mb-3 px-4 text-large-strong text-primary">
+    <section aria-labelledby={titleId} className={compact ? "settings-group mb-5" : "settings-group mb-7"}>
+      <h2
+        id={titleId}
+        className={
+          compact
+            ? "settings-group-title mb-2 px-4 text-strong text-primary"
+            : "settings-group-title mb-3 px-4 text-large-strong text-primary"
+        }
+      >
         Routines
       </h2>
       <div className="settings-group-card overflow-hidden rounded-card bg-well">

@@ -19,10 +19,35 @@ export const SURFACE_GAP = 12;
  */
 export const INLINE_MIN_CONTAINER_WIDTH = MIN_PANEL_WIDTH + MIN_CONVERSATION_WIDTH;
 
-export function clampEnvironmentPanelWidth(value: number, containerWidth: number): number {
+/** A side surface's own width range: the workspace Environment panel's, or a narrower one. */
+export interface PanelWidthBounds {
+  min: number;
+  max: number;
+  default: number;
+}
+
+export const ENVIRONMENT_PANEL_WIDTH_BOUNDS: PanelWidthBounds = {
+  min: MIN_PANEL_WIDTH,
+  max: MAX_PANEL_WIDTH,
+  default: DEFAULT_PANEL_WIDTH,
+};
+
+/**
+ * The Bot side panel (Activity, Files, Memory, Routines) holds lists and a
+ * plain text viewer, not the workspace's editor and terminal, so it may be
+ * narrower. That lets it sit beside the chat, reflowing it, on windows where the
+ * workspace panel would already float over the chat.
+ */
+export const BOT_PANEL_WIDTH_BOUNDS: PanelWidthBounds = { min: 400, max: MAX_PANEL_WIDTH, default: 440 };
+
+export function clampEnvironmentPanelWidth(
+  value: number,
+  containerWidth: number,
+  bounds: PanelWidthBounds = ENVIRONMENT_PANEL_WIDTH_BOUNDS,
+): number {
   const available = Math.max(0, containerWidth - PANEL_EDGE_GUTTER);
-  const maximum = Math.min(MAX_PANEL_WIDTH, available || MAX_PANEL_WIDTH);
-  const minimum = Math.min(MIN_PANEL_WIDTH, maximum);
+  const maximum = Math.min(bounds.max, available || bounds.max);
+  const minimum = Math.min(bounds.min, maximum);
   return Math.min(maximum, Math.max(minimum, value));
 }
 
@@ -38,20 +63,21 @@ export function clampEnvironmentPanelWidth(value: number, containerWidth: number
 export function resolveEnvironmentPanelLayout(
   preferredWidth: number,
   containerWidth: number,
+  bounds: PanelWidthBounds = ENVIRONMENT_PANEL_WIDTH_BOUNDS,
 ): { width: number; inline: boolean } {
   const available = Math.max(0, containerWidth - PANEL_EDGE_GUTTER);
-  const minPanel = Math.min(MIN_PANEL_WIDTH, available || MIN_PANEL_WIDTH);
+  const minPanel = Math.min(bounds.min, available || bounds.min);
   const canInline = containerWidth - minPanel >= MIN_CONVERSATION_WIDTH;
 
   if (!canInline) {
     return {
-      width: clampEnvironmentPanelWidth(preferredWidth, containerWidth),
+      width: clampEnvironmentPanelWidth(preferredWidth, containerWidth, bounds),
       inline: false,
     };
   }
 
   const inlineMax = containerWidth - MIN_CONVERSATION_WIDTH;
-  const preferred = clampEnvironmentPanelWidth(preferredWidth, containerWidth);
+  const preferred = clampEnvironmentPanelWidth(preferredWidth, containerWidth, bounds);
   return {
     width: Math.min(preferred, inlineMax),
     inline: true,
@@ -61,12 +87,13 @@ export function resolveEnvironmentPanelLayout(
 export function resolveEnvironmentPanelResizeBounds(
   containerWidth: number,
   inline: boolean,
+  bounds: PanelWidthBounds = ENVIRONMENT_PANEL_WIDTH_BOUNDS,
 ): { min: number; max: number } {
   const availableMaximum = inline
     ? containerWidth - MIN_CONVERSATION_WIDTH
     : containerWidth - PANEL_EDGE_GUTTER;
-  const max = Math.max(0, Math.min(MAX_PANEL_WIDTH, availableMaximum));
-  return { min: Math.min(MIN_PANEL_WIDTH, max), max };
+  const max = Math.max(0, Math.min(bounds.max, availableMaximum));
+  return { min: Math.min(bounds.min, max), max };
 }
 
 export interface QuickViewLayout {
@@ -141,10 +168,11 @@ export function resolveChatCardInset(input: {
 }
 
 /** A saved preferred width, or the default when it is missing, unparsable or outside the saved range. */
-export function storedWorkbenchWidth(stored: string | null): number {
-  if (stored === null) return DEFAULT_PANEL_WIDTH;
+export function storedWorkbenchWidth(
+  stored: string | null,
+  bounds: PanelWidthBounds = ENVIRONMENT_PANEL_WIDTH_BOUNDS,
+): number {
+  if (stored === null) return bounds.default;
   const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= MAX_PANEL_WIDTH
-    ? parsed
-    : DEFAULT_PANEL_WIDTH;
+  return Number.isFinite(parsed) && parsed >= bounds.min && parsed <= bounds.max ? parsed : bounds.default;
 }
