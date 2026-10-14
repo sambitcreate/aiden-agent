@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -534,27 +535,16 @@ private fun AidenBotHomeRowView(
                 )
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
-            Box {
+            // A working Bot's face glances (or wears the glance badge); the row says "Working".
+            Box(Modifier.semantics { if (row.isWorking) stateDescription = workingLabel }) {
                 AidenBotCanonicalAvatarView(
                     coordinator = coordinator,
                     botId = row.bot.id,
                     avatar = row.bot.avatar,
                     name = row.bot.name,
-                    size = 52.dp
+                    size = 52.dp,
+                    working = row.isWorking
                 )
-                if (row.isWorking) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(14.dp)
-                            .clip(CircleShape)
-                            .background(palette.canvas)
-                            .padding(2.dp)
-                            .clip(CircleShape)
-                            .background(palette.success)
-                            .semantics { contentDescription = workingLabel }
-                    )
-                }
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {

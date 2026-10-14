@@ -36,18 +36,20 @@ import sbtbiswas.AidenOnTheGo.R
 /**
  * Placeholder block for content that is still arriving. Aiden never shows a spinner for
  * a read: cached content renders immediately, and only a first load with nothing cached
- * shows these shaped placeholders. The shimmer stops under Reduce Motion.
+ * shows these shaped placeholders. The shimmer stops under Reduce Motion, and when
+ * [animate] is false (a read that has failed, or an app in the background).
  */
 @Composable
 fun AidenSkeletonBlock(
     modifier: Modifier = Modifier,
     width: Dp? = null,
     height: Dp = 14.dp,
-    shape: Shape = MaterialTheme.shapes.small
+    shape: Shape = MaterialTheme.shapes.small,
+    animate: Boolean = true
 ) {
     val reduceMotion = aidenReduceMotion()
     val base = MaterialTheme.colorScheme.surfaceContainerHigh
-    val brush = if (reduceMotion) {
+    val brush = if (reduceMotion || !animate) {
         Brush.linearGradient(listOf(base, base))
     } else {
         val highlight = MaterialTheme.colorScheme.surfaceContainerHighest

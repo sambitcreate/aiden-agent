@@ -643,6 +643,11 @@
     <string name="bot_activity_status_elapsed">%1$s · %2$s</string>
     <string name="bot_session_queued">Queued</string>
     <string name="bot_session_queued_hint">Sends when the current reply finishes</string>
+    <string name="bot_session_sending">Sending…</string>
+    <string name="bot_session_send_failed">Couldn’t send</string>
+    <string name="bot_session_try_again">Try again</string>
+    <string name="bot_session_remove_message">Remove message</string>
+    <string name="bot_session_connecting">Connecting…</string>
     <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>
     <string name="bot_chat_open_failed">Aiden couldn’t open this Bot’s chat. Try again.</string>
     <string name="bot_session_connect">Connect to your Mac to open this chat.</string>

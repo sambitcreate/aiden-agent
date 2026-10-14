@@ -4,6 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.geometry.CornerRadius
@@ -17,7 +21,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.chat.aidenPowerSaveMode
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 /**
  * What a Bot's mark looks like: a colour and a shape. Every Bot shares one fixed eye
@@ -68,11 +74,35 @@ fun AidenBotSemanticAvatarView(
     avatar: AidenBotSemanticAvatar,
     name: String = "",
     size: Dp = 48.dp,
+    /** While its Bot works the face glances (R8); Reduce Motion, battery saver and the background hold it still. */
+    working: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val presentation = aidenBotAvatarPresentation(avatar)
     val fill = AidenBotAvatarColors.swatch(presentation.color)
     val avatarLabel = if (name.isNotEmpty()) stringResource(R.string.bots_avatar_cd, name) else null
+
+    val glancing = aidenBotFaceMotion(
+        working = working,
+        photo = false,
+        reduceMotion = aidenReduceMotion(),
+        powerSave = working && aidenPowerSaveMode(),
+        resumed = aidenBotIsResumed()
+    ).glances
+    val clockMs = remember { mutableLongStateOf(0L) }
+    LaunchedEffect(glancing) {
+        if (!glancing) {
+            clockMs.longValue = 0L
+            return@LaunchedEffect
+        }
+        var startMs = Long.MIN_VALUE
+        while (true) {
+            withFrameMillis { frameMs ->
+                if (startMs == Long.MIN_VALUE) startMs = frameMs
+                clockMs.longValue = frameMs - startMs
+            }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -85,17 +115,21 @@ fun AidenBotSemanticAvatarView(
             val shapePath = aidenBotShapePath(presentation.shape, w, h)
             drawPath(path = shapePath, color = fill)
 
-            // The one fixed eye mark: two slanted pills in the shared face colour.
+            // The one fixed eye mark: two slanted pills in the shared face colour. The clock is
+            // read only here, in the draw phase, as in AidenActivityMark.
+            val glance = if (glancing) aidenBotFaceGlance(clockMs.longValue) else AidenBotFaceGlance(0f, 1f)
             val eyeWidth = w * 0.11f
             val eyeHeight = h * 0.24f
             val eyeTop = h * 0.42f
-            listOf(w * 0.40f, w * 0.58f).forEach { left ->
+            val shownHeight = eyeHeight * glance.blink
+            listOf(w * 0.40f, w * 0.58f).forEach { base ->
+                val left = base + glance.dxFraction * w
                 rotate(degrees = 12f, pivot = Offset(left + eyeWidth / 2f, eyeTop + eyeHeight / 2f)) {
                     drawRoundRect(
                         color = AidenBotAvatarColors.face,
-                        topLeft = Offset(left, eyeTop),
-                        size = Size(eyeWidth, eyeHeight),
-                        cornerRadius = CornerRadius(eyeWidth / 2f, eyeWidth / 2f)
+                        topLeft = Offset(left, eyeTop + (eyeHeight - shownHeight) / 2f),
+                        size = Size(eyeWidth, shownHeight),
+                        cornerRadius = CornerRadius(eyeWidth / 2f, minOf(eyeWidth, shownHeight) / 2f)
                     )
                 }
             }

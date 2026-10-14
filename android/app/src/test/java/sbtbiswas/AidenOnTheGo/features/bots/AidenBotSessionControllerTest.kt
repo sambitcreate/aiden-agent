@@ -51,8 +51,11 @@ class AidenBotSessionControllerTest {
         var resumeGate: CompletableDeferred<Unit>? = null
         var failNextResume = false
 
+        /** Failures the next session reads throw, in order. */
+        val sessionFailures = ArrayDeque<Exception>()
         override suspend fun session(botId: String): AidenBotSession {
             sessionReads += 1
+            sessionFailures.removeFirstOrNull()?.let { throw it }
             return session
         }
 
@@ -1380,6 +1383,85 @@ class AidenBotSessionControllerTest {
             runningSession.botId, transport, backgroundScope, sessionKey = chatKey.copy(deviceId = "device_fixture_02"), store = sessions
         )
         assertTrue(otherPairing.state.value.showsSkeleton)
+    }
+
+    // --- Task 10: what the chat draws while the Mac isn't reachable (R14) ---
+
+    @Test
+    fun aChatSaysConnectingThenOffersTryAgainWithStillSkeletonsWhenItsFirstReadFails() = runTest {
+        val transport = FakeTransport(runningSession)
+        transport.sessionFailures += IOException("Mac asleep")
+        transport.feeds += flow { awaitCancellation() }
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        assertEquals(AidenBotConnectionHint.CONNECTING, aidenBotConnectionHint(controller.state.value, started))
+        assertEquals(AidenBotSkeletonLook.SHIMMERING, aidenBotSkeletonLook(controller.state.value))
+
+        controller.start()
+        runCurrent()
+        // Never an endless shimmer: the read failed, so the skeletons rest and Try again shows.
+        assertEquals(AidenBotConnectionHint.UNREACHABLE, aidenBotConnectionHint(controller.state.value, started))
+        assertEquals(AidenBotSkeletonLook.STILL, aidenBotSkeletonLook(controller.state.value))
+        assertTrue("the composer still takes a message", controller.state.value.canSend)
+
+        // Try again reads the session: the hint and skeletons give way to the chat.
+        assertTrue(controller.refetch())
+        assertNull(aidenBotConnectionHint(controller.state.value, started))
+        assertEquals(AidenBotSkeletonLook.HIDDEN, aidenBotSkeletonLook(controller.state.value))
+        controller.stopFollowing()
+    }
+
+    @Test
+    fun aCachedChatShowsItsTranscriptWithConnectingAndAMissingBotShowsNeither() = runTest {
+        val sessions = AidenBotSessionStore(null)
+        val transport = FakeTransport(runningSession)
+        val first = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        first.refetch()
+        first.stopFollowing()
+
+        transport.sessionFailures += IOException("Mac asleep")
+        val reopened = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions)
+        reopened.refetch()
+        assertEquals(AidenBotSkeletonLook.HIDDEN, aidenBotSkeletonLook(reopened.state.value))
+        assertFalse(reopened.state.value.entries.isEmpty())
+
+        val gone = FakeTransport(runningSession)
+        gone.sessionFailures += serverError(404)
+        val missing = AidenBotSessionController(runningSession.botId, gone, backgroundScope)
+        missing.refetch()
+        assertTrue(missing.state.value.botMissing)
+        assertNull(aidenBotConnectionHint(missing.state.value, started))
+        assertEquals(AidenBotSkeletonLook.HIDDEN, aidenBotSkeletonLook(missing.state.value))
+    }
+
+    @Test
+    fun aDroppedFeedSaysReconnectingOnceOnTheLineAndConnectingWhenIdle() = runTest {
+        val dropped = flow<AidenBotSessionEvent> { throw IOException("Wi-Fi dropped") }
+        val working = FakeTransport(activitySession)
+        working.feeds += flow {
+            emit(snapshotOf(activitySession))
+            throw IOException("Wi-Fi dropped")
+        }
+        working.feeds += flow { awaitCancellation() }
+        val running = AidenBotSessionController(activitySession.botId, working, backgroundScope, activitySupported = true)
+        running.start()
+        runCurrent()
+        assertEquals(AidenBotActivityPhase.RECONNECTING, aidenBotStatusLine(running.state.value, started)!!.display.phase)
+        assertNull("the line already says it", aidenBotConnectionHint(running.state.value, started))
+        running.stopFollowing()
+
+        val idleSession = activitySession.copy(state = AidenBotSessionState.IDLE, activity = null)
+        val quiet = FakeTransport(idleSession)
+        quiet.feeds += flow {
+            emit(snapshotOf(idleSession))
+            throw IOException("Wi-Fi dropped")
+        }
+        quiet.feeds += dropped
+        val idle = AidenBotSessionController(idleSession.botId, quiet, backgroundScope, activitySupported = true)
+        idle.start()
+        runCurrent()
+        assertNull(aidenBotStatusLine(idle.state.value, started))
+        assertEquals(AidenBotConnectionHint.CONNECTING, aidenBotConnectionHint(idle.state.value, started))
+        idle.stopFollowing()
     }
 
     @Test

@@ -605,7 +605,7 @@ private val runInputModeOptions = listOf(
  * of the two segments, an announced action label, and a springing mode label.
  */
 @Composable
-private fun AidenRunInputSplitButton(
+internal fun AidenRunInputSplitButton(
     mode: AidenStreamInputMode,
     canSubmit: Boolean,
     canChooseMode: Boolean,
