@@ -108,14 +108,6 @@ struct AidenBotCustomAccessDraft: Equatable {
         guard let selection = try? selection() else { return false }
         return catalog.containsAvailable(selection)
     }
-
-    mutating func selectProvider(_ providerID: String, catalog: AidenBotCapabilityCatalog) {
-        guard let provider = catalog.providers.first(where: {
-            $0.id == providerID && $0.available
-        }), let model = provider.models.first(where: \.available) else { return }
-        self.providerID = provider.id
-        modelID = model.id
-    }
 }
 
 func aidenBotVisibleCapabilityOptions(

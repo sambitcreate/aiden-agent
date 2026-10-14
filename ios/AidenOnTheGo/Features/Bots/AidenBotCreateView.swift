@@ -128,7 +128,9 @@ struct AidenBotCreateView: View {
                         }
                         if catalog.model(providerId: current.customAccess.providerID,
                                          modelId: current.customAccess.modelID)?.supportsImages == false,
-                           current.visionProviderID != nil {
+                           catalog.providers.contains(where: { provider in
+                               provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
+                           }) {
                             AidenBotModelRow(
                                 title: "Photos",
                                 catalog: catalog,

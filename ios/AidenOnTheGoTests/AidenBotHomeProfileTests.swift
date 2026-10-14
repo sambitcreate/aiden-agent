@@ -320,4 +320,62 @@ final class AidenBotHomeProfileTests: XCTestCase {
         )
         XCTAssertTrue(aidenBotModelListSections(catalog: catalog, imagesOnly: false, query: "zzz").isEmpty)
     }
+
+    /// The fixture catalog with extra models: `second_vision` (an image reader
+    /// that is available), `offline_vision` (an image reader that is not), and
+    /// a whole `offline_provider` that is not set up.
+    private func extendedCatalog() throws -> AidenBotCapabilityCatalog {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var raw = try XCTUnwrap(object["botCapabilityCatalog"] as? [String: Any])
+        var providers = try XCTUnwrap(raw["providers"] as? [[String: Any]])
+        var first = providers[0]
+        var models = try XCTUnwrap(first["models"] as? [[String: Any]])
+        models.append(["id": "second_vision", "label": "Second Vision", "available": true, "supportsImages": true])
+        models.append(["id": "offline_vision", "label": "Offline Vision", "available": false, "supportsImages": true])
+        first["models"] = models
+        providers[0] = first
+        providers.append([
+            "id": "offline_provider", "label": "Offline Provider", "available": false,
+            "models": [["id": "offline_model", "label": "Offline Model", "available": true, "supportsImages": true]],
+        ])
+        raw["providers"] = providers
+        object["botCapabilityCatalog"] = raw
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: raw)
+        )
+    }
+
+    func testUnavailableModelsAndProvidersAreNeverSelected() throws {
+        let catalog = try extendedCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        let before = draft
+
+        XCTAssertFalse(draft.selectModel(providerID: "provider_fixture", modelID: "offline_vision", catalog: catalog),
+                       "an unavailable model")
+        XCTAssertFalse(draft.selectModel(providerID: "offline_provider", modelID: "offline_model", catalog: catalog),
+                       "an available model of an unavailable provider")
+        XCTAssertFalse(draft.selectVisionModel(providerID: "provider_fixture", modelID: "offline_vision", catalog: catalog))
+        XCTAssertFalse(draft.selectVisionModel(providerID: "offline_provider", modelID: "offline_model", catalog: catalog))
+        XCTAssertEqual(draft, before, "refused picks change nothing")
+    }
+
+    func testTextOnlyChoiceKeepsAStillUsablePhotoModel() throws {
+        let catalog = try extendedCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertTrue(draft.selectVisionModel(providerID: "provider_fixture", modelID: "second_vision", catalog: catalog))
+
+        // Picking the text-only model again keeps the manually chosen photo model.
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "second_vision")
+
+        // An image-reading primary model clears it; going back to text-only re-suggests the first.
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertNil(draft.visionModelID)
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+    }
 }
