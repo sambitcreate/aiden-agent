@@ -150,6 +150,27 @@ export function sessionWithSavedMcpTokens(
   };
 }
 
+/**
+ * Compare-and-set for tokens a background refresh returned. The refresh
+ * presented the tokens this client last observed; if the stored pair has since
+ * changed (another client rotated, re-authorized or signed out), the response
+ * is older than what is persisted and must not replace it. Returns undefined
+ * when the stored session should be kept as is.
+ */
+export function sessionWithRefreshedMcpTokens(
+  session: McpOAuthSession,
+  binding: string,
+  observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined,
+  tokens: OAuthTokens,
+  requestedScope?: string,
+): McpOAuthSession | undefined {
+  const stored = session.tokens;
+  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token)) {
+    return undefined;
+  }
+  return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope);
+}
+
 function normalizedScope(scope: string | undefined): string | null {
   const scopes = [...new Set((scope ?? "").split(/\s+/u).filter(Boolean))].sort();
   return scopes.length ? scopes.join(" ") : null;

@@ -98,9 +98,42 @@ interface RefreshFlight {
   settled: boolean;
 }
 
-/** A completed rotation is replayed to late callers still holding the old refresh token. */
+/**
+ * A completed rotation is replayed to late callers still holding the old
+ * refresh token, until the refresh token it issued is itself presented.
+ */
 const REFRESH_REPLAY_MS = 30_000;
 const refreshFlights = new Map<string, RefreshFlight>();
+/** Digest of (token endpoint, issued refresh token) -> key of the completed flight that issued it. */
+const refreshIssuers = new Map<string, string>();
+
+function issuedTokenKey(url: URL, refreshToken: string): string {
+  return createHash("sha256").update(url.href).update("\0").update(refreshToken).digest("hex");
+}
+
+function issuedRefreshToken(snapshot: SharedTokenResponse): string | undefined {
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(snapshot.body));
+    const token = value && typeof value === "object" ? (value as { refresh_token?: unknown }).refresh_token : undefined;
+    return typeof token === "string" && token ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Presenting a refresh token consumes it: the completed response that issued
+ * it must no longer be replayed, or a caller still holding the older token
+ * would receive (and the SDK would persist) credentials already rotated away.
+ */
+function retireIssuerOf(url: URL, presented: string | null): void {
+  if (!presented) return;
+  const issued = issuedTokenKey(url, presented);
+  const issuerKey = refreshIssuers.get(issued);
+  if (issuerKey === undefined) return;
+  refreshIssuers.delete(issued);
+  if (refreshFlights.get(issuerKey)?.settled) refreshFlights.delete(issuerKey);
+}
 
 function refreshFlightKey(url: URL, body: string, headers: Headers): string {
   return createHash("sha256")
@@ -130,10 +163,12 @@ function abortError(signal: AbortSignal): unknown {
  */
 function coalesceRefresh(
   key: string,
+  exchange: { url: URL; presented: string | null },
   run: (signal: AbortSignal) => Promise<Response>,
   callerSignal: AbortSignal,
 ): Promise<Response> {
   callerSignal.throwIfAborted();
+  retireIssuerOf(exchange.url, exchange.presented);
   let flight = refreshFlights.get(key);
   if (!flight) {
     const controller = new AbortController();
@@ -150,7 +185,15 @@ function coalesceRefresh(
           if (refreshFlights.get(key) === created) refreshFlights.delete(key);
           return;
         }
-        setTimeout(() => { if (refreshFlights.get(key) === created) refreshFlights.delete(key); }, REFRESH_REPLAY_MS).unref?.();
+        retireIssuerOf(exchange.url, exchange.presented);
+        const issued = issuedRefreshToken(snapshot);
+        // A non-rotating server re-issues the presented token; nothing was consumed.
+        const issuedKey = issued && issued !== exchange.presented ? issuedTokenKey(exchange.url, issued) : undefined;
+        if (issuedKey && refreshFlights.get(key) === created) refreshIssuers.set(issuedKey, key);
+        setTimeout(() => {
+          if (refreshFlights.get(key) === created) refreshFlights.delete(key);
+          if (issuedKey && refreshIssuers.get(issuedKey) === key) refreshIssuers.delete(issuedKey);
+        }, REFRESH_REPLAY_MS).unref?.();
       },
       () => {
         created.settled = true;
@@ -385,11 +428,13 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     ]);
     if (options.isCurrent && !options.isCurrent()) throw new Error("MCP connection is no longer current.");
     const url = new URL(request?.url ?? String(input));
-    const key = refreshFlightKey(url, String(init?.body ?? ""), headers);
+    const body = String(init?.body ?? "");
+    const key = refreshFlightKey(url, body, headers);
+    const presented = new URLSearchParams(body).get("refresh_token");
     // The shared request belongs to no single caller: it carries only its own
     // deadline and the cancellation of every waiter, and each caller re-checks
     // its own currency before using the result.
-    const response = await coalesceRefresh(key, (signal) => policyFetch(input, init, { signal, caller: false }), callerSignal);
+    const response = await coalesceRefresh(key, { url, presented }, (signal) => policyFetch(input, init, { signal, caller: false }), callerSignal);
     if (options.isCurrent && !options.isCurrent()) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error("MCP connection is no longer current.");

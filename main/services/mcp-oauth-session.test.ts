@@ -11,6 +11,7 @@ import {
   sameMcpOAuthGrant,
   sessionForFreshMcpAuthorization,
   sessionForMcpAuthorizationAttempt,
+  sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
@@ -703,4 +704,15 @@ test("a background 403 insufficient_scope challenge is requested by the next int
   assert.deepEqual(url.searchParams.get("scope")?.split(" ").sort(), ["files.read", "files.write", "offline_access"]);
   clearMcpStepUpScope(serviceUrl);
   assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "files.read"), "files.read");
+});
+
+test("a late refresh response neither overwrites newer tokens nor restores a signed-out session", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const presented = { access_token: "access-1", refresh_token: "refresh-1" };
+  const late = { access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2" };
+  const current = { authorizationBinding: binding, tokens: { ...presented, token_type: "Bearer" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(current, binding, presented, late)?.tokens?.refresh_token, "refresh-2");
+  const rotated = { authorizationBinding: binding, tokens: { access_token: "access-3", token_type: "Bearer", refresh_token: "refresh-3" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(rotated, binding, presented, late), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
 });

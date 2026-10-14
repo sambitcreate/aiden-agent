@@ -10,7 +10,8 @@ import { GenerationBoundConnectionCache } from "./generation-bound-connection-ca
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { observeSseReauthentication } from "./mcp-sse-auth-lifecycle.js";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithRefreshedMcpTokens, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { createMcpFetchPolicy } from "./mcp-fetch-policy.js";
 
 const serviceUrl = "https://mcp.example/mcp";
 const initialized = {
@@ -387,23 +388,27 @@ test("a late SSE auth failure cannot evict a replacement connection", async () =
 
 /**
  * Provider over one shared session store, with the background provider's
- * persistence rules: rotate saved tokens into the bound session and
- * invalidate only the tokens this provider last observed.
+ * persistence rules: rotate refreshed tokens into the bound session only while
+ * it still holds the tokens the refresh presented, and invalidate only the
+ * tokens this provider last observed. `beforeTokens` can hold a read open.
  */
-function storeBackedProvider(store: { session: McpOAuthSession }): OAuthClientProvider {
+function storeBackedProvider(store: { session: McpOAuthSession }, beforeTokens?: () => Promise<void>): OAuthClientProvider {
   const binding = mcpAuthorizationBinding(serviceUrl);
   let observed: Pick<OAuthTokens, "access_token" | "refresh_token"> | undefined;
   return {
     redirectUrl: "http://127.0.0.1:41432/callback",
     clientMetadata: { redirect_uris: ["http://127.0.0.1:41432/callback"] },
     clientInformation: () => ({ client_id: "fixture-client" }),
-    tokens: () => {
+    tokens: async () => {
       const tokens = store.session.tokens;
       observed = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+      await beforeTokens?.();
       return tokens;
     },
     saveTokens: (tokens) => {
-      store.session = sessionWithSavedMcpTokens(store.session, binding, tokens);
+      const next = sessionWithRefreshedMcpTokens(store.session, binding, observed, tokens);
+      if (!next) return;
+      store.session = next;
       observed = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
     },
     invalidateCredentials: (scope) => {
@@ -517,6 +522,35 @@ test("a stale invalid_grant never deletes tokens another client already rotated"
   assert.equal(store.session.tokens?.access_token, "next-access");
   // Whereas the tokens a provider itself observed are still revocable.
   assert.equal(sessionAfterTokenInvalidation(store.session, { access_token: "next-access", refresh_token: "next-refresh" })?.tokens, undefined);
+});
+
+test("a delayed refresh holding a consumed token never rolls back tokens two later rotations saved", async () => {
+  const authority = rotatingAuthority("delayed");
+  const store = { session: { authorizationBinding: mcpAuthorizationBinding(serviceUrl), tokens: authority.initialTokens() } as McpOAuthSession };
+  const fetchFn = createMcpFetchPolicy({
+    serviceUrl,
+    fetch: async (input, init) => (await authority.fetch(input, init)) ?? new Response(null, { status: 404 }),
+  });
+  let captured = false;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  // This client reads refresh token 1, then stalls before presenting it.
+  const delayed = auth(storeBackedProvider(store, async () => { captured = true; await held; }), { serverUrl: serviceUrl, fetchFn });
+  await until(() => captured);
+  // Meanwhile other clients rotate 1 -> 2 -> 3 and persist each result.
+  assert.equal(await auth(storeBackedProvider(store), { serverUrl: serviceUrl, fetchFn }), "AUTHORIZED");
+  assert.equal(await auth(storeBackedProvider(store), { serverUrl: serviceUrl, fetchFn }), "AUTHORIZED");
+  assert.equal(store.session.tokens?.refresh_token, "delayed-refresh-3");
+  release();
+  assert.equal(await delayed, "AUTHORIZED");
+  const latest = authority.initialTokens();
+  assert.equal(store.session.tokens?.refresh_token, latest.refresh_token, "the stored refresh token is the authority's newest");
+  assert.equal(store.session.tokens?.access_token, latest.access_token);
+  // And it still works for the next rotation.
+  const before = authority.refreshPosts();
+  assert.equal(await auth(storeBackedProvider(store), { serverUrl: serviceUrl, fetchFn }), "AUTHORIZED");
+  assert.equal(authority.refreshPosts(), before + 1);
+  assert.equal(store.session.tokens?.refresh_token, authority.initialTokens().refresh_token);
 });
 
 test("a request cancelled while its 401 refresh is pending is never re-sent", async (t) => {
