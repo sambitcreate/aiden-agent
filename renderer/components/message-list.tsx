@@ -361,8 +361,12 @@ function AssistantResponse({
             key={row.key}
             role="assistant"
             content={row.content}
-            streaming={streaming && isLastText}
-            streamComplete={isLastText ? streamComplete : undefined}
+            // Every text row of a running turn stays on the gated reveal path,
+            // so text a tool step closed keeps its release slot after newer
+            // prose takes over the last row.
+            streaming={streaming}
+            streamComplete={streamComplete}
+            textClosed={index < rows.length - 1}
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
             showCopy={isLastText}
             copyText={content}

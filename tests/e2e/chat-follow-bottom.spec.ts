@@ -63,6 +63,15 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
       .toBeLessThanOrEqual(1);
   }
   await expect(viewport).toHaveAttribute("data-follow", "true");
+  // Released blocks fade in place: opacity only, nothing slides.
+  const motion = await page
+    .locator(".streaming-reveal[data-streaming] > *")
+    .last()
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { property: style.transitionProperty, transform: style.transform, translate: style.translate };
+    });
+  expect(motion).toEqual({ property: "opacity", transform: "none", translate: "none" });
   expect(
     await viewport.evaluate((element) => element.scrollHeight > element.clientHeight * 1.5),
     "the reply overflows the transcript",
@@ -110,4 +119,6 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
   await expect(viewport).toHaveAttribute("data-follow", "true");
+  // The settled reply keeps its tree and stops fading anything in.
+  await expect(page.locator(".streaming-reveal").last()).not.toHaveAttribute("data-streaming", /.*/);
 });

@@ -14,26 +14,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("inline streaming text fades without baseline movement or blur", () => {
-  const styles = source("../styles.css");
-  const inlineKeyframes = between(
-    styles,
-    "@keyframes aiden-streaming-unit-in",
-    "@keyframes aiden-streaming-block-in",
-  );
-  assert.match(inlineKeyframes, /opacity:\s*0/u);
-  assert.match(inlineKeyframes, /opacity:\s*1/u);
-  assert.doesNotMatch(inlineKeyframes, /\b(?:top|transform|filter)\s*:/u);
-
-  const blockKeyframes = between(
-    styles,
-    "@keyframes aiden-streaming-block-in",
-    "@keyframes aiden-reasoning-surface-in",
-  );
-  assert.match(blockKeyframes, /translateY\(4px\)/u);
-  assert.doesNotMatch(blockKeyframes, /\bfilter\s*:/u);
-});
-
 test("rich links keep anchor navigation and dismiss without fetching", () => {
   const richLink = source("../components/rich-link.tsx");
   assert.match(richLink, /<a[\s\S]*href=\{href\}/u);

@@ -9,6 +9,7 @@ import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL_MAX_WAIT_MS } from "../lib/streaming-reveal";
 
 afterEach(() => {
   mock.restoreAll();
@@ -290,9 +291,8 @@ function toolStep(contentOffset: number): AgentToolStep {
 
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-test("text closed by a tool step finishes its reveal instead of appearing all at once", async () => {
-  const sentences = Array.from({ length: 24 }, (_, index) => `Sentence ${index + 1} ends here.`);
-  const text = `${sentences.join(" ")}\n\n`;
+test("text closed by a tool step joins whole at the next release", async () => {
+  const text = "Checked the config.\n\nNow reading the file that defines";
   const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
     version: 3,
     generationId: "generation-1",
@@ -301,19 +301,114 @@ test("text closed by a tool step finishes its reveal instead of appearing all at
     steps,
   });
   const view = render(transcript({ messages: [prompt], streamingText: text, timeline: timeline([]) }));
-  await wait(30);
-  assert.equal(view.container.textContent?.includes("Sentence 24 ends here."), false, "still revealing");
+  assert.ok(view.container.textContent?.includes("Checked the config."));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "an unfinished sentence waits");
 
-  // A tool call starts: this text is no longer the live tail.
+  // A tool call starts: this text can no longer grow, so its end is a boundary
+  // that joins at the next release instead of all at once.
   view.rerender(transcript({ messages: [prompt], streamingText: text, timeline: timeline([toolStep(text.length)]) }));
-  assert.ok(view.container.textContent?.includes("Sentence 1 ends here."), "what was shown stays");
-  assert.equal(
-    view.container.textContent?.includes("Sentence 24 ends here."),
-    false,
-    "the rest is not dumped in the same frame",
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval still holds");
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
+  assert.ok(view.container.textContent?.includes("Now reading the file that defines"));
+});
+
+test("tool-closed text keeps its release slot when follow-up prose starts", async () => {
+  const first = "Checked the config.\n\nNow reading the file that defines";
+  const timeline = (steps: AgentToolStep[], status: GenerationTimeline["status"] = "running"): GenerationTimeline => ({
+    version: 3,
+    generationId: "generation-1",
+    status,
+    startedAt: 1,
+    steps,
+  });
+  const closed = timeline([toolStep(first.length)]);
+  const view = render(transcript({ messages: [prompt], streamingText: first, timeline: timeline([]) }));
+  view.rerender(transcript({ messages: [prompt], streamingText: first, timeline: closed }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "the release interval holds");
+
+  // The next prose row starts before the closed row's slot comes round.
+  const both = `${first}\n\nThe follow-up`;
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed }));
+  assert.equal(view.container.textContent?.includes("Now reading"), false, "newer prose does not flush the closed tail");
+
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
+  assert.ok(view.container.textContent?.includes("Now reading the file that defines"), "the tail joins at its slot");
+
+  // The end of the turn shows every row in full.
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed, streamComplete: true }));
+  assert.ok(view.container.textContent?.includes("The follow-up"));
+});
+
+test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
+  // A lone heading with no boundary: should stay hidden until timeout
+  const contentWithHeading = "Intro paragraph.\n\n## Next section";
+  const view = render(transcript({ messages: [prompt], streamingText: contentWithHeading }));
+  assert.ok(view.container.textContent?.includes("Intro paragraph."));
+  assert.equal(view.container.textContent?.includes("Next section"), false, "unfinished heading waits");
+
+  // Wait past the max-wait timeout
+  await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
+  // The heading should now be visible, and the turn is still running (streamComplete not set)
+  assert.ok(view.container.textContent?.includes("Next section"), "heading visible after timeout");
+  assert.equal(view.container.textContent?.includes("Intro paragraph."), true, "intro still present");
+
+  // Verify we're still streaming by checking for the data-streaming attribute
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "still streaming (turn not complete)");
+});
+
+test("max-wait timeout shows unfinished prose sentence while turn still runs", async () => {
+  // Plain prose with no sentence-ending punctuation: should wait for timeout
+  const contentWithProse = "Here is the intro.\n\nShort unfinished sentence";
+  const view = render(transcript({ messages: [prompt], streamingText: contentWithProse }));
+  assert.ok(view.container.textContent?.includes("Here is the intro."));
+  assert.equal(view.container.textContent?.includes("Short unfinished"), false, "incomplete prose waits");
+
+  // Wait past the timeout
+  await wait(STREAMING_REVEAL_MAX_WAIT_MS + 50);
+  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "prose visible after timeout");
+
+  // More of the same sentence arriving never hides what the deadline showed.
+  view.rerender(transcript({ messages: [prompt], streamingText: `${contentWithProse} keeps going` }));
+  assert.ok(view.container.textContent?.includes("Short unfinished sentence"), "flushed prose stays visible");
+
+  // Turn is still running
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "turn still running");
+});
+
+test("a streaming reply joins a paragraph at a time and stops fading once settled", async () => {
+  const first = "The first paragraph is ready.";
+  const second = "The second paragraph follows.";
+  const view = render(transcript({ messages: [prompt], streamingText: `${first}\n\n${second.slice(0, 10)}` }));
+  assert.ok(view.container.textContent?.includes(first), "the first block shows at once");
+  const reveal = view.container.querySelector(".streaming-reveal");
+  assert.ok(reveal?.hasAttribute("data-streaming"), "new blocks fade while the reply streams");
+
+  const reply = `${first}\n\n${second}\n\n`;
+  view.rerender(transcript({ messages: [prompt], streamingText: reply }));
+  assert.equal(view.container.textContent?.includes(second), false, "the next block waits its turn");
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
+  assert.ok(view.container.textContent?.includes(second), "then joins whole");
+
+  const saved: ChatMessage = { id: "assistant-1", role: "assistant", content: reply, createdAt: 2 };
+  view.rerender(
+    transcript({ messages: [prompt, saved], streamingText: reply, streamComplete: true, persistedHandoffMessageId: saved.id }),
   );
-  await wait(1_000);
-  assert.ok(view.container.textContent?.includes("Sentence 24 ends here."), "and it finishes revealing");
+  await wait(STREAMING_REVEAL_FADE_MS + 50);
+  view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
+  const settled = view.container.querySelector(".streaming-reveal");
+  assert.equal(settled, reveal, "the settled reply keeps its tree");
+  assert.equal(settled?.hasAttribute("data-streaming"), false, "and no longer fades anything in");
+});
+
+test("with reduced motion every streamed block shows as soon as it arrives", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const view = render(transcript({ messages: [prompt], streamingText: "One.\n\n" }));
+  view.rerender(transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }));
+  for (const text of ["One.", "Two.", "three", "four"]) {
+    assert.ok(view.container.textContent?.includes(text), text);
+  }
 });
 
 function liveRun(runId: string): SubagentRunSnapshotV1 {

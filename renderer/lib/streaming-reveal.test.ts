@@ -4,15 +4,18 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import {
-  advanceStreamingRevealCount,
-  advanceStreamingRevealSchedule,
-  clampStreamingRevealSchedule,
-  STREAMING_REVEAL_COMPLETE_DELAY_MS,
+  advanceStreamingRevealGate,
+  INITIAL_STREAMING_REVEAL_GATE,
+  lastStreamingRevealBoundary,
+  scanStreamingRevealBoundary,
+  INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN,
   STREAMING_REVEAL_FALLBACK_MS,
   STREAMING_REVEAL_HANDOFF_MS,
+  STREAMING_REVEAL_MAX_WAIT_MS,
+  STREAMING_REVEAL_RELEASE_MS,
   parseStreamingReveal,
-  revealDelayMs,
   StreamingRevealParser,
+  type StreamingRevealGate,
   splitStreamingRevealUnit,
   streamingRevealHandoffDelay,
 } from "./streaming-reveal.js";
@@ -196,14 +199,12 @@ test("holds italic, strike, link, and multiline markup until it balances", () =>
   assert.ok(units(multiline).length > 0);
 });
 
-test("completion flushes prose remainder and cadence accelerates with backlog", () => {
+test("completion flushes the prose remainder", () => {
   assert.equal(units("Short remainder").length, 0);
   const longOpenProse =
     "This intentionally unpunctuated local model response keeps producing enough words to reveal a stable group before completion ";
   assert.ok(units(longOpenProse).length > 0);
   assert.equal(units("Short remainder", true).length, 1);
-  assert.ok(revealDelayMs(20, false) < revealDelayMs(1, false));
-  assert.equal(revealDelayMs(20, true), STREAMING_REVEAL_COMPLETE_DELAY_MS);
 });
 
 test("completion never drops valid inline code, math, links, or intraword underscores", () => {
@@ -225,62 +226,168 @@ test("completion never drops valid inline code, math, links, or intraword unders
   }
 });
 
-test("fast completion drains through bounded reveal waves instead of jumping to the end", () => {
-  const unitCount = 25;
-  let revealed = advanceStreamingRevealCount(0, unitCount, true);
-  assert.ok(revealed > 0);
-  assert.ok(revealed < unitCount);
+const streaming = { complete: false, reducedMotion: false };
 
-  let steps = 1;
-  while (revealed < unitCount) {
-    revealed = advanceStreamingRevealCount(revealed, unitCount, true);
-    steps += 1;
+/** Drives the gate the way the renderer does: on each delta and at `nextAt`. */
+function releasesFor(deltas: { at: number; text: string }[], end: number) {
+  let gate: StreamingRevealGate = INITIAL_STREAMING_REVEAL_GATE;
+  let content = "";
+  let nextAt: number | null = null;
+  const releases: { at: number; text: string }[] = [];
+  const step = (now: number) => {
+    const result = advanceStreamingRevealGate(gate, { content, ...streaming }, now);
+    if (result.gate.text !== gate.text) releases.push({ at: now, text: result.gate.text });
+    gate = result.gate;
+    nextAt = result.nextAt;
+  };
+  let index = 0;
+  for (let now = 0; now <= end; now += 1) {
+    let changed = false;
+    while (index < deltas.length && deltas[index]!.at === now) {
+      content += deltas[index]!.text;
+      index += 1;
+      changed = true;
+    }
+    if (changed || (nextAt !== null && now >= nextAt)) step(now);
   }
-  assert.equal(revealed, unitCount);
-  assert.ok(steps <= 12);
-  assert.equal(advanceStreamingRevealCount(0, unitCount, false), 1);
-});
+  return { releases, content };
+}
 
-test("persistent scheduling advances during continuous fast-stream backlog growth", () => {
-  let schedule = { revealedCount: 0, dueAt: null as number | null };
-  let unitCount = 0;
-  for (let now = 0; now <= 1_000; now += 16) {
-    unitCount += 1;
-    schedule = advanceStreamingRevealSchedule(
-      schedule,
-      { unitCount, complete: false, reducedMotion: false },
-      now,
+test("new text joins at block boundaries, no more than once per release interval", () => {
+  const response = [
+    "Here is the plan. It has a few steps.\n\n",
+    "## Steps\n\n",
+    "- Read files\n- Note details\n- Run tests\n\n",
+    "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n",
+    "```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n",
+    "Final words with `code` and **bold**. Done!\n\n",
+  ].join("");
+  // A fast model: four characters every 16ms.
+  const deltas = [];
+  for (let offset = 0; offset < response.length; offset += 4) {
+    deltas.push({ at: (offset / 4) * 16, text: response.slice(offset, offset + 4) });
+  }
+  const { releases } = releasesFor(deltas, deltas[deltas.length - 1]!.at + 2_000);
+  assert.ok(releases.length > 3, "the reply arrives in several steps");
+  assert.equal(releases[releases.length - 1]!.text, response, "and all of it arrives");
+  for (let index = 1; index < releases.length; index += 1) {
+    assert.ok(
+      releases[index]!.at - releases[index - 1]!.at >= STREAMING_REVEAL_RELEASE_MS,
+      `release ${index} waits for the interval`,
     );
   }
-  assert.ok(schedule.revealedCount > 8);
-  assert.ok(schedule.revealedCount < unitCount);
+  // What is on screen only ever grows: every block keeps its place and text.
+  for (let index = 1; index < releases.length; index += 1) {
+    const before = parseStreamingReveal(releases[index - 1]!.text).flatMap((block) => block.units);
+    const after = parseStreamingReveal(releases[index]!.text).flatMap((block) => block.units);
+    before.forEach((unit, position) => {
+      assert.equal(after[position]?.id, unit.id);
+      assert.ok(after[position]!.text.startsWith(unit.text), `"${unit.text}" is never retracted`);
+    });
+  }
 });
 
-test("reduced motion exposes the latest backlog without hiding it when motion returns", () => {
-  const reduced = advanceStreamingRevealSchedule(
-    { revealedCount: 3, dueAt: 50 },
-    { unitCount: 10, complete: false, reducedMotion: true },
-    100,
-  );
-  assert.deepEqual(reduced, { revealedCount: 10, dueAt: null });
-
-  const restored = advanceStreamingRevealSchedule(
-    reduced,
-    { unitCount: 12, complete: false, reducedMotion: false },
-    116,
-  );
-  assert.equal(restored.revealedCount, 10);
-  assert.ok(restored.dueAt !== null);
+test("boundaries are whole paragraphs, list items, table rows, and code lines", () => {
+  const cases: [string, string][] = [
+    ["Para one.\n\nPara two is still", "Para one.\n\n"],
+    // A heading waits for the paragraph under it.
+    ["## Title\n\nBody starts", ""],
+    ["## Title\n\nBody.\n\n", "## Title\n\nBody.\n\n"],
+    // Each item joins once the next one starts.
+    ["- a\n- b\n- c", "- a\n- b\n"],
+    ["## Steps\n- a\n- b", "## Steps\n- a\n"],
+    // A table joins with its first body row, then a row at a time.
+    ["| h | k |\n| --- | --- |\n", ""],
+    ["| h | k |\n| --- | --- |\n| 1 | 2 |\n| 3 |", "| h | k |\n| --- | --- |\n| 1 | 2 |\n"],
+    // An open fence grows by finished lines; a blank line inside it is code.
+    ["```ts\n", ""],
+    ["```ts\nconst a = 1;\n\nconst b", "```ts\nconst a = 1;\n\n"],
+    ["```ts\na\n```\n", "```ts\na\n```\n"],
+    ["No line has ended yet", ""],
+  ];
+  for (const [text, released] of cases) {
+    assert.equal(text.slice(0, lastStreamingRevealBoundary(text)), released, JSON.stringify(text));
+  }
 });
 
-test("terminal replacement clamps reveal state before later growth", () => {
-  const shortened = clampStreamingRevealSchedule({ revealedCount: 8, dueAt: 100 }, 3);
-  assert.deepEqual(shortened, { revealedCount: 3, dueAt: null });
-  const grown = advanceStreamingRevealSchedule(
-    shortened, { unitCount: 5, complete: false, reducedMotion: false }, 200,
+test("a scan resumed chunk by chunk finds the same boundary as a full scan", () => {
+  const response = [
+    "Intro line.\n\n## Steps\n\n- one\n- two\n  continued\n- three\n\n",
+    "| h | k |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nAfter the table.\n\n",
+    "````md\n```ts\ninner\n```\n\nstill code\n````\n\n1. first\n2) second\n\nEnd.",
+  ].join("");
+  for (const size of [1, 2, 3, 5, 8, 13, 40]) {
+    let scan = INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN;
+    for (let end = size; end < response.length + size; end += size) {
+      const prefix = response.slice(0, end);
+      const result = scanStreamingRevealBoundary(scan, prefix);
+      assert.equal(result.boundary, lastStreamingRevealBoundary(prefix), `${size}: ${JSON.stringify(prefix)}`);
+      scan = result.scan;
+    }
+  }
+  // A replaced text starts the scan over rather than trusting the old lines.
+  const scanned = scanStreamingRevealBoundary(INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN, "```ts\na\n").scan;
+  assert.equal(scanStreamingRevealBoundary(scanned, "Plain.\n\nMore").boundary, "Plain.\n\n".length);
+});
+
+test("text a tool step closed joins whole at the next release, not at once", () => {
+  const content = "Checked the config.\n\nNow reading the file that defines";
+  const shown = advanceStreamingRevealGate(INITIAL_STREAMING_REVEAL_GATE, { content, ...streaming }, 0);
+  assert.equal(shown.gate.text, "Checked the config.\n\n");
+  const closed = { content, ...streaming, closed: true };
+  const waiting = advanceStreamingRevealGate(shown.gate, closed, 100);
+  assert.equal(waiting.gate.text, "Checked the config.\n\n", "the release interval still holds");
+  assert.equal(waiting.nextAt, STREAMING_REVEAL_RELEASE_MS);
+  const joined = advanceStreamingRevealGate(waiting.gate, closed, waiting.nextAt!);
+  assert.equal(joined.gate.text, content, "then the unfinished sentence joins without the longest wait");
+  assert.equal(joined.nextAt, null);
+});
+
+test("a tail with no boundary waits, then joins after the longest wait", () => {
+  const content = "Intro.\n\n## Next section";
+  let { gate, nextAt } = advanceStreamingRevealGate(
+    INITIAL_STREAMING_REVEAL_GATE,
+    { content, ...streaming },
+    0,
   );
-  assert.equal(grown.revealedCount, 3);
-  assert.ok(grown.dueAt !== null);
+  assert.equal(gate.text, "Intro.\n\n");
+  ({ gate, nextAt } = advanceStreamingRevealGate(gate, { content, ...streaming }, 500));
+  assert.equal(gate.text, "Intro.\n\n", "an unfinished heading waits");
+  assert.equal(nextAt, STREAMING_REVEAL_MAX_WAIT_MS);
+  ({ gate, nextAt } = advanceStreamingRevealGate(gate, { content, ...streaming }, nextAt!));
+  assert.equal(gate.text, content);
+  assert.equal(nextAt, null);
+});
+
+test("the end of the text and reduced motion release everything at once", () => {
+  const first = advanceStreamingRevealGate(
+    INITIAL_STREAMING_REVEAL_GATE,
+    { content: "One.\n\nTwo", ...streaming },
+    0,
+  ).gate;
+  const content = "One.\n\nTwo.\n\n```ts\nopen";
+  for (const input of [
+    { content, complete: true, reducedMotion: false },
+    { content, complete: false, reducedMotion: true },
+  ]) {
+    const { gate, nextAt } = advanceStreamingRevealGate(first, input, 1);
+    assert.equal(gate.text, content, JSON.stringify(input));
+    assert.equal(nextAt, null);
+  }
+});
+
+test("a reply that is replaced rather than extended starts the gate over", () => {
+  const shown = advanceStreamingRevealGate(
+    INITIAL_STREAMING_REVEAL_GATE,
+    { content: "First answer.\n\nMore", ...streaming },
+    0,
+  ).gate;
+  const { gate } = advanceStreamingRevealGate(
+    shown,
+    { content: "Retry.\n\nThen", ...streaming },
+    10,
+  );
+  assert.equal(gate.text, "Retry.\n\n");
 });
 
 test("reduced motion removes the final handoff wait", () => {
