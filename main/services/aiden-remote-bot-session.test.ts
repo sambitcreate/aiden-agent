@@ -20,6 +20,7 @@ import {
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
+  tailWithinJsonBytes,
   type AidenRemoteBotSessionRuntime,
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
@@ -30,6 +31,8 @@ import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-
 import {
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
+  parseAidenRemoteBotApproval,
+  parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
@@ -1836,6 +1839,115 @@ test("a transcript near its own budget with a long partial and a full queue stil
     assert.equal(session.hasOlder, true, "the transcript gave way to the partial and the queue");
     assert.equal(session.entries[session.entries.length - 1]!.id, "entry_5", "the newest replies stay");
   } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+/** U+0001: a control character, so each code point is written as a six-byte \u escape (the JSON worst case). */
+const ESCAPED = "\u0001";
+
+/** A message of `codePoints` escaped code points, led by a label that tells it apart. */
+function escapedMessage(label: string, codePoints: number): string {
+  return `${label} ${ESCAPED.repeat(codePoints - [...label].length - 1)}`;
+}
+
+/** Four questions at the protocol maxima, every character a six-byte escape. */
+function maximalQuestions(): AskUserQuestionV1[] {
+  return Array.from({ length: 4 }, (_, question) => ({
+    question: `${question} ${ESCAPED.repeat(998)}`, // 1,000 code points
+    header: `h${question}${ESCAPED.repeat(14)}`, // 16
+    multiSelect: false,
+    options: Array.from({ length: 5 }, (_, option) => ({
+      label: `o${option} ${ESCAPED.repeat(57)}`, // 60
+      description: `d${option} ${ESCAPED.repeat(1_997)}`, // 2,000
+    })),
+  }));
+}
+
+test("the parts that ship whole at the protocol maxima take well under half the frame limit", () => {
+  // Worst case in JSON bytes, six per code point: four questions of
+  // (1,000 + 16 + 5 x (60 + 2,000)) = 44,304 code points, 265,824 bytes; an
+  // approval of (2,000 + 120 + 128) = 2,248 code points, 13,488 bytes. State
+  // and activity add a few hundred bytes, so the group is under 300 KB, under
+  // the 512 KiB half of the 1 MiB frame limit. The partial (600,000 bytes) and
+  // the queued list (at most 256 KiB) share what is left of the snapshot budget.
+  const question = parseAidenRemoteBotQuestion({ waitId: WAIT_ID, toolCallId: ESCAPED.repeat(128), questions: maximalQuestions() });
+  const approval = parseAidenRemoteBotApproval({
+    waitId: WAIT_ID,
+    toolCallId: ESCAPED.repeat(128),
+    toolName: ESCAPED.repeat(120),
+    summary: ESCAPED.repeat(2_000),
+    canAllow: true,
+  });
+  const bytes = Buffer.byteLength(JSON.stringify({ question, approval }), "utf8");
+  assert.ok(bytes < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES / 2, `the question and approval take ${bytes} bytes`);
+});
+
+test("a partial over its share is cut from the front on a code-point boundary, keeping the newest words", () => {
+  // From the end, JSON content bytes: a 4-byte emoji, three bytes per CJK
+  // character, six per escape. 4 + 3 x 5 + 6 = 25 keeps one escape before the CJK run.
+  const text = `head${ESCAPED.repeat(10)}一一一一一😀`;
+  const tail = tailWithinJsonBytes(text, 25);
+  assert.equal(tail, `${ESCAPED}一一一一一😀`);
+  const contentBytes = (value: string) => Buffer.byteLength(JSON.stringify(value), "utf8") - 2;
+  assert.ok(contentBytes(tail) <= 25, "the tail fits its share");
+  assert.ok(contentBytes(`${ESCAPED}${tail}`) > 25, "one more code point would not fit: the cut is as long as it can be");
+  assert.equal(tailWithinJsonBytes("short", 100), "short", "text that fits is kept whole");
+  assert.equal(tailWithinJsonBytes("a😀", 3), "", "an emoji is never split, even to its lone half");
+});
+
+test("the probe at the protocol maxima keeps every frame and the snapshot inside the frame limit", async () => {
+  // A 100,000-code-point escaped partial, four maximal questions and three
+  // 14,000-code-point escaped queued messages (84,000 JSON bytes each), plus an
+  // escaped 100,000-code-point reply. Written out, the old snapshot was about 1.12 MB.
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const questions = createBotQuestions();
+  const service = runningOn(driven, fake, { questions, notifyBotsChanged: () => {} });
+  const stream = await openAudienceStream(service, { activity: true });
+  const asking = new AbortController();
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    await driven.emitView(
+      [user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))],
+      {
+        "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
+        ...waitingInbox(Array.from({ length: 3 }, (_, index) => escapedMessage(`m${index}`, 14_000))),
+      },
+    );
+    const asked = questions.request({
+      botId: BOT_ID,
+      waitId: WAIT_ID,
+      toolCallId: "call_1",
+      questions: maximalQuestions(),
+      signal: asking.signal,
+    });
+    asked.catch(() => undefined);
+    const kinds = ["entry", "partial", "question", "queued"];
+    await stream.until(
+      () => kinds.every((kind) => stream.frames.some((frame) => frame.type === kind)),
+      "the entry, partial, question and queued frames",
+    );
+    // Each frame on its own is inside the limit, and each parses through the native reader.
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    const wire = JSON.stringify(session);
+    assert.ok(Buffer.byteLength(wire, "utf8") < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot is inside the frame limit");
+    assert.deepEqual(parseAidenRemoteBotSession(JSON.parse(wire)), session, "the snapshot parses back to itself");
+    // Priority order: the question (about 268 KB) and the whole partial (600,000 bytes) ship.
+    // What is left, about 115 KB of 983,040, takes one 84,000-byte queued message: the second
+    // would bring the list to 168,000 bytes. The transcript gets nothing and says so.
+    assert.deepEqual(session.question?.questions, maximalQuestions(), "the question ships whole");
+    assert.equal(session.partial, ESCAPED.repeat(100_000), "the partial ships whole");
+    assert.deepEqual(session.queued?.map((item) => [item.submissionId, item.text]), [
+      ["30", escapedMessage("m0", 14_000)],
+    ]);
+    assert.deepEqual(session.entries, [], "the reply that no longer fits is left out");
+    assert.equal(session.hasOlder, true);
+  } finally {
+    asking.abort();
     await stream.close();
     await service.close();
   }

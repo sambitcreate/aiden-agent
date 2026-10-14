@@ -127,10 +127,11 @@ const ctx = BACKGROUND_CONTEXT;
 /** The transcript window's own cap, applied on top of what the snapshot budget leaves it. */
 const MAX_SESSION_JSON_BYTES = 768 * 1_024;
 /**
- * Serialized bytes one session snapshot may take: the transport's SSE frame
- * limit less a margin for the SSE id and event lines and the frame envelope
- * (`protocolVersion`, `botId`, `epoch`, `seq`, `type`). The transcript window,
- * the partial, the question, the approval and the queued list all share it.
+ * Serialized bytes one session snapshot's `session` object may take: the
+ * transport's SSE frame limit less a margin for the SSE id and event lines and
+ * the frame envelope (`protocolVersion`, `botId`, `epoch`, `seq`, `type`, at most
+ * about 1 KB with a 160-scalar `botId`). The snapshot allocates this budget in
+ * priority order (see `snapshot`).
  */
 const SNAPSHOT_BUDGET_BYTES = AIDEN_REMOTE_MAX_SSE_FRAME_BYTES - 64 * 1_024;
 /**
@@ -463,25 +464,61 @@ export function projectBotSessionQueued(
   personal: ReadonlySet<string>,
 ): AidenRemoteBotQueuedMessage[] {
   const seen = new Set<string>();
-  const queued: AidenRemoteBotQueuedMessage[] = [];
-  // Serialized size of the list so far: the brackets, plus a comma before each item after the first.
-  let bytes = 2;
+  const valid: AidenRemoteBotQueuedMessage[] = [];
   for (const message of liveQueuedMessages(docs, personal)) {
     const text = wireText(message.text, AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
     if (!text.trim() || !WIRE_SUBMISSION_ID.test(message.submissionId) || seen.has(message.submissionId)) continue;
-    const item: AidenRemoteBotQueuedMessage = {
-      submissionId: message.submissionId,
-      mode: message.mode === "steer" ? "steer" : "queue",
-      text,
-    };
-    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8") + (queued.length > 0 ? 1 : 0);
-    if (bytes + itemBytes > MAX_QUEUED_JSON_BYTES) break;
     seen.add(message.submissionId);
-    queued.push(item);
-    bytes += itemBytes;
-    if (queued.length === AIDEN_REMOTE_BOT_QUEUED_MAX) break;
+    valid.push({ submissionId: message.submissionId, mode: message.mode === "steer" ? "steer" : "queue", text });
+    if (valid.length === AIDEN_REMOTE_BOT_QUEUED_MAX) break;
   }
-  return queued;
+  return oldestThatFit(valid, MAX_QUEUED_JSON_BYTES);
+}
+
+/**
+ * The oldest items whose serialized JSON array fits `budgetBytes`, in order. The
+ * first item that would overflow ends the list, so the rest are omitted; an item
+ * is never cut.
+ */
+function oldestThatFit<Item>(items: readonly Item[], budgetBytes: number): Item[] {
+  const kept: Item[] = [];
+  let bytes = 2; // the brackets
+  for (const item of items) {
+    const size = Buffer.byteLength(JSON.stringify(item), "utf8") + (kept.length > 0 ? 1 : 0);
+    if (bytes + size > budgetBytes) break;
+    kept.push(item);
+    bytes += size;
+  }
+  return kept;
+}
+
+/** The serialized bytes of a JSON string's content: its quotes excluded, its escapes counted as written. */
+function jsonContentBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), "utf8") - 2;
+}
+
+/**
+ * The longest tail of `text`, cut on a code-point boundary, whose JSON string
+ * content fits `budgetBytes`. Text that fits is returned whole; otherwise its
+ * front is cut, so a phone keeps the newest streamed words.
+ */
+export function tailWithinJsonBytes(text: string, budgetBytes: number): string {
+  if (jsonContentBytes(text) <= budgetBytes) return text;
+  const points = [...text];
+  let bytes = 0;
+  let start = points.length;
+  while (start > 0) {
+    const size = jsonContentBytes(points[start - 1]!);
+    if (bytes + size > budgetBytes) break;
+    bytes += size;
+    start -= 1;
+  }
+  return points.slice(start).join("");
+}
+
+/** The serialized bytes one `"key":value` member adds to a JSON object, its separating comma included. */
+function memberBytes(key: string, value: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ [key]: value }), "utf8") - 1;
 }
 
 export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSessionStateView {
@@ -647,25 +684,51 @@ class BotLiveProjector {
   }
 
   /**
-   * The session as one device sees it. Everything but the transcript is
-   * measured first; the transcript window takes what the snapshot budget
-   * leaves, so the whole snapshot stays inside the SSE frame limit.
+   * The session as one device sees it, inside the snapshot budget by
+   * construction. Parts are allocated in priority order:
+   *  1. identity, state, question, approval and activity ship whole (measured
+   *     first; their protocol maxima sit well under half the budget);
+   *  2. the partial, cut to its tail if it no longer fits;
+   *  3. the queued list, oldest first, at most `MAX_QUEUED_JSON_BYTES` and what is left;
+   *  4. the transcript window, with whatever is left (possibly none).
    */
   snapshot(audience: Audience): AidenRemoteBotSession {
-    const head = {
+    const showActivity = audience.activity && this.activityDeps !== undefined;
+    let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
+    for (const [key, value] of Object.entries(this.state)) used += memberBytes(key, value);
+    used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
+    if (showActivity) used += memberBytes("activity", this.activity);
+
+    let partial: string | undefined;
+    if (this.partial !== undefined) {
+      partial = tailWithinJsonBytes(this.partial, SNAPSHOT_BUDGET_BYTES - used - memberBytes("partial", ""));
+      used += memberBytes("partial", partial);
+    }
+
+    let queued: AidenRemoteBotQueuedMessage[] | undefined;
+    if (showActivity) {
+      // "[]" is already counted in the member's empty form, hence the + 2.
+      const arrayBudget = SNAPSHOT_BUDGET_BYTES - used - memberBytes("queued", []) + 2;
+      queued = oldestThatFit(this.queued, Math.min(MAX_QUEUED_JSON_BYTES, arrayBudget));
+      used += memberBytes("queued", queued);
+    }
+
+    // The transcript's members are reserved empty; `hasOlder` takes its larger, `false`, form.
+    const transcriptBudget =
+      SNAPSHOT_BUDGET_BYTES - used - memberBytes("entries", []) - memberBytes("hasOlder", false) + 2;
+    const { entries, hasOlder } = windowed(entriesFor(this.entries, audience), transcriptBudget);
+    return parseAidenRemoteBotSession({
       botId: this.botId,
       epoch: this.epoch,
       seq: this.seq,
       ...this.state,
-      ...(this.partial !== undefined ? { partial: this.partial } : {}),
-      entries: [] as AidenRemoteBotSessionEntry[],
-      hasOlder: false,
+      ...(partial !== undefined ? { partial } : {}),
+      entries,
+      hasOlder,
       question: this.question,
       approval: this.approval,
-      ...(audience.activity && this.activityDeps ? { activity: this.activity, queued: this.queued } : {}),
-    };
-    const room = SNAPSHOT_BUDGET_BYTES - Buffer.byteLength(JSON.stringify(head), "utf8");
-    return parseAidenRemoteBotSession({ ...head, ...windowed(entriesFor(this.entries, audience), room) });
+      ...(showActivity ? { activity: this.activity, queued } : {}),
+    });
   }
 
   /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
