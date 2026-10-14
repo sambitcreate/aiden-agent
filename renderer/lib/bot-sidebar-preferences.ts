@@ -86,6 +86,14 @@ export function withoutMissingBots(
   };
 }
 
+/** A deleted Bot leaves no pin and no view behind, even when it was the last Bot (which `withoutMissingBots` can't tell). */
+export function withoutBot(preferences: BotSidebarPreferences, botId: string): BotSidebarPreferences {
+  const pinned = preferences.pinnedBotId === botId;
+  if (!pinned && !(botId in preferences.lastViewed)) return preferences;
+  const { [botId]: _dropped, ...lastViewed } = preferences.lastViewed;
+  return { ...preferences, pinnedBotId: pinned ? null : preferences.pinnedBotId, lastViewed };
+}
+
 export function isBotUnread(preferences: BotSidebarPreferences, botId: string, lastReplyAt: number | null): boolean {
   return lastReplyAt !== null && lastReplyAt > (preferences.lastViewed[botId] ?? preferences.since);
 }

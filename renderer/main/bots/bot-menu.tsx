@@ -5,28 +5,62 @@
 
 import * as React from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import type {
+import { Ellipsis } from "lucide-react";
+import {
+  Button,
+  ContextMenu,
+  ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "../../components/ui";
 import { botChatPath, botChatRouteBotId } from "../../lib/bot-routes";
+import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
 import { useBotPanelActions } from "./bot-panel-context";
-import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
+import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 
 export type BotMenuAction = "profile" | "files" | "memory" | "routines" | "advanced" | "pin" | "delete";
 
-// Set when the chosen item opened the side panel, so the menu's close does not
-// pull focus back to the ••• button after the panel has taken it.
-let openedPanel = false;
+const PANEL_ACTIONS: ReadonlySet<BotMenuAction> = new Set(["files", "memory", "routines"]);
 
-/** Pass as `onCloseAutoFocus` on the menu content: skips Radix's focus restore when the panel took focus. */
-export function botMenuCloseAutoFocus(event: Event): void {
-  const skip = openedPanel;
-  openedPanel = false;
-  if (skip) event.preventDefault();
+/**
+ * One menu's focus hand-off. When its chosen item opened the side panel, the
+ * menu's close leaves focus with the panel instead of pulling it back to the
+ * trigger. Each menu owns one, so a choice in one menu never affects another.
+ */
+export interface BotMenuFocusGuard {
+  /** Pass as the menu content's `onCloseAutoFocus`. */
+  onCloseAutoFocus(event: Event): void;
+  /** The chosen action ran and opened the panel. */
+  panelOpened(): void;
+  /** A new choice starts clean. */
+  reset(): void;
+}
+
+export function useBotMenuFocusGuard(): BotMenuFocusGuard {
+  const opened = React.useRef(false);
+  return React.useMemo(
+    () => ({
+      onCloseAutoFocus: (event: Event) => {
+        const skip = opened.current;
+        opened.current = false;
+        if (skip) event.preventDefault();
+      },
+      panelOpened: () => {
+        opened.current = true;
+      },
+      reset: () => {
+        opened.current = false;
+      },
+    }),
+    [],
+  );
 }
 
 /** The ••• button a menu item belongs to, which the panel returns focus to when it closes. */
@@ -39,21 +73,27 @@ export function BotMenuItems({
   pinned,
   Item,
   Separator,
+  focusGuard,
+  returnFocus,
   onAction,
 }: {
   pinned: boolean;
   Item: typeof DropdownMenuItem | typeof ContextMenuItem;
   Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator;
+  /** The guard whose `onCloseAutoFocus` is on this menu's content. */
+  focusGuard: BotMenuFocusGuard;
+  /** Where the panel returns focus when the menu has no labelled trigger, such as a row's right-click menu. */
+  returnFocus?: () => HTMLElement | null;
   onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
 }) {
   // Each open mounts the items afresh, so a flag left by an earlier open never carries over.
-  React.useEffect(() => {
-    openedPanel = false;
-  }, []);
+  React.useEffect(() => focusGuard.reset(), [focusGuard]);
   const choose = (action: BotMenuAction) => (event: Event) => {
     const item = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    openedPanel = action === "files" || action === "memory" || action === "routines";
-    onAction(action, item ? menuTrigger(item) : null);
+    focusGuard.reset();
+    onAction(action, (item ? menuTrigger(item) : null) ?? returnFocus?.() ?? null);
+    // Only an action that ran keeps focus off the trigger; one that threw leaves Radix to restore it.
+    if (PANEL_ACTIONS.has(action)) focusGuard.panelOpened();
   };
   return (
     <>
@@ -71,14 +111,78 @@ export function BotMenuItems({
   );
 }
 
+/**
+ * A Bot row's right-click menu and its hover ••• button, with the same items.
+ * The row is `children` (the right-click target); `rowRef` points at it, so a
+ * panel opened from the right-click menu hands focus back to the row.
+ */
+export function BotRowMenus({
+  bot,
+  pinned,
+  rowRef,
+  moreClassName,
+  onAction,
+  children,
+}: {
+  bot: Pick<BotDefinition, "name">;
+  pinned: boolean;
+  rowRef: React.RefObject<HTMLElement | null>;
+  moreClassName?: string;
+  onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
+  children: React.ReactElement;
+}) {
+  const contextGuard = useBotMenuFocusGuard();
+  const moreGuard = useBotMenuFocusGuard();
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent onCloseAutoFocus={contextGuard.onCloseAutoFocus}>
+          <BotMenuItems
+            pinned={pinned}
+            Item={ContextMenuItem}
+            Separator={ContextMenuSeparator}
+            focusGuard={contextGuard}
+            returnFocus={() => rowRef.current}
+            onAction={onAction}
+          />
+        </ContextMenuContent>
+      </ContextMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            iconOnly
+            variant="transparent"
+            size="small"
+            aria-label={`More for ${bot.name}`}
+            className={cn(
+              "absolute opacity-0 transition-opacity duration-(--motion-duration) ease-standard group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 motion-reduce:transition-none",
+              moreClassName,
+            )}
+          >
+            <Ellipsis />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onCloseAutoFocus={moreGuard.onCloseAutoFocus}>
+          <BotMenuItems
+            pinned={pinned}
+            Item={DropdownMenuItem}
+            Separator={DropdownMenuSeparator}
+            focusGuard={moreGuard}
+            onAction={onAction}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+}
+
 /** What each menu item does for a Bot. Delete is the caller's, because it owns the confirmation. */
 export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
   const navigate = useNavigate();
   const { show } = useBotPanelActions();
-  const { preferences, pin, unpin } = useBotSidebarPreferences();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const chatBotId = botChatRouteBotId(pathname);
-  const pinnedBotId = preferences.pinnedBotId;
   return React.useCallback(
     (bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null) => {
       switch (action) {
@@ -95,14 +199,13 @@ export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
           if (chatBotId !== bot.id) void navigate(botChatPath(bot.id));
           return;
         case "pin":
-          if (pinnedBotId === bot.id) unpin();
-          else pin(bot.id);
+          botSidebarPreferenceActions.togglePin(bot.id);
           return;
         case "delete":
           onDelete(bot);
           return;
       }
     },
-    [chatBotId, navigate, onDelete, pin, pinnedBotId, show, unpin],
+    [chatBotId, navigate, onDelete, show],
   );
 }

@@ -1,24 +1,9 @@
 import * as React from "react";
-import { Ellipsis, Plus, RotateCcw, Search, X } from "lucide-react";
+import { Plus, RotateCcw, Search, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
-import {
-  Button,
-  Callout,
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  EmptyState,
-  Input,
-  Text,
-} from "../../components/ui";
+import { Button, Callout, EmptyState, Input, Text } from "../../components/ui";
 import type { BotDefinition } from "../../shared/bots";
+import { BotRowMenus, type BotMenuAction } from "./bot-menu";
 import { botRowStatusLabel, type BotSessionState } from "./bot-session-state";
 
 export interface BotListRow {
@@ -57,59 +42,36 @@ function matchesSearch(row: BotListRow, query: string): boolean {
   );
 }
 
-type BotRowPage = "memory" | "advanced";
-
-function BotRowMenuItems({
-  bot,
-  Item,
-  Separator,
-  onOpenProfile,
-  onOpenPage,
-  onDelete,
-}: {
-  bot: BotDefinition;
-  Item: typeof DropdownMenuItem | typeof ContextMenuItem;
-  Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator;
-  onOpenProfile(bot: BotDefinition): void;
-  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
-  onDelete(bot: BotDefinition): void;
-}) {
-  return (
-    <>
-      <Item onSelect={() => onOpenProfile(bot)}>Profile</Item>
-      {onOpenPage ? <Item onSelect={() => onOpenPage(bot, "memory")}>Memory</Item> : null}
-      {onOpenPage ? <Item onSelect={() => onOpenPage(bot, "advanced")}>Advanced</Item> : null}
-      <Separator />
-      <Item color="status-red" onSelect={() => onDelete(bot)}>
-        Delete Bot
-      </Item>
-    </>
-  );
-}
+type BotRowAction = (bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null) => void;
 
 function BotListItem({
   row,
   now,
+  pinned,
   onOpen,
-  onOpenProfile,
-  onOpenPage,
-  onDelete,
+  onAction,
 }: {
   row: BotListRow;
   now: number;
+  pinned: boolean;
   onOpen(bot: BotDefinition): void;
-  onOpenProfile(bot: BotDefinition): void;
-  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
-  onDelete(bot: BotDefinition): void;
+  onAction: BotRowAction;
 }) {
   const { bot } = row;
+  const rowRef = React.useRef<HTMLButtonElement>(null);
   const status = botRowStatusLabel(row.state);
   const working = row.state?.kind === "running";
   return (
     <li className="group relative">
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
+      <BotRowMenus
+        bot={bot}
+        pinned={pinned}
+        rowRef={rowRef}
+        moreClassName="right-2 top-1/2 -translate-y-1/2"
+        onAction={(action, returnFocus) => onAction(bot, action, returnFocus)}
+      >
           <button
+            ref={rowRef}
             type="button"
             className="flex w-full min-w-0 items-center gap-3 rounded-card py-2.5 pl-3 pr-12 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
             onClick={() => onOpen(bot)}
@@ -156,41 +118,7 @@ function BotListItem({
               {working ? <span className="sr-only">Working</span> : null}
             </span>
           </button>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <BotRowMenuItems
-            bot={bot}
-            Item={ContextMenuItem}
-            Separator={ContextMenuSeparator}
-            onOpenProfile={onOpenProfile}
-            onOpenPage={onOpenPage}
-            onDelete={onDelete}
-          />
-        </ContextMenuContent>
-      </ContextMenu>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            iconOnly
-            variant="transparent"
-            size="medium"
-            aria-label={`More for ${bot.name}`}
-            className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 motion-reduce:transition-none"
-          >
-            <Ellipsis />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <BotRowMenuItems
-            bot={bot}
-            Item={DropdownMenuItem}
-            Separator={DropdownMenuSeparator}
-            onOpenProfile={onOpenProfile}
-            onOpenPage={onOpenPage}
-            onDelete={onDelete}
-          />
-        </DropdownMenuContent>
-      </DropdownMenu>
+      </BotRowMenus>
     </li>
   );
 }
@@ -215,8 +143,8 @@ function BotListSkeleton() {
 
 /**
  * The identity-first Bots home: one row per Bot, and a tap opens its chat.
- * Profile, Memory, Advanced and Delete Bot live in each row's ••• menu and
- * context menu.
+ * The shared Bot menu (Profile, Files, Memory, Routines, Advanced, Pin to top,
+ * Delete Bot) is each row's ••• menu and context menu.
  */
 export function BotList({
   rows,
@@ -224,9 +152,8 @@ export function BotList({
   error = false,
   onRetry,
   onOpen,
-  onOpenProfile,
-  onOpenPage,
-  onDelete,
+  onAction,
+  pinnedBotId = null,
   onCreate,
   now = Date.now(),
   emptyState,
@@ -237,9 +164,8 @@ export function BotList({
   error?: boolean;
   onRetry?(): void;
   onOpen(bot: BotDefinition): void;
-  onOpenProfile(bot: BotDefinition): void;
-  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
-  onDelete(bot: BotDefinition): void;
+  onAction: BotRowAction;
+  pinnedBotId?: string | null;
   onCreate(): void;
   now?: number;
   /** Replaces the default "No Bots yet" state, such as the starter carousel. */
@@ -331,10 +257,9 @@ export function BotList({
               key={row.bot.id}
               row={row}
               now={now}
+              pinned={row.bot.id === pinnedBotId}
               onOpen={onOpen}
-              onOpenProfile={onOpenProfile}
-              onOpenPage={onOpenPage}
-              onDelete={onDelete}
+              onAction={onAction}
             />
           ))}
         </ul>

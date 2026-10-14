@@ -13,11 +13,13 @@ import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { BotList, type BotListRow } from "./bots/bot-list";
+import { useBotMenuActions } from "./bots/bot-menu";
 import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
 import { BotStarterCarousel } from "./bots/bot-starter-carousel";
+import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 import { RemoteBots } from "./remote-bots";
 
 export { botChatPath } from "../lib/bot-routes";
@@ -47,6 +49,8 @@ function BotsHome() {
     .sort((left, right) => (right.updatedAt ?? right.bot.updatedAt) - (left.updatedAt ?? left.bot.updatedAt));
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
+  const menuAction = useBotMenuActions(setDeleting);
+  const { preferences } = useBotSidebarPreferences();
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
 
   return (
@@ -66,9 +70,8 @@ function BotsHome() {
           error={bots.isError}
           onRetry={() => void bots.refetch()}
           onOpen={openChat}
-          onOpenProfile={(bot) => void navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
-          onOpenPage={(bot, page) => void navigate({ to: "/bots/$botId", params: { botId: bot.id }, search: { page } })}
-          onDelete={setDeleting}
+          onAction={menuAction}
+          pinnedBotId={preferences.pinnedBotId}
           onCreate={() => setCreating(true)}
           emptyState={<BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />}
         >

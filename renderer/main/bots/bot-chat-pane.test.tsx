@@ -7,6 +7,7 @@ import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -966,4 +967,36 @@ test("the chat header's face works only while the Bot works, and a photo gets a 
   });
   await waitFor(() => assert.equal(face.hasAttribute("data-working"), false));
   assert.equal(face.querySelector('[data-aiden-mark="glance"]'), null);
+});
+
+test("an open chat keeps its Bot read: a reply that arrives while it is open, and leaving it, both mark it viewed", async () => {
+  const viewedAt = () =>
+    parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now()).lastViewed["bot-1"] ?? 0;
+  installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon")] }),
+    "bots:live:unsubscribe": () => undefined,
+    "bots:pendingApprovals": () => [],
+  });
+  await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
+  await screen.findByText("Plan Lisbon");
+  await waitFor(() => assert.ok(viewedAt() > 0, "opening the chat views it"));
+  const opened = viewedAt();
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "entry",
+    entry: assistantEntry("a1", "Here is a plan for Lisbon."),
+  });
+  await screen.findByText("Here is a plan for Lisbon.");
+  await waitFor(() => assert.ok(viewedAt() > opened, "the reply arrived while the chat was open"));
+  const replied = viewedAt();
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  // Leaving the chat unmounts it.
+  cleanup();
+  assert.ok(viewedAt() > replied, "leaving the chat");
 });

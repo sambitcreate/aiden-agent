@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
-import { BotChatActions, BotChatBackButton, BotChatNamePill } from "./bot-chat-header";
+import { BotChatActions, BotChatNamePill } from "./bot-chat-header";
 
 afterEach(cleanup);
 
@@ -13,7 +13,6 @@ function renderHeader(pinned = false) {
   const calls: string[] = [];
   render(
     <>
-      <BotChatBackButton onBack={() => calls.push("back")} />
       <BotChatNamePill bot={bot} onOpenProfile={() => calls.push("profile")} />
       <BotChatActions bot={bot} pinned={pinned} onAction={(action) => calls.push(action)} />
     </>,
@@ -26,11 +25,10 @@ const openMenu = async () => {
   return (await screen.findAllByRole("menuitem")).map((item) => item.textContent);
 };
 
-test("the name pill opens the Bot's profile and back returns to all Bots", () => {
+test("the name pill opens the Bot's profile", () => {
   const calls = renderHeader();
   fireEvent.click(screen.getByRole("button", { name: "SLMob profile" }));
-  fireEvent.click(screen.getByRole("button", { name: "All Bots" }));
-  assert.deepEqual(calls, ["profile", "back"]);
+  assert.deepEqual(calls, ["profile"]);
 });
 
 test("the ••• menu offers Profile, Files, Memory, Routines, Advanced, Pin to top and Delete Bot, in that order", async () => {
@@ -67,7 +65,61 @@ test("Delete Bot is the last item, set apart from the others by a separator", as
   await openMenu();
   const separator = screen.getByRole("separator");
   const deleteItem = screen.getByRole("menuitem", { name: "Delete Bot" });
-  const advanced = screen.getByRole("menuitem", { name: "Pin to top" });
-  assert.equal(Boolean(advanced.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING), true);
+  const pin = screen.getByRole("menuitem", { name: "Pin to top" });
+  assert.equal(Boolean(pin.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING), true);
   assert.equal(Boolean(separator.compareDocumentPosition(deleteItem) & Node.DOCUMENT_POSITION_FOLLOWING), true);
+});
+
+test("after Files hands focus to the panel, the next close by Pin to top or Escape gives focus back to •••", async () => {
+  renderHeader();
+  const more = screen.getByRole("button", { name: "More for SLMob" });
+  more.focus();
+  fireEvent.keyDown(more, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Files" }));
+  await waitFor(() => assert.equal(screen.queryByRole("menu") === null, true));
+  // Files left focus to the panel (absent here), so the menu did not take it back.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(document.activeElement === more, false);
+
+  more.focus();
+  fireEvent.keyDown(more, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
+  await waitFor(() => assert.equal(document.activeElement === more, true));
+
+  fireEvent.keyDown(more, { key: "Enter" });
+  const menu = await screen.findByRole("menu");
+  fireEvent.keyDown(menu, { key: "Escape" });
+  await waitFor(() => assert.equal(screen.queryByRole("menu") === null, true));
+  await waitFor(() => assert.equal(document.activeElement === more, true));
+});
+
+test("a menu whose action fails to open the panel still gives focus back to •••", async () => {
+  render(
+    <BotChatActions
+      bot={bot}
+      pinned={false}
+      onAction={() => {
+        throw new Error("The panel is not available.");
+      }}
+    />,
+  );
+  const more = screen.getByRole("button", { name: "More for SLMob" });
+  more.focus();
+  fireEvent.keyDown(more, { key: "Enter" });
+  const files = await screen.findByRole("menuitem", { name: "Files" });
+  const reported: unknown[] = [];
+  const onError = (event: ErrorEvent) => {
+    reported.push(event.error);
+    event.preventDefault();
+  };
+  window.addEventListener("error", onError);
+  try {
+    fireEvent.click(files);
+  } catch (error) {
+    reported.push(error);
+  } finally {
+    window.removeEventListener("error", onError);
+  }
+  await waitFor(() => assert.equal(screen.queryByRole("menu") === null, true));
+  await waitFor(() => assert.equal(document.activeElement === more, true));
 });

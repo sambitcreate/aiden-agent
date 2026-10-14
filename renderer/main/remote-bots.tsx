@@ -21,12 +21,12 @@ function grantsOf(view: PeerHostView): string {
 }
 
 /**
- * The Bots area's paired-Mac section. Bots come from each host's last-known
+ * The Bots sidebar's paired-Mac section; `query` is the sidebar's search. Bots come from each host's last-known
  * feed; opening one asks that host for the Bot's chat and opens it there.
  * One control per host is kept while the view is open, so a retry after a
  * lost answer reuses its key.
  */
-export function RemoteBots() {
+export function RemoteBots({ query = "" }: { query?: string } = {}) {
   const navigate = useNavigate();
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
   const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
@@ -82,5 +82,7 @@ export function RemoteBots() {
     }
   };
 
-  return <RemoteBotsSection groups={groups} opening={opening} onOpen={(hostId, botId) => void open(hostId, botId)} />;
+  return (
+    <RemoteBotsSection groups={groups} opening={opening} query={query} onOpen={(hostId, botId) => void open(hostId, botId)} />
+  );
 }

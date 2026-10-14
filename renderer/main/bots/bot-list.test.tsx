@@ -30,9 +30,7 @@ function renderList(rows: BotListRow[], handlers: Partial<React.ComponentProps<t
       rows={rows}
       now={NOW}
       onOpen={(value) => calls.push(`open:${value.id}`)}
-      onOpenProfile={(value) => calls.push(`profile:${value.id}`)}
-      onOpenPage={(value, page) => calls.push(`${page}:${value.id}`)}
-      onDelete={(value) => calls.push(`delete:${value.id}`)}
+      onAction={(value, action) => calls.push(`${action}:${value.id}`)}
       onCreate={() => calls.push("create")}
       {...handlers}
     />,
@@ -70,7 +68,7 @@ test("a Bot without a model says so in its row", () => {
   assert.ok(within(screen.getByRole("button", { name: /^Researcher/u })).getByText("Needs an AI model"));
 });
 
-test("tapping a row opens that Bot, and its context menu offers Profile and Delete Bot", async () => {
+test("tapping a row opens that Bot, and its context menu offers the Bot menu", async () => {
   const calls = renderList([{ bot: bot("b1", "Planner") }, { bot: bot("b2", "Inbox") }]);
   fireEvent.click(screen.getByRole("button", { name: /^Inbox/u }));
   assert.deepEqual(calls, ["open:b2"]);
@@ -84,12 +82,12 @@ test("tapping a row opens that Bot, and its context menu offers Profile and Dele
   assert.deepEqual(calls, ["open:b2", "profile:b1", "delete:b1", "memory:b1"]);
 });
 
-test("each row's ••• button reaches Profile, Memory, Advanced and Delete Bot without a right-click", async () => {
+test("each row's ••• button reaches the Bot menu without a right-click", async () => {
   const calls = renderList([{ bot: bot("b1", "Planner") }]);
   const more = screen.getByRole("button", { name: "More for Planner" });
   fireEvent.keyDown(more, { key: "Enter" });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Memory", "Advanced", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
   assert.deepEqual(calls, ["advanced:b1"], "the menu acts on its Bot without opening the chat");
 });

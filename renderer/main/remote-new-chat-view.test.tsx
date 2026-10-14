@@ -270,3 +270,15 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
 
   assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
 });
+
+test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac with no match", () => {
+  const groups = [
+    { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },
+    { host: laptop, bots: [{ id: "bot-3", name: "Planner" }] },
+  ];
+  const searched = dom(renderToStaticMarkup(<RemoteBotsSection groups={groups} opening={null} onOpen={noop} query="pull requests" />));
+  assert.equal(searched.button(/^Reviewer, on Studio$/u) !== undefined, true);
+  assert.equal(searched.button(/^Scribe, on Studio$/u) === undefined, true);
+  assert.doesNotMatch(searched.text, /On Laptop/u);
+  assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={groups} opening={null} onOpen={noop} query="zebra" />), "");
+});

@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { ChevronLeft, Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
 import {
   Button,
@@ -12,17 +12,8 @@ import {
 import { useShortcutBinding, useShortcutLabel } from "../../lib/command-system";
 import { ariaKeyShortcut } from "../../shared/keybindings";
 import type { BotDefinition } from "../../shared/bots";
-import { BotMenuItems, botMenuCloseAutoFocus, type BotMenuAction } from "./bot-menu";
+import { BotMenuItems, useBotMenuFocusGuard, type BotMenuAction } from "./bot-menu";
 import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
-
-/** Back to the Bots list, in the chat toolbar's leading slot. */
-export function BotChatBackButton({ onBack }: { onBack(): void }) {
-  return (
-    <Button iconOnly variant="bar" size="small" aria-label="All Bots" onClick={onBack}>
-      <ChevronLeft />
-    </Button>
-  );
-}
 
 /** The chat toolbar's title: the Bot's avatar and name, which open its Profile. */
 export function BotChatNamePill({
@@ -61,6 +52,7 @@ export function BotChatActions({
   pinned: boolean;
   onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
 }) {
+  const focusGuard = useBotMenuFocusGuard();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -68,8 +60,14 @@ export function BotChatActions({
           <Ellipsis />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onCloseAutoFocus={botMenuCloseAutoFocus}>
-        <BotMenuItems pinned={pinned} Item={DropdownMenuItem} Separator={DropdownMenuSeparator} onAction={onAction} />
+      <DropdownMenuContent align="end" onCloseAutoFocus={focusGuard.onCloseAutoFocus}>
+        <BotMenuItems
+          pinned={pinned}
+          Item={DropdownMenuItem}
+          Separator={DropdownMenuSeparator}
+          focusGuard={focusGuard}
+          onAction={onAction}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );

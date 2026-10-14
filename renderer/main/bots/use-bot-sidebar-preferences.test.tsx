@@ -49,9 +49,11 @@ test("a storage that refuses writes still updates the preferences for this sessi
   const useBotSidebarPreferences = await loadHook();
   stub.failWrites = true;
   const { result } = renderHook(() => useBotSidebarPreferences());
-  act(() => result.current.pin("b1"));
+  act(() => result.current.togglePin("b1"));
   assert.equal(result.current.preferences.pinnedBotId, "b1");
   assert.equal(stub.data.has(BOT_SIDEBAR_PREFERENCES_KEY), false);
+  act(() => result.current.togglePin("b1"));
+  assert.equal(result.current.preferences.pinnedBotId, null, "toggling the pinned Bot unpins it");
 });
 
 test("a record written by another window is picked up on the storage event", async () => {
@@ -75,9 +77,9 @@ test("the start time is written once on mount and not rewritten by actions that 
   assert.equal(stub.writes, 1);
   const since = stored().since;
   assert.equal(typeof since, "number");
-  act(() => first.result.current.unpin());
+  act(() => first.result.current.forget("b1"));
   act(() => first.result.current.prune(new Set(["b1"])));
-  assert.equal(stub.writes, 1, "unpinning nothing and pruning nothing write nothing");
+  assert.equal(stub.writes, 1, "forgetting and pruning a Bot with nothing stored write nothing");
   first.unmount();
   renderHook(() => useBotSidebarPreferences());
   assert.equal(stub.writes, 1, "a later mount finds the stored record");
@@ -87,7 +89,7 @@ test("the start time is written once on mount and not rewritten by actions that 
 test("pruning with no live Bots keeps the pin, and pruning with live Bots drops a deleted one", async () => {
   const useBotSidebarPreferences = await loadHook();
   const { result } = renderHook(() => useBotSidebarPreferences());
-  act(() => result.current.pin("b1"));
+  act(() => result.current.togglePin("b1"));
   act(() => result.current.prune(new Set()));
   assert.equal(result.current.preferences.pinnedBotId, "b1");
   act(() => result.current.prune(new Set(["b2"])));

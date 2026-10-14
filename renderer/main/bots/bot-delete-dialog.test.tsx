@@ -1,11 +1,17 @@
 import { installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  BOT_SIDEBAR_PREFERENCES_KEY,
+  parseBotSidebarPreferences,
+  serializeBotSidebarPreferences,
+} from "../../lib/bot-sidebar-preferences";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { mountWithBotRouter } from "./test-providers";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 const bot = { id: "bot-1", name: "Chief" };
 
@@ -56,4 +62,31 @@ test("a failed delete keeps the dialog open and the Bot in place", async () => {
   );
   assert.equal(router.state.location.pathname, "/bots/bot-1");
   assert.ok(screen.getByRole("alertdialog"));
+});
+
+const storedPreferences = () => parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
+
+test("deleting the pinned Bot unpins it, even when it was the last Bot, and a failed delete keeps the pin", async () => {
+  localStorage.setItem(
+    BOT_SIDEBAR_PREFERENCES_KEY,
+    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-1", lastViewed: { "bot-1": 5 } }),
+  );
+  let fail = true;
+  installBotTestIpc({
+    "bots:delete": () => {
+      if (fail) throw new Error("Error invoking remote method 'bots:delete': Error: This Bot is busy.");
+    },
+    "bots:list": () => [],
+  });
+  const { dialog, router } = await openDialog();
+  const confirm = () => within(dialog).getByRole("button", { name: "Delete Bot" }) as HTMLButtonElement;
+  fireEvent.click(confirm());
+  await waitFor(() => assert.equal(confirm().disabled, false));
+  assert.equal(storedPreferences().pinnedBotId, "bot-1", "nothing was deleted");
+
+  fail = false;
+  fireEvent.click(confirm());
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
+  assert.equal(storedPreferences().pinnedBotId, null);
+  assert.equal(storedPreferences().lastViewed["bot-1"], undefined);
 });

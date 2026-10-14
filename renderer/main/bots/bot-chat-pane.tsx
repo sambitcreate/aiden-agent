@@ -27,7 +27,7 @@ import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotQueuedMessage, t
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
-import { BotChatActions, BotChatBackButton, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
+import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
@@ -477,7 +477,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const live = useSharedBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
-  const { preferences } = useBotSidebarPreferences();
+  const { preferences, markViewed } = useBotSidebarPreferences();
   const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
@@ -485,6 +485,13 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const entryCount = snapshot?.entries.length ?? 0;
+  // Seeing the chat, every message that arrives while it is open, and leaving
+  // it all clear its unread dot: a reply's time can be when it began streaming.
+  React.useEffect(() => {
+    markViewed(botId);
+  }, [botId, entryCount, markViewed]);
+  React.useEffect(() => () => markViewed(botId), [botId, markViewed]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
 
@@ -503,7 +510,6 @@ export function BotChatPane({ botId }: { botId: string }) {
       scrollRestorationId={`bot-chat:${botId}`}
       className="h-full min-h-0"
       alignFooterToScrollContent
-      leading={<BotChatBackButton onBack={back} />}
       title={
         current ? (
           <BotChatNamePill

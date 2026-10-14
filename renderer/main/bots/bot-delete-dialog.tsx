@@ -6,6 +6,7 @@ import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { queryKeys } from "../../lib/queries";
 import type { BotDefinition } from "../../shared/bots";
+import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 
 export function botDeleteTitle(name: string): string {
   return `Delete ${name}?`;
@@ -32,6 +33,8 @@ export function BotDeleteDialog({
     setBusy(true);
     try {
       await botsApi.delete(bot.id);
+      // Here, not in a list prune: deleting the last Bot leaves an empty list, which never prunes.
+      botSidebarPreferenceActions.forget(bot.id);
       qc.removeQueries({ queryKey: queryKeys.bot(bot.id) });
       qc.removeQueries({ queryKey: queryKeys.botChats(bot.id) });
       await qc.invalidateQueries({ queryKey: queryKeys.bots });

@@ -8,6 +8,7 @@ import {
   parseBotSidebarPreferences,
   serializeBotSidebarPreferences,
   withBotViewed,
+  withoutBot,
   withoutMissingBots,
   withPinnedBot,
   type BotSidebarPreferences,
@@ -67,9 +68,11 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-const ACTIONS = {
-  pin: (botId: string) => update((current) => withPinnedBot(current, botId)),
-  unpin: () => update((current) => withPinnedBot(current, null)),
+/** The preference writes, usable without subscribing to the preferences. */
+export const botSidebarPreferenceActions = {
+  /** Pins the Bot, or unpins it when it is the pinned one; reads the stored pin, not a render's copy. */
+  togglePin: (botId: string) =>
+    update((current) => withPinnedBot(current, current.pinnedBotId === botId ? null : botId)),
   markViewed: (botId: string) => update((current) => withBotViewed(current, botId, Date.now())),
   /**
    * Drops the pin and views of deleted Bots. Call it only after a settled,
@@ -77,10 +80,12 @@ const ACTIONS = {
    * would still unpin a Bot that exists.
    */
   prune: (liveIds: ReadonlySet<string>) => update((current) => withoutMissingBots(current, liveIds)),
+  /** Drops a deleted Bot's pin and view; call it once its delete has succeeded. */
+  forget: (botId: string) => update((current) => withoutBot(current, botId)),
 } as const;
 
 export function useBotSidebarPreferences() {
   const preferences = React.useSyncExternalStore(subscribe, snapshot, snapshot);
   React.useEffect(persistIfMissing, []);
-  return { preferences, ...ACTIONS };
+  return { preferences, ...botSidebarPreferenceActions };
 }
