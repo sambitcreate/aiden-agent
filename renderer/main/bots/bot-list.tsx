@@ -57,22 +57,28 @@ function matchesSearch(row: BotListRow, query: string): boolean {
   );
 }
 
+type BotRowPage = "memory" | "advanced";
+
 function BotRowMenuItems({
   bot,
   Item,
   Separator,
   onOpenProfile,
+  onOpenPage,
   onDelete,
 }: {
   bot: BotDefinition;
   Item: typeof DropdownMenuItem | typeof ContextMenuItem;
   Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator;
   onOpenProfile(bot: BotDefinition): void;
+  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
   onDelete(bot: BotDefinition): void;
 }) {
   return (
     <>
       <Item onSelect={() => onOpenProfile(bot)}>Profile</Item>
+      {onOpenPage ? <Item onSelect={() => onOpenPage(bot, "memory")}>Memory</Item> : null}
+      {onOpenPage ? <Item onSelect={() => onOpenPage(bot, "advanced")}>Advanced</Item> : null}
       <Separator />
       <Item color="status-red" onSelect={() => onDelete(bot)}>
         Delete Bot
@@ -86,12 +92,14 @@ function BotListItem({
   now,
   onOpen,
   onOpenProfile,
+  onOpenPage,
   onDelete,
 }: {
   row: BotListRow;
   now: number;
   onOpen(bot: BotDefinition): void;
   onOpenProfile(bot: BotDefinition): void;
+  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
   onDelete(bot: BotDefinition): void;
 }) {
   const { bot } = row;
@@ -160,6 +168,7 @@ function BotListItem({
             Item={ContextMenuItem}
             Separator={ContextMenuSeparator}
             onOpenProfile={onOpenProfile}
+            onOpenPage={onOpenPage}
             onDelete={onDelete}
           />
         </ContextMenuContent>
@@ -182,6 +191,7 @@ function BotListItem({
             Item={DropdownMenuItem}
             Separator={DropdownMenuSeparator}
             onOpenProfile={onOpenProfile}
+            onOpenPage={onOpenPage}
             onDelete={onDelete}
           />
         </DropdownMenuContent>
@@ -219,6 +229,7 @@ export function BotList({
   onRetry,
   onOpen,
   onOpenProfile,
+  onOpenPage,
   onDelete,
   onCreate,
   now = Date.now(),
@@ -231,6 +242,7 @@ export function BotList({
   onRetry?(): void;
   onOpen(bot: BotDefinition): void;
   onOpenProfile(bot: BotDefinition): void;
+  onOpenPage?(bot: BotDefinition, page: BotRowPage): void;
   onDelete(bot: BotDefinition): void;
   onCreate(): void;
   now?: number;
@@ -325,6 +337,7 @@ export function BotList({
               now={now}
               onOpen={onOpen}
               onOpenProfile={onOpenProfile}
+              onOpenPage={onOpenPage}
               onDelete={onDelete}
             />
           ))}

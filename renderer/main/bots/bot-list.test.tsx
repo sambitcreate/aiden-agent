@@ -31,6 +31,7 @@ function renderList(rows: BotListRow[], handlers: Partial<React.ComponentProps<t
       now={NOW}
       onOpen={(value) => calls.push(`open:${value.id}`)}
       onOpenProfile={(value) => calls.push(`profile:${value.id}`)}
+      onOpenPage={(value, page) => calls.push(`${page}:${value.id}`)}
       onDelete={(value) => calls.push(`delete:${value.id}`)}
       onCreate={() => calls.push("create")}
       {...handlers}
@@ -78,17 +79,19 @@ test("tapping a row opens that Bot, and its context menu offers Profile and Dele
   fireEvent.click(await screen.findByRole("menuitem", { name: "Profile" }));
   fireEvent.contextMenu(screen.getByRole("button", { name: /^Planner/u }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
-  assert.deepEqual(calls, ["open:b2", "profile:b1", "delete:b1"]);
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^Planner/u }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Memory" }));
+  assert.deepEqual(calls, ["open:b2", "profile:b1", "delete:b1", "memory:b1"]);
 });
 
-test("each row's ••• button reaches Profile and Delete Bot without a right-click", async () => {
+test("each row's ••• button reaches Profile, Memory, Advanced and Delete Bot without a right-click", async () => {
   const calls = renderList([{ bot: bot("b1", "Planner") }]);
   const more = screen.getByRole("button", { name: "More for Planner" });
   fireEvent.keyDown(more, { key: "Enter" });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Delete Bot"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Bot" }));
-  assert.deepEqual(calls, ["delete:b1"], "the menu acts on its Bot without opening the chat");
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Memory", "Advanced", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
+  assert.deepEqual(calls, ["advanced:b1"], "the menu acts on its Bot without opening the chat");
 });
 
 test("search narrows the list by name or subtitle, and Clear brings everything back", () => {

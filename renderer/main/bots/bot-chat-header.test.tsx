@@ -19,6 +19,8 @@ function renderHeader() {
         bot={bot}
         onOpenProfile={() => calls.push("menu-profile")}
         onOpenFiles={() => calls.push("files")}
+        onOpenMemory={() => calls.push("memory")}
+        onOpenAdvanced={() => calls.push("advanced")}
         onDelete={() => calls.push("delete")}
       />
     </>,
@@ -33,12 +35,12 @@ test("the name pill opens the Bot's profile and back returns to all Bots", () =>
   assert.deepEqual(calls, ["profile", "back"]);
 });
 
-test("the ••• menu offers exactly Profile, Files, and Delete Bot", async () => {
+test("the ••• menu offers Profile, Files, Memory, Advanced and Delete Bot, in that order", async () => {
   const calls = renderHeader();
   const more = screen.getByRole("button", { name: "More for SLMob" });
   fireEvent.keyDown(more, { key: "Enter" });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Delete Bot"]);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Files" }));
-  assert.deepEqual(calls, ["files"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Advanced", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
+  assert.deepEqual(calls, ["advanced"]);
 });

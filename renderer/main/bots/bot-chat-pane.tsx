@@ -427,6 +427,8 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
+  const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
+  const openMemory = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "memory" } });
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
@@ -452,6 +454,8 @@ export function BotChatPane({ botId }: { botId: string }) {
             bot={current}
             onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
             onOpenFiles={() => setFiles({ open: true, path: null })}
+            onOpenMemory={openMemory}
+            onOpenAdvanced={openAdvanced}
             onDelete={() => setDeleteOpen(true)}
           />
         ) : null
@@ -522,8 +526,6 @@ export function BotChatPane({ botId }: { botId: string }) {
       ),
     );
   }
-  const openAdvanced = () =>
-    void navigate({ to: "/bots/$botId", params: { botId: current.id }, search: { page: "advanced" } });
   const openProviders = () => void navigate({ to: "/settings", search: { section: "providers" } });
 
   if (state?.kind === "needs_model") {
@@ -638,9 +640,6 @@ export function BotChatPane({ botId }: { botId: string }) {
       throw error;
     }
   };
-
-  const openMemory = () =>
-    void navigate({ to: "/bots/$botId", params: { botId: current.id }, search: { page: "memory" } });
 
   const dismissConnection = async (pluginId: string) => {
     try {
