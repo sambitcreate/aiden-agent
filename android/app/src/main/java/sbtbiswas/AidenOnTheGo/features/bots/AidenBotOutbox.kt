@@ -14,7 +14,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
-import kotlin.coroutines.resume
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * Names one Bot chat across controllers and launches: its Mac, this pairing's device and the
@@ -71,7 +71,9 @@ data class AidenBotOutgoingMessage(
     /** The submission that entry names, if any: only a receipt with that id settles it. */
     val echoSubmissionId: String? = null,
     /** Waits for the next connection or backoff before trying again. */
-    val deferred: Boolean = false
+    val deferred: Boolean = false,
+    /** Taken, but a snapshot found nothing on the Mac showing it: it goes on the next, or after a grace period. */
+    val unheld: Boolean = false
 ) {
     /** Whether the Mac may hold it, so its echo can stand in for it. */
     val mayHaveReachedMac: Boolean
@@ -83,7 +85,7 @@ data class AidenBotOutgoingMessage(
 
     /** As another visit or launch finds it: what that run saw is stale. */
     fun adopted(nowMs: Long): AidenBotOutgoingMessage {
-        val fresh = copy(deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null)
+        val fresh = copy(deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null, unheld = false)
         return if (fresh.status == AidenBotOutgoingStatus.SENDING && fresh.isExpired(nowMs)) fresh.expired() else fresh
     }
 
@@ -108,6 +110,9 @@ data class AidenBotOutgoingMessage(
         )
     }
 }
+
+/** A chat's unsent messages read back from disk, and whether some of them couldn't be (FR-I2). */
+data class AidenBotOutboxRestore(val messages: List<AidenBotOutgoingMessage>, val unreadable: Boolean)
 
 /** How the chat draws an outgoing message (R14). */
 sealed class AidenBotOutgoingLook {
@@ -135,13 +140,18 @@ class AidenBotSessionStore(
     private val io: Executor = defaultIo,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val report: (String) -> Unit = {},
-    /** The largest outbox file a later launch reads back; one past it is refused at enqueue. */
+    /**
+     * The most one chat's outbox may hold; a message past it is refused at enqueue. A later
+     * launch reads back up to twice this, so a restore that merged two full outboxes still reads.
+     */
     private val maxBytes: Int = MAX_BYTES
 ) {
     private val transcripts = LinkedHashMap<AidenBotSessionKey, List<AidenBotSessionEntry>>(CAPACITY, 0.75f, true)
     private val outboxes = HashMap<AidenBotSessionKey, List<AidenBotOutgoingMessage>>()
     private val read = HashSet<AidenBotSessionKey>()
     private val owners = HashMap<AidenBotSessionKey, Any>()
+    /** Chats whose unreadable file couldn't be moved aside: it is never written over. */
+    private val stuck = HashSet<AidenBotSessionKey>()
 
     @Synchronized
     fun transcript(key: AidenBotSessionKey): List<AidenBotSessionEntry>? = transcripts[key]
@@ -164,31 +174,45 @@ class AidenBotSessionStore(
 
     /**
      * The chat's messages, oldest first, read from disk on [io] (never the caller's thread) the
-     * first time in this run of the app. Disk reads, writes and purges all run in order on [io],
-     * so a purge that came first leaves nothing to read. Empty once [owner] no longer writes it.
+     * first time in this run of the app, and whether some couldn't be read back (FR-I2). Disk
+     * reads, writes and purges all run in order on [io], so a purge that came first leaves
+     * nothing to read. The read itself runs outside the store's lock: messages sent meanwhile
+     * wait in memory and follow the older disk copy. Empty once [owner] no longer writes it.
+     * The caller always resumes, with the store's answer or with the error that stopped it.
      */
-    suspend fun restoreOutbox(key: AidenBotSessionKey, owner: Any): List<AidenBotOutgoingMessage> =
+    suspend fun restoreOutbox(key: AidenBotSessionKey, owner: Any): AidenBotOutboxRestore =
         suspendCancellableCoroutine { continuation ->
-            io.execute {
-                val messages = synchronized(this) {
-                    when {
-                        owners[key] !== owner -> emptyList()
-                        read.add(key) -> {
-                            // What was sent before this read waited in memory; it follows the older disk copy.
-                            val disk = load(key)
-                            val known = disk.mapTo(HashSet()) { it.key }
-                            val pending = outboxes[key].orEmpty().filterNot { it.key in known }
-                            val merged = disk + pending
-                            if (merged.isEmpty()) outboxes.remove(key) else outboxes[key] = merged
-                            if (pending.isNotEmpty()) write(key, merged.map(Record::of))
-                            merged
-                        }
-                        else -> outboxes[key].orEmpty()
-                    }
-                }
-                continuation.resume(messages)
+            val task = Runnable { continuation.resumeWith(runCatching { restoreNow(key, owner) }) }
+            try {
+                io.execute(task)
+            } catch (error: RejectedExecutionException) {
+                continuation.resumeWith(Result.failure(error))
             }
         }
+
+    private fun restoreNow(key: AidenBotSessionKey, owner: Any): AidenBotOutboxRestore {
+        synchronized(this) {
+            if (owners[key] !== owner) return AidenBotOutboxRestore(emptyList(), unreadable = false)
+            if (key in read) return AidenBotOutboxRestore(outboxes[key].orEmpty(), unreadable = false)
+        }
+        val disk = load(key)
+        val merged: List<AidenBotOutgoingMessage>
+        val rewrite: Boolean
+        synchronized(this) {
+            // Another controller took the chat, or a purge or unpair came while the disk was read.
+            if (owners[key] !== owner || !read.add(key)) {
+                return AidenBotOutboxRestore(if (owners[key] === owner) outboxes[key].orEmpty() else emptyList(), disk.unreadable)
+            }
+            val known = disk.messages.mapTo(HashSet()) { it.key }
+            val pending = outboxes[key].orEmpty().filterNot { it.key in known }
+            merged = disk.messages + pending
+            if (merged.isEmpty()) outboxes.remove(key) else outboxes[key] = merged
+            rewrite = pending.isNotEmpty() || disk.changed
+        }
+        // Still on [io]: a write or purge queued after this read lands after this write.
+        if (rewrite) write(key, merged.map(Record::of))
+        return AidenBotOutboxRestore(merged, disk.unreadable)
+    }
 
     /**
      * Keeps [messages] when [owner] writes this chat; false when another controller does, or
@@ -216,6 +240,7 @@ class AidenBotSessionStore(
         transcripts.remove(key)
         outboxes.remove(key)
         read += key
+        stuck -= key
         io.execute { fileFor(key)?.let { AtomicFile(it).delete() } }
     }
 
@@ -229,6 +254,7 @@ class AidenBotSessionStore(
         transcripts.keys.removeAll { it.instanceId == instanceId }
         outboxes.keys.removeAll { it.instanceId == instanceId }
         owners.keys.removeAll { it.instanceId == instanceId }
+        stuck.removeAll { it.instanceId == instanceId }
         val dir = root?.let { File(it, digest(instanceId)) }
         io.execute { dir?.deleteRecursively() }
     }
@@ -306,28 +332,35 @@ class AidenBotSessionStore(
         val messages: List<JsonElement>
     )
 
+    private class Loaded(val messages: List<AidenBotOutgoingMessage>, val changed: Boolean, val unreadable: Boolean)
+
     /**
      * One chat's messages from disk. Each record decodes on its own, so a bad one costs only
-     * itself. One still unsent after 24 hours comes back as not sent; a taken one that old is
-     * the Mac's now.
+     * itself. A file this build can't read (unopenable, oversized, damaged, a newer version or
+     * another pairing's) is set aside beside it as `.unreadable`, never deleted; when only some
+     * records are bad, the file as it was is copied aside and the readable ones written back.
+     * One still unsent after 24 hours comes back as not sent; a taken one that old is the Mac's
+     * now. Nothing is dropped to fit: the size limit is checked when a message is sent.
      */
-    private fun load(key: AidenBotSessionKey): List<AidenBotOutgoingMessage> {
-        val file = fileFor(key) ?: return emptyList()
+    private fun load(key: AidenBotSessionKey): Loaded {
+        val nothing = Loaded(emptyList(), changed = false, unreadable = false)
+        val file = fileFor(key) ?: return nothing
         val atomic = AtomicFile(file)
         // AtomicFile keeps the last good copy as `.bak` until a write finishes.
-        if (!file.exists() && !File(file.path + ".bak").exists()) return emptyList()
+        if (!file.exists() && !File(file.path + ".bak").exists()) return nothing
         val envelope = try {
             val bytes = atomic.readFully()
-            if (bytes.size > maxBytes) throw IllegalStateException("too large")
+            // A chat never writes one this large: two full outboxes merged on a restore at most.
+            if (bytes.size > 2 * maxBytes) throw IllegalStateException("too large")
             json.decodeFromString(Envelope.serializer(), String(bytes, Charsets.UTF_8))
                 .takeIf { it.version == 1 && it.instanceId == key.instanceId && it.deviceId == key.deviceId && it.botId == key.botId }
         } catch (_: Exception) {
             null
         }
         if (envelope == null) {
-            report("event=bot_outbox_unreadable outcome=dropped")
-            atomic.delete()
-            return emptyList()
+            report("event=bot_outbox_unreadable outcome=set_aside")
+            setAside(key, file, keepOriginal = false)
+            return Loaded(emptyList(), changed = false, unreadable = true)
         }
         val readable = envelope.messages.mapNotNull { element ->
             try {
@@ -336,8 +369,10 @@ class AidenBotSessionStore(
                 null
             }
         }
-        if (readable.size != envelope.messages.size) {
-            report("event=bot_outbox_record_unreadable outcome=dropped count=${envelope.messages.size - readable.size}")
+        val lostSome = readable.size != envelope.messages.size
+        if (lostSome) {
+            report("event=bot_outbox_record_unreadable outcome=set_aside count=${envelope.messages.size - readable.size}")
+            setAside(key, file, keepOriginal = true)
         }
         val now = nowMs()
         val messages = readable.mapNotNull { message ->
@@ -347,12 +382,33 @@ class AidenBotSessionStore(
                 message.status == AidenBotOutgoingStatus.SENDING -> message.expired()
                 else -> message
             }
-        }.take(MAX_MESSAGES)
-        if (messages != readable) {
-            val records = messages.map(Record::of)
-            io.execute { write(key, records) }
         }
-        return messages
+        return Loaded(messages, changed = lostSome || messages != readable, unreadable = lostSome)
+    }
+
+    /**
+     * Moves (or, with [keepOriginal], copies) a file this build can't fully read out of the
+     * chat's way, as `<name>.<uuid>.unreadable`. One that can't be moved is never written over.
+     */
+    private fun setAside(key: AidenBotSessionKey, file: File, keepOriginal: Boolean) {
+        val aside = File(file.parentFile, "${file.nameWithoutExtension}.${UUID.randomUUID()}.unreadable")
+        val moved = try {
+            if (keepOriginal) {
+                file.copyTo(aside)
+                true
+            } else {
+                file.renameTo(aside)
+            }
+        } catch (_: Exception) {
+            false
+        }
+        if (!moved) {
+            report("event=bot_outbox_set_aside outcome=failed")
+            if (!keepOriginal) synchronized(this) { stuck += key }
+            return
+        }
+        // A backup left beside it belongs to the same unreadable file.
+        if (!keepOriginal) File(file.path + ".bak").takeIf { it.exists() }?.renameTo(File(aside.path + ".bak"))
     }
 
     private fun encode(key: AidenBotSessionKey, records: List<Record>): ByteArray {
@@ -363,6 +419,7 @@ class AidenBotSessionStore(
     /** Atomic and synced before it replaces the old file, so a crash leaves the old or the new outbox, never half of one. */
     private fun write(key: AidenBotSessionKey, records: List<Record>) {
         val file = fileFor(key) ?: return
+        if (synchronized(this) { key in stuck }) return
         val atomic = AtomicFile(file)
         if (records.isEmpty()) {
             atomic.delete()

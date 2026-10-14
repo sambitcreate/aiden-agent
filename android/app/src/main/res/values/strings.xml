@@ -675,6 +675,11 @@
     <string name="bot_session_sending">Sending…</string>
     <string name="bot_session_send_failed">Couldn’t send</string>
     <string name="bot_session_try_again">Try again</string>
+    <!-- Joins "Couldn’t send" and "Try again" into "Couldn’t send · Try again" (copy shared with iOS). -->
+    <string name="bot_session_send_failed_separator">·</string>
+    <string name="bot_session_access_lost">That message wasn’t sent. Please try again.</string>
+    <string name="bot_session_outbox_full">Too many messages are waiting. Send or remove some, then try again.</string>
+    <string name="bot_session_outbox_unrestorable">Some unsent messages couldn’t be restored.</string>
     <string name="bot_session_remove_message">Remove message</string>
     <string name="bot_session_connecting">Connecting…</string>
     <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>

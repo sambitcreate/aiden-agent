@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.annotation.StringRes
+import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -216,6 +219,22 @@ enum class AidenBotConnectRequestPhase { IDLE, SENDING, SENT, FAILED }
 /** Stop or Resume, from the tap until the Mac's own word stands for it (R14, R18). */
 enum class AidenBotTurnIntent { NONE, REQUESTED, ACKNOWLEDGED }
 
+/**
+ * A notice about this phone's unsent messages, in the copy shared with iOS (`strings.xml`).
+ * Unlike an action's error it stays until the person sends again or dismisses it.
+ */
+enum class AidenBotSessionNotice(@param:StringRes val text: Int) {
+    /** "That message wasn’t sent. Please try again.": access ended with messages unsent. */
+    ACCESS_LOST(R.string.bot_session_access_lost),
+    /** "Too many messages are waiting. Send or remove some, then try again." */
+    OUTBOX_FULL(R.string.bot_session_outbox_full),
+    /** "Some unsent messages couldn’t be restored.": a previous launch's file was set aside (FR-I2). */
+    OUTBOX_UNRESTORABLE(R.string.bot_session_outbox_unrestorable)
+}
+
+/** A Bot session request that got no answer within its limit (FR-I3): it may have reached the Mac. */
+class AidenBotSessionTimeout : java.io.IOException("The Mac didn’t answer in time.")
+
 /** True when a message request may have reached the Mac, so the next attempt must reuse its key. */
 fun aidenBotMessageFailureIsAmbiguous(error: Exception): Boolean = when (error) {
     is AidenRemoteClientException.Server -> error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429 ||
@@ -252,6 +271,8 @@ data class AidenBotSessionUiState(
     val isAnsweringQuestion: Boolean = false,
     val isRespondingToApproval: Boolean = false,
     val actionError: String? = null,
+    /** A notice about unsent messages; shown in place of [actionError] until dismissed or the next send. */
+    val notice: AidenBotSessionNotice? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
     /** Routine proposal answers in flight or failed, by proposal id. A settled card has none. */
     val proposalResponses: Map<String, AidenBotProposalPhase> = emptyMap(),
@@ -395,6 +416,10 @@ class AidenBotSessionController(
     private val retryDelaysMillis: List<Long> = listOf(1_000, 4_000),
     /** A clean close reconnects at once; only one that stays down this long says "Reconnecting". */
     private val reconnectingDebounceMillis: Long = 2_000,
+    /** Every request to the Mac gets an answer within this, or counts as one that may have arrived (FR-I3). */
+    private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
+    /** How long a taken message that nothing on the Mac shows stays before it goes (FR-m5). */
+    private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
@@ -405,6 +430,9 @@ class AidenBotSessionController(
     private var backoffJob: Job? = null
     private var downJob: Job? = null
     private var restoreJob: Job? = null
+    /** Grace timers for taken messages nothing on the Mac shows, by key; and those whose grace ran out. */
+    private val unheldTimers = mutableMapOf<UUID, Job>()
+    private val unheldExpired = mutableSetOf<UUID>()
     /** What a previous launch left on disk has been read (or there is nothing to read): deliveries wait for it. */
     private var restored: Boolean
     private var released = false
@@ -470,7 +498,18 @@ class AidenBotSessionController(
         backoffJob?.cancel()
         downJob?.cancel()
         restoreJob?.cancel()
+        unheldTimers.values.forEach { it.cancel() }
+        unheldTimers.clear()
     }
+
+    /** The notice was read. */
+    fun dismissNotice() {
+        _state.update { it.copy(notice = null) }
+    }
+
+    /** [block], or [AidenBotSessionTimeout] once it has run past [requestLimitMillis]. */
+    private suspend fun <T : Any> bounded(block: suspend () -> T): T =
+        withTimeoutOrNull(requestLimitMillis) { block() } ?: throw AidenBotSessionTimeout()
 
     /**
      * Reads what a previous launch left on disk, once, on the store's io thread. Those messages
@@ -481,11 +520,24 @@ class AidenBotSessionController(
         val key = sessionKey ?: return
         val store = store ?: return
         restoreJob = scope.launch {
-            val stored = store.restoreOutbox(key, this@AidenBotSessionController)
+            val restore = try {
+                store.restoreOutbox(key, this@AidenBotSessionController)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // The read itself failed: nothing came back, and the person hears so.
+                AidenBotOutboxRestore(emptyList(), unreadable = true)
+            }
             val now = nowMs()
+            val stored = restore.messages
             val known = stored.mapTo(HashSet()) { it.key }
             restored = true
-            setOutbox(stored.map { it.adopted(now) } + _state.value.outbox.filterNot { it.key in known }, force = true)
+            val (merged, overflow) = capped(stored.map { it.adopted(now) } + _state.value.outbox.filterNot { it.key in known })
+            setOutbox(merged, force = true)
+            when {
+                restore.unreadable -> _state.update { it.copy(notice = AidenBotSessionNotice.OUTBOX_UNRESTORABLE) }
+                overflow -> _state.update { it.copy(notice = AidenBotSessionNotice.OUTBOX_FULL) }
+            }
             reconcileOutbox(snapshot = false)
             wakeOutbox()
         }
@@ -499,7 +551,7 @@ class AidenBotSessionController(
 
     private suspend fun load(authoritative: Boolean): Boolean {
         return try {
-            val session = transport.session(botId)
+            val session = bounded { transport.session(botId) }
             val current = _state.value.session
             if (!authoritative && current != null && session.epoch == current.epoch && session.seq < current.seq) {
                 _state.update { it.copy(isLoading = false, loadFailed = false) }
@@ -599,8 +651,8 @@ class AidenBotSessionController(
 
     /**
      * The Mac's own word now stands for a Stop or Resume it has heard, and a new run (another
-     * `startedAt`, or a first activity after a Stop pressed before any) has nothing to stop. Any
-     * activity after a Resume tap says what the resumed run is doing.
+     * `startedAt`, or a first activity after a Stop pressed before any) has nothing to stop. An
+     * activity after a Resume tap says what the resumed run is doing; a cleared one says nothing.
      */
     private fun activityArrived(next: AidenBotSessionActivity?) {
         val stopRun = stopStartedAt
@@ -609,7 +661,7 @@ class AidenBotSessionController(
                 (next != null && (stopRun == null || next.startedAt != stopRun))
             current.copy(
                 stopIntent = if (clearStop) AidenBotTurnIntent.NONE else current.stopIntent,
-                resumeIntent = AidenBotTurnIntent.NONE
+                resumeIntent = if (next != null) AidenBotTurnIntent.NONE else current.resumeIntent
             )
         }
     }
@@ -697,7 +749,7 @@ class AidenBotSessionController(
         if (trimmed.isEmpty() || trimmed.codePointCount(0, trimmed.length) > AidenBotSessionWire.MAX_MESSAGE_LENGTH) return false
         val current = _state.value
         if (!current.canSend) return false
-        _state.update { it.copy(actionError = null) }
+        _state.update { it.copy(actionError = null, notice = null) }
         val mode = if (current.offersBusyModes) whenBusy ?: AidenStreamInputMode.QUEUE else null
         if (!enqueue(trimmed, mode, retryOf = null)) return false
         ensureRestored()
@@ -712,19 +764,45 @@ class AidenBotSessionController(
     private fun enqueue(text: String, mode: AidenStreamInputMode?, retryOf: String?): Boolean {
         val current = _state.value
         val next = current.outbox + AidenBotOutgoingMessage.create(text, mode, current.isRunning, retryOf, nowMs())
-        val fits = next.size <= AidenBotSessionStore.MAX_MESSAGES &&
-            (sessionKey == null || store == null || store.fits(sessionKey, next))
-        if (!fits) {
-            _state.update { it.copy(actionError = OUTBOX_FULL) }
+        if (!fits(next)) {
+            _state.update { it.copy(notice = AidenBotSessionNotice.OUTBOX_FULL) }
             return false
         }
         setOutbox(next)
         return true
     }
 
+    /** Whether [messages] fit what this chat keeps for a later launch. */
+    private fun fits(messages: List<AidenBotOutgoingMessage>): Boolean =
+        messages.size <= AidenBotSessionStore.MAX_MESSAGES && (sessionKey == null || store == null || store.fits(sessionKey, messages))
+
+    /**
+     * Restored messages and those sent before the disk was read can together run past the
+     * limit. Nothing is dropped: the newest that never went out say "Couldn't send · Try
+     * again", so the person sends or removes them. Returns whether any did.
+     */
+    private fun capped(messages: List<AidenBotOutgoingMessage>): Pair<List<AidenBotOutgoingMessage>, Boolean> {
+        var fit = messages.size
+        while (fit > 0 && !fits(messages.take(fit))) fit -= 1
+        if (fit == messages.size) return messages to false
+        val capped = messages.mapIndexed { index, message ->
+            if (index >= fit && message.status == AidenBotOutgoingStatus.SENDING && !message.frozen) {
+                message.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = false)
+            } else {
+                message
+            }
+        }
+        return capped to (capped != messages)
+    }
+
     /** Try again on a message that couldn't be sent. One the Mac may hold keeps its key, so the Mac replays its receipt. */
     suspend fun retrySend(id: String): Boolean {
         val message = _state.value.outbox.firstOrNull { it.id == id && it.status == AidenBotOutgoingStatus.FAILED } ?: return false
+        // An outbox past its limit (after a restore) takes no more until some are sent or removed.
+        if (!fits(_state.value.outbox)) {
+            _state.update { it.copy(notice = AidenBotSessionNotice.OUTBOX_FULL) }
+            return false
+        }
         val base = if (message.keepsKey) message else message.copy(key = UUID.randomUUID(), frozen = false, sentMode = null, baseline = emptySet())
         val again = base.copy(
             status = AidenBotOutgoingStatus.SENDING,
@@ -736,7 +814,8 @@ class AidenBotSessionController(
             echoed = false,
             echoEntryId = null,
             echoSubmissionId = null,
-            queuedId = null
+            queuedId = null,
+            unheld = false
         )
         setOutbox(_state.value.outbox.map { if (it.id == id) again else it })
         flushNow()
@@ -787,15 +866,15 @@ class AidenBotSessionController(
         setOutbox(_state.value.outbox.mapNotNull { if (it.key == key) change(it) else it })
     }
 
-    private fun cursor(): String = _state.value.session.let { "${it?.epoch}\u001f${it?.seq}" }
-
     /**
      * Server truth replaces optimistic messages (R14, R16, R17). A taken message gives way to the
      * entry with its `submissionId`; text stands in only where the entry has none (an older
      * Mac), for a request still unsettled, or for a Queued bubble that beats the receipt. Each
      * entry settles one message for the life of the epoch. An unsettled message is never
-     * removed: it hides and settles on its receipt. On a Mac that sends its queue, a snapshot
-     * also drops a taken message that is neither queued nor in the transcript.
+     * removed: it hides and settles on its receipt. On a Mac that sends its queue, a taken
+     * message that is neither queued nor in the transcript goes once a later snapshot still
+     * finds it so, or [unheldGraceMillis] after the first one did (FR-m5): the Mac's Queued list
+     * may be full, or may leave a message out while it can't yet tell whose it is.
      */
     private fun reconcileOutbox(snapshot: Boolean) {
         val current = _state.value
@@ -805,6 +884,7 @@ class AidenBotSessionController(
             claimedEntries.clear()
         }
         if (current.outbox.isEmpty()) return
+        val queueFull = current.queued.size >= AidenBotQueuedMessage.MAX_COUNT
         val entries = current.session?.entries.orEmpty()
         val owned = current.outbox.mapNotNull { it.submissionId }.toSet()
         val queuedIds = current.queued.map { it.submissionId }.toSet()
@@ -829,10 +909,16 @@ class AidenBotSessionController(
                 val id = message.submissionId
                 if (id != null) {
                     if (id in queuedIds) {
-                        message = message.copy(queuedId = id)
-                    } else if (snapshot && current.activitySupported) {
-                        // Taken, not queued and not in the transcript: nothing on the Mac holds it.
-                        continue
+                        message = message.copy(queuedId = id, unheld = false)
+                    } else if (current.activitySupported) {
+                        // Taken, not queued and not in the transcript: nothing on the Mac shows it.
+                        when {
+                            // A full queue can't show it; it stays until the Mac's view has room.
+                            queueFull -> message = message.copy(unheld = false)
+                            // A second snapshot agrees, or the grace period ran out ([unheldTimers]).
+                            message.unheld && (snapshot || message.key in unheldExpired) -> continue
+                            snapshot -> message = message.copy(unheld = true)
+                        }
                     }
                 } else if (message.queuedId == null) {
                     // The Queued frame can beat the receipt.
@@ -846,6 +932,27 @@ class AidenBotSessionController(
             kept += message
         }
         setOutbox(kept)
+        trackUnheld()
+    }
+
+    /**
+     * One grace timer per taken message that nothing on the Mac shows (FR-m5): when it runs
+     * out and the message is still unheld, the message goes. One the Mac shows again, or that
+     * settled, loses its timer.
+     */
+    private fun trackUnheld() {
+        val unheld = _state.value.outbox.filter { it.unheld }.mapTo(HashSet()) { it.key }
+        (unheldTimers.keys - unheld).forEach { unheldTimers.remove(it)?.cancel() }
+        unheldExpired.retainAll(unheld)
+        for (key in unheld) {
+            if (key in unheldTimers || key in unheldExpired) continue
+            unheldTimers[key] = scope.launch {
+                delay(unheldGraceMillis)
+                unheldTimers.remove(key)
+                unheldExpired += key
+                reconcileOutbox(snapshot = false)
+            }
+        }
     }
 
     /** The unclaimed user entry that stands for [message], if any. */
@@ -921,7 +1028,12 @@ class AidenBotSessionController(
         val current = _state.value
         val message = current.outbox.firstOrNull { it.key == key } ?: return
         if (current.needsModel || current.state == AidenBotSessionState.UNAVAILABLE || current.botMissing) {
-            updateMessage(key) { it.copy(status = AidenBotOutgoingStatus.FAILED, echoed = false) }
+            // A frozen request may have reached the Mac: Try again replays its key. Any entry it
+            // waited on goes back to the others.
+            message.echoEntryId?.let { claimedEntries -= it }
+            updateMessage(key) {
+                it.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = it.frozen, echoed = false, echoEntryId = null, echoSubmissionId = null)
+            }
             return
         }
         if (message.isExpired(nowMs())) {
@@ -936,11 +1048,13 @@ class AidenBotSessionController(
             baseline = current.session?.entries?.map { it.id }?.toSet().orEmpty()
         )
         if (request != message) updateMessage(key) { request }
-        val mark = cursor()
+        // The store refused the frozen request (another controller took the chat, or an unpair).
+        if (released) return
+        val writes = stateWrites
         _state.update { it.copy(isSending = true) }
         try {
-            val receipt = transport.send(botId, request.text, key, request.sentMode)
-            if (cursor() == mark) applyStateView(receipt.stateView)
+            val receipt = bounded { transport.send(botId, request.text, key, request.sentMode) }
+            if (stateWrites == writes) applyStateView(receipt.stateView)
             updateMessage(key) { latest ->
                 var settled = latest
                 if (settled.echoed && settled.echoSubmissionId != null && settled.echoSubmissionId != receipt.submissionId) {
@@ -1022,7 +1136,7 @@ class AidenBotSessionController(
         backoffJob?.cancel()
         setOutbox(emptyList())
         sessionKey?.let { store?.purge(it) }
-        if (hadUnsent) _state.update { it.copy(actionError = ACCESS_LOST) }
+        if (hadUnsent) _state.update { it.copy(notice = AidenBotSessionNotice.ACCESS_LOST) }
     }
 
     /** The Bot is gone: what waited to go to it says it couldn't be sent. */
@@ -1049,11 +1163,10 @@ class AidenBotSessionController(
                 actionError = null
             )
         }
-        val mark = cursor()
         return try {
-            val view = transport.resume(botId, keys.key(RESUME))
+            val view = bounded { transport.resume(botId, keys.key(RESUME)) }
             keys.complete(RESUME)
-            if (cursor() == mark) applyStateView(view)
+            if (stateWrites == writes) applyStateView(view)
             _state.update {
                 if (it.resumeIntent == AidenBotTurnIntent.REQUESTED) it.copy(resumeIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
             }
@@ -1090,11 +1203,10 @@ class AidenBotSessionController(
                 actionError = null
             )
         }
-        val mark = cursor()
         return try {
-            val view = transport.dismiss(botId, keys.key(DISMISS))
+            val view = bounded { transport.dismiss(botId, keys.key(DISMISS)) }
             keys.complete(DISMISS)
-            if (cursor() == mark) applyStateView(view)
+            if (stateWrites == writes) applyStateView(view)
             true
         } catch (error: CancellationException) {
             throw error
@@ -1128,11 +1240,11 @@ class AidenBotSessionController(
         } else {
             _state.update { it.copy(actionError = null) }
         }
-        val mark = cursor()
+        val writes = stateWrites
         return try {
-            val view = transport.stop(botId, keys.key(STOP))
+            val view = bounded { transport.stop(botId, keys.key(STOP)) }
             keys.complete(STOP)
-            if (cursor() == mark) applyStateView(view)
+            if (stateWrites == writes) applyStateView(view)
             _state.update {
                 if (it.stopIntent == AidenBotTurnIntent.REQUESTED) it.copy(stopIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
             }
@@ -1167,7 +1279,7 @@ class AidenBotSessionController(
             it.copy(isAnsweringQuestion = true, actionError = null, session = it.session?.copy(question = null))
         }
         return try {
-            transport.answerQuestion(botId, question.waitId, response, keys.key(action))
+            bounded { transport.answerQuestion(botId, question.waitId, response, keys.key(action)) }
             keys.complete(action)
             pendingAnswer = null
             true
@@ -1214,7 +1326,7 @@ class AidenBotSessionController(
             pendingApprovalDecision = action to decision
         }
         return try {
-            transport.respondToApproval(approval.waitId, decision, keys.key(action))
+            bounded { transport.respondToApproval(approval.waitId, decision, keys.key(action)) }
             keys.complete(action)
             pendingApprovalDecision = null
             true
@@ -1247,7 +1359,7 @@ class AidenBotSessionController(
         val action = "connect:$pluginId"
         _state.update { it.copy(connectRequests = it.connectRequests + (pluginId to AidenBotConnectRequestPhase.SENDING)) }
         val next = try {
-            transport.requestConnection(botId, pluginId, keys.key(action))
+            bounded { transport.requestConnection(botId, pluginId, keys.key(action)) }
             keys.complete(action)
             AidenBotConnectRequestPhase.SENT
         } catch (error: CancellationException) {
@@ -1290,7 +1402,7 @@ class AidenBotSessionController(
         replaceProposal(proposalId) { if (it == card) optimistic else it }
         val action = "$RESPOND_PROPOSAL:$proposalId:${decision.name}"
         return try {
-            val result = transport.respondToRoutineProposal(botId, proposalId, decision, keys.key(action))
+            val result = bounded { transport.respondToRoutineProposal(botId, proposalId, decision, keys.key(action)) }
             keys.complete(action)
             settleProposal(proposalId, result)
             true
@@ -1355,8 +1467,10 @@ class AidenBotSessionController(
         const val SEND_FAILED = "Aiden couldn’t send that. Try again."
         const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
-        const val ACCESS_LOST = "That message wasn’t sent. Please try again."
-        const val OUTBOX_FULL = "Too many messages are waiting or didn’t send. Send or remove some, then try again."
+        /** The bound on each request to the Mac (FR-I3), the same as iOS. */
+        const val REQUEST_LIMIT_MILLIS = 12_000L
+        /** How long a taken message nothing on the Mac shows waits for a second look (FR-m5). */
+        const val UNHELD_GRACE_MILLIS = 10_000L
     }
 }
 

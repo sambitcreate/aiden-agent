@@ -427,7 +427,8 @@ fun AidenBotSessionScreen(
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
-                ui.actionError?.let { message ->
+                // A notice about unsent messages (copy shared with iOS), else the last action's error.
+                (ui.notice?.let { resources.getString(it.text) } ?: ui.actionError)?.let { message ->
                     item(key = "error") {
                         Text(message, color = palette.danger, style = MaterialTheme.typography.bodySmall)
                     }
