@@ -34,10 +34,29 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   );
 }
 
+/**
+ * The Activity tab owns its read of the live conversation, so a live event
+ * re-renders this subtree and not the rest of the panel.
+ */
+function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
+  const live = useSharedBotLive(botId);
+  // Always the full log: the Bot's Chat activity level shapes only the in-chat
+  // recap, and opening this tab is the person asking to see every step.
+  return (
+    <BotPanelActivity
+      botName={botName}
+      entries={live.snapshot?.entries ?? []}
+      running={live.snapshot?.state.kind === "running"}
+      loading={live.snapshot === null && !live.failed}
+      failed={live.snapshot === null && live.failed}
+      onRetry={live.reload}
+    />
+  );
+}
+
 function BotWorkbenchLayout({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
   const { open, tab, fileRequest, focusRequest, close, consumeFocusRequest, setTab } = useBotPanel();
   const bot = useBot(botId).data ?? null;
-  const live = useSharedBotLive(botId);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
@@ -102,34 +121,30 @@ function BotWorkbenchLayout({ botId, children }: React.PropsWithChildren<{ botId
     selected: tab === id,
     closable: false,
   }));
-  const running = live.snapshot?.state.kind === "running";
   const body = (id: BotPanelTab, active: boolean): React.ReactNode => {
     if (!bot) return null;
     switch (id) {
       case "activity":
-        // Always the full log: the Bot's Chat activity level shapes only the in-chat
-        // recap, and opening this tab is the person asking to see every step.
-        return (
-          <BotPanelActivity
-            botName={bot.name}
-            entries={live.snapshot?.entries ?? []}
-            running={running}
-            loading={live.snapshot === null && !live.failed}
-          />
-        );
+        return <ActivityTab botId={bot.id} botName={bot.name} />;
       case "files":
         return <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />;
       case "memory":
         return <BotMemoryContent bot={bot} compact />;
       case "routines":
-        return <BotRoutines bot={bot} />;
+        return <BotRoutines bot={bot} compact />;
     }
   };
   const views: WorkbenchView[] = BOT_PANEL_TABS.map((id) => ({
     id,
     render: ({ presented, selected }) =>
       visited.has(id) ? (
-        <div className="h-full min-h-0 overflow-y-auto px-3 py-4">{body(id, presented && selected)}</div>
+        <div
+          // The log has no controls of its own, so its scroller takes a tab stop to scroll by keyboard.
+          {...(id === "activity" ? { role: "region", "aria-label": "Activity", tabIndex: 0 } : {})}
+          className="h-full min-h-0 overflow-y-auto px-3 py-4 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          {body(id, presented && selected)}
+        </div>
       ) : null,
   }));
 
@@ -164,6 +179,8 @@ function BotWorkbenchLayout({ botId, children }: React.PropsWithChildren<{ botId
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
         tabListLabel="Bot panel views"
+        // Four fixed tabs always fit; there is nothing for an "Open tabs" list to reveal.
+        tabMenu={false}
         onSelectTab={(entry) => setTab(entry.viewId as BotPanelTab)}
         onCloseTab={() => undefined}
         closeLabel="Close Bot panel"

@@ -1,4 +1,6 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+// Before anything loads react-dom, so React reports its commits to the probe.
+import { countRenders } from "./test-render-probe";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -23,6 +25,8 @@ import {
 } from "./bot-panel-context";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 import { BotPanelFiles } from "./bot-panel-files";
+import { BotPanelActivity } from "./bot-panel-activity";
+import { shouldRestoreEnvironmentFocus } from "../../lib/environment-panel-state";
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
 
@@ -213,7 +217,7 @@ test("a page that is not a Bot chat keeps a file request, so it lands when that 
   assert.equal(panelState(), "open files none", "reaching a different Bot drops it");
 });
 
-test("the routed provider follows the router: a request for one Bot is dropped on reaching another, and a late event after unmount is harmless", async () => {
+test("the routed provider follows the router: a request for one Bot is dropped on reaching another, and it stops listening when it unmounts", async () => {
   const rootRoute = createRootRoute({
     component: () => (
       <RoutedBotPanelProvider>
@@ -228,6 +232,17 @@ test("the routed provider follows the router: a request for one Bot is dropped o
     ),
     history: createMemoryHistory({ initialEntries: ["/bots/bot-a/chat"] }),
   });
+  let listening = 0;
+  const subscribe = router.subscribe.bind(router);
+  router.subscribe = ((eventType, listener) => {
+    const stop = subscribe(eventType, listener);
+    if (eventType !== "onResolved") return stop;
+    listening += 1;
+    return () => {
+      listening -= 1;
+      stop();
+    };
+  }) as typeof router.subscribe;
   // Under `tsx --test` TanStack runs as on a server and never emits onResolved itself.
   const resolve = () =>
     act(() =>
@@ -251,9 +266,10 @@ test("the routed provider follows the router: a request for one Bot is dropped o
   await act(() => router.navigate({ to: "/bots/$botId/chat", params: { botId: "bot-b" } }));
   resolve();
   assert.equal(panelState(), "open files none");
+  assert.equal(listening, 1);
   view.unmount();
+  assert.equal(listening, 0, "unmounting removes its router listener");
   resolve();
-  assert.equal(screen.queryByRole("status", { name: "Panel" }), null);
 });
 
 test("a component that only acts keeps one stable set of actions while panel state changes", () => {
@@ -578,8 +594,13 @@ test("the panel toggle opens the Bot panel with only Bot tabs, focused on the se
   );
   assert.equal(within(botPanel()).queryByRole("button", { name: /^Close .+ tab$/u }), null, "Bot tabs are fixed");
   assert.equal(within(botPanel()).queryByRole("button", { name: "New workspace tab" }), null);
-  assert.equal(botPanel().closest('[data-environment-surface="tools"]') === null, true, "the workspace panel's focus rules never claim it");
+  assert.equal(within(botPanel()).queryByRole("button", { name: "Open tabs" }) === null, true, "four fixed tabs need no list");
   await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
+  assert.equal(
+    shouldRestoreEnvironmentFocus(document.activeElement, "tools"),
+    false,
+    "focus in the Bot panel is never the workspace panel's to restore",
+  );
   fireEvent.keyDown(panelTab("Activity"), { key: "ArrowRight" });
   await waitFor(() => assert.equal(document.activeElement === panelTab("Files"), true));
   assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
@@ -593,9 +614,9 @@ test("a panel restored open at launch does not take focus", async () => {
   localStorage.setItem("aiden-agent.bot-panel.open", "true");
   await mountBotChat();
   assert.equal(botPanel().getAttribute("data-state"), "open");
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  });
+  await waitFor(() => assert.ok(within(botPanel()).getByText("No activity yet")));
+  // The panel's focus hand-off runs in the frame after it opens; let that frame pass.
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   assert.equal(botPanel().contains(document.activeElement), false);
 });
 
@@ -850,4 +871,196 @@ test("Routines in the panel lists the Bot's routines and offers Add routine", as
   assert.ok(within(list).getByText("Every Sunday at 8:41 AM"));
   fireEvent.click(within(botPanel()).getByRole("button", { name: /Add routine/u }));
   assert.ok(await screen.findByRole("dialog", { name: "Add routine" }));
+});
+
+test("Home and End in the tab strip jump to the first and last tab, and focus follows", async () => {
+  await mountBotChat();
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
+  fireEvent.keyDown(panelTab("Activity"), { key: "End" });
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Routines"), true));
+  assert.equal(panelTab("Routines").getAttribute("aria-selected"), "true");
+  fireEvent.keyDown(panelTab("Routines"), { key: "Home" });
+  await waitFor(() => assert.equal(document.activeElement === panelTab("Activity"), true));
+  assert.equal(panelTab("Activity").getAttribute("aria-selected"), "true");
+});
+
+test("resizing the Bot panel saves its width under its own key and leaves the workspace width alone", async () => {
+  localStorage.setItem("aiden-agent.environment.width", "512");
+  await mountBotChat();
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  const separator = within(botPanel()).getByRole("separator", { name: "Resize Bot panel" });
+  fireEvent.keyDown(separator, { key: "End" });
+  const saved = localStorage.getItem("aiden-agent.bot-panel.width");
+  assert.ok(saved !== null && /^\d+$/u.test(saved), "the Bot panel's width is saved");
+  assert.equal(localStorage.getItem("aiden-agent.environment.width"), "512");
+});
+
+test("Activity says when the conversation couldn't be read, and Try again reads it", async () => {
+  let failing = true;
+  await mountBotChat({
+    "bots:live:subscribe": () => {
+      if (failing) throw new Error("main was busy");
+      return chatSnapshot([
+        { id: "u1", type: "user", text: "Go", imageCount: 0, at: Date.now() },
+        { id: "a1", type: "assistant", text: "", toolCalls: [{ id: "c1", name: "read_file", kind: "reading", label: "Read 1 file" }], stopReason: "toolUse" },
+        { id: "t1", type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, status: "ok" },
+      ]);
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  const alert = await within(botPanel()).findByRole("alert");
+  assert.equal(alert.textContent?.includes("Aiden couldn’t load Planner’s activity."), true);
+  assert.equal(within(botPanel()).queryByText("No activity yet") === null, true, "a failure is not an empty log");
+  failing = false;
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  assert.deepEqual(
+    (await within(botPanel()).findAllByRole("listitem")).map((item) => item.textContent),
+    ["Read 1 file"],
+  );
+});
+
+test("the Activity log's scroller can be reached by keyboard and is named", async () => {
+  await mountBotChat();
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  const region = await within(botPanel()).findByRole("region", { name: "Activity" });
+  assert.equal(region.tabIndex, 0);
+});
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (error: unknown) => void = () => undefined;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+test("coming back to Files keeps the list and the open file on screen while they are read again", async () => {
+  let listCalls = 0;
+  let readCalls = 0;
+  let laterList = deferred<unknown>();
+  let laterRead = deferred<unknown>();
+  await mountBotChat({
+    "bots:files:list": () => (++listCalls === 1 ? FILE_HANDLERS["bots:files:list"]() : laterList.promise),
+    "bots:files:read": (botId, path) => (++readCalls === 1 ? FILE_HANDLERS["bots:files:read"](botId, path) : laterRead.promise),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Files"));
+  await within(botPanel()).findByRole("list", { name: "Files" });
+  fireEvent.click(panelTab("Memory"));
+  fireEvent.click(panelTab("Files"));
+  await waitFor(() => assert.equal(listCalls, 2));
+  assert.ok(within(botPanel()).getByRole("list", { name: "Files" }), "the list stays while it is read again");
+  assert.equal(within(botPanel()).queryByRole("status", { name: "Loading files" }) === null, true);
+  laterList.resolve(FILE_HANDLERS["bots:files:list"]());
+  fireEvent.click(await within(botPanel()).findByRole("button", { name: "groceries.md" }));
+  await within(botPanel()).findByLabelText("Contents of lists/groceries.md");
+  fireEvent.click(panelTab("Activity"));
+  fireEvent.click(panelTab("Files"));
+  await waitFor(() => assert.equal(readCalls, 2));
+  assert.equal(within(botPanel()).getByLabelText("Contents of lists/groceries.md").textContent, "eggs\nmilk");
+  assert.equal(within(botPanel()).queryByRole("status", { name: "Opening file" }) === null, true, "no skeleton over the open file");
+  laterRead.resolve({ path: "lists/groceries.md", content: "eggs\nmilk\nbread", size: 15, modifiedAt: 2, version: "v2" });
+  await waitFor(() =>
+    assert.equal(within(botPanel()).getByLabelText("Contents of lists/groceries.md").textContent, "eggs\nmilk\nbread"),
+  );
+  laterList = deferred();
+  laterRead = deferred();
+});
+
+test("a list that fails to refresh stays on screen with the failure above it, and Try again reads only the list", async () => {
+  let listCalls = 0;
+  const { calls } = await mountBotChat({
+    ...FILE_HANDLERS,
+    "bots:files:list": () => {
+      listCalls += 1;
+      if (listCalls === 2) throw new Error("disk went away");
+      return FILE_HANDLERS["bots:files:list"]();
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Files"));
+  await within(botPanel()).findByRole("list", { name: "Files" });
+  fireEvent.click(panelTab("Memory"));
+  fireEvent.click(panelTab("Files"));
+  const alert = await within(botPanel()).findByRole("alert");
+  assert.ok(within(botPanel()).getByRole("list", { name: "Files" }), "the last good list stays");
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  await waitFor(() => assert.equal(within(botPanel()).queryByRole("alert") === null, true));
+  assert.equal(listCalls, 3);
+  assert.equal(calls.filter((call) => call.channel === "bots:files:read").length, 0, "Try again read nothing else");
+});
+
+const FILE_CHAT = [
+  { id: "u1", type: "user", text: "Write my grocery list", imageCount: 0 },
+  { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },
+  { id: "a1", type: "assistant", text: "Done.", toolCalls: [], stopReason: "stop" },
+] as BotTranscriptEntry[];
+
+test("a chip whose file can't be read shows why, Try again reads only that file, and All files still works", async () => {
+  let readCalls = 0;
+  let listCalls = 0;
+  await mountBotChat({
+    "bots:live:subscribe": () => chatSnapshot(FILE_CHAT),
+    "bots:files:list": () => {
+      listCalls += 1;
+      return FILE_HANDLERS["bots:files:list"]();
+    },
+    "bots:files:read": (botId, path) => {
+      readCalls += 1;
+      if (readCalls === 1) throw new Error("permission denied");
+      return FILE_HANDLERS["bots:files:read"](botId, path);
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
+  const alert = await within(botPanel()).findByRole("alert");
+  await waitFor(() => assert.equal(listCalls, 1));
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  assert.equal((await within(botPanel()).findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
+  assert.equal(readCalls, 2);
+  assert.equal(listCalls, 1, "the list was not read again");
+  fireEvent.click(within(botPanel()).getByRole("button", { name: "All files" }));
+  assert.ok(await within(botPanel()).findByRole("list", { name: "Files" }));
+});
+
+test("a chip clicked while the panel is open on Memory switches it to Files on that file", async () => {
+  await mountBotChat({
+    ...FILE_HANDLERS,
+    "bots:live:subscribe": () => chatSnapshot(FILE_CHAT),
+    "bots:memory:get": () => memoryView([]),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Memory"));
+  assert.equal(panelTab("Memory").getAttribute("aria-selected"), "true");
+  fireEvent.click(await screen.findByRole("button", { name: "Open groceries.md" }));
+  assert.equal(panelTab("Files").getAttribute("aria-selected"), "true");
+  assert.equal((await within(botPanel()).findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
+});
+
+test("a live event re-renders the Activity tab and leaves the Files tab alone", async () => {
+  const activityRenders = countRenders(BotPanelActivity);
+  const filesRenders = countRenders(BotPanelFiles);
+  await mountBotChat(FILE_HANDLERS);
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Files"));
+  await within(botPanel()).findByRole("list", { name: "Files" });
+  fireEvent.click(panelTab("Activity"));
+  await within(botPanel()).findByText("No activity yet");
+  const filesBefore = filesRenders();
+  const activityBefore = activityRenders();
+  for (let seq = 1; seq <= 3; seq += 1) {
+    act(() =>
+      emitBotTestNotification("bots:live:event", {
+        botId: "bot-1",
+        epoch: "e1",
+        seq,
+        type: "entry",
+        entry: { id: `u${seq}`, type: "user", text: `Message ${seq}`, imageCount: 0 },
+      }),
+    );
+  }
+  await waitFor(() => assert.ok(activityRenders() >= activityBefore + 3, "the probe sees Activity re-render"));
+  assert.equal(filesRenders(), filesBefore, "Files did not re-render");
 });

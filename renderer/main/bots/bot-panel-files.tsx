@@ -10,7 +10,11 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { WorkspaceFileDocument, WorkspaceFileIndex } from "../../lib/types";
 import type { BotPanelFileRequest } from "./bot-panel-context";
 
-type Load<T> = { status: "loading" } | { status: "ready"; value: T } | { status: "failed"; message: string };
+/** A read that has shown something keeps it on screen through a refresh, and a refresh that fails says so above it. */
+type Load<T> =
+  | { status: "loading" }
+  | { status: "ready"; value: T; refreshError?: string }
+  | { status: "failed"; message: string };
 
 /**
  * The last file request each Bot's Files tab applied. It outlives the tab, so a
@@ -41,7 +45,9 @@ export function BotPanelFiles({
   const [index, setIndex] = React.useState<Load<WorkspaceFileIndex>>({ status: "loading" });
   const [path, setPath] = React.useState<string | null>(() => pendingPath);
   const [document, setDocument] = React.useState<Load<WorkspaceFileDocument> | null>(null);
-  const [attempt, setAttempt] = React.useState(0);
+  // Try again re-reads only what failed: the list or the open file.
+  const [listAttempt, setListAttempt] = React.useState(0);
+  const [documentAttempt, setDocumentAttempt] = React.useState(0);
 
   React.useLayoutEffect(() => {
     if (pendingKey === null || pendingPath === null) return;
@@ -52,7 +58,7 @@ export function BotPanelFiles({
   React.useEffect(() => {
     if (!active) return;
     let current = true;
-    // A refresh keeps the list it has on screen; only a first read shows rows loading.
+    // Coming back into view re-reads the list behind the one on screen.
     setIndex((value) => (value.status === "ready" ? value : { status: "loading" }));
     botsApi.files.list(botId).then(
       (value) => {
@@ -61,13 +67,15 @@ export function BotPanelFiles({
       (error: unknown) => {
         if (!current) return;
         const message = userFacingErrorMessage(error, `Aiden couldn’t load ${botName}’s files.`);
-        setIndex((value) => (value.status === "ready" ? value : { status: "failed", message }));
+        setIndex((value) =>
+          value.status === "ready" ? { status: "ready", value: value.value, refreshError: message } : { status: "failed", message },
+        );
       },
     );
     return () => {
       current = false;
     };
-  }, [active, botId, botName, attempt]);
+  }, [active, botId, botName, listAttempt]);
 
   React.useEffect(() => {
     if (path === null) {
@@ -76,30 +84,39 @@ export function BotPanelFiles({
     }
     if (!active) return;
     let current = true;
-    setDocument({ status: "loading" });
+    const showing = (value: Load<WorkspaceFileDocument> | null): value is Extract<Load<WorkspaceFileDocument>, { status: "ready" }> =>
+      value?.status === "ready" && value.value.path === path;
+    // The open file stays on screen while it is re-read; only another file shows the skeleton.
+    setDocument((value) => (showing(value) ? value : { status: "loading" }));
     botsApi.files.read(botId, path).then(
       (value) => {
         if (current) setDocument({ status: "ready", value });
       },
       (error: unknown) => {
-        if (current) setDocument({ status: "failed", message: userFacingErrorMessage(error, "Aiden couldn’t open that file.") });
+        if (!current) return;
+        const message = userFacingErrorMessage(error, "Aiden couldn’t open that file.");
+        setDocument((value) =>
+          showing(value) ? { status: "ready", value: value.value, refreshError: message } : { status: "failed", message },
+        );
       },
     );
     return () => {
       current = false;
     };
-  }, [active, botId, path, attempt]);
+  }, [active, botId, path, documentAttempt]);
 
-  const retry = (message: string) => (
+  const retry = (message: string, onRetry: () => void) => (
     <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
       <Text variant="small" color="red">
         {message}
       </Text>
-      <Button size="small" variant="filled" onClick={() => setAttempt((value) => value + 1)}>
+      <Button size="small" variant="filled" onClick={onRetry}>
         <RotateCcw /> Try again
       </Button>
     </Callout>
   );
+  const retryList = () => setListAttempt((value) => value + 1);
+  const retryDocument = () => setDocumentAttempt((value) => value + 1);
   const loading = (label: string) => (
     <div role="status" aria-label={label} className="flex flex-col gap-2">
       {[0, 1, 2].map((row) => (
@@ -117,20 +134,23 @@ export function BotPanelFiles({
             All files
           </Button>
         </div>
-        <Text as="h3" variant="strong" className="truncate px-1" title={path}>
+        <Text as="h2" variant="strong" className="truncate px-1" title={path}>
           {path.split("/").pop() || path}
         </Text>
         {document === null || document.status === "loading" ? (
           loading("Opening file")
         ) : document.status === "failed" ? (
-          retry(document.message)
+          retry(document.message, retryDocument)
         ) : (
-          <pre
-            aria-label={`Contents of ${document.value.path}`}
-            className="select-text whitespace-pre-wrap break-words rounded-card bg-well p-3 font-mono text-small text-primary"
-          >
-            {document.value.content}
-          </pre>
+          <>
+            {document.refreshError ? retry(document.refreshError, retryDocument) : null}
+            <pre
+              aria-label={`Contents of ${document.value.path}`}
+              className="select-text whitespace-pre-wrap break-words rounded-card bg-well p-3 font-mono text-small text-primary"
+            >
+              {document.value.content}
+            </pre>
+          </>
         )}
       </div>
     );
@@ -142,10 +162,11 @@ export function BotPanelFiles({
       <Text as="p" variant="small" color="secondary" className="px-1">
         {`Files ${botName} made or saved while helping you.`}
       </Text>
+      {index.status === "ready" && index.refreshError ? retry(index.refreshError, retryList) : null}
       {index.status === "loading" ? (
         loading("Loading files")
       ) : index.status === "failed" ? (
-        retry(index.message)
+        retry(index.message, retryList)
       ) : files.length === 0 ? (
         <EmptyState
           placement="inline"

@@ -76,6 +76,8 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
   onCloseTab: (tab: T) => void;
   /** The launcher hook point. Without it the strip has no "+" button. */
   newTab?: { label: string; onOpen: () => void };
+  /** The "Open tabs" list, for strips whose tabs can overflow. Defaults to shown. */
+  tabMenu?: boolean;
   closeLabel: string;
   /** Shown as `${closeTitle} (${shortcut})` with the `environment.toggle` binding. */
   closeTitle: string;
@@ -91,6 +93,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   onSelectTab,
   onCloseTab,
   newTab,
+  tabMenu = true,
   closeLabel,
   closeTitle,
   onClose,
@@ -119,7 +122,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
         })}
       </div>
       {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
-      <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+      {tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
       <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
     </header>
   );
@@ -199,6 +202,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   onSelectTab,
   onCloseTab,
   newTab,
+  tabMenu,
   closeLabel,
   closeTitle,
   onClose,
@@ -315,6 +319,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         newTab={newTab}
+        tabMenu={tabMenu}
         closeLabel={closeLabel}
         closeTitle={closeTitle}
         onClose={onClose}
