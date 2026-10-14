@@ -848,6 +848,7 @@
         "renderer/main/bots/bot-chat-header.test.tsx",
         "renderer/main/bots/bot-chat-mode.test.tsx",
         "renderer/main/bots/bot-create-flow.test.tsx",
+        "renderer/main/bots/bot-model-choice.test.ts",
         "renderer/main/bots/bot-delete-dialog.test.tsx",
         "renderer/main/bots/bot-list.test.tsx",
         "renderer/main/bots/bot-profile.test.tsx",
