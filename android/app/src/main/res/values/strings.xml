@@ -619,6 +619,30 @@
     <string name="bot_advanced_connected_apps">Connected apps</string>
 
     <!-- Bots: chat -->
+    <!-- Bot chat activity (contract revision 30): the status line's words, shared with the Mac and iOS (spec §5). -->
+    <string name="bot_activity_preparing">Getting ready</string>
+    <string name="bot_activity_thinking">Thinking</string>
+    <string name="bot_activity_reading">Reading</string>
+    <string name="bot_activity_photo">Looking at your photo</string>
+    <string name="bot_activity_searching">Searching the web</string>
+    <string name="bot_activity_command">Running a command</string>
+    <string name="bot_activity_editing">Editing files</string>
+    <string name="bot_activity_app">Using an app</string>
+    <string name="bot_activity_app_named">Using %1$s</string>
+    <string name="bot_activity_helper">Asking a helper</string>
+    <string name="bot_activity_computer">Using your Mac</string>
+    <string name="bot_activity_remembering">Remembering</string>
+    <string name="bot_activity_routine">Setting up a routine</string>
+    <string name="bot_activity_working">Working</string>
+    <string name="bot_activity_writing">Writing</string>
+    <string name="bot_activity_waiting">Waiting for you</string>
+    <string name="bot_activity_tidying">Tidying up its notes</string>
+    <string name="bot_activity_stopping">Stopping</string>
+    <string name="bot_activity_resuming">Picking up where it left off</string>
+    <string name="bot_activity_reconnecting">Reconnecting to your Mac</string>
+    <string name="bot_activity_status_elapsed">%1$s · %2$s</string>
+    <string name="bot_session_queued">Queued</string>
+    <string name="bot_session_queued_hint">Sends when the current reply finishes</string>
     <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>
     <string name="bot_chat_open_failed">Aiden couldn’t open this Bot’s chat. Try again.</string>
     <string name="bot_session_connect">Connect to your Mac to open this chat.</string>

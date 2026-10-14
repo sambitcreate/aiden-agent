@@ -266,6 +266,12 @@ class AidenRemoteCoordinator(
                     if (!installation.hasNegotiatedAccess(capability)) add(capability)
                 }
             }
+            // Contract revision 30: activity frames and Chat activity. Older Macs never announce it.
+            if (server.offersBotActivity) {
+                for (capability in AidenRemoteCapability.PHONE_BOT_ACTIVITY) {
+                    if (!installation.hasNegotiatedAccess(capability)) add(capability)
+                }
+            }
         }
         if (requested.isEmpty()) return server
         return try {

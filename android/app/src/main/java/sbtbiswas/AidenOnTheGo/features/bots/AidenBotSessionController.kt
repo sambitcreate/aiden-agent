@@ -164,6 +164,11 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, question = payload.question))
         is AidenBotSessionEventPayload.Approval ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, approval = payload.approval))
+        // Revision 30: the frame carries the whole new value, so it replaces the stored one.
+        is AidenBotSessionEventPayload.Activity ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, activity = payload.activity))
+        is AidenBotSessionEventPayload.Queued ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, queued = payload.queued))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
         is AidenBotSessionEventPayload.Snapshot -> AidenBotSessionEventOutcome.Applied(payload.session)
     }

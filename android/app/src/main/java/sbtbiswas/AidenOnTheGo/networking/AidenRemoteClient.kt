@@ -1432,9 +1432,14 @@ class AidenRemoteClient(
     }
 
     /** Sends one turn. Control writes never auto-retry; a manual retry reuses [idempotencyKey]. */
-    suspend fun sendBotMessage(botId: String, text: String, idempotencyKey: UUID): AidenBotSessionSendResponse {
+    suspend fun sendBotMessage(
+        botId: String,
+        text: String,
+        idempotencyKey: UUID,
+        whenBusy: AidenStreamInputMode? = null
+    ): AidenBotSessionSendResponse {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), AidenBotSessionSendRequest(text))
+        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), AidenBotSessionSendRequest(text, whenBusy))
         return executeRequest(
             "/bots/$botId/messages",
             method = "POST",

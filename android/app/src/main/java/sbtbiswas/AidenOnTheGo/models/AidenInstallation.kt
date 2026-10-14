@@ -148,6 +148,14 @@ data class AidenServer(
     val offersBotCards: Boolean
         get() = supportsBotMemory || supportsBotProactive
 
+    /** The Mac offers `bot:activity` (revision 30), so this phone asks for it. */
+    val offersBotActivity: Boolean
+        get() = features.contains(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE)
+
+    /** Announced and held: show the status line, Steer and Queue, Queued bubbles and Chat activity. */
+    val supportsBotActivity: Boolean
+        get() = offersBotActivity && capabilities.contains(AidenRemoteCapability.BOT_ACTIVITY)
+
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.

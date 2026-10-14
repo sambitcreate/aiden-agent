@@ -62,6 +62,11 @@ object AidenBotWire {
         }
     }
 
+    private val SUBMISSION_ID = Regex("^[A-Za-z0-9._:-]{1,64}$")
+
+    /** A submission id the Mac minted: 1 to 64 of `A-Za-z0-9._:-`. */
+    fun isSubmissionId(value: String): Boolean = SUBMISSION_ID.matches(value)
+
     fun validateString(value: String, field: String, maxLength: Int, allowEmpty: Boolean = false) {
         if ((!allowEmpty && value.isEmpty()) || value.codePointCount(0, value.length) > maxLength) {
             throw AidenBotContractException.InvalidField(field)
@@ -323,6 +328,31 @@ object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDeta
 object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
 object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer())
 
+/** A Bot's Chat activity choice (spec §7, contract revision 30). */
+@Serializable
+enum class AidenBotChatActivityLevel {
+    @SerialName("quiet") QUIET,
+    @SerialName("summary") SUMMARY,
+    @SerialName("detailed") DETAILED
+}
+
+@Serializable
+enum class AidenBotChatActivityWording {
+    @SerialName("follows") FOLLOWS,
+    @SerialName("thinking") THINKING
+}
+
+@Serializable
+data class AidenBotChatActivity(
+    val level: AidenBotChatActivityLevel,
+    val wording: AidenBotChatActivityWording
+) {
+    companion object {
+        /** What a Bot that never chose shows: Quiet, Follows the work. */
+        val DEFAULT = AidenBotChatActivity(AidenBotChatActivityLevel.QUIET, AidenBotChatActivityWording.FOLLOWS)
+    }
+}
+
 @OptIn(ExperimentalSerializationApi::class)
 @KeepGeneratedSerializer
 @Serializable(with = AidenBotDetailSerializer::class)
@@ -338,6 +368,8 @@ data class AidenBotDetail(
     val access: AidenBotAccessView,
     val modelSelection: AidenBotModelSelection? = null,
     val visionModelSelection: AidenBotModelSelection? = null,
+    /** Revision 30 (`bot:activity`). */
+    val chatActivity: AidenBotChatActivity? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String
@@ -382,10 +414,12 @@ data class AidenBotIdentityPatch(
     val name: String? = null,
     val purpose: String? = null,
     val instructions: String? = null,
-    val avatar: AidenBotSemanticAvatar? = null
+    val avatar: AidenBotSemanticAvatar? = null,
+    /** Revision 30 (`bot:activity`): how much a running turn shows in the chat. */
+    val chatActivity: AidenBotChatActivity? = null
 ) {
     init {
-        if (name == null && purpose == null && instructions == null && avatar == null) {
+        if (name == null && purpose == null && instructions == null && avatar == null && chatActivity == null) {
             throw AidenBotContractException.InvalidCombination("empty identity patch")
         }
         name?.let { AidenBotWire.validateString(it, "name", AidenBotWire.MAX_NAME_LENGTH) }
