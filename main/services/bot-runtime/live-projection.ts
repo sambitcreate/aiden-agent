@@ -485,11 +485,12 @@ export interface BotLiveActivityInput {
   /** This run is a Resume and has not moved on yet. */
   resuming: boolean;
   /**
-   * `pi.live` as it was when the Resume began. While it is unchanged nothing
-   * live has happened since, so a killed run's partial text or tool still in it
-   * predates the Resume and is not the resumed run's work.
+   * `pi.live` as it was when the Resume began, serialized once then
+   * (`JSON.stringify`). While it is unchanged nothing live has happened since,
+   * so a killed run's partial text or tool still in it predates the Resume and
+   * is not the resumed run's work.
    */
-  resumedFrom?: unknown;
+  resumedFrom?: string;
   startedAt: number;
 }
 
@@ -529,7 +530,7 @@ export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | 
   if (input.stopping) return at("stopping");
   if (input.waiting) return at("waiting");
   // After a crash the paused run's text stays in `pi.live` until the resumed run's first event.
-  if (input.resuming && JSON.stringify(input.resumedFrom) === JSON.stringify(live)) {
+  if (input.resuming && input.resumedFrom !== undefined && input.resumedFrom === JSON.stringify(live)) {
     return at("resuming");
   }
   if (live.compactions?.some((compaction) => compaction.blocking === true)) return at("tidying");
@@ -564,13 +565,14 @@ export function liveQueuedInputIds(docs: Readonly<Record<string, unknown>>): str
 }
 
 /**
- * Inputs waiting in `pi.inbox` that the person sent. `quiet` holds the ids of
- * routine and hidden (self-intro) submissions, which are decided by their
- * request id and never shown.
+ * Inputs waiting in `pi.inbox` that the person sent. Only ids in `personal`
+ * (classified as the person's own, `createQueuedInputClassifier`) are listed,
+ * so a routine's or the self-intro's input, or one not classified yet, never
+ * shows: the list is private by construction.
  */
 export function liveQueuedMessages(
   docs: Readonly<Record<string, unknown>>,
-  quiet: ReadonlySet<string> = new Set(),
+  personal: ReadonlySet<string>,
 ): BotQueuedMessage[] {
   const items = (docs["pi.inbox"] as { items?: unknown } | undefined)?.items;
   if (!Array.isArray(items)) return [];
@@ -581,10 +583,90 @@ export function liveQueuedMessages(
     if (typeof item.id !== "number" && typeof item.id !== "string") continue;
     const submissionId = String(item.id);
     const content = item.content as UserContent | undefined;
-    if (content === undefined || quiet.has(submissionId)) continue;
+    if (content === undefined || !personal.has(submissionId)) continue;
     queued.push({ submissionId, mode: item.mode, text: textOf(content), imageCount: imageCount(content) });
   }
   return queued;
+}
+
+export interface QueuedInputClassifierDeps {
+  /**
+   * `quietInputs` for one Bot: `true` for a routine's input or the hidden
+   * self-intro, `false` for the person's own. An id it cannot find is left out.
+   */
+  classify(submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
+  now(): number;
+  /** Pause before a failed or incomplete classification is tried again. */
+  retryMs: number;
+  /** A classification failed: called once per failing streak. */
+  report(error: unknown): void;
+  /** The pause is over: project again (on the caller's own serial lane), even if no frame arrives. */
+  retry(): void;
+}
+
+export interface QueuedInputClassifier {
+  /**
+   * The ids of the inputs waiting in `docs` that are known to be the person's
+   * own. Each id is asked about once. One with no answer yet, or whose lookup
+   * failed, is left out (fail closed) and asked again after the pause, never
+   * on every frame.
+   */
+  personal(docs: Readonly<Record<string, unknown>>): Promise<ReadonlySet<string>>;
+  /** Cancel a pending retry. */
+  close(): void;
+}
+
+/** The queued-input classification the desktop feed and every Remote projector share. */
+export function createQueuedInputClassifier(deps: QueuedInputClassifierDeps): QueuedInputClassifier {
+  /** Queued submission ids already classified as quiet (true) or the person's (false). */
+  const kinds = new Map<string, boolean>();
+  let failing = false;
+  /** No classification before this time: a persistent failure is not retried on every frame. */
+  let notBefore = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+
+  function scheduleRetry(): void {
+    notBefore = Math.max(notBefore, deps.now() + deps.retryMs);
+    if (timer !== undefined || closed) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (closed) return;
+      notBefore = 0;
+      deps.retry();
+    }, deps.retryMs);
+    timer.unref?.();
+  }
+
+  return {
+    async personal(docs) {
+      const ids = liveQueuedInputIds(docs);
+      for (const id of [...kinds.keys()]) if (!ids.includes(id)) kinds.delete(id);
+      const unknown = ids.filter((id) => !kinds.has(id));
+      if (unknown.length > 0 && deps.now() >= notBefore) {
+        try {
+          const answers = await deps.classify(unknown);
+          for (const id of unknown) {
+            const quiet = answers.get(id);
+            if (quiet !== undefined) kinds.set(id, quiet);
+          }
+          failing = false;
+        } catch (error) {
+          if (!failing) deps.report(error);
+          failing = true;
+        }
+        if (unknown.some((id) => !kinds.has(id))) scheduleRetry();
+      } else if (unknown.length > 0) {
+        scheduleRetry();
+      }
+      return new Set(ids.filter((id) => kinds.get(id) === false));
+    },
+    close() {
+      closed = true;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -679,19 +761,14 @@ interface Feed {
   question: BotPendingQuestion | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
-  /** Queued submission ids already classified as quiet (true) or the person's (false). */
-  inputKinds: Map<string, boolean>;
-  /** Classifying failed and has not succeeded since; logged once per streak. */
-  classifyFailing: boolean;
-  /** No classification attempt before this time (a throttle for a persistent failure). */
-  classifyNotBefore: number;
-  classifyRetry: ReturnType<typeof setTimeout> | null;
+  /** Which queued inputs are the person's own (fail closed, throttled retries). */
+  classifier: QueuedInputClassifier;
   /** When the current running turn started. */
   startedAt: number;
   stopping: boolean;
   resuming: boolean;
-  /** `pi.live` when this run's Resume began (`BotLiveActivityInput.resumedFrom`). */
-  resumedFrom: unknown;
+  /** `pi.live` when this run's Resume began, serialized (`BotLiveActivityInput.resumedFrom`). */
+  resumedFrom: string | undefined;
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
   runActive: boolean;
@@ -828,7 +905,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     feed.startedAt = runStarts.startedAt(feed.botId, liveRunKey(feed.frame.docs), now);
     feed.stopping = false;
     feed.resuming = resumingBots.delete(feed.botId);
-    feed.resumedFrom = feed.frame.docs["pi.live"];
+    feed.resumedFrom = feed.resuming ? JSON.stringify(feed.frame.docs["pi.live"]) : undefined;
   }
 
   async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
@@ -859,52 +936,21 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const entry of next.slice(previous.length)) emit(feed, { type: "entry", entry });
   }
 
-  /**
-   * The person's queued messages. Each queued id is classified once; an id that
-   * is not yet classified as the person's own stays hidden (fail closed), so a
-   * routine's prompt never shows as a message the person sent. A failed or
-   * incomplete classification is retried after a pause, not on every frame.
-   */
+  /** The person's queued messages: only inputs classified as theirs (`createQueuedInputClassifier`). */
   async function queuedFor(feed: Feed, docs: Readonly<Record<string, unknown>>): Promise<BotQueuedMessage[]> {
-    const ids = liveQueuedInputIds(docs);
-    for (const id of [...feed.inputKinds.keys()]) if (!ids.includes(id)) feed.inputKinds.delete(id);
-    const unknown = ids.filter((id) => !feed.inputKinds.has(id));
-    if (unknown.length > 0 && now() >= feed.classifyNotBefore) {
-      try {
-        const answers = await deps.quietInputs(feed.botId, unknown);
-        for (const id of unknown) {
-          const quiet = answers.get(id);
-          if (quiet !== undefined) feed.inputKinds.set(id, quiet);
-        }
-        feed.classifyFailing = false;
-      } catch (error) {
-        if (!feed.classifyFailing) report(feed.botId, error);
-        feed.classifyFailing = true;
-      }
-      if (unknown.some((id) => !feed.inputKinds.has(id))) scheduleClassifyRetry(feed);
-    } else if (unknown.length > 0) {
-      scheduleClassifyRetry(feed);
-    }
-    return liveQueuedMessages(docs, new Set(ids.filter((id) => feed.inputKinds.get(id) !== false)));
+    return liveQueuedMessages(docs, await feed.classifier.personal(docs));
   }
 
-  /** One retry after the pause, through the feed queue, even if no frame arrives. */
-  function scheduleClassifyRetry(feed: Feed): void {
-    feed.classifyNotBefore = Math.max(feed.classifyNotBefore, now() + classifyRetryMs);
-    if (feed.classifyRetry !== null || feed.ended) return;
-    feed.classifyRetry = setTimeout(() => {
-      feed.classifyRetry = null;
-      void enqueueWork(feed, async () => {
-        if (feed.ended) return;
-        feed.classifyNotBefore = 0;
-        const queued = await queuedFor(feed, feed.frame.docs);
-        if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
-          feed.queued = queued;
-          emit(feed, { type: "queued", queued });
-        }
-      });
-    }, classifyRetryMs);
-    feed.classifyRetry.unref?.();
+  /** The classification pause is over: list the queued messages again, through the feed queue. */
+  function requeue(feed: Feed): void {
+    void enqueueWork(feed, async () => {
+      if (feed.ended) return;
+      const queued = await queuedFor(feed, feed.frame.docs);
+      if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
+        feed.queued = queued;
+        emit(feed, { type: "queued", queued });
+      }
+    });
   }
 
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
@@ -978,6 +1024,16 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
       const watch = await conversation.watch(context);
       const initial = watch.value;
+      let opened: Feed | undefined;
+      const classifier = createQueuedInputClassifier({
+        classify: (ids) => deps.quietInputs(botId, ids),
+        now,
+        retryMs: classifyRetryMs,
+        report: (error) => report(botId, error),
+        retry: () => {
+          if (opened) requeue(opened);
+        },
+      });
       const feed: Feed = {
         botId,
         epoch: newEpoch(),
@@ -988,10 +1044,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         question: deps.question?.(botId) ?? null,
         activity: null,
         queued: [],
-        inputKinds: new Map(),
-        classifyFailing: false,
-        classifyNotBefore: 0,
-        classifyRetry: null,
+        classifier,
         startedAt: now(),
         stopping: false,
         resuming: false,
@@ -1004,6 +1057,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         ended: false,
         queue: Promise.resolve(),
       };
+      opened = feed;
       if (feed.state.kind === "running") startRun(feed);
       else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
@@ -1046,8 +1100,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   async function stopFeed(feed: Feed): Promise<void> {
     feed.ended = true;
-    if (feed.classifyRetry !== null) clearTimeout(feed.classifyRetry);
-    feed.classifyRetry = null;
+    feed.classifier.close();
     if (feeds.get(feed.botId) === feed) feeds.delete(feed.botId);
     await feed.watch.stop().catch(() => undefined);
     feed.cancel();

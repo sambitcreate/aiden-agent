@@ -849,7 +849,7 @@ test("the live phase reads stop, a waiting card, compaction, the newest running 
   assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
   // A paused run's text and tool, still in `pi.live` when the Resume began, are not the resumed run's work.
   const paused = docs({ tools, generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } });
-  const resumed = { ...base, resuming: true, resumedFrom: paused["pi.live"] };
+  const resumed = { ...base, resuming: true, resumedFrom: JSON.stringify(paused["pi.live"]) };
   assert.equal(liveBotActivity({ ...resumed, docs: paused })?.phase, "resuming");
   assert.equal(liveBotActivity({ ...resumed, stopping: true, docs: paused })?.phase, "stopping");
   assert.equal(liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1 } }) })?.phase, "resuming");
@@ -1288,10 +1288,13 @@ test("queued inputs are listed by the person's ids only; passive writes never sh
     },
   };
   assert.deepEqual(liveQueuedInputIds(docs), ["2", "4", "5"]);
-  assert.deepEqual(liveQueuedMessages(docs, new Set(["2", "4"])), [
+  // Only the ids classified as the person's own are listed; 2 and 4 are a routine's and the self-intro.
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["5"])), [
     { submissionId: "5", mode: "steer", text: "Make it vegetarian", imageCount: 1 },
   ]);
-  assert.deepEqual(liveQueuedMessages({}), []);
+  // An id not classified yet (or a passive write's) never shows.
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["1"])), []);
+  assert.deepEqual(liveQueuedMessages({}, new Set(["5"])), []);
 });
 
 /** Wait, outside the projection, until the conversation's `pi.inbox` satisfies `predicate`. */

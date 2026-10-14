@@ -105,12 +105,13 @@ import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-
 import {
   liveBotActivity,
   livePartialText,
-  liveQueuedInputIds,
   liveQueuedMessages,
   liveRunKey,
   createBotRunStarts,
+  createQueuedInputClassifier,
   projectBotTranscript,
   type BotRunStarts,
+  type QueuedInputClassifier,
 } from "./bot-runtime/live-projection.js";
 import {
   botRoutineLabel,
@@ -444,10 +445,9 @@ export function projectBotSessionQueued(
   docs: Readonly<Record<string, unknown>>,
   personal: ReadonlySet<string>,
 ): AidenRemoteBotQueuedMessage[] {
-  const quiet = new Set(liveQueuedInputIds(docs).filter((id) => !personal.has(id)));
   const seen = new Set<string>();
   const queued: AidenRemoteBotQueuedMessage[] = [];
-  for (const message of liveQueuedMessages(docs, quiet)) {
+  for (const message of liveQueuedMessages(docs, personal)) {
     const text = wireText(message.text, AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
     if (!text.trim() || !WIRE_SUBMISSION_ID.test(message.submissionId) || seen.has(message.submissionId)) continue;
     seen.add(message.submissionId);
@@ -538,16 +538,12 @@ class BotLiveProjector {
   private stopRequested = false;
   /** This run is a Resume and has not moved on yet. */
   private resuming = false;
-  /** `pi.live` when the Resume was heard (`BotLiveActivityInput.resumedFrom`). */
-  private resumedFrom: unknown;
+  /** `pi.live` when the Resume was heard, serialized once (`BotLiveActivityInput.resumedFrom`). */
+  private resumedFrom: string | undefined;
   /** The session resumed: the run it publishes as running reads "Picking up where it left off". */
   private resumeRequested = false;
-  /** Queued submission ids classified as quiet (true) or the person's own (false). */
-  private readonly inputKinds = new Map<string, boolean>();
-  private classifyFailing = false;
-  /** No classification before this time: a persistent failure is not retried on every frame. */
-  private classifyNotBefore = 0;
-  private classifyRetry: ReturnType<typeof setTimeout> | undefined;
+  /** Which queued inputs are the person's own (the desktop feed's classifier). */
+  private readonly classifier: QueuedInputClassifier | undefined;
   /**
    * Entry id → submission id of the person's messages placed while this
    * projector lived. A finished turn's submission drops out of the session,
@@ -570,7 +566,22 @@ class BotLiveProjector {
     private readonly readApproval: () => AidenRemoteBotApproval | null = () => null,
     /** Revision 30; without it nothing is derived and no activity or queued frame is ever sent. */
     private readonly activityDeps?: ProjectorActivity,
-  ) {}
+  ) {
+    this.classifier = activityDeps
+      ? createQueuedInputClassifier({
+          classify: (ids) => activityDeps.classify(ids),
+          now: () => activityDeps.now(),
+          retryMs: activityDeps.retryMs,
+          report: (error) => activityDeps.report(error),
+          // One retry after the pause, on the serial lane, even if no frame arrives.
+          retry: () => {
+            void this.serial(async () => {
+              if (!this.closed && this.view) await this.publish(this.view);
+            });
+          },
+        })
+      : undefined;
+  }
 
   async attach(conversation: Conversation): Promise<void> {
     const watch = await conversation.watch(ctx);
@@ -747,7 +758,7 @@ class BotLiveProjector {
       if (this.resumeRequested) {
         this.resumeRequested = false;
         this.resuming = true;
-        this.resumedFrom = docs["pi.live"];
+        this.resumedFrom = JSON.stringify(docs["pi.live"]);
       }
       if (this.stopRequested) this.stopping = true;
     } else {
@@ -783,33 +794,12 @@ class BotLiveProjector {
   }
 
   /**
-   * The person's queued messages (the desktop's `queuedFor`). Each id is
-   * classified once; an id not yet known to be the person's stays off the wire
-   * (fail closed), so a routine's prompt never shows as their message. A failed
-   * or incomplete classification is retried after a pause, not on every frame.
+   * The person's queued messages (the desktop's `queuedFor`): an id not yet
+   * known to be the person's stays off the wire (fail closed), so a routine's
+   * prompt never shows as their message.
    */
   private async queuedFor(docs: Readonly<Record<string, unknown>>): Promise<AidenRemoteBotQueuedMessage[]> {
-    const deps = this.activityDeps!;
-    const ids = liveQueuedInputIds(docs);
-    for (const id of [...this.inputKinds.keys()]) if (!ids.includes(id)) this.inputKinds.delete(id);
-    const unknown = ids.filter((id) => !this.inputKinds.has(id));
-    if (unknown.length > 0 && deps.now() >= this.classifyNotBefore) {
-      try {
-        const answers = await deps.classify(unknown);
-        for (const id of unknown) {
-          const quiet = answers.get(id);
-          if (quiet !== undefined) this.inputKinds.set(id, quiet);
-        }
-        this.classifyFailing = false;
-      } catch (error) {
-        if (!this.classifyFailing) deps.report(error);
-        this.classifyFailing = true;
-      }
-      if (unknown.some((id) => !this.inputKinds.has(id))) this.scheduleClassifyRetry();
-    } else if (unknown.length > 0) {
-      this.scheduleClassifyRetry();
-    }
-    return projectBotSessionQueued(docs, new Set(ids.filter((id) => this.inputKinds.get(id) === false)));
+    return projectBotSessionQueued(docs, await this.classifier!.personal(docs));
   }
 
   /**
@@ -852,22 +842,6 @@ class BotLiveProjector {
     for (const entryId of [...this.submissionOf.keys()]) {
       if (!inView.has(wireEntryId(entryId))) this.submissionOf.delete(entryId);
     }
-  }
-
-  /** One retry after the pause, on the serial lane, even if no frame arrives. */
-  private scheduleClassifyRetry(): void {
-    const { retryMs, now } = this.activityDeps!;
-    this.classifyNotBefore = Math.max(this.classifyNotBefore, now() + retryMs);
-    if (this.classifyRetry !== undefined || this.closed) return;
-    this.classifyRetry = setTimeout(() => {
-      this.classifyRetry = undefined;
-      void this.serial(async () => {
-        if (this.closed) return;
-        this.classifyNotBefore = 0;
-        if (this.view) await this.publish(this.view);
-      });
-    }, retryMs);
-    this.classifyRetry.unref?.();
   }
 
   private async publish(view: ConversationView): Promise<void> {
@@ -963,7 +937,7 @@ class BotLiveProjector {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.idleTimer);
-    clearTimeout(this.classifyRetry);
+    this.classifier?.close();
     this.frame({ type: "closed", payload: {} });
     this.onClosed();
     await this.stopWatch?.().catch(() => undefined);

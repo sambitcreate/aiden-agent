@@ -16,6 +16,7 @@ import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
   projectAidenRemoteBotMemory,
+  projectBotSessionActivity,
   projectBotSessionEntries,
   projectBotSessionState,
   redactRemoteError,
@@ -1450,6 +1451,75 @@ test("a device without bot:activity gets the state it already has at each activi
   }
 });
 
+test("a phone that reconnects mid-run gets the phase and the waiting messages in its first snapshot", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const first = await openAudienceStream(service, { activity: true });
+  try {
+    await first.until(() => first.frames.length >= 1, "the first snapshot");
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] },
+      "pi.inbox": { items: [{ id: 18, mode: "steer", content: [{ type: "text", text: "Keep it vegetarian." }] }] },
+    });
+    await first.until(() => first.frames.some((frame) => frame.type === "queued"), "the queued frame");
+  } finally {
+    await first.close(); // Wi-Fi drops
+  }
+  const again = await openAudienceStream(service, { activity: true });
+  try {
+    await again.until(() => again.frames.length >= 1, "the reconnect snapshot");
+    const session = again.frames[0]!.payload.session;
+    assert.equal(again.frames[0]!.type, "snapshot");
+    assert.equal(session.activity.phase, "searching");
+    assert.deepEqual(session.queued, [{ submissionId: "18", mode: "steer", text: "Keep it vegetarian." }]);
+  } finally {
+    await again.close();
+    await service.close();
+  }
+});
+
+test("an app step shows the app's name cut to 40 code points; other phases never carry one", () => {
+  const emoji = "😀".repeat(41);
+  assert.deepEqual(
+    projectBotSessionActivity({ phase: "app", app: emoji, startedAt: 1_760_450_000_000.7 }),
+    { phase: "app", app: "😀".repeat(40), startedAt: 1_760_450_000_000 },
+  );
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "Notion", startedAt: 5 }), { phase: "app", app: "Notion", startedAt: 5 });
+  // No name to show: the phone reads its generic app word.
+  assert.deepEqual(projectBotSessionActivity({ phase: "app", app: "   ", startedAt: 5 }), { phase: "app", startedAt: 5 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "reading", app: "Notion", startedAt: 5 }), { phase: "reading", startedAt: 5 });
+  assert.deepEqual(projectBotSessionActivity({ phase: "thinking", startedAt: -3 }), { phase: "thinking", startedAt: 0 });
+  // Every cut is one the strict parser accepts.
+  const cut = projectBotSessionActivity({ phase: "app", app: `${"x".repeat(39)}😀😀`, startedAt: 5 });
+  assert.equal([...cut.app!].length, 40);
+  assert.deepEqual(parseAidenRemoteBotSessionEvent({
+    protocolVersion: 1, botId: BOT_ID, epoch: "epoch_1", seq: 1, type: "activity", payload: { activity: cut },
+  }).payload, { activity: cut });
+});
+
+test("a frame that leaves the phase as it was sends no activity frame", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const searching = { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] };
+    await driven.emitView([user(1, "Plan dinners")], { "pi.live": searching });
+    // The tool's output grows; the line still reads Searching the web.
+    await driven.emitView([user(1, "Plan dinners")], {
+      "pi.live": { ...searching, tools: [{ ...searching.tools[0], output: "3 results" }] },
+    });
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, "Found three.")], { "pi.live": searching });
+    await stream.until(() => stream.frames.some((frame) => frame.type === "entry"), "the reply entry");
+    assert.deepEqual(stream.frames.slice(1).map((frame) => frame.type), ["activity", "entry"]);
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
 test("a Stop pressed anywhere reads Stopping on phones until the run ends, and a Stop with nothing running changes nothing", async () => {
   const driven = drivenConversation([user(1, "Plan dinners")]);
   const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
@@ -1472,10 +1542,11 @@ test("a Stop pressed anywhere reads Stopping on phones until the run ends, and a
     await stream.until(() => last(phasesOf(stream.frames)) === null, "the run to end");
 
     const settled = stream.frames.length;
+    const settledSeq = last(stream.frames)!.seq;
     intents.announce(BOT_ID, "stopping"); // a double-tap after the reply landed
-    await service.session(BOT_ID, { activity: true }); // runs after the intent on the projector's lane
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(stream.frames.length, settled, "nothing was running, so nothing changed");
+    const fetched = await service.session(BOT_ID, { activity: true }); // runs after the intent on the projector's lane
+    assert.equal(fetched.seq, settledSeq, "nothing was running, so the intent published nothing");
+    assert.equal(fetched.activity, null);
 
     fake.setState({ kind: "running", submissionId: "sub_2" });
     await driven.emitView(
@@ -1483,7 +1554,9 @@ test("a Stop pressed anywhere reads Stopping on phones until the run ends, and a
       { "pi.live": { run: { inputs: [3] } } },
     );
     await stream.until(() => last(phasesOf(stream.frames)) !== null, "the next run");
-    assert.equal(last(phasesOf(stream.frames)), "preparing", "the next turn starts at Getting ready");
+    // The lane is serial: anything the intent had published would have come before the next run's frames.
+    assert.equal(stream.frames[settled]!.seq, settledSeq + 1);
+    assert.deepEqual(phasesOf(stream.frames.slice(settled)), ["preparing"], "the next turn starts at Getting ready");
     assert.ok(gapless(stream.frames));
   } finally {
     await stream.close();
