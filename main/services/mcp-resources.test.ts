@@ -3,8 +3,8 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpError, ErrorCode, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpResourceTool, mcpResourceToolName, MCP_RESOURCE_LIMITS } from "./mcp-resources.js";
+import { McpError, ErrorCode, LATEST_PROTOCOL_VERSION, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, mcpResourceToolName, MCP_RESOURCE_LIMITS } from "./mcp-resources.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -76,6 +76,37 @@ test("inventory is frozen for a generation despite subsequent remote list change
   assert.deepEqual(await invoke(tool, { action: "list" }), first);
   assert.equal(lists, 1);
 });
+
+for (const end of [null, ""]) {
+  test(`real SDK resource lists ending with nextCursor ${JSON.stringify(end)} publish every page`, async (t) => {
+    // Wire-level fixture: the SDK Server would not emit these legal end markers itself.
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const methods: string[] = [];
+    serverSide.onmessage = (message: JSONRPCMessage) => {
+      if (!("method" in message) || !("id" in message)) return;
+      methods.push(message.method);
+      const cursor = (message.params as { cursor?: string } | undefined)?.cursor;
+      const result = message.method === "initialize"
+        ? { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { resources: {} }, serverInfo: { name: "raw", version: "1" } }
+        : message.method === "resources/list"
+          ? { resources: [{ name: cursor ? "Second" : "First", uri: cursor ? "memo://two" : "memo://one" }], nextCursor: cursor ? end : "page-two" }
+          : { resourceTemplates: [{ name: "Query", uriTemplate: "memo://query/{q}" }], nextCursor: end };
+      void serverSide.send({ jsonrpc: "2.0", id: message.id, result });
+    };
+    await serverSide.start();
+    const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
+    await client.connect(clientSide);
+    t.after(async () => { await client.close(); });
+    const { tool } = fixture({
+      listResources: (params, options) => listMcpResourcesPage(client, params, options),
+      listResourceTemplates: (params, options) => listMcpResourceTemplatesPage(client, params, options),
+      readResource: (params, options) => client.readResource(params, options),
+    });
+    const { resources } = await invoke(tool, { action: "list" });
+    assert.deepEqual(resources.map(({ name }: { name: string }) => name), ["First", "Second", "Query"]);
+    assert.deepEqual(methods.filter((method) => method !== "initialize"), ["resources/list", "resources/list", "resources/templates/list"]);
+  });
+}
 
 test("pagination cycles, excess pages/entries, oversized metadata fail closed", async () => {
   for (const client of [

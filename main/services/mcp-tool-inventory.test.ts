@@ -1,11 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, LATEST_PROTOCOL_VERSION, ListToolsRequestSchema, type CallToolResult, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+
+/**
+ * A wire-level server: replies exactly as `respond` says, without the SDK
+ * Server's own result validation, so tests observe what the client accepts.
+ */
+async function rawServerClient(t: { after(fn: () => Promise<void>): void }, respond: (method: string, params: unknown) => unknown) {
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  serverSide.onmessage = (message: JSONRPCMessage) => {
+    if (!("method" in message) || !("id" in message)) return;
+    requests.push({ method: message.method, params: message.params });
+    const result = message.method === "initialize"
+      ? { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "raw", version: "1" } }
+      : respond(message.method, message.params);
+    void Promise.resolve(result).then((value) => serverSide.send({ jsonrpc: "2.0", id: message.id, result: value as Record<string, unknown> }));
+  };
+  await serverSide.start();
+  const client = new Client({ name: "raw-client", version: "1" });
+  await client.connect(clientSide);
+  t.after(async () => { await client.close(); });
+  return { client, requests: () => requests.filter(({ method }) => method !== "initialize") };
+}
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];
@@ -76,11 +98,59 @@ test("already cancelled discovery sends no requests and later-page failures prop
 });
 
 test("malformed or oversized cursors never become subsequent requests", async () => {
-  for (const cursor of ["", "x".repeat(4097), 42, null]) {
+  for (const cursor of ["x".repeat(4097), 42, {}]) {
     let requests = 0;
     await assert.rejects(listMcpToolInventory({ assertCurrent() {}, async listPage() { requests++; return { tools: [], nextCursor: cursor as string }; } }), /invalid/u);
     assert.equal(requests, 1);
   }
+});
+
+for (const end of [undefined, null, ""]) {
+  test(`a real SDK tools/list page ending with nextCursor ${JSON.stringify(end)} completes the inventory`, async (t) => {
+    const { client, requests } = await rawServerClient(t, (_method, params) => {
+      const cursor = (params as { cursor?: string } | undefined)?.cursor;
+      return cursor === undefined
+        ? { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "page-2" }
+        : { tools: [{ name: "last", inputSchema: { type: "object" } }], ...(end === undefined ? {} : { nextCursor: end }) };
+    });
+    const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
+    assert.deepEqual(tools.map(({ name }) => name), ["first", "last"]);
+    assert.equal(requests().length, 2, "the end-of-list page is not followed by another request");
+  });
+}
+
+test("each discovery page has its own deadline instead of the SDK's 60 s default", async (t) => {
+  const { client, requests } = await rawServerClient(t, (_method, params) => {
+    if ((params as { cursor?: string } | undefined)?.cursor) return new Promise(() => {});
+    return { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "stalled" };
+  });
+  const started = Date.now();
+  await assert.rejects(
+    listMcpToolInventory({ assertCurrent() {}, listPage: boundedMcpToolPageReader(client, 100) }),
+    (error: unknown) => (error as { code?: number }).code === -32001,
+  );
+  assert.ok(Date.now() - started < 2_000, "the stalled second page times out at the page deadline");
+  assert.equal(requests().length, 2);
+});
+
+test("non-object structured content from a real tools/call reaches the agent result and its output schema", async (t) => {
+  const values: unknown[] = [[1, "two"], null, 0, false, "", "text"];
+  let next = 0;
+  const { client } = await rawServerClient(t, () => ({ content: [], structuredContent: values[next++] }));
+  for (const value of values) {
+    const schema = { type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value };
+    const guard = createMcpToolCallGuard([{ name: "any", outputSchema: schema }]);
+    const result = await executeMcpAgentTool(async () => {
+      const raw = await callMcpTool(client, { name: "any", arguments: {} });
+      guard.validateResult("any", raw);
+      return raw;
+    });
+    assert.deepEqual(result.structuredContent, value);
+    assert.match((result.content[0] as { text: string }).text, /Structured content/u);
+  }
+  const typed = createMcpToolCallGuard([{ name: "count", outputSchema: { type: "number" } }]);
+  assert.throws(() => typed.validateResult("count", { content: [] }), /did not return structured content/u);
+  assert.throws(() => typed.validateResult("count", { content: [], structuredContent: "1" }), /output schema/u);
 });
 
 test("complete inventory guards preserve early-page output schemas and task requirements", async () => {

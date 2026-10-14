@@ -149,6 +149,7 @@
         "main/services/mcp-resources.test.ts",
         "main/services/mcp-server-instructions.test.ts",
         "main/services/mcp-status.test.ts",
+        "main/services/mcp-stdio-transport.test.ts",
         "main/services/mcp-tool-inventory.test.ts",
         "main/services/mcp-tool-discovery-core.test.ts",
         "main/services/mcp-tool-schema.test.ts",

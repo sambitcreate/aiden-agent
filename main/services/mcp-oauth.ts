@@ -21,13 +21,17 @@ import type {
 import { shell, logger } from "../platform.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
+  clearMcpStepUpScope,
   hasMcpOAuthSessionData,
+  mcpInteractiveAuthorizationScope,
   McpOAuthSessionTransaction,
   McpOAuthAuthorizationFlow,
   mcpAuthorizationBinding,
   publicMcpClientInformation,
   sessionMatchesMcpBinding,
   sessionForMcpAuthorizationAttempt,
+  sessionAfterTokenInvalidation,
+  sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
@@ -172,9 +176,19 @@ class McpOAuthProvider implements OAuthClientProvider {
     });
   }
 
+  /** The tokens this provider last handed to (or received from) the SDK. */
+  private lastTokens?: Pick<OAuthTokens, "access_token" | "refresh_token">;
+  /**
+   * The SDK reads the PKCE verifier only to exchange an authorization code and
+   * reads tokens() only before a refresh, so this tells the two saves apart.
+   */
+  private exchangingCode = false;
+
   async tokens(): Promise<OAuthTokens | undefined> {
+    this.exchangingCode = false;
     const tokens = (await this.boundSession()).tokens;
     if (tokens) this.observeTokens?.(tokens);
+    this.lastTokens = tokens && { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
     return tokens;
   }
 
@@ -183,11 +197,22 @@ class McpOAuthProvider implements OAuthClientProvider {
     // Register the exact material before either persistence or transport reuse.
     // Subagent callers use this hook to retain only a host-owned redactor.
     this.observeTokens?.(tokens);
+    const exchangedCode = this.exchangingCode;
+    this.exchangingCode = false;
     const session = await this.boundSession();
     this.assertCanMutate();
-    await this.saveSession(
-      sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope),
-    );
+    // An authorization-code exchange always wins. A refresh response that
+    // arrives after another client already rotated past the tokens it presented
+    // must not roll the stored pair back to credentials the server consumed.
+    const next = exchangedCode
+      ? sessionWithSavedMcpTokens(session, this.binding, tokens, this.authorization.requestedScope)
+      : sessionWithRefreshedMcpTokens(session, this.binding, this.lastTokens, tokens, this.authorization.requestedScope);
+    if (!next) {
+      logger.info("mcp-oauth", `Kept newer stored tokens for "${this.serverId}" over a late refresh response.`);
+      return;
+    }
+    await this.saveSession(next);
+    this.lastTokens = { access_token: tokens.access_token, refresh_token: tokens.refresh_token };
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
@@ -202,6 +227,7 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async codeVerifier(): Promise<string> {
+    this.exchangingCode = true;
     const verifier = (await this.boundSession()).codeVerifier;
     if (!verifier)
       throw new Error("Missing PKCE code verifier — restart the sign-in.");
@@ -217,7 +243,10 @@ class McpOAuthProvider implements OAuthClientProvider {
     this.assertCanMutate();
     const session = await this.boundSession();
     this.assertCanMutate();
-    const boundUrl = this.authorization.authorizationUrl(authorizationUrl, session.tokens?.scope || session.grantedScope);
+    const boundUrl = this.authorization.authorizationUrl(
+      authorizationUrl,
+      mcpInteractiveAuthorizationScope(this.metadataServer?.url, session.tokens?.scope || session.grantedScope),
+    );
     await shell.openExternal(boundUrl.toString());
   }
 
@@ -237,8 +266,11 @@ class McpOAuthProvider implements OAuthClientProvider {
     const session = await this.boundSession();
     this.assertCanMutate();
     if (scope === "tokens") {
-      if (session.tokens?.scope) session.grantedScope = session.tokens.scope;
-      delete session.tokens;
+      // Compare-and-delete: newer tokens saved by a concurrent client survive.
+      const next = sessionAfterTokenInvalidation(session, this.lastTokens);
+      if (!next) return;
+      await this.saveSession(next);
+      return;
     }
     if (scope === "verifier") delete session.codeVerifier;
     if (scope === "client") delete session.clientInformation;
@@ -519,6 +551,7 @@ export async function authorizeMcpServer(
           return isCurrent() && oauthOperations.isCurrent(operation);
         }),
       );
+      clearMcpStepUpScope(server.url);
       return;
     } catch (error) {
       await client.close().catch(() => {});
@@ -560,6 +593,7 @@ export async function authorizeMcpServer(
         return isCurrent() && oauthOperations.isCurrent(operation);
       }),
     );
+    clearMcpStepUpScope(server.url);
   } catch (error) {
     if (commitAttempted && oauthOperations.isCurrent(operation)) {
       try {

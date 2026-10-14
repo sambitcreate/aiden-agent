@@ -2,13 +2,40 @@ import { createHash, randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import {
+  McpError,
+  ErrorCode,
+  ListResourcesResultSchema,
+  ListResourceTemplatesResultSchema,
+  type ListResourcesRequest,
+  type ListResourceTemplatesRequest,
+  type ListResourcesResult,
+  type ListResourceTemplatesResult,
+} from "@modelcontextprotocol/sdk/types.js";
+import { LenientCursorSchema, mcpListCursor } from "./mcp-tool-inventory.js";
 import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpServer } from "./types.js";
 import { mcpResourceImages } from "./mcp-tool-result.js";
 
 export const MCP_RESOURCE_LIMITS = Object.freeze({ pages: 4, entries: 128, bytes: 32_000, field: 2048 });
-type ResourceClient = Pick<Client, "listResources" | "listResourceTemplates" | "readResource">;
+type ResourceClient = Pick<Client, "readResource"> & {
+  listResources(params: ListResourcesRequest["params"], options?: RequestOptions): Promise<{ resources: ListResourcesResult["resources"]; nextCursor?: string | null }>;
+  listResourceTemplates(params: ListResourceTemplatesRequest["params"], options?: RequestOptions): Promise<{ resourceTemplates: ListResourceTemplatesResult["resourceTemplates"]; nextCursor?: string | null }>;
+};
+
+const LenientListResourcesResultSchema = ListResourcesResultSchema.extend({ nextCursor: LenientCursorSchema });
+const LenientListResourceTemplatesResultSchema = ListResourceTemplatesResultSchema.extend({ nextCursor: LenientCursorSchema });
+
+/** One resources/list page; a `null` or empty `nextCursor` ends the list instead of failing it. */
+export function listMcpResourcesPage(client: Pick<Client, "request">, params: ListResourcesRequest["params"], options?: RequestOptions) {
+  return client.request({ method: "resources/list", params }, LenientListResourcesResultSchema, options);
+}
+
+/** One resources/templates/list page, with the same end-of-list leniency. */
+export function listMcpResourceTemplatesPage(client: Pick<Client, "request">, params: ListResourceTemplatesRequest["params"], options?: RequestOptions) {
+  return client.request({ method: "resources/templates/list", params }, LenientListResourceTemplatesResultSchema, options);
+}
 type Entry = { handle: string; name: string; uri?: string; uriTemplate?: string };
 
 /** Separate identity domain: a remote tool name cannot impersonate resource authority. */
@@ -101,7 +128,7 @@ export function createMcpResourceTool(
           entries.push(Object.freeze(entry));
         }
         boundedJson(entries);
-        cursor = result.nextCursor;
+        cursor = mcpListCursor(result.nextCursor);
         if (cursor === undefined) break;
         field(cursor);
         if (cursors.has(cursor) || page + 1 === MCP_RESOURCE_LIMITS.pages) {
