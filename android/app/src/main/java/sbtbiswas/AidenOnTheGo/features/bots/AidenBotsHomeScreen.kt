@@ -18,9 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,11 +40,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
@@ -212,9 +216,11 @@ fun AidenBotsHomeScreen(
     onNavigateToCreateBot: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBotChat: (String) -> Unit = {},
-    botDeleter: AidenBotDeleter? = null
+    botDeleter: AidenBotDeleter? = null,
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val palette = AidenTheme.palette
+    val resources = LocalResources.current
     val reduceMotion = aidenReduceMotion()
     val scope = rememberCoroutineScope()
     val client by coordinator.client.collectAsStateWithLifecycle()
@@ -231,6 +237,28 @@ fun AidenBotsHomeScreen(
     var isDeleting by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
+    val canOpenMemory = serverInfo?.supportsBotMemory == true
+    // A row's Advanced opens the same sheet as the chat's ••• → Advanced.
+    var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
+    var openingAdvanced by remember { mutableStateOf(false) }
+    fun openAdvanced(botId: String) {
+        val cl = client ?: return
+        if (openingAdvanced) return
+        openingAdvanced = true
+        scope.launch {
+            try {
+                val detail = cl.bot(botId)
+                coordinator.botCache.putBotDetail(detail)
+                advancedBot = detail
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+            } finally {
+                openingAdvanced = false
+            }
+        }
+    }
 
     // Revision 27: finished Bot routine runs become local notifications on each refresh.
     val context = LocalContext.current
@@ -374,10 +402,25 @@ fun AidenBotsHomeScreen(
                     canDelete = canDelete,
                     onOpen = { openChat(row.bot) },
                     onOpenProfile = { onNavigateToBotProfile(row.bot.id) },
+                    onOpenMemory = if (canOpenMemory) ({ onNavigateToBotMemory(row.bot.id) }) else null,
+                    onOpenAdvanced = { openAdvanced(row.bot.id) },
                     onDelete = { pendingDelete = row.bot }
                 )
             }
         }
+    }
+
+    advancedBot?.let { bot ->
+        AidenBotAdvancedSheet(
+            bot = bot,
+            client = client,
+            onDismiss = { advancedBot = null },
+            onSaved = { saved ->
+                coordinator.botCache.putBotDetail(saved)
+                advancedBot = null
+                scope.launch { viewModel.loadBots(force = true) }
+            }
+        )
     }
 
     pendingDelete?.let { bot ->
@@ -448,6 +491,8 @@ private fun AidenBotHomeRowView(
     canDelete: Boolean,
     onOpen: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenMemory: (() -> Unit)?,
+    onOpenAdvanced: () -> Unit,
     onDelete: () -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -552,7 +597,26 @@ private fun AidenBotHomeRowView(
                     onOpenProfile()
                 }
             )
+            if (onOpenMemory != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.bot_menu_memory)) },
+                    leadingIcon = { Icon(Icons.Default.SdStorage, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenMemory()
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.bot_menu_advanced)) },
+                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                onClick = {
+                    menuOpen = false
+                    onOpenAdvanced()
+                }
+            )
             if (canDelete) {
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },

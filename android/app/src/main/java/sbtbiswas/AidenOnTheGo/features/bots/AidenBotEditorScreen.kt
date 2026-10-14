@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.scheduled.aidenScheduledRunFailureIsAmbiguous
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
@@ -77,6 +78,33 @@ data class AidenBotCreateDraft(
             avatar = AidenBotSemanticAvatar.Recipe(AidenBotCharacter.autoAssigned(trimmedName)),
             access = access
         )
+    }
+}
+
+/**
+ * New Bot's idempotency key. Retrying the same request after an uncertain failure reuses
+ * the key, so the Mac replays a Bot it may already have made instead of making a second.
+ * A different request, or any retry after the Mac refused one, gets a new key: the Mac
+ * keeps a refused key, replays its refusal for the same body and answers a different body
+ * with `idempotency_conflict`.
+ */
+class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID) {
+    private var request: AidenBotCreateRequest? = null
+    private var key: UUID? = null
+
+    fun keyFor(request: AidenBotCreateRequest): UUID {
+        val current = key
+        if (current != null && request == this.request) return current
+        return makeKey().also {
+            key = it
+            this.request = request
+        }
+    }
+
+    fun failed(error: Throwable) {
+        if (aidenScheduledRunFailureIsAmbiguous(error)) return
+        request = null
+        key = null
     }
 }
 
@@ -170,8 +198,8 @@ private fun AidenBotCreateScreen(
         } catch (_: Exception) {
         }
     }
-    // One key per attempt, so a retried Create never makes two Bots.
-    val botKey = remember { UUID.randomUUID() }
+    // A retried Create never makes two Bots, and a changed one never reuses a refused key.
+    val attempts = remember { AidenBotCreateAttempts() }
 
     AidenBotEditorScaffold(
         title = stringResource(R.string.bot_editor_new_title),
@@ -185,13 +213,22 @@ private fun AidenBotCreateScreen(
                 isSaving = true
                 error = null
                 try {
-                    val created = cl.createBot(request, botKey)
+                    val created = cl.createBot(request, attempts.keyFor(request))
                     coordinator.botCache.putBotDetail(created)
                     onBotSaved(created.id)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
-                    error = resources.getString(R.string.bot_editor_create_failed)
+                } catch (e: Exception) {
+                    attempts.failed(e)
+                    // The Mac may have refused the model (its service was signed out); a fresh
+                    // catalog lets the field say so instead of only the generic message.
+                    try {
+                        catalog = cl.botCapabilityCatalog()
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (_: Exception) {
+                    }
+                    error = if (draft.modelIsGone(catalog)) null else resources.getString(R.string.bot_editor_create_failed)
                 } finally {
                     isSaving = false
                 }

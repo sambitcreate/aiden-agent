@@ -3,6 +3,7 @@ package sbtbiswas.AidenOnTheGo.features.bots
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,6 +11,11 @@ import sbtbiswas.AidenOnTheGo.AidenRemoteContractFixture
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelCapability
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.models.AidenBotAccessMode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
+import java.io.IOException
+import java.util.UUID
 
 class AidenBotModelChoiceTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -77,5 +83,49 @@ class AidenBotModelChoiceTest {
         )
         assertTrue(chosen.modelIsGone(withoutIt))
         assertNull(chosen.request(withoutIt))
+    }
+
+    private fun refused(code: AidenRemoteErrorCode) = AidenRemoteClientException.Server(
+        409,
+        AidenRemoteErrorEnvelope.Body(code = code, message = "refused", requestId = "req", retryable = false)
+    )
+
+    @Test
+    fun aRetryOfTheSameCreateAfterAnUncertainFailureReusesItsKey() {
+        val keys = ArrayDeque(List(3) { UUID.randomUUID() })
+        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
+        val request = AidenBotCreateDraft(name = "Seer").request(catalog)!!
+        val first = attempts.keyFor(request)
+        attempts.failed(IOException("connection lost"))
+        assertEquals("the Mac may have made it, so it replays that Bot", first, attempts.keyFor(request))
+    }
+
+    @Test
+    fun aChangedRequestOrARefusedOneGetsANewKey() {
+        val keys = ArrayDeque(List(3) { UUID.randomUUID() })
+        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
+        val writer = AidenBotCreateDraft(name = "Seer", model = AidenModelRoute("provider_fixture", "model_fixture"))
+        val first = attempts.keyFor(writer.request(catalog)!!)
+
+        // The Mac refused it (the model's service was signed out); the person picks another model.
+        attempts.failed(refused(AidenRemoteErrorCode.INVALID_REQUEST))
+        val seer = writer.copy(model = AidenModelRoute("provider_fixture", "vision_model_fixture")).request(catalog)!!
+        val second = attempts.keyFor(seer)
+        assertNotEquals("a different body under the old key is an idempotency_conflict", first, second)
+
+        // Even an uncertain failure doesn't carry a key over to a different request.
+        attempts.failed(IOException("connection lost"))
+        val renamed = attempts.keyFor(seer.copy(name = "Seer 2"))
+        assertNotEquals(second, renamed)
+    }
+
+    @Test
+    fun retryingTheSameRequestAfterTheMacRefusedItGetsANewKey() {
+        val keys = ArrayDeque(List(2) { UUID.randomUUID() })
+        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
+        val request = AidenBotCreateDraft(name = "Seer").request(catalog)!!
+        val first = attempts.keyFor(request)
+        attempts.failed(refused(AidenRemoteErrorCode.INVALID_REQUEST))
+        assertNotEquals("the Mac replays a refused key's refusal", first, attempts.keyFor(request))
     }
 }
