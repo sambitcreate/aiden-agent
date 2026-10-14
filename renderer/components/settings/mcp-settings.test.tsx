@@ -406,6 +406,25 @@ test("signing in to an existing server never saves its other unsaved edits", asy
   assert.ok(await within(dialog).findByRole("button", { name: "Sign out" }));
 });
 
+test("signing in after adding a header saves the header first, so sign-in uses the stored record", async () => {
+  const calls = mount({
+    "mcp:list": () => [remoteServer],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => ({ ...(server as McpServer), headers: { "X-Team": savedMarker } }),
+    "mcp:authorize": () => ({ authorized: true }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add header" }));
+  const names = within(dialog).getAllByRole("textbox", { name: "Header name" });
+  fireEvent.change(names[names.length - 1]!, { target: { value: "X-Team" } });
+  fireEvent.change(within(dialog).getByLabelText("Value of X-Team"), { target: { value: "blue" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.headers, { "X-Team": "blue" });
+  assert.deepEqual((channelCalls(calls, "mcp:authorize")[0]!.args[0] as McpServer).headers, { "X-Team": savedMarker });
+});
+
 test("a waiting sign-in can be cancelled, and cancelling a new preset's setup removes it again", async () => {
   let rejectAuthorize: (error: Error) => void = () => undefined;
   const { calls, openChanges } = renderPreset(linearState(), undefined, {

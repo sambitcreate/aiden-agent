@@ -393,3 +393,36 @@ test("an outside edit that drops a stored header prunes its value, so restoring 
   assert.throws(() => resolveMcpFieldSecrets(saved.server, record), (error: unknown) => error instanceof McpFieldSecretMissingError && /“X-Team”/u.test(error.message));
   assert.ok(team);
 });
+
+test("a failed prune after an outside edit stays pending and the next reload retries it", async () => {
+  const { createLastSafeSnapshotReload } = await import("./portable-config-watch-core.js");
+  const { mcpFieldSecretReferencesChanged } = await import("./mcp-field-secrets-core.js");
+  const saved = planMcpFieldSecrets(remote, counter());
+  let record: McpFieldSecretRecord | undefined = stored(saved);
+  let servers: McpServer[] = [saved.server];
+  let storeAvailable = false;
+  const reload = createLastSafeSnapshotReload(
+    async () => true,
+    async () => structuredClone(servers),
+    async () => true,
+    async (previous, next) => {
+      for (const before of previous) {
+        const after = next.find(({ id }) => id === before.id);
+        if (!mcpFieldSecretReferencesChanged(before, after)) continue;
+        // As in production, a store failure rejects reconciliation.
+        if (!storeAvailable) throw new Error("keychain locked");
+        record = record && pruneMcpFieldSecretRecord(record, after);
+      }
+    },
+  );
+  await reload.syncCurrent();
+  servers = [{ ...saved.server, headers: { Authorization: saved.server.headers!.Authorization! } }];
+  await assert.rejects(reload(), /keychain locked/u);
+  assert.equal(mcpFieldSecretFieldValues(saved.server, record)["headers:X-Team"], "blue", "the failed prune removed nothing");
+  storeAvailable = true;
+  // config.json has not changed again; the pending transition is retried anyway.
+  await reload();
+  servers = [saved.server];
+  await reload();
+  assert.throws(() => resolveMcpFieldSecrets(saved.server, record), (error: unknown) => error instanceof McpFieldSecretMissingError && /“X-Team”/u.test(error.message));
+});

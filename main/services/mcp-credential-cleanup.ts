@@ -279,11 +279,10 @@ export function reconcileExternalMcpCredentialChanges(
         // Independently of sign-in cleanup: an edit that drops or renames a
         // stored env/header field (or removes the server) prunes its values
         // against this authoritative config, so restoring the old marker later
-        // finds nothing.
+        // finds nothing. A failed prune rejects reconciliation, which keeps this
+        // transition pending so the next reload retries it.
         if (mcpFieldSecretReferencesChanged(before, after)) {
-          await pruneStoredMcpFieldSecrets(before.id, after).catch((error: unknown) =>
-            logger.warn("mcp", "Could not prune stored MCP env and header values after a config change.", error),
-          );
+          await pruneStoredMcpFieldSecrets(before.id, after);
         }
       } finally {
         release();
