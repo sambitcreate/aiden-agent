@@ -2976,13 +2976,17 @@ textarea {
 @keyframes aiden-mark-bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
 
 /* Bot faces glance and blink while their Bot works (spec §6), reusing the glance
-   keyframes. Motion runs only with Reduce Motion off and on screen; otherwise the
-   face holds its still pose. */
+   keyframes. Motion runs only with Reduce Motion off and on screen; off screen the
+   face pauses where it is. */
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
 .bot-avatar[data-offscreen] * { animation-play-state: paused !important; }
+/* Under Reduce Motion a working face holds the glance's look-aside pose instead,
+   so it still reads as working without moving. */
+:root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
 @media (prefers-reduced-motion: reduce) {
   .bot-avatar[data-working] * { animation: none !important; }
+  .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
 }
 
 /* Helix family (Live). Position and depth run on the same period with depth a

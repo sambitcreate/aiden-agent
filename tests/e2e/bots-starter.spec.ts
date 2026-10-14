@@ -193,3 +193,38 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
     await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),
   ).toBe(1);
 });
+
+// Under Reduce Motion the working face cannot glance, so it holds the glance's
+// look-aside pose: still, and still different from an idle face.
+test("under Reduce Motion a working Bot's face looks aside without moving, and an idle face looks ahead", async ({ aiden }) => {
+  const { page } = aiden;
+  const working = botFixture({ id: "bot-chief", name: "Chief of Staff" });
+  const idle = botFixture({ id: "bot-owl", name: "Night Owl" });
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ ipcMain }, fixtures) => {
+    for (const channel of ["bots:list", "bots:live:summary", "bots:getCanonicalPhoto"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("bots:list", () => fixtures);
+    ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
+      botId,
+      preview: null,
+      updatedAt: null,
+      state: botId === "bot-chief" ? { kind: "running", submissionId: "s-1" } : { kind: "idle" },
+    }));
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+  }, [working, idle]);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  const face = (name: string) =>
+    page.getByRole("listitem").filter({ hasText: name }).locator(".bot-avatar-eyes").first();
+  const pose = (name: string) =>
+    face(name).evaluate((eyes) => ({
+      transform: getComputedStyle(eyes).transform,
+      moving: eyes.getAnimations({ subtree: true }).length > 0,
+    }));
+  await expect(page.getByRole("listitem").filter({ hasText: "Chief of Staff" }).getByText("Working")).toBeAttached();
+
+  await expect.poll(async () => (await pose("Chief of Staff")).transform).not.toBe("none");
+  expect(await pose("Chief of Staff")).toMatchObject({ moving: false });
+  expect(await pose("Night Owl")).toEqual({ transform: "none", moving: false });
+});
