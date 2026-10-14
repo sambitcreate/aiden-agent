@@ -25,7 +25,9 @@ function newest(lastViewed: Record<string, number>): Record<string, number> {
   return Object.fromEntries(entries.sort((left, right) => right[1] - left[1]).slice(0, BOT_LAST_VIEWED_LIMIT));
 }
 
-export function parseBotSidebarPreferences(raw: string | null, now: number): BotSidebarPreferences {
+// A view or start time in the future (clock skew, a hand-edited record) would
+// hide every later reply as already seen, so times are clamped to `now`.
+export function parseBotSidebarPreferences(raw: string | null, now: number = Date.now()): BotSidebarPreferences {
   if (raw === null) return fresh(now);
   let value: unknown;
   try {
@@ -39,11 +41,11 @@ export function parseBotSidebarPreferences(raw: string | null, now: number): Bot
   const lastViewed: Record<string, number> = {};
   if (record.lastViewed && typeof record.lastViewed === "object" && !Array.isArray(record.lastViewed)) {
     for (const [botId, at] of Object.entries(record.lastViewed as Record<string, unknown>)) {
-      if (botId && validTime(at)) lastViewed[botId] = at;
+      if (botId && validTime(at)) lastViewed[botId] = Math.min(at, now);
     }
   }
   return {
-    since: validTime(record.since) ? record.since : now,
+    since: validTime(record.since) ? Math.min(record.since, now) : now,
     pinnedBotId: typeof record.pinnedBotId === "string" && record.pinnedBotId ? record.pinnedBotId : null,
     lastViewed: newest(lastViewed),
   };
@@ -67,10 +69,13 @@ export function withBotViewed(preferences: BotSidebarPreferences, botId: string,
   return { ...preferences, lastViewed: newest({ ...preferences.lastViewed, [botId]: at }) };
 }
 
+// An empty live set means the Bots list is loading, failed or stale, not that
+// every Bot was deleted, so it never prunes.
 export function withoutMissingBots(
   preferences: BotSidebarPreferences,
   liveIds: ReadonlySet<string>,
 ): BotSidebarPreferences {
+  if (liveIds.size === 0) return preferences;
   const pinGone = preferences.pinnedBotId !== null && !liveIds.has(preferences.pinnedBotId);
   const kept = Object.entries(preferences.lastViewed).filter(([botId]) => liveIds.has(botId));
   if (!pinGone && kept.length === Object.keys(preferences.lastViewed).length) return preferences;

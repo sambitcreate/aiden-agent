@@ -862,6 +862,7 @@
         "renderer/main/bots/bot-status-line.test.tsx",
         "renderer/main/bots/bot-activity-recap.test.tsx",
         "renderer/main/bots/bot-chat-activity-page.test.tsx",
+        "renderer/main/bots/use-bot-sidebar-preferences.test.tsx",
         "renderer/main/bots/bot-routines.test.tsx",
         "renderer/main/bots/bot-memory-page.test.tsx",
         "renderer/lib/bot-routes.test.ts",

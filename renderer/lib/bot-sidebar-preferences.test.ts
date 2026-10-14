@@ -61,3 +61,24 @@ test("the last viewed Bot is the newest view among Bots that still exist", () =>
   assert.equal(lastViewedBotId(preferences, new Set(["b1", "b2"])), "b2");
   assert.equal(lastViewedBotId(preferences, new Set(["b3"])), null);
 });
+
+test("an empty live set never prunes, since it means the list is not loaded", () => {
+  const preferences = { since: 1, pinnedBotId: "b1", lastViewed: { b1: 50 } };
+  assert.equal(withoutMissingBots(preferences, new Set()), preferences);
+});
+
+test("a valid start time survives a lastViewed that is an array or a string", () => {
+  for (const lastViewed of [[1, 2], "oops", 7, null]) {
+    const parsed = parseBotSidebarPreferences(JSON.stringify({ version: 1, since: 900, pinnedBotId: "b1", lastViewed }), NOW);
+    assert.deepEqual(parsed, { since: 900, pinnedBotId: "b1", lastViewed: {} });
+  }
+});
+
+test("times in the future are clamped so they cannot hide later replies", () => {
+  const parsed = parseBotSidebarPreferences(
+    JSON.stringify({ version: 1, since: NOW + 9_000, pinnedBotId: null, lastViewed: { b1: NOW + 5_000, b2: NOW - 5 } }),
+    NOW,
+  );
+  assert.deepEqual(parsed, { since: NOW, pinnedBotId: null, lastViewed: { b1: NOW, b2: NOW - 5 } });
+  assert.equal(isBotUnread(parsed, "b1", NOW + 1), true);
+});

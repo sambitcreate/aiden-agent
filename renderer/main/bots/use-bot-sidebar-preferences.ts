@@ -30,16 +30,27 @@ function snapshot(): BotSidebarPreferences {
   return cache.value;
 }
 
-function update(change: (current: BotSidebarPreferences) => BotSidebarPreferences): void {
-  const current = snapshot();
-  const next = change(current);
-  // An unchanged record is still written once, so `since` sticks across launches.
-  if (next === current && cache?.raw !== null) return;
+function persist(preferences: BotSidebarPreferences): void {
   try {
-    localStorage.setItem(BOT_SIDEBAR_PREFERENCES_KEY, serializeBotSidebarPreferences(next));
+    localStorage.setItem(BOT_SIDEBAR_PREFERENCES_KEY, serializeBotSidebarPreferences(preferences));
   } catch {
     // Per-device convenience only.
   }
+}
+
+// Writes the record once when none is stored, so `since` sticks across launches.
+function persistIfMissing(): void {
+  const current = snapshot();
+  if (readRaw() !== null) return;
+  persist(current);
+  cache = { raw: readRaw(), value: current };
+}
+
+function update(change: (current: BotSidebarPreferences) => BotSidebarPreferences): void {
+  const current = snapshot();
+  const next = change(current);
+  if (next === current) return;
+  persist(next);
   cache = { raw: readRaw(), value: next };
   for (const listener of listeners) listener();
 }
@@ -60,10 +71,16 @@ const ACTIONS = {
   pin: (botId: string) => update((current) => withPinnedBot(current, botId)),
   unpin: () => update((current) => withPinnedBot(current, null)),
   markViewed: (botId: string) => update((current) => withBotViewed(current, botId, Date.now())),
+  /**
+   * Drops the pin and views of deleted Bots. Call it only after a settled,
+   * successful Bots load: an empty set is ignored, but a partial or stale list
+   * would still unpin a Bot that exists.
+   */
   prune: (liveIds: ReadonlySet<string>) => update((current) => withoutMissingBots(current, liveIds)),
 } as const;
 
 export function useBotSidebarPreferences() {
   const preferences = React.useSyncExternalStore(subscribe, snapshot, snapshot);
+  React.useEffect(persistIfMissing, []);
   return { preferences, ...ACTIONS };
 }
