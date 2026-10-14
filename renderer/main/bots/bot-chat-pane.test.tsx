@@ -59,13 +59,13 @@ async function mountChat(handlers: Record<string, (...args: unknown[]) => unknow
   return calls;
 }
 
-test("a reply still being written is folded under Working and opens to its text", async () => {
+test("a reply still being written shows as its own bubble", async () => {
   await mountChat({
-    "bots:live:subscribe": () => snapshot({ partial: "Checking your calendar now", state: { kind: "running", submissionId: "s1" } }),
+    "bots:live:subscribe": () =>
+      snapshot({ partial: "Checking your calendar now", state: { kind: "running", submissionId: "s1" } }),
   });
-  const working = await screen.findByRole("button", { name: /Working/u });
-  fireEvent.click(working);
   assert.ok(await screen.findByText("Checking your calendar now"));
+  assert.equal(screen.queryByRole("button", { name: /Working|Updates/u }), null);
 });
 
 test("a Bot's A–E question shows its card, and submitting a chosen option answers it by wait id", async () => {
@@ -303,22 +303,27 @@ test("a connect card answered with Not now reads Not connected and stays put", a
   assert.equal(within(card).queryByRole("button", { name: "Connect Gmail" }), null);
 });
 
-test("text before a tool call folds under Updates, and only the final answer is a bubble", async () => {
+test("the Bot's own progress message is a bubble at every level, and Quiet shows no tool rows", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
         entries: [
           userEntry("u1", "Am I free Friday?"),
-          { id: "a1", type: "assistant", text: "Let me check your calendar.", toolCalls: [{ id: "t1", name: "calendar", kind: "working", label: "Used a tool" }], stopReason: "toolUse" },
+          {
+            id: "a1",
+            type: "assistant",
+            text: "Let me check your calendar.",
+            toolCalls: [{ id: "t1", name: "calendar", kind: "working", label: "Used a tool" }],
+            stopReason: "toolUse",
+          },
           { id: "r1", type: "tool_result", toolCallId: "t1", toolName: "calendar", isError: false, status: "ok" },
           assistantEntry("a2", "You are free all day Friday."),
         ],
       }),
   });
-  assert.ok(await screen.findByText("You are free all day Friday."));
-  assert.equal(screen.queryByText("Let me check your calendar."), null);
-  fireEvent.click(screen.getByRole("button", { name: "Updates" }));
   assert.ok(await screen.findByText("Let me check your calendar."));
+  assert.ok(screen.getByText("You are free all day Friday."));
+  assert.equal(screen.queryByText(/Used a tool/u), null);
 });
 
 test("a tool call that needs approval asks in the chat and answers by wait id", async () => {
@@ -509,7 +514,6 @@ test("a renderer reload mid-reply shows the partial reply from the fresh snapsho
     type: "partial",
     text: "Once upon a time there was a fox.",
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Working/u }));
   assert.ok(await screen.findByText("Once upon a time there was a fox."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
@@ -563,7 +567,7 @@ test("a file the Bot wrote shows as a chip that opens that file", async () => {
   assert.equal((await screen.findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
 });
 
-test("all tool rounds before an answer fold into one Updates line", async () => {
+test("each round's narration is its own bubble before the answer", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
       snapshot({
@@ -575,10 +579,9 @@ test("all tool rounds before an answer fold into one Updates line", async () => 
         ],
       }),
   });
-  assert.ok(await screen.findByText("TAP on Friday is cheapest."));
-  assert.equal(screen.getAllByRole("button", { name: "Updates" }).length, 1);
-  fireEvent.click(screen.getByRole("button", { name: "Updates" }));
-  assert.ok(await screen.findByText(/Searching airlines\.\s+Comparing prices\./u));
+  assert.ok(await screen.findByText("Searching airlines."));
+  assert.ok(screen.getByText("Comparing prices."));
+  assert.ok(screen.getByText("TAP on Friday is cheapest."));
 });
 
 test("a Summary Bot shows one recap above its answer that opens to the steps", async () => {
@@ -778,7 +781,7 @@ function proposalEntry(status: "pending" | "accepted" | "dismissed", routineId?:
   return { id: "p1", type: "routine_proposal", proposal: CHECK_IN_PROPOSAL, status, ...(routineId ? { routineId } : {}) };
 }
 
-test("Memory updated is a quiet caption, outside Updates, that opens this Bot's Memory page", async () => {
+test("Memory updated is a quiet caption, that opens this Bot's Memory page", async () => {
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -796,7 +799,6 @@ test("Memory updated is a quiet caption, outside Updates, that opens this Bot's 
   await screen.findByText("Noted.");
   const captions = screen.getAllByRole("button", { name: "Memory updated. Open Memory" });
   assert.equal(captions.length, 1, "back-to-back saves read as one line");
-  assert.equal(screen.queryByRole("button", { name: /Updates/u }) === null, true, "never folded into Updates");
   fireEvent.click(captions[0]!);
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
   assert.equal((router.state.location.search as { page?: string }).page, "memory");

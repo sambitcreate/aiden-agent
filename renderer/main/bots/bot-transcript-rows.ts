@@ -1,19 +1,19 @@
 // What a Bot chat shows, row by row, from the durable projection.
 //
 // A reply's turn starts at the person's message (or a routine, or their answer
-// to a question) and ends at the next one. Narration written before tool calls,
-// and the in-flight partial while the reply runs, fold into ONE "Updates" line
-// per reply. With Summary or Detailed chat activity, a turn that used tools
-// also gets one recap of its steps just above its answer; Detailed shows it,
-// live, while the turn runs. A reply the person stopped ends with a "stopped"
-// line that is derived here and never stored.
+// to a question) and ends at the next one. Everything the Bot writes is a
+// bubble, including the narration it writes alongside tool calls (spec
+// decision 9); tool steps themselves never become rows. With Summary or
+// Detailed chat activity, a turn that used tools also gets one recap of its
+// steps just above its answer; Detailed shows it, live, while the turn runs.
+// A reply the person stopped ends with a "stopped" line that is derived here
+// and never stored.
 
 import { botRetryableFailedTurn, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import type { BotRecapStep } from "./bot-activity-steps";
-import { resolveBotReplyProjection } from "./bot-reply-projection";
 
 export interface BotTranscriptRowOptions {
   running: boolean;
@@ -24,8 +24,6 @@ export type BotTranscriptRow =
   | { kind: "user"; id: string; text: string }
   | { kind: "routine"; id: string; label: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
-  /** The one collapsed progress line of a reply; `active` while it runs. */
-  | { kind: "updates"; id: string; progressText: string; active: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
   /** "You stopped this reply." */
@@ -36,7 +34,7 @@ export type BotTranscriptRow =
   | { kind: "connect"; id: string; card: ConnectCardEntry }
   /** `retryText` is set only on the newest failed turn, when Retry applies. */
   | { kind: "failed"; id: string; retryText: string | null; errorMessage?: string }
-  /** A quiet "Memory updated" caption; never folded into Updates. */
+  /** A quiet "Memory updated" caption. */
   | { kind: "memory_update"; id: string }
   | {
       kind: "routine_proposal";
@@ -45,8 +43,6 @@ export type BotTranscriptRow =
       status: BotRoutineProposalStatus;
       routineId?: string;
     };
-
-type UpdatesRow = Extract<BotTranscriptRow, { kind: "updates" }>;
 
 interface Turn {
   id: string;
@@ -62,10 +58,6 @@ interface Turn {
   interrupted: boolean;
 }
 
-function joinProgress(parts: readonly string[]): string {
-  return parts.map((part) => part.trim()).filter(Boolean).join("\n\n");
-}
-
 export function botTranscriptRows(
   entries: readonly BotTranscriptEntry[],
   partial: string | null,
@@ -73,24 +65,10 @@ export function botTranscriptRows(
 ): BotTranscriptRow[] {
   const rows: BotTranscriptRow[] = [];
   const retryable = running ? null : botRetryableFailedTurn(entries);
-  // The current turn, and its reply's Updates row with the narration folded into it so far.
-  const state: { turn: Turn | null; updates: { row: UpdatesRow; parts: string[] } | null } = {
-    turn: null,
-    updates: null,
-  };
-
-  const fold = (id: string, text: string) => {
-    if (!state.updates) {
-      const row: UpdatesRow = { kind: "updates", id: `${id}:updates`, progressText: "", active: false };
-      rows.push(row);
-      state.updates = { row, parts: [] };
-    }
-    state.updates.parts.push(text);
-    state.updates.row.progressText = joinProgress(state.updates.parts);
-  };
+  // The current turn, once a message has started one.
+  const state: { turn: Turn | null } = { turn: null };
 
   const endTurn = (live: boolean) => {
-    state.updates = null;
     const turn = state.turn;
     state.turn = null;
     if (!turn) return;
@@ -161,9 +139,8 @@ export function botTranscriptRows(
           turn.byCall.set(call.id, recapStep);
         }
         if (entry.stopReason === "aborted") turn.stopped = true;
-        if (entry.toolCalls.length > 0) fold(entry.id, entry.text);
-        else if (entry.text.trim()) {
-          turn.answerRow = rows.length;
+        if (entry.text.trim()) {
+          if (entry.toolCalls.length === 0) turn.answerRow = rows.length;
           rows.push({ kind: "assistant", id: entry.id, text: entry.text });
         }
         break;
@@ -216,22 +193,9 @@ export function botTranscriptRows(
     }
   }
 
-  if (running) {
-    // Everything streamed so far is progress until the reply commits.
-    const { progressText } = partial === null ? { progressText: "" } : resolveBotReplyProjection(partial, null, true);
-    // The reply's existing Updates line carries it, even with chips below it.
-    const current = state.updates;
-    if (current) {
-      current.row.active = true;
-      if (progressText) current.row.progressText = joinProgress([...current.parts, progressText]);
-    } else {
-      rows.push({ kind: "updates", id: "working", progressText, active: true });
-    }
-    endTurn(true);
-  } else {
-    endTurn(false);
-    // A paused reply keeps what it wrote, as a bubble.
-    if (partial !== null && partial.trim()) rows.push({ kind: "assistant", id: "partial", text: partial });
+  endTurn(running);
+  if (partial !== null && partial.trim()) {
+    rows.push({ kind: "assistant", id: "partial", text: partial, ...(running ? { streaming: true } : {}) });
   }
   return rows;
 }

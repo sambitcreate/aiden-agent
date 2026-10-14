@@ -38,7 +38,6 @@ import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
-import { BotUpdates } from "./bot-updates";
 import { useConnectionSetup } from "./use-connection-setup";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
@@ -291,7 +290,7 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   );
 }
 
-/** Chat transcript rows: bubbles, one Updates line per reply, chips, cards. */
+/** Chat transcript rows: bubbles, recaps, chips, cards. */
 function TranscriptEntries({
   name,
   entries,
@@ -349,11 +348,9 @@ function TranscriptEntries({
           case "assistant":
             return (
               <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
-                <SafeMessageBubble role="assistant" content={row.text} showCopy={false} />
+                <SafeMessageBubble role="assistant" content={row.text} showCopy={false} streaming={row.streaming} />
               </BotMessageActions>
             );
-          case "updates":
-            return <BotUpdates key={row.id} progressText={row.progressText} timeline={null} active={row.active} />;
           case "recap":
             return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} />;
           case "stopped":

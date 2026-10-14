@@ -21,20 +21,29 @@ const kinds = (rows: ReturnType<typeof botTranscriptRows>) => rows.map((row) => 
 
 const quiet = { running: false, level: "quiet" } as const;
 
-test("every tool round of one reply folds into a single Updates line before the answer", () => {
+test("narration written alongside tool calls is a bubble, and tool steps never become rows", () => {
   const rows = botTranscriptRows(
     [
       user("u1", "Find flights"),
-      step("a1", "Searching airlines."),
+      step("a1", "On it, I'll check the airlines."),
       result("a1"),
-      step("a2", "Comparing prices."),
+      step("a2", ""),
       result("a2"),
       answer("a3", "The cheapest is TAP on Friday."),
     ],
     null,
     quiet,
   );
-  assert.deepEqual(kinds(rows), ["user", "updates", "assistant"]);
+  assert.deepEqual(
+    rows.map((row) => (row.kind === "assistant" ? `assistant:${row.text}` : row.kind)),
+    ["user", "assistant:On it, I'll check the airlines.", "assistant:The cheapest is TAP on Friday."],
+  );
+});
+
+test("a running reply streams as a bubble, and nothing is shown before it has words", () => {
+  const rows = botTranscriptRows([user("u1", "Plan dinner")], "Looking at recipes", { running: true, level: "quiet" });
+  assert.deepEqual(rows[rows.length - 1], { kind: "assistant", id: "partial", text: "Looking at recipes", streaming: true });
+  assert.deepEqual(kinds(botTranscriptRows([user("u1", "Hi")], null, { running: true, level: "quiet" })), ["user"]);
 });
 
 test("Quiet never adds a recap; Summary puts one recap of the turn right above its answer", () => {
@@ -47,8 +56,7 @@ test("Quiet never adds a recap; Summary puts one recap of the turn right above i
   ];
   assert.equal(kinds(botTranscriptRows(entries, null, quiet)).includes("recap"), false);
   const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
-  // The Updates line is still here until Task 7 removes it.
-  assert.deepEqual(kinds(rows), ["user", "updates", "file", "recap", "assistant"]);
+  assert.deepEqual(kinds(rows), ["user", "file", "recap", "assistant"]);
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
   assert.equal(recap.live, false);
