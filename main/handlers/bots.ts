@@ -49,6 +49,7 @@ import {
   parseBotSessionAction,
   parseBotApprovalDecision,
   parseBotUpdate,
+  parseBotWithdraw,
 } from "./bot-params.js";
 
 async function desktopAvatarAdapter() {
@@ -202,9 +203,20 @@ export function registerBotHandlers(): void {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
-  ipcMain.handle("bots:stop", async (_event, id: unknown) =>
-    (await botSessionRuntime()).stop(parseBotId(id)),
-  );
+  ipcMain.handle("bots:withdraw", async (_event, input: unknown) => {
+    const { botId, submissionId } = parseBotWithdraw(input);
+    return (await botSessionRuntime()).withdraw(botId, submissionId);
+  });
+  ipcMain.handle("bots:stop", async (_event, id: unknown) => {
+    const botId = parseBotId(id);
+    botLiveProjection().notifyStopping(botId);
+    try {
+      return await (await botSessionRuntime()).stop(botId);
+    } catch (error) {
+      botLiveProjection().cancelStopping(botId);
+      throw error;
+    }
+  });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, access } = parseBotCreateFromPreset(input);
     const { bot, created } = await botStarter().startFromPreset(presetId, access === undefined ? {} : { access });

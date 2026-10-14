@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link2, RotateCcw, Unlink } from "lucide-react";
+import { ChevronRight, Link2, RotateCcw, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -53,6 +53,7 @@ import {
   recommendedBotModelChoice,
   sameBotModelChoice,
 } from "./bot-model-choice";
+import { botChatActivitySummary } from "./bot-chat-activity-page";
 import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
@@ -430,7 +431,15 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
  * Back with unsaved edits asks before discarding them. Telegram is a
  * connection with its own Connect and Disconnect actions.
  */
-export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): void }) {
+export function BotAdvanced({
+  bot,
+  onClose,
+  onOpenChatActivity,
+}: {
+  bot: BotDefinition;
+  onClose(): void;
+  onOpenChatActivity(): void;
+}) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const catalogQuery = useBotCapabilityCatalog(true, bot.id);
@@ -449,10 +458,12 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
 
   const accessChanged = draft !== null && !sameDraft(draft, baseline);
   const dirty = accessChanged;
-  const guard = useDiscardChangesGuard({
+  const discardDescription = `Your changes to ${bot.name}’s Advanced settings won’t be saved.`;
+  const guard = useDiscardChangesGuard({ dirty, onLeave: onClose, description: discardDescription });
+  const chatActivityGuard = useDiscardChangesGuard({
     dirty,
-    onLeave: onClose,
-    description: `Your changes to ${bot.name}’s Advanced settings won’t be saved.`,
+    onLeave: onOpenChatActivity,
+    description: discardDescription,
   });
 
   const saveAccess = async (current: BotAccessDraft, start: BotAccessDraft) => {
@@ -553,8 +564,26 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
           <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
         </>
       )}
+      <FieldSet title="Chat">
+        <button
+          type="button"
+          aria-label="Chat activity"
+          className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+          onClick={() => {
+            if (!saving) chatActivityGuard.requestLeave();
+          }}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-strong text-primary">Chat activity</span>
+            <span className="mt-0.5 block text-small text-secondary">What you see while {bot.name} works.</span>
+          </span>
+          <span className="shrink-0 text-small text-secondary">{botChatActivitySummary(bot.chatActivity)}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+        </button>
+      </FieldSet>
       <TelegramSection bot={bot} />
       {guard.dialog}
+      {chatActivityGuard.dialog}
     </BotPageShell>
   );
 }

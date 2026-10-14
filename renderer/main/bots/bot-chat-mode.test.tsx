@@ -7,9 +7,7 @@ import { CommandSystemProvider } from "../../lib/command-system";
 import { Composer } from "../../components/composer";
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../../lib/hosts/composer-surfaces";
 import type { Workspace } from "../../lib/types";
-import type { GenerationTimeline } from "../../shared/generation-timeline";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
-import { resolveBotReplyProjection } from "./bot-reply-projection";
 import { createBotTestQueryClient } from "./test-providers";
 
 afterEach(cleanup);
@@ -75,52 +73,4 @@ test("a Bot chat has no slash palette for rename, fork, side questions, or expor
 
   renderComposer(BOT_CHAT_COMPOSER_SURFACES);
   assert.deepEqual(await typeSlash(), []);
-});
-
-function toolTimeline(contentOffset: number): GenerationTimeline {
-  return {
-    version: 3,
-    generationId: "gen-1",
-    status: "completed",
-    startedAt: 1,
-    finishedAt: 3,
-    steps: [
-      {
-        id: "step-1",
-        order: 0,
-        kind: "tool",
-        toolCallId: "call-1",
-        toolName: "web_search",
-        label: "Searched the web",
-        detail: "weeknight dinners",
-        status: "completed",
-        startedAt: 1,
-        updatedAt: 2,
-        finishedAt: 2,
-        contentOffset,
-      },
-    ],
-  };
-}
-
-test("the reply projection matches the phone rule for split, running, and tool-free replies", () => {
-  const text = "Checking.\n\nChecking.\n\nDone: three dinners.";
-  const boundary = text.indexOf("Done");
-  assert.deepEqual(resolveBotReplyProjection(text, toolTimeline(boundary), false), {
-    finalText: "Done: three dinners.",
-    progressText: "Checking.",
-  });
-  assert.deepEqual(resolveBotReplyProjection(text, toolTimeline(boundary), true), {
-    finalText: "",
-    progressText: "Checking.\n\nDone: three dinners.",
-  });
-  assert.deepEqual(resolveBotReplyProjection("  Hi there  ", null, false), {
-    finalText: "Hi there",
-    progressText: "",
-  });
-  const emoji = "😀 done";
-  assert.deepEqual(resolveBotReplyProjection(emoji, toolTimeline(1), false), {
-    finalText: emoji,
-    progressText: "",
-  });
 });

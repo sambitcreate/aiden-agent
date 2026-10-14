@@ -147,3 +147,13 @@ test("row times read as a clock time today, a day name this week, then a date", 
     ),
   );
 });
+
+test("a working Bot's face is marked working; an idle one is not", () => {
+  renderList([
+    { bot: bot("b1", "Runner"), state: { kind: "running", submissionId: "s1" } },
+    { bot: bot("b2", "Sleeper"), state: { kind: "idle" } },
+  ]);
+  assert.equal(screen.getByTitle("Runner").hasAttribute("data-working"), true);
+  assert.equal(screen.getByTitle("Sleeper").hasAttribute("data-working"), false);
+  assert.ok(within(screen.getByRole("button", { name: /^Runner/u })).getByText("Working"));
+});

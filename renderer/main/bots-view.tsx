@@ -7,6 +7,7 @@ import { botsApi } from "../lib/ipc";
 import { useBot, useBots } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
+import { BotChatActivityPage } from "./bots/bot-chat-activity-page";
 import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
@@ -131,7 +132,14 @@ function BotPage({ botId }: { botId: string }) {
       {page === "instructions" ? (
         <BotInstructionsEditor key={`${current.id}:instructions`} bot={current} onClose={back} />
       ) : page === "advanced" ? (
-        <BotAdvanced key={`${current.id}:advanced`} bot={current} onClose={back} />
+        <BotAdvanced
+          key={`${current.id}:advanced`}
+          bot={current}
+          onClose={back}
+          onOpenChatActivity={() => openPage("chat-activity")}
+        />
+      ) : page === "chat-activity" ? (
+        <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "memory" ? (
         <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
       ) : (

@@ -326,12 +326,21 @@ botQuestions.onChange((botId) => {
   );
 });
 
+// An approval appearing or settling changes the line to and from "Waiting for you".
+botApprovals.onChange((botId) => {
+  void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} activity view report.`, error),
+  );
+});
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
     conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     state: async (botId) => (await botSessionRuntime()).state(botId),
+    quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
+    approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,
     onRunSettled: broadcastState,
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
@@ -374,6 +383,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       unbindTelegram,
       eraseBotData,
     ],
+    onResumed: (botId) => botLiveProjection().notifyResuming(botId),
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);

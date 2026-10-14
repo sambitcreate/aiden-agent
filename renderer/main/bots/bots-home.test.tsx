@@ -74,6 +74,9 @@ test("Start chat on a starter Bot sends one create request and opens its chat", 
       entries: [],
       partial: null,
       state: { kind: "idle" },
+      question: null,
+      activity: null,
+      queued: [],
     }),
   });
   const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });

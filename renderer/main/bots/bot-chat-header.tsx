@@ -24,9 +24,12 @@ export function BotChatBackButton({ onBack }: { onBack(): void }) {
 export function BotChatNamePill({
   bot,
   onOpenProfile,
+  working = false,
 }: {
   bot: Pick<BotDefinition, "id" | "name" | "avatar">;
   onOpenProfile(): void;
+  /** The Bot is in a running turn: its face glances. */
+  working?: boolean;
 }) {
   return (
     <Button
@@ -38,7 +41,7 @@ export function BotChatNamePill({
       aria-label={`${bot.name} profile`}
       onClick={onOpenProfile}
     >
-      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" />
+      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" working={working} />
       <span className="truncate text-strong font-medium">{bot.name}</span>
     </Button>
   );
