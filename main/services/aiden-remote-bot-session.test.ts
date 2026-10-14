@@ -2041,6 +2041,8 @@ test("tags stay on every bubble in view, past the window, and no old bubble is e
     assert.equal(bubbles.length, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
     assert.deepEqual(bubbles.map(([, id]) => id), bubbles.map(([text]) => `sub_${String(text).slice("Message ".length)}`));
     assert.equal(legacy.raw.some((data) => data.includes("submissionId")), false);
+    // The memo forgot the bubbles that left view: it holds no more tags than the window shows.
+    assert.equal(await service.submissionTagsHeld(BOT_ID), AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
   } finally {
     await holder.close();
     await legacy.close();
@@ -2061,7 +2063,7 @@ test("a failed placement lookup is reported, and that bubble falls back to its t
         ...fake.runtime,
         async placedSubmissions() {
           if (failing) throw new Error("The session could not be inspected.");
-          return new Map([["2", "sub_2"]]);
+          return new Map([["3", "sub_3"]]);
         },
       },
     },
@@ -2070,13 +2072,21 @@ test("a failed placement lookup is reported, and that bubble falls back to its t
   try {
     await service.session(BOT_ID, { activity: true });
     await driven.emit([user(1, "Plan dinners")]);
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks")]);
+    assert.equal(reports.length, 1, "a failing streak is reported once");
     failing = false;
-    await driven.emit([user(1, "Plan dinners"), user(2, "And lunches")]);
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks"), user(3, "And lunches")]);
     assert.deepEqual(userBubbles((await service.session(BOT_ID, { activity: true })).entries), [
       ["Plan dinners", null],
-      ["And lunches", "sub_2"],
+      ["And snacks", null],
+      ["And lunches", "sub_3"],
     ]);
-    assert.deepEqual(reports.map((error) => (error as Error).message), ["The session could not be inspected."]);
+    failing = true;
+    await driven.emit([user(1, "Plan dinners"), user(2, "And snacks"), user(3, "And lunches"), user(4, "And breakfasts")]);
+    assert.deepEqual(reports.map((error) => (error as Error).message), [
+      "The session could not be inspected.",
+      "The session could not be inspected.",
+    ], "a new streak after a success is reported again");
   } finally {
     await service.close();
   }

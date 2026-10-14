@@ -184,8 +184,8 @@ export interface AidenRemoteBotSessionServiceOptions {
   turnIntents?: Pick<BotTurnIntents, "announce" | "onIntent">;
   /**
    * A queued input could not be classified (it stays off phones and is
-   * retried; reported once per failing streak), or the submission a new
-   * message was placed as could not be read (that bubble goes without its id).
+   * retried), or the submission a new message was placed as could not be read
+   * (that bubble goes without its id). Each is reported once per failing streak.
    */
   onReport?(botId: string, error: unknown): void;
   /** Pause before a failed classification is retried; defaults to one second. */
@@ -554,6 +554,8 @@ class BotLiveProjector {
   private readonly submissionOf = new Map<string, string>();
   /** The newest `pi.user` entry already looked up, so each message is asked about once. */
   private placedThrough = -1;
+  /** The last placement lookup failed: a failing streak is reported once. */
+  private placedFailing = false;
   closed = false;
 
   constructor(
@@ -820,15 +822,22 @@ class BotLiveProjector {
     let placed: ReadonlyMap<string, string>;
     try {
       placed = await this.activityDeps.placed();
+      this.placedFailing = false;
     } catch (error) {
       // The field is optional: without it the phone matches this bubble by its text.
-      this.activityDeps.report(error);
+      if (!this.placedFailing) this.activityDeps.report(error);
+      this.placedFailing = true;
       return this.submissionOf;
     }
     for (const [entryId, submissionId] of placed) {
       if (WIRE_SUBMISSION_ID.test(submissionId)) this.submissionOf.set(entryId, submissionId);
     }
     return this.submissionOf;
+  }
+
+  /** How many bubble tags this projector holds (the memo's size, for tests of its bound). */
+  get submissionTagCount(): number {
+    return this.submissionOf.size;
   }
 
   /** Forget the ids of bubbles that left the session window: no snapshot can show them again. */
@@ -1436,6 +1445,15 @@ export class AidenRemoteBotSessionService {
       if (this.projectors.get(botId) === created) this.projectors.delete(botId);
     });
     return created;
+  }
+
+  /**
+   * Test seam: how many bubble tags the Bot's open projector remembers, or 0
+   * with none open. The memo is bounded by the session window.
+   */
+  async submissionTagsHeld(botId: string): Promise<number> {
+    const projector = await this.projectors.get(botId)?.catch(() => undefined);
+    return projector?.submissionTagCount ?? 0;
   }
 
   /** A projector whose watch already ended is replaced by a fresh epoch. */
