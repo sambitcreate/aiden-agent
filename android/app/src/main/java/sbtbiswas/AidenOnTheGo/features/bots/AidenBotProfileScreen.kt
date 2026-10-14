@@ -488,7 +488,7 @@ fun AidenBotProfileScreen(
                 accept(it)
                 showAdvanced = false
             },
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedGrant = coordinator.cachedBotActivityGrant),
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = remember(client) { coordinator.botChatActivityHost() },
             // The baseline only: unsaved name or subtitle edits stay, and the host has cached the pick.
             onChatActivitySaved = { bot = it }

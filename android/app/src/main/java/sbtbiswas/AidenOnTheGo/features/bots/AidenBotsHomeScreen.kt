@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
+import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -220,6 +221,27 @@ fun AidenBotsHomeScreen(
     onNavigateToBotChat: (String) -> Unit = {},
     botDeleter: AidenBotDeleter? = null,
     onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
+) {
+    // One battery-saver receiver for every glancing face on the page.
+    AidenPowerSaveScope {
+        AidenBotsHomeContent(
+            coordinator, viewModel, onNavigateToChat, onNavigateToBotProfile, onNavigateToCreateBot,
+            modifier, onNavigateToBotChat, botDeleter, onNavigateToBotMemory
+        )
+    }
+}
+
+@Composable
+private fun AidenBotsHomeContent(
+    coordinator: AidenRemoteCoordinator,
+    viewModel: AidenBotsViewModel,
+    onNavigateToChat: (String) -> Unit,
+    onNavigateToBotProfile: (String) -> Unit,
+    onNavigateToCreateBot: () -> Unit,
+    modifier: Modifier,
+    onNavigateToBotChat: (String) -> Unit,
+    botDeleter: AidenBotDeleter?,
+    onNavigateToBotMemory: (String) -> Unit
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -448,7 +470,7 @@ fun AidenBotsHomeScreen(
                 advancedClient = null
                 scope.launch { viewModel.loadBots(force = true) }
             },
-            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedGrant = coordinator.cachedBotActivityGrant),
+            chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = remember(advancedClient) { coordinator.botChatActivityHost() }
         )
     }

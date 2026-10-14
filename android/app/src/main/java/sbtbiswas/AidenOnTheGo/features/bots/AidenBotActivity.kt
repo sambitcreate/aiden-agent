@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -145,8 +147,8 @@ fun aidenBotFaceGlance(timeMs: Long): AidenBotFaceGlance {
  * `bot-activity-v1` and this phone holds `bot:activity` now. A detail cached from another
  * pairing or before an older Mac was restored never decides what the chat shows.
  */
-fun aidenBotChatActivity(server: AidenServer?, detail: AidenBotDetail?, cachedGrant: Boolean = false): AidenBotChatActivity? =
-    if (aidenBotActivitySupported(server, cachedGrant)) detail?.chatActivity else null
+fun aidenBotChatActivity(server: AidenServer?, detail: AidenBotDetail?, cachedSupport: Boolean = false): AidenBotChatActivity? =
+    if (aidenBotActivitySupported(server, cachedSupport)) detail?.chatActivity else null
 
 // --- The chat's presentation (R14, R19): pure, so the JVM suite can hold it ---
 
@@ -155,7 +157,9 @@ enum class AidenBotConnectionHint {
     /** "Connecting…": no snapshot yet, or the feed dropped. */
     CONNECTING,
     /** The first read failed: say so with Try again. The chat stays usable and keeps reconnecting. */
-    UNREACHABLE
+    UNREACHABLE,
+    /** The Mac refused this phone (401/403) on the first read: no "Mac nearby", and no Try again. */
+    NO_ACCESS
 }
 
 /**
@@ -166,7 +170,11 @@ enum class AidenBotConnectionHint {
 fun aidenBotConnectionHint(ui: AidenBotSessionUiState, nowMs: Long): AidenBotConnectionHint? {
     if (ui.botMissing || !ui.isConnecting) return null
     if (aidenBotStatusLine(ui, nowMs)?.display?.phase == AidenBotActivityPhase.RECONNECTING) return null
-    return if (!ui.hasLoaded && ui.loadFailed) AidenBotConnectionHint.UNREACHABLE else AidenBotConnectionHint.CONNECTING
+    return when {
+        !ui.hasLoaded && ui.accessLost -> AidenBotConnectionHint.NO_ACCESS
+        !ui.hasLoaded && ui.loadFailed -> AidenBotConnectionHint.UNREACHABLE
+        else -> AidenBotConnectionHint.CONNECTING
+    }
 }
 
 /** Transcript placeholders while a chat opens with nothing cached. */
@@ -198,6 +206,23 @@ fun aidenBotOutgoingBubble(look: AidenBotOutgoingLook): AidenBotPendingBubble = 
 }
 
 data class AidenBotBubbleColors(val container: Color, val content: Color)
+
+/**
+ * The chat's quiet text on its background: [caption] for "Sending…", "Queued" and the
+ * connection hint, [link] for Try again. Both are scheme tokens that read at 4.5:1 or better in
+ * every theme (the accent alone doesn't in some light themes).
+ */
+data class AidenBotChatTextColors(val caption: Color, val link: Color)
+
+fun aidenBotChatTextColors(scheme: ColorScheme): AidenBotChatTextColors =
+    AidenBotChatTextColors(caption = scheme.onSurfaceVariant, link = scheme.secondary)
+
+/**
+ * Whether new rows should scroll the chat to its end: only when the person is already at (or
+ * within [slack] rows of) the end, or just sent something themselves. Reading back stays put.
+ */
+fun aidenBotFollowsTranscriptEnd(lastVisibleIndex: Int, totalCount: Int, justSent: Boolean, slack: Int = 2): Boolean =
+    justSent || totalCount == 0 || lastVisibleIndex >= totalCount - 1 - slack
 
 /**
  * The person's bubble: the accent fill once it's in the reply, the tonal accent container
@@ -243,11 +268,17 @@ internal fun aidenBotIsResumed(): Boolean {
 /** Holds the last line shown, so the line fades out with its words rather than blank. */
 private class AidenBotLastLine(var line: AidenBotStatusLineState? = null)
 
+/** Tags for UI tests. */
+object AidenBotStatusLineTags {
+    const val LINE = "bot_status_line"
+}
+
 /**
  * The status line while a Bot works (spec §12): a native activity mark and the shared word,
  * plus the elapsed time after 20 seconds. No steps and no Stop (Stop stays in the top bar).
- * Its accessible name is the word alone, announced at most once every 2 seconds; the
- * announcer starts over each time the line hides.
+ * Its accessible name is the word alone and the elapsed time is its state (as iOS's
+ * accessibility value, FR-m8). The word is announced at most once every 2 seconds, and the
+ * elapsed time never is; the announcer starts over each time the line hides.
  */
 @Composable
 fun AidenBotStatusLine(ui: AidenBotSessionUiState) {
@@ -269,6 +300,12 @@ fun AidenBotStatusLine(ui: AidenBotSessionUiState) {
     if (line != null) last.line = line
     val word = line?.display?.word()
     var announced by remember { mutableStateOf<AidenBotAnnouncement?>(null) }
+    val view = LocalView.current
+    // An explicit announcement, like iOS: the line's own node changes every second with its elapsed state.
+    LaunchedEffect(announced?.text) {
+        @Suppress("DEPRECATION")
+        announced?.text?.let { view.announceForAccessibility(it) }
+    }
     LaunchedEffect(word) {
         if (word == null) {
             announced = null
@@ -288,7 +325,6 @@ fun AidenBotStatusLine(ui: AidenBotSessionUiState) {
     ) {
         val shown = line ?: last.line ?: return@AnimatedVisibility
         val shownWord = shown.display.word()
-        val spoken = announced?.text ?: shownWord
         // The mark grows with the person's text size.
         val markSize = 18.dp * LocalDensity.current.fontScale
         Row(
@@ -297,9 +333,10 @@ fun AidenBotStatusLine(ui: AidenBotSessionUiState) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp, vertical = 2.dp)
+                .testTag(AidenBotStatusLineTags.LINE)
                 .clearAndSetSemantics {
-                    liveRegion = LiveRegionMode.Polite
-                    contentDescription = spoken
+                    contentDescription = shownWord
+                    shown.elapsed?.let { stateDescription = it }
                 }
         ) {
             AidenActivityMark(mark = shown.display.mark, size = markSize, active = resumed, color = palette.secondary)
@@ -339,7 +376,7 @@ private fun AidenBotPendingCaptionText(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelSmall,
-        color = AidenTheme.palette.secondary,
+        color = aidenBotChatTextColors(MaterialTheme.colorScheme).caption,
         modifier = Modifier.padding(top = 2.dp, end = 4.dp)
     )
 }
@@ -383,23 +420,38 @@ fun AidenBotOutgoingBubble(
         return
     }
     val bubble = aidenBotOutgoingBubble(look)
+    val text = aidenBotChatTextColors(MaterialTheme.colorScheme)
     when (bubble.caption) {
-        AidenBotPendingCaption.FAILED -> AidenBotPendingBubbleView(message.text, faded = bubble.faded) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        AidenBotPendingCaption.FAILED -> {
+            val failed = stringResource(R.string.bot_session_send_failed)
+            Column(Modifier.fillMaxWidth()) {
+                // TalkBack reads the message with its state, then offers Try again and remove.
+                AidenBotPendingBubbleView(
+                    message.text,
+                    faded = bubble.faded,
+                    modifier = Modifier.semantics(mergeDescendants = true) { stateDescription = failed }
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.align(Alignment.End)) {
                 Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = palette.danger, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text(stringResource(R.string.bot_session_send_failed), style = MaterialTheme.typography.labelMedium, color = palette.secondary)
-                Text(" ·", style = MaterialTheme.typography.labelMedium, color = palette.secondary, modifier = Modifier.clearAndSetSemantics {})
+                Text(failed, style = MaterialTheme.typography.labelMedium, color = text.caption, modifier = Modifier.clearAndSetSemantics {})
+                Text(
+                    stringResource(R.string.bot_session_send_failed_separator),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = text.caption,
+                    modifier = Modifier.padding(start = 4.dp).clearAndSetSemantics {}
+                )
                 TextButton(
                     onClick = onRetry,
                     enabled = canRetry,
                     contentPadding = PaddingValues(horizontal = 8.dp),
                     modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                 ) {
-                    Text(stringResource(R.string.bot_session_try_again), style = MaterialTheme.typography.labelLarge, color = if (canRetry) palette.accent else palette.secondary)
+                    Text(stringResource(R.string.bot_session_try_again), style = MaterialTheme.typography.labelLarge, color = if (canRetry) text.link else text.caption)
                 }
                 IconButton(onClick = onRemove, modifier = Modifier.size(AidenUi.MinimumTouchTarget)) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.bot_session_remove_message), tint = palette.secondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.bot_session_remove_message), tint = text.caption, modifier = Modifier.size(18.dp))
+                }
                 }
             }
         }
@@ -414,10 +466,28 @@ fun AidenBotOutgoingBubble(
     }
 }
 
-/** A quiet line above the composer while the Mac isn't reachable, never a blocking screen (R14). */
+/**
+ * A quiet line above the composer while the Mac isn't reachable, never a blocking screen (R14).
+ * It slides in and out; Try again shows it is trying at once (the hint goes back to "Connecting…").
+ */
 @Composable
-fun AidenBotConnectionHintRow(hint: AidenBotConnectionHint, onTryAgain: () -> Unit) {
-    val palette = AidenTheme.palette
+fun AidenBotConnectionHintRow(hint: AidenBotConnectionHint?, onTryAgain: () -> Unit) {
+    val reduceMotion = aidenReduceMotion()
+    // Holds the last hint so the row fades out with its words rather than blank.
+    var shown by remember { mutableStateOf(hint) }
+    if (hint != null) shown = hint
+    AnimatedVisibility(
+        visible = hint != null,
+        enter = fadeIn(AidenMotion.short(reduceMotion)) + expandVertically(AidenMotion.spatial(reduceMotion)),
+        exit = fadeOut(AidenMotion.short(reduceMotion)) + shrinkVertically(AidenMotion.spatial(reduceMotion))
+    ) {
+        shown?.let { AidenBotConnectionHintContent(it, onTryAgain) }
+    }
+}
+
+@Composable
+private fun AidenBotConnectionHintContent(hint: AidenBotConnectionHint, onTryAgain: () -> Unit) {
+    val text = aidenBotChatTextColors(MaterialTheme.colorScheme)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -425,18 +495,25 @@ fun AidenBotConnectionHintRow(hint: AidenBotConnectionHint, onTryAgain: () -> Un
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .heightIn(min = 24.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite }
     ) {
         when (hint) {
             AidenBotConnectionHint.CONNECTING -> Text(
                 stringResource(R.string.bot_session_connecting),
                 style = MaterialTheme.typography.labelMedium,
-                color = palette.secondary
+                color = text.caption
+            )
+            AidenBotConnectionHint.NO_ACCESS -> Text(
+                stringResource(R.string.bot_session_load_no_access),
+                style = MaterialTheme.typography.labelMedium,
+                color = text.caption,
+                textAlign = TextAlign.Center
             )
             AidenBotConnectionHint.UNREACHABLE -> {
                 Text(
                     stringResource(R.string.bot_session_load_failed),
                     style = MaterialTheme.typography.labelMedium,
-                    color = palette.secondary,
+                    color = text.caption,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f, fill = false)
                 )
@@ -445,7 +522,7 @@ fun AidenBotConnectionHintRow(hint: AidenBotConnectionHint, onTryAgain: () -> Un
                     contentPadding = PaddingValues(horizontal = 8.dp),
                     modifier = Modifier.heightIn(min = AidenUi.MinimumTouchTarget)
                 ) {
-                    Text(stringResource(R.string.bot_session_try_again), style = MaterialTheme.typography.labelLarge, color = palette.accent)
+                    Text(stringResource(R.string.bot_session_try_again), style = MaterialTheme.typography.labelLarge, color = text.link)
                 }
             }
         }

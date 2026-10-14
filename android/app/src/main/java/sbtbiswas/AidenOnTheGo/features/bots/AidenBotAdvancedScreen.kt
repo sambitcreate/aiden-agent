@@ -371,6 +371,8 @@ fun AidenBotAdvancedSheet(
 
     val controller = chatActivityController
     if (showsChatActivityRow && showingChatActivity && controller != null && chatActivityHost != null) {
+        // The host lets go of this page's listener when it closes (once a running save has reported).
+        DisposableEffect(controller) { onDispose { chatActivityHost.release(latestBot.id, controller) } }
         AidenBotChatActivityDialog(
             botName = latestBot.name,
             controller = controller,

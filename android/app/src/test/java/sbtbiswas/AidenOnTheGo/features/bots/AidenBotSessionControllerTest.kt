@@ -2202,4 +2202,29 @@ class AidenBotSessionControllerTest {
             "${named("bot_session_send_failed")} ${named("bot_session_send_failed_separator")} ${named("bot_session_try_again")}"
         )
     }
+
+    // Chat polish: a first read the Mac refuses says so, and Try again shows at once that it's trying.
+    @Test
+    fun aRefusedFirstReadSaysAccessAndTryAgainShowsItIsTrying() = runTest {
+        val refused = FakeTransport(runningSession).apply { sessionFailures += serverError(403, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED) }
+        val locked = AidenBotSessionController(runningSession.botId, refused, backgroundScope)
+        assertFalse(locked.refetch())
+        assertEquals(AidenBotConnectionHint.NO_ACCESS, aidenBotConnectionHint(locked.state.value, started))
+
+        val hanging = HangingTransport(FakeTransport(runningSession))
+        hanging.hung = true
+        val controller = AidenBotSessionController(runningSession.botId, hanging, backgroundScope)
+        val first = async { controller.refetch() }
+        advanceTimeBy(AidenBotSessionController.REQUEST_LIMIT_MILLIS + 1)
+        runCurrent()
+        assertFalse(first.await())
+        assertEquals(AidenBotConnectionHint.UNREACHABLE, aidenBotConnectionHint(controller.state.value, started))
+        assertEquals(AidenBotSkeletonLook.STILL, aidenBotSkeletonLook(controller.state.value))
+        val again = async { controller.refetch() }
+        runCurrent()
+        assertEquals("trying again", AidenBotConnectionHint.CONNECTING, aidenBotConnectionHint(controller.state.value, started))
+        assertEquals(AidenBotSkeletonLook.SHIMMERING, aidenBotSkeletonLook(controller.state.value))
+        hanging.hung = false
+        again.cancel()
+    }
 }

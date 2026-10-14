@@ -66,19 +66,19 @@ fun aidenBotChatActivitySummary(value: AidenBotChatActivity?): String {
 
 /**
  * Whether the Mac offers Bot activity (`bot-activity-v1`) and this phone holds `bot:activity`.
- * Before `/server` has answered (a cold start, or offline), the grant negotiated and persisted
- * for the pairing stands in: it is only ever requested from a Mac that announced the feature.
- * Once `/server` answers it decides.
+ * Before `/server` has answered (a cold start, or offline), what the pairing last saw stands in
+ * (R21): the feature token `/server` announced and the grant it holds, both persisted. Once
+ * `/server` answers it decides.
  */
-fun aidenBotActivitySupported(server: AidenServer?, cachedGrant: Boolean): Boolean =
-    server?.supportsBotActivity ?: cachedGrant
+fun aidenBotActivitySupported(server: AidenServer?, cachedSupport: Boolean): Boolean =
+    server?.supportsBotActivity ?: cachedSupport
 
 /**
  * Advanced offers Chat activity on a Mac that announces `bot-activity-v1` to a phone that
  * holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen.
  */
-fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean, cachedGrant: Boolean = false): Boolean =
-    hasBaseline && aidenBotActivitySupported(server, cachedGrant)
+fun aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Boolean, cachedSupport: Boolean = false): Boolean =
+    hasBaseline && aidenBotActivitySupported(server, cachedSupport)
 
 // --- The previews' script: what each level shows on the Mac ---
 
@@ -242,7 +242,9 @@ class AidenBotChatActivityController(
     private val onSaved: (AidenBotDetail) -> Unit = {},
     private val waitForConnection: (suspend () -> Boolean)? = null,
     private val connectionHoldMillis: Long = CONNECTION_HOLD_MILLIS,
-    private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS
+    private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
+    /** The saves a pick started have all settled (reported or rolled back). */
+    private val onSettled: () -> Unit = {}
 ) {
     private val _state = MutableStateFlow(
         (bot.chatActivity ?: AidenBotChatActivity.DEFAULT).let {
@@ -268,6 +270,7 @@ class AidenBotChatActivityController(
         } finally {
             pending = null
             _state.update { it.copy(isSaving = false, value = it.saved) }
+            onSettled()
         }
     }
 
@@ -357,7 +360,8 @@ fun aidenBotChatActivityController(
     bot: AidenBotDetail,
     client: () -> AidenRemoteClient?,
     onSaved: (AidenBotDetail) -> Unit = {},
-    waitForConnection: (suspend () -> Boolean)? = null
+    waitForConnection: (suspend () -> Boolean)? = null,
+    onSettled: () -> Unit = {}
 ): AidenBotChatActivityController {
     fun connected(): AidenRemoteClient = client() ?: throw AidenRemoteClientException.Disconnected()
     return AidenBotChatActivityController(
@@ -367,6 +371,7 @@ fun aidenBotChatActivityController(
         },
         refresh = { connected().bot(bot.id) },
         onSaved = onSaved,
-        waitForConnection = waitForConnection
+        waitForConnection = waitForConnection,
+        onSettled = onSettled
     )
 }

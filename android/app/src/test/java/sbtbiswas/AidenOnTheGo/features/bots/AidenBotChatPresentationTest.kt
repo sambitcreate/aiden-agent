@@ -9,6 +9,7 @@ import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.config.AidenThemeCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenColorScheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenFrameDue
 
 /** How the Bot chat draws what isn't in the Mac's transcript yet, and how a working Bot's face says so. */
 class AidenBotChatPresentationTest {
@@ -44,6 +45,44 @@ class AidenBotChatPresentationTest {
                 assertTrue("$name: waiting text contrast $ratio is below 4.5:1", ratio >= 4.5f)
             }
         }
+    }
+
+    @Test
+    fun captionsAndTryAgainReadOnTheChatInEveryTheme() {
+        AidenThemeCatalog.palettes.forEach { (preset, palettes) ->
+            palettes.forEachIndexed { index, palette ->
+                val scheme = aidenColorScheme(palette, isDark = index == 1)
+                val text = aidenBotChatTextColors(scheme)
+                val name = "$preset ${if (index == 1) "dark" else "light"}"
+                val caption = AidenPalette.contrastRatio(text.caption, scheme.background)
+                val link = AidenPalette.contrastRatio(text.link, scheme.background)
+                assertTrue("$name: caption contrast $caption is below 4.5:1", caption >= 4.5f)
+                assertTrue("$name: Try again contrast $link is below 4.5:1", link >= 4.5f)
+            }
+        }
+    }
+
+    @Test
+    fun theChatFollowsNewRowsOnlyAtItsEndOrAfterTheirOwnSend() {
+        assertTrue("at the end", aidenBotFollowsTranscriptEnd(lastVisibleIndex = 9, totalCount = 10, justSent = false))
+        assertTrue("a row or two short of it", aidenBotFollowsTranscriptEnd(lastVisibleIndex = 7, totalCount = 10, justSent = false))
+        assertFalse("reading back", aidenBotFollowsTranscriptEnd(lastVisibleIndex = 3, totalCount = 10, justSent = false))
+        assertTrue("their own message always shows", aidenBotFollowsTranscriptEnd(lastVisibleIndex = 3, totalCount = 10, justSent = true))
+    }
+
+    @Test
+    fun framesAreCappedAtAboutThirtyASecond() {
+        // A 120 Hz display offers a frame every ~8 ms: only one in four or so is drawn.
+        var shown = 0L
+        var drawn = 0
+        for (elapsed in generateSequence(0L) { it + 8 }.takeWhile { it <= 1_000 }) {
+            if (aidenFrameDue(shown, elapsed)) {
+                shown = elapsed
+                drawn += 1
+            }
+        }
+        assertTrue("$drawn frames in a second", drawn in 25..31)
+        assertTrue("a restarted clock draws at once", aidenFrameDue(500, 0))
     }
 
     @Test

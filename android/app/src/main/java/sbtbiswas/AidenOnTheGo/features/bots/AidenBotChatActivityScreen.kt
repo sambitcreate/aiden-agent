@@ -74,9 +74,15 @@ class AidenBotChatActivityHost(
     val launch: (suspend () -> Unit) -> Unit,
     val cache: (AidenBotDetail) -> Unit
 ) {
-    private class Live(val controller: AidenBotChatActivityController, var listener: (AidenBotDetail) -> Unit)
+    private class Live(val controller: AidenBotChatActivityController, var listener: (AidenBotDetail) -> Unit) {
+        /** The page that set [listener] is gone. */
+        var released = false
+    }
 
     private val live = mutableMapOf<String, Live>()
+
+    /** How many Bots have a controller (and its page's listener) held here. */
+    internal val heldCount: Int get() = live.size
 
     /**
      * The controller for [bot]. One still saving is reused, so a sheet reopened mid-save never
@@ -85,6 +91,7 @@ class AidenBotChatActivityHost(
     fun controller(bot: AidenBotDetail, onSaved: (AidenBotDetail) -> Unit): AidenBotChatActivityController {
         live[bot.id]?.takeIf { it.controller.state.value.isSaving }?.let {
             it.listener = onSaved
+            it.released = false
             return it.controller
         }
         lateinit var entry: Live
@@ -95,11 +102,28 @@ class AidenBotChatActivityHost(
                 cache(saved)
                 entry.listener(saved)
             },
-            waitForConnection = waitForConnection
+            waitForConnection = waitForConnection,
+            // A page that left mid-save heard its last answer: let go of it now.
+            onSettled = { if (entry.released) forget(bot.id, entry) }
         )
         entry = Live(controller, onSaved)
         live[bot.id] = entry
         return controller
+    }
+
+    /**
+     * The page showing [controller] went away. Its listener goes now, or, while a save is still
+     * running, once that save has reported (so the screens behind still hear it).
+     */
+    fun release(botId: String, controller: AidenBotChatActivityController) {
+        val entry = live[botId]?.takeIf { it.controller === controller } ?: return
+        entry.released = true
+        if (!controller.state.value.isSaving) forget(botId, entry)
+    }
+
+    private fun forget(botId: String, entry: Live) {
+        if (live[botId] === entry) live.remove(botId)
+        entry.listener = {}
     }
 }
 
@@ -113,15 +137,19 @@ suspend fun <C : Any> aidenBotAwaitConnected(connection: Flow<AidenConnectionSta
         .first { (state, current) -> state == AidenConnectionState.NEEDS_PAIRING || (state == AidenConnectionState.CONNECTED && current != null) }
         .first == AidenConnectionState.CONNECTED
 
-/** The host for the pairing that is active now; a pick never reaches another pairing's Mac. */
+/**
+ * The host for the pairing that is active now; a pick never reaches another pairing's Mac. It is
+ * pinned to the pairing itself, not the Mac's id, so an unpair and re-pair of the same Mac is
+ * another pairing.
+ */
 fun AidenRemoteCoordinator.botChatActivityHost(): AidenBotChatActivityHost = pairingMemo("bot-chat-activity-host") {
-    val instance = activeInstanceId
-    fun samePairing() = activeInstanceId == instance
+    val pairing = activePairing
+    fun samePairing() = holdsPairing(pairing)
     AidenBotChatActivityHost(
         client = { if (samePairing()) client.value else null },
         waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client) && samePairing() },
         launch = { block -> launchDetached(block) },
-        cache = { detail -> if (samePairing()) botCache.putBotDetail(detail) }
+        cache = pinnedBotCache()
     )
 }
 

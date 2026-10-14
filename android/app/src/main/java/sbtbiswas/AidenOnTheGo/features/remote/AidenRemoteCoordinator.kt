@@ -68,6 +68,16 @@ internal fun aidenProgressCapabilitiesToRequest(
         .filterNot { installation.hasNegotiatedAccess(it) }
         .distinct()
 
+/**
+ * One pairing: the Mac, this phone's device id there, and when it was made. Unpairing and
+ * pairing the same Mac again is another pairing, so nothing started for the old one lands in
+ * the new one.
+ */
+data class AidenPairingIdentity(val instanceId: String, val deviceId: String, val pairedAt: java.time.Instant)
+
+val AidenInstallation.pairing: AidenPairingIdentity
+    get() = AidenPairingIdentity(instanceId, deviceId, createdAt)
+
 enum class AidenConnectionState {
     NEEDS_PAIRING,
     CONNECTING,
@@ -143,12 +153,29 @@ class AidenRemoteCoordinator(
     val activeInstanceId: String?
         get() = installationStore.activeInstallation?.instanceId
 
+    /** The pairing in use now, or null with none. */
+    val activePairing: AidenPairingIdentity?
+        get() = installationStore.activeInstallation?.pairing
+
+    /** True while [pairing] is still the pairing in use. */
+    fun holdsPairing(pairing: AidenPairingIdentity?): Boolean = pairing != null && activePairing == pairing
+
+    /**
+     * Writes a Bot detail to the cache only while the pairing that was active when this was
+     * made still is, so a save that finishes after an unpair or a re-pair never lands in
+     * another pairing's cache.
+     */
+    fun pinnedBotCache(): (AidenBotDetail) -> Unit {
+        val pairing = activePairing
+        return { detail -> if (holdsPairing(pairing)) botCache.putBotDetail(detail) }
+    }
+
     /**
      * Runs [block] on the coordinator's own scope, which outlives every screen. For work a
      * person started and may leave behind: a settings pick still saving after they back out.
      */
     fun launchDetached(block: suspend () -> Unit): Job {
-        val entry = DetachedWork(activeInstanceId)
+        val entry = DetachedWork(activePairing)
         val job = scope.launch { block() }
         entry.job = job
         detachedWork += entry
@@ -156,27 +183,31 @@ class AidenRemoteCoordinator(
         return job
     }
 
-    private class DetachedWork(val instanceId: String?) {
+    private class DetachedWork(val pairing: AidenPairingIdentity?) {
         lateinit var job: Job
     }
 
     private val detachedWork = java.util.concurrent.CopyOnWriteArrayList<DetachedWork>()
 
     /** Work started for one pairing doesn't run on for another, or for none. */
-    private fun cancelDetachedWork(keep: (String?) -> Boolean) {
-        detachedWork.filterNot { keep(it.instanceId) }.forEach { it.job.cancel() }
+    private fun cancelDetachedWork(keep: (AidenPairingIdentity?) -> Boolean) {
+        detachedWork.filterNot { keep(it.pairing) }.forEach { it.job.cancel() }
     }
 
-    private val pairingMemos = mutableMapOf<Pair<String?, String>, Any>()
+    private val pairingMemos = mutableMapOf<Pair<AidenPairingIdentity?, String>, Any>()
 
     /** One [create]d object per pairing and [key], for state that must be shared across screens. */
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> pairingMemo(key: String, create: () -> T): T =
-        pairingMemos.getOrPut(activeInstanceId to key) { create() } as T
+        pairingMemos.getOrPut(activePairing to key) { create() } as T
 
-    /** What Chat activity persisted for the active pairing; stands in until `/server` answers. */
-    val cachedBotActivityGrant: Boolean
-        get() = installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACTIVITY) == true
+    /**
+     * Whether the active pairing's Mac last announced `bot-activity-v1` and this phone holds
+     * `bot:activity` (R21: the feature and the grant, both persisted). It stands in until
+     * `/server` answers, so an offline open keeps the line, Steer and Queue, and Chat activity.
+     */
+    val cachedBotActivitySupported: Boolean
+        get() = installationStore.activeInstallation?.cachedBotActivitySupported == true
 
     /**
      * True while [client] is still the active client of installation [instanceId]. A read
@@ -220,7 +251,7 @@ class AidenRemoteCoordinator(
         activationGeneration += 1
         val generation = activationGeneration
         val installation = installationStore.activeInstallation
-        cancelDetachedWork { it == installation?.instanceId }
+        cancelDetachedWork { it != null && it == installation?.pairing }
         if (installation == null) {
             _client.value = null
             _serverInfo.value = null
@@ -262,7 +293,8 @@ class AidenRemoteCoordinator(
                     instanceId = installation.instanceId,
                     serverCapabilities = serverCapabilities,
                     serverName = server.name,
-                    deviceCapabilities = server.capabilities
+                    deviceCapabilities = server.capabilities,
+                    serverFeatures = server.features
                 )
                 val negotiatedServer = negotiateProgressCapabilities(
                     generation = generation,
@@ -275,7 +307,8 @@ class AidenRemoteCoordinator(
                     instanceId = installation.instanceId,
                     serverCapabilities = negotiatedServer.serverCapabilities ?: negotiatedServer.capabilities,
                     serverName = negotiatedServer.name,
-                    deviceCapabilities = negotiatedServer.capabilities
+                    deviceCapabilities = negotiatedServer.capabilities,
+                    serverFeatures = negotiatedServer.features
                 )
                 // Persist the negotiated grant before publishing serverInfo;
                 // progress consumers use both values as one capability gate.
@@ -327,7 +360,8 @@ class AidenRemoteCoordinator(
                 instanceId = installation.instanceId,
                 serverCapabilities = refreshedServerCapabilities,
                 serverName = refreshed.name,
-                deviceCapabilities = refreshed.capabilities
+                deviceCapabilities = refreshed.capabilities,
+                serverFeatures = refreshed.features
             )
             installationStore.updateDeviceCapabilities(installation.instanceId, completeCapabilities)
             refreshed
@@ -386,8 +420,8 @@ class AidenRemoteCoordinator(
                     .orEmpty()
             )
         }
-        cancelDetachedWork { it != installation.instanceId }
-        pairingMemos.keys.removeAll { it.first == installation.instanceId }
+        cancelDetachedWork { it?.instanceId != installation.instanceId }
+        pairingMemos.keys.removeAll { it.first?.instanceId == installation.instanceId }
         archiveStore.purge(installation.instanceId)
         workspaceCache.purge(installation.instanceId, knownWorkspaceIds)
         scheduledCache.purge(installation.instanceId)

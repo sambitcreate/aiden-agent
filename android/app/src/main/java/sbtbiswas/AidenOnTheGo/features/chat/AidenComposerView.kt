@@ -649,9 +649,10 @@ internal fun AidenRunInputSplitButton(
     val primaryInteraction = remember { MutableInteractionSource() }
     val menuInteraction = remember { MutableInteractionSource() }
 
+    // At least a touch target tall, and taller when large text needs it: the label never clips.
     Row(
         horizontalArrangement = Arrangement.spacedBy(AidenShape.GroupGap),
-        modifier = Modifier.height(height)
+        modifier = Modifier.height(IntrinsicSize.Min).heightIn(min = height)
     ) {
         Surface(
             shape = primaryShape,

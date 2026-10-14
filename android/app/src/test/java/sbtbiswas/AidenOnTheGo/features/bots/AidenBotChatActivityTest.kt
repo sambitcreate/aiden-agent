@@ -626,10 +626,14 @@ class AidenBotChatActivityTest {
 
     // --- The pairing pin (coordinator level) ---
 
-    private fun exchange(instance: String, capabilities: List<AidenRemoteCapability> = listOf(AidenRemoteCapability.CHAT_READ)) =
+    private fun exchange(
+        instance: String,
+        capabilities: List<AidenRemoteCapability> = listOf(AidenRemoteCapability.CHAT_READ),
+        deviceId: String = "device-$instance"
+    ) =
         AidenPairingExchange(
             instanceId = instance,
-            deviceId = "device-$instance",
+            deviceId = deviceId,
             endpoint = "https://$instance.test/api/aiden/v1",
             serverSpkiSha256 = "sha256/$instance",
             credential = "secret-$instance",
@@ -693,17 +697,119 @@ class AidenBotChatActivityTest {
         assertTrue(second.isCancelled)
     }
 
+    private val activityGrants = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_ACTIVITY)
+
+    /** What a Mac's `/server` answer leaves on the pairing: its grants and the features it announced. */
+    private fun AidenInstallationStore.answered(instance: String, features: List<String>, grants: List<AidenRemoteCapability> = activityGrants) =
+        updateServerCapabilities(instance, grants, "Mac", grants, serverFeatures = features)
+
     @Test
-    fun theCachedGrantIsTheNegotiatedOneForThePairingInUse() {
+    fun theCachedSupportIsTheNegotiatedOneForThePairingInUse() {
         val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
         val coordinator = coordinatorFor(installations)
-        installations.addInstallation(
-            exchange("one", listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_ACTIVITY)),
-            null
-        )
-        assertTrue(coordinator.cachedBotActivityGrant)
+        installations.addInstallation(exchange("one", activityGrants), null)
+        assertFalse("the grant alone, before /server ever announced the feature", coordinator.cachedBotActivitySupported)
+        installations.answered("one", listOf(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE))
+        assertTrue(coordinator.cachedBotActivitySupported)
         installations.addInstallation(exchange("two"), null)
-        assertFalse("the active pairing never held it", coordinator.cachedBotActivityGrant)
+        assertFalse("the active pairing never held it", coordinator.cachedBotActivitySupported)
+    }
+
+    // R21: the feature token is persisted with the grant, so a cold offline start keeps both.
+    @Test
+    fun aColdOfflineStartKeepsWhatTheMacLastAnnouncedAndHeldAndAnOlderMacClearsIt() {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        installations.addInstallation(exchange("one", activityGrants), null)
+        installations.answered("one", listOf(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE))
+
+        val relaunched = coordinatorFor(AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore()))
+        assertTrue("no /server yet: the persisted feature and grant stand in", relaunched.cachedBotActivitySupported)
+        assertTrue(aidenBotActivitySupported(relaunched.serverInfo.value, relaunched.cachedBotActivitySupported))
+
+        // The Mac went back to a build without the feature: the next launch doesn't assume it.
+        relaunched.installationStore.answered("one", emptyList())
+        assertFalse(coordinatorFor(AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())).cachedBotActivitySupported)
+    }
+
+    // An unpair and re-pair of the same Mac is another pairing: nothing of the old one carries over.
+    @Test
+    fun aRePairedMacStartsWithoutTheOldPairingsGrantHostOrSaves() = runBlocking {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        installations.addInstallation(exchange("one", activityGrants), null)
+        installations.answered("one", listOf(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE))
+        val coordinator = coordinatorFor(installations)
+        coordinator.refreshClient()
+        assertTrue(coordinator.cachedBotActivitySupported)
+        val oldHost = coordinator.botChatActivityHost()
+        val oldWork = coordinator.launchDetached { awaitCancellation() }
+
+        coordinator.removeInstallation("one")
+        installations.addInstallation(exchange("one", deviceId = "device-one-again"), null)
+        coordinator.refreshClient()
+
+        assertFalse("the new pairing was never granted bot:activity", coordinator.cachedBotActivitySupported)
+        assertTrue(oldWork.isCancelled)
+        assertNotSame(oldHost, coordinator.botChatActivityHost())
+        assertNull("the old pairing's host has no client for the new one", oldHost.client())
+        oldHost.cache(bot.copy(revision = "late_pick"))
+        assertNull("a save that finishes late never lands in the new pairing's cache", coordinator.botCache.getBotDetail(bot.id))
+    }
+
+    // Re-pairing without an unpair in between (the same Mac id) is another pairing too.
+    @Test
+    fun aHostAndItsWorkArePinnedToThePairingNotTheMacsId() {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        installations.addInstallation(exchange("one"), null)
+        val coordinator = coordinatorFor(installations)
+        coordinator.refreshClient()
+        val host = coordinator.botChatActivityHost()
+        val work = coordinator.launchDetached { awaitCancellation() }
+        installations.addInstallation(exchange("one", deviceId = "device-one-again"), null)
+        coordinator.refreshClient()
+        assertTrue(work.isCancelled)
+        assertNotSame(host, coordinator.botChatActivityHost())
+        host.cache(bot)
+        assertNull(coordinator.botCache.getBotDetail(bot.id))
+        // The new pairing's own writes land.
+        coordinator.pinnedBotCache()(bot)
+        assertEquals(bot, coordinator.botCache.getBotDetail(bot.id))
+    }
+
+    // The host lets go of a closed page's listener, once any save it started has reported.
+    @Test
+    fun aClosedPageIsLetGoOfOnceItsSaveHasReported() = runBlocking {
+        val patched = fixture.getValue("botActivity").jsonObject.getValue("identityPatch").jsonObject
+        val server = MockWebServer()
+        server.start()
+        try {
+            val client = AidenRemoteClient(
+                endpoint = server.url("/api/aiden/v1").toString().trimEnd('/'),
+                credential = "test_credential_123",
+                customOkHttpClient = OkHttpClient()
+            )
+            server.enqueue(MockResponse().setResponseCode(200).setBody(patched.getValue("response").toString()))
+            val connected = CompletableDeferred<Boolean>()
+            val host = AidenBotChatActivityHost(client = { client }, waitForConnection = { connected.await() }, launch = { }, cache = { })
+
+            // Closed with nothing saving: let go at once.
+            val idle = host.controller(bot) { }
+            assertEquals(1, host.heldCount)
+            host.release(bot.id, idle)
+            assertEquals(0, host.heldCount)
+
+            // Closed mid-save: kept until the save reports, which still reaches the screen behind.
+            val reported = mutableListOf<String>()
+            val saving = host.controller(bot.copy(revision = "bot_revision_8")) { reported += it.revision }
+            val pick = async(Dispatchers.Unconfined) { saving.pick(detailed) }
+            host.release(bot.id, saving)
+            assertEquals("still saving", 1, host.heldCount)
+            connected.complete(true)
+            pick.await()
+            assertEquals(listOf("bot_revision_9"), reported)
+            assertEquals(0, host.heldCount)
+        } finally {
+            server.shutdown()
+        }
     }
 
     // One writer per Bot: a sheet reopened while a pick is still saving gets the same controller.
@@ -759,15 +865,15 @@ class AidenBotChatActivityTest {
     fun theRowSurvivesAColdOfflineStartOnThePersistedGrant() {
         fun mac(features: List<String>, capabilities: List<AidenRemoteCapability>) =
             AidenServer(instanceId = "inst", name = "Mac", capabilities = capabilities, features = features)
-        assertTrue(aidenBotShowsChatActivity(null, hasBaseline = true, cachedGrant = true))
-        assertFalse("never granted", aidenBotShowsChatActivity(null, hasBaseline = true, cachedGrant = false))
-        assertFalse("still needs a Bot on screen", aidenBotShowsChatActivity(null, hasBaseline = false, cachedGrant = true))
+        assertTrue(aidenBotShowsChatActivity(null, hasBaseline = true, cachedSupport = true))
+        assertFalse("never granted", aidenBotShowsChatActivity(null, hasBaseline = true, cachedSupport = false))
+        assertFalse("still needs a Bot on screen", aidenBotShowsChatActivity(null, hasBaseline = false, cachedSupport = true))
         assertFalse(
             "once the Mac answers it decides, whatever was cached",
-            aidenBotShowsChatActivity(mac(emptyList(), listOf(AidenRemoteCapability.CHAT_READ)), hasBaseline = true, cachedGrant = true)
+            aidenBotShowsChatActivity(mac(emptyList(), listOf(AidenRemoteCapability.CHAT_READ)), hasBaseline = true, cachedSupport = true)
         )
-        assertTrue(aidenBotActivitySupported(null, cachedGrant = true))
-        assertFalse(aidenBotActivitySupported(null, cachedGrant = false))
+        assertTrue(aidenBotActivitySupported(null, cachedSupport = true))
+        assertFalse(aidenBotActivitySupported(null, cachedSupport = false))
     }
 
     // Previews: what each level shows on the Mac.

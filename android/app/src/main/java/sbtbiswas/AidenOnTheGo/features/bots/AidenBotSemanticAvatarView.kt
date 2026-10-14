@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.aidenPowerSaveMode
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenFrameDue
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 /**
@@ -99,7 +100,9 @@ fun AidenBotSemanticAvatarView(
         while (true) {
             withFrameMillis { frameMs ->
                 if (startMs == Long.MIN_VALUE) startMs = frameMs
-                clockMs.longValue = frameMs - startMs
+                // About 30 frames a second: a glance needs no more, and a list of faces stays cheap.
+                val elapsed = frameMs - startMs
+                if (aidenFrameDue(clockMs.longValue, elapsed)) clockMs.longValue = elapsed
             }
         }
     }

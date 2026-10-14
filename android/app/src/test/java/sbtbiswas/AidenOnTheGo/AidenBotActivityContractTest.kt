@@ -336,10 +336,16 @@ class AidenBotActivityContractTest {
     }
 
     // Test 8: the opt-in is requested only from a Mac that offers it.
-    private fun macWith(features: List<String>, capabilities: List<AidenRemoteCapability>) = AidenServer(
+    /** [offers] are the opt-ins the Mac's capability list offers beyond what this phone holds. */
+    private fun macWith(
+        features: List<String>,
+        capabilities: List<AidenRemoteCapability>,
+        offers: List<AidenRemoteCapability> = emptyList()
+    ) = AidenServer(
         instanceId = "inst_activity",
         name = "Mac",
         capabilities = capabilities,
+        serverCapabilities = (capabilities + offers).distinct(),
         features = features
     )
 
@@ -348,16 +354,19 @@ class AidenBotActivityContractTest {
         val feature = AidenRemoteProtocol.BOT_ACTIVITY_FEATURE
         val grant = AidenRemoteCapability.BOT_ACTIVITY
         val base = listOf(AidenRemoteCapability.CHAT_READ)
-        // offers / supports: (feature, grant) -> (offers, supports)
+        // offers: the Mac's capability list lists the opt-in (FR-m3, as on iOS).
+        // supports: the feature is announced and this phone holds the grant.
         val none = macWith(emptyList(), base)
         assertFalse(none.offersBotActivity)
         assertFalse(none.supportsBotActivity)
         val featureOnly = macWith(listOf(feature), base)
-        assertTrue(featureOnly.offersBotActivity)
+        assertFalse("announced, but not offered to this phone", featureOnly.offersBotActivity)
         assertFalse(featureOnly.supportsBotActivity)
-        // A grant without the feature is not an offer: an older Mac is never asked, and never trusted.
+        val offered = macWith(listOf(feature), base, offers = listOf(grant))
+        assertTrue(offered.offersBotActivity)
+        assertFalse("offered, not held yet", offered.supportsBotActivity)
+        // A grant without the feature is never trusted.
         val grantOnly = macWith(emptyList(), base + grant)
-        assertFalse(grantOnly.offersBotActivity)
         assertFalse(grantOnly.supportsBotActivity)
         val both = macWith(listOf(feature), base + grant)
         assertTrue(both.offersBotActivity)
@@ -380,7 +389,6 @@ class AidenBotActivityContractTest {
     @Test
     fun aGrantIsAskedForOnlyFromAMacThatAnnouncesItsFeatureAndOnlyWhenNotHeld() {
         val rows = listOf(
-            AidenRemoteProtocol.BOT_ACTIVITY_FEATURE to listOf(AidenRemoteCapability.BOT_ACTIVITY),
             AidenRemoteProtocol.BOT_MEMORY_FEATURE to listOf(AidenRemoteCapability.BOT_CARDS),
             AidenRemoteProtocol.BOT_PROACTIVE_FEATURE to listOf(AidenRemoteCapability.BOT_CARDS),
             AidenRemoteProtocol.CHAT_AGENTS_FEATURE to listOf(AidenRemoteCapability.AGENTS_READ),
@@ -410,10 +418,33 @@ class AidenBotActivityContractTest {
             )
         }
         // Several features at once ask for each missing grant once, in a stable order.
-        val all = macWith(listOf(AidenRemoteProtocol.BOT_MEMORY_FEATURE, AidenRemoteProtocol.BOT_PROACTIVE_FEATURE, AidenRemoteProtocol.BOT_ACTIVITY_FEATURE), emptyList())
+        val all = macWith(
+            listOf(AidenRemoteProtocol.BOT_MEMORY_FEATURE, AidenRemoteProtocol.BOT_PROACTIVE_FEATURE, AidenRemoteProtocol.BOT_ACTIVITY_FEATURE),
+            emptyList(),
+            offers = listOf(AidenRemoteCapability.BOT_ACTIVITY)
+        )
         assertEquals(
             listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY),
             aidenProgressCapabilitiesToRequest(all, installationHolding())
+        )
+    }
+
+    // FR-m3: bot:activity is asked for only when the Mac's capability list offers it, as on iOS.
+    @Test
+    fun botActivityIsAskedForOnlyWhenTheMacsCapabilityListOffersIt() {
+        val feature = listOf(AidenRemoteProtocol.BOT_ACTIVITY_FEATURE)
+        val base = listOf(AidenRemoteCapability.CHAT_READ)
+        val grant = AidenRemoteCapability.BOT_ACTIVITY
+        assertEquals(
+            "the feature alone is not an offer",
+            emptyList<AidenRemoteCapability>(),
+            aidenProgressCapabilitiesToRequest(macWith(feature, base), installationHolding())
+        )
+        assertEquals(listOf(grant), aidenProgressCapabilitiesToRequest(macWith(feature, base, offers = listOf(grant)), installationHolding()))
+        assertEquals(
+            "already held",
+            emptyList<AidenRemoteCapability>(),
+            aidenProgressCapabilitiesToRequest(macWith(feature, base + grant), installationHolding(grant))
         )
     }
 

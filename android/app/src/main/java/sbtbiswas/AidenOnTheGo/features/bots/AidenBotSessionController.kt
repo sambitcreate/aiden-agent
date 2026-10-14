@@ -263,6 +263,8 @@ data class AidenBotSessionUiState(
     val loadFailed: Boolean = false,
     /** The Mac no longer has this Bot (deleted elsewhere): the feed stops. */
     val botMissing: Boolean = false,
+    /** The Mac refused this phone (401/403, or the pairing is gone): retrying can't help. */
+    val accessLost: Boolean = false,
     /** A message request is on its way to the Mac. The composer doesn't wait for it (R14). */
     val isSending: Boolean = false,
     /** A Resume request is in flight. */
@@ -550,6 +552,8 @@ class AidenBotSessionController(
     }
 
     private suspend fun load(authoritative: Boolean): Boolean {
+        // Try again shows at once that it is trying: "Connecting…" and shimmering skeletons.
+        if (_state.value.session == null) _state.update { it.copy(isLoading = true, loadFailed = false) }
         return try {
             val session = bounded { transport.session(botId) }
             val current = _state.value.session
@@ -563,8 +567,11 @@ class AidenBotSessionController(
             throw error
         } catch (error: Exception) {
             val missing = (error as? AidenRemoteClientException.Server)?.statusCode == 404
-            if (aidenBotLostAccess(error)) purgeForAccessLoss()
-            _state.update { it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing) }
+            val lost = aidenBotLostAccess(error)
+            if (lost) purgeForAccessLoss()
+            _state.update {
+                it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing, accessLost = it.accessLost || lost)
+            }
             if (missing) failWaiting()
             false
         }
@@ -608,7 +615,7 @@ class AidenBotSessionController(
     /** A snapshot replaces everything, and means the Mac is reachable: the outbox goes out. */
     private fun applySnapshot(session: AidenBotSession) {
         val previous = _state.value.session
-        _state.update { it.copy(session = session, isLoading = false, loadFailed = false, hasLoaded = true) }
+        _state.update { it.copy(session = session, isLoading = false, loadFailed = false, hasLoaded = true, accessLost = false) }
         settleCards(session)
         questionWrites += 1
         approvalWrites += 1
@@ -699,7 +706,7 @@ class AidenBotSessionController(
                 if (aidenBotLostAccess(error)) {
                     downJob?.cancel()
                     purgeForAccessLoss()
-                    _state.update { it.copy(isLoading = false, loadFailed = it.session == null) }
+                    _state.update { it.copy(isLoading = false, loadFailed = it.session == null, accessLost = true) }
                     return
                 }
                 clean = false

@@ -1,11 +1,5 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,7 +13,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +29,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
+
+private const val SHIMMER_MS = 1_400L
+
+/** Frame-driven loops (shimmers, glancing faces) redraw at about 30 frames a second. */
+const val AIDEN_CAPPED_FRAME_INTERVAL_MS = 33L
+
+/**
+ * Whether a frame [elapsedMs] into a frame-driven loop is due, the last one drawn having been at
+ * [shownMs]: at most one every [intervalMs]. A clock that went back (a restarted loop) is due.
+ */
+fun aidenFrameDue(shownMs: Long, elapsedMs: Long, intervalMs: Long = AIDEN_CAPPED_FRAME_INTERVAL_MS): Boolean =
+    elapsedMs == 0L || elapsedMs - shownMs >= intervalMs || elapsedMs < shownMs
 
 /**
  * Placeholder block for content that is still arriving. Aiden never shows a spinner for
@@ -53,13 +62,19 @@ fun AidenSkeletonBlock(
         Brush.linearGradient(listOf(base, base))
     } else {
         val highlight = MaterialTheme.colorScheme.surfaceContainerHighest
-        val transition = rememberInfiniteTransition(label = "aiden_skeleton")
-        val offset by transition.animateFloat(
-            initialValue = -300f,
-            targetValue = 900f,
-            animationSpec = infiniteRepeatable(tween(1_400, easing = LinearEasing), RepeatMode.Restart),
-            label = "aiden_skeleton_offset"
-        )
+        // About 30 frames a second: a shimmer needs no more, and a screen of them stays cheap.
+        val clockMs = remember { mutableLongStateOf(0L) }
+        LaunchedEffect(Unit) {
+            var startMs = Long.MIN_VALUE
+            while (true) {
+                withFrameMillis { frameMs ->
+                    if (startMs == Long.MIN_VALUE) startMs = frameMs
+                    val elapsed = frameMs - startMs
+                    if (aidenFrameDue(clockMs.longValue, elapsed)) clockMs.longValue = elapsed
+                }
+            }
+        }
+        val offset = -300f + 1_200f * ((clockMs.longValue % SHIMMER_MS).toFloat() / SHIMMER_MS)
         Brush.linearGradient(
             colors = listOf(base, highlight, base),
             start = Offset(offset, 0f),

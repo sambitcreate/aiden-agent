@@ -687,6 +687,7 @@
     <string name="bot_session_connect">Connect to your Mac to open this chat.</string>
     <string name="bot_session_loading">Loading chat</string>
     <string name="bot_session_missing">This Bot is no longer on your Mac.</string>
+    <string name="bot_session_load_no_access">This phone can’t open this chat. Check its access in Aiden on your Mac.</string>
     <string name="bot_session_load_failed">Aiden couldn’t load this chat. Make sure your Mac is on and nearby.</string>
     <string name="bot_session_unreachable">Aiden couldn’t reach your Mac. Try again.</string>
     <string name="bot_session_reset">This chat was restarted.</string>
