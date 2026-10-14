@@ -977,3 +977,31 @@ test("bot:activity is an opt-in any paired device may negotiate and keep", async
   assert.equal(authenticated?.capabilities.has("bot:activity"), true);
   assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
 });
+
+test("bot:activity survives a restart, dies with revocation, and an older stored state simply lacks it", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:activity"]);
+
+  // The grant is persisted: a restored registry still honours it.
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  assert.equal((await restored.registry.authenticate(issued.credential))?.capabilities.has("bot:activity"), true);
+
+  // Revoking ends the credential; pairing again starts without the opt-in until it is negotiated anew.
+  assert.equal(await state.registry.revokeDevice(issued.device.id), true);
+  assert.equal((await state.registry.authenticate(issued.credential))?.revoked, true);
+  const repaired = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), false);
+  await state.registry.upgradeDeviceCapabilities(repaired.device.id, ["bot:activity"]);
+  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), true);
+
+  // A state written before revision 30 has no such grant, loads cleanly, and can still negotiate it.
+  const older = fixture();
+  const legacy = await older.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const reloaded = fixture(older.stored());
+  await reloaded.registry.initialize();
+  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), false);
+  await reloaded.registry.upgradeDeviceCapabilities(legacy.device.id, ["bot:activity"]);
+  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), true);
+});

@@ -116,6 +116,10 @@ async function fixture(options: {
     policyEpoch: "bot_policy_epoch_1",
     summary: "Can use your Mac, shell, enabled connections, and skills.",
   };
+  // A Mac wired for Chat activity returns the field on every Bot detail it serves.
+  const detailChatActivity = options.chatActivity
+    ? { chatActivity: { level: "summary" as const, wording: "follows" as const } }
+    : {};
   const botDetail = {
     id: "bot-1",
     name: "Planner",
@@ -509,7 +513,8 @@ async function fixture(options: {
       ...(options.chatActivity ? { supportsChatActivity: true } : {}),
       list: async () => {
         calls.push("bots:list");
-        return { bots: [botDetail], maxBots: 256 };
+        const { instructions: _instructions, access: _access, ...summary } = botDetail;
+        return { bots: [summary], maxBots: 256 };
       },
       get: async (botId) => {
         calls.push(`bots:get:${botId}`);
@@ -517,16 +522,16 @@ async function fixture(options: {
           ...botDetail,
           id: botId,
           access: { ...botAccess, botId },
-          ...(options.chatActivity ? { chatActivity: { level: "summary" as const, wording: "follows" as const } } : {}),
+          ...detailChatActivity,
         };
       },
       create: async (deviceId, key) => {
         calls.push(`bots:create:${deviceId}:${key}`);
-        return botDetail;
+        return { ...botDetail, ...detailChatActivity };
       },
       updateIdentity: async (botId, revision) => {
         calls.push(`bots:update:${botId}:${revision}`);
-        return { ...botDetail, id: botId, revision: "bot_revision_2" };
+        return { ...botDetail, id: botId, revision: "bot_revision_2", ...detailChatActivity };
       },
       delete: async (botId, revision) => {
         calls.push(`bots:delete:${botId}:${revision}`);
@@ -584,7 +589,7 @@ async function fixture(options: {
       },
       deleteAvatar: async (botId, revision) => {
         calls.push(`bots:avatar:delete:${botId}:${revision}`);
-        return { ...botDetail, id: botId };
+        return { ...botDetail, id: botId, ...detailChatActivity };
       },
       avatarContent: async (botId, assetRevision) => {
         calls.push(`bots:avatar:content:${botId}:${assetRevision}`);
@@ -5125,10 +5130,23 @@ test("bot-activity-v1 and bot:activity are offered only while activity frames an
 test("only a device holding bot:activity is served activity frames and a Bot's chatActivity", async () => {
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   const seen: string[] = [];
-  for (const capabilities of [
-    ["server:read", "bot:read", "chat:read"],
-    ["server:read", "bot:read", "chat:read", "bot:activity"],
-  ] as AidenRemoteCapability[][]) {
+  const write = { ...headers, "content-type": "application/json", "if-match": "bot_revision_1" };
+  // Every route that returns a Bot detail, keyed by name.
+  const detailRoutes = (base: string): Array<[string, () => Promise<Response>]> => [
+    ["get", () => fetch(`${base}/bots/bot-1`, { headers })],
+    ["create", () => fetch(`${base}/bots`, {
+      method: "POST",
+      headers: { ...write, "idempotency-key": "bot-create-key-0000001" },
+      body: JSON.stringify({ name: "Planner" }),
+    })],
+    ["patch", () => fetch(`${base}/bots/bot-1`, { method: "PATCH", headers: write, body: JSON.stringify({ name: "Planner" }) })],
+    ["avatar delete", () => fetch(`${base}/bots/bot-1/avatar`, { method: "DELETE", headers: write })],
+  ];
+  const shown: Record<string, string[]> = { plain: [], holder: [] };
+  for (const [label, capabilities] of [
+    ["plain", ["server:read", "bot:read", "bot:write", "chat:read"]],
+    ["holder", ["server:read", "bot:read", "bot:write", "chat:read", "bot:activity"]],
+  ] as Array<[string, AidenRemoteCapability[]]>) {
     const app = await fixture({
       capabilities,
       acceptsBotCapabilities: true,
@@ -5139,14 +5157,17 @@ test("only a device holding bot:activity is served activity frames and a Bot's c
     try {
       await fetch(`${app.base}/bots/bot-1/session`, { headers });
       await fetch(`${app.base}/bots/bot-1/session/events`, { headers });
-      const detail = await (await fetch(`${app.base}/bots/bot-1`, { headers })).json();
-      seen.push(`detail:${"chatActivity" in detail ? "activity" : "plain"}`);
+      for (const [route, call] of detailRoutes(app.base)) {
+        const response = await call();
+        assert.ok(response.status === 200 || response.status === 201, `${label} ${route}: ${response.status}`);
+        const detail = await response.json();
+        shown[label]!.push(`${route}:${"chatActivity" in detail ? "activity" : "plain"}`);
+      }
     } finally {
       await app.close();
     }
   }
-  assert.deepEqual(seen, [
-    "session:plain", "events:plain", "detail:plain",
-    "session:activity", "events:activity", "detail:activity",
-  ]);
+  assert.deepEqual(seen, ["session:plain", "events:plain", "session:activity", "events:activity"]);
+  assert.deepEqual(shown.plain, ["get:plain", "create:plain", "patch:plain", "avatar delete:plain"]);
+  assert.deepEqual(shown.holder, ["get:activity", "create:activity", "patch:activity", "avatar delete:activity"]);
 });

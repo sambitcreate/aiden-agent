@@ -1480,14 +1480,23 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
-/** Bot detail as one device may read it: `chatActivity` only for `bot:activity` holders. */
-function botDetailForDevice(
+/**
+ * The one place a Bot detail leaves the router (create, get, PATCH, avatar
+ * DELETE): `chatActivity` only for `bot:activity` holders, so an older
+ * phone never sees the field whichever route returned the detail.
+ */
+function writeBotDetail(
+  response: ServerResponse,
+  status: number,
   detail: AidenRemoteBotDetail,
   device: AidenRemoteRouterAuthenticatedDevice,
-): AidenRemoteBotDetail {
-  if (device.capabilities.has("bot:activity")) return detail;
+): void {
+  if (device.capabilities.has("bot:activity")) {
+    writeJson(response, status, detail);
+    return;
+  }
   const { chatActivity: _hidden, ...visible } = detail;
-  return visible;
+  writeJson(response, status, visible);
 }
 
 function advertisedServerCapabilities(
@@ -2006,11 +2015,7 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          botDetailForDevice(await dependencies.bots.create(device.id, key, body), device),
-        );
+        writeBotDetail(response, 201, await dependencies.bots.create(device.id, key, body), device);
         return;
       }
       if (path === "/bot-capabilities" && request.method === "GET") {
@@ -2142,16 +2147,11 @@ export function createAidenRemoteRequestHandler(
         }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        // Returns the avatar asset metadata, not a Bot detail.
         writeJson(
           response,
           200,
-          await dependencies.bots.putAvatar(
-            device.id,
-            botAvatarMatch[1]!,
-            revision,
-            key,
-            body,
-          ),
+          await dependencies.bots.putAvatar(device.id, botAvatarMatch[1]!, revision, key, body),
         );
         return;
       }
@@ -2165,10 +2165,11 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(
+        writeBotDetail(
           response,
           200,
           await dependencies.bots.deleteAvatar(botAvatarMatch[1]!, revision),
+          device,
         );
         return;
       }
@@ -2205,7 +2206,7 @@ export function createAidenRemoteRequestHandler(
           200,
           await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!, {
             cards: device.capabilities.has("bot:cards"),
-            activity: device.capabilities.has("bot:activity"),
+            activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
           }),
         );
         return;
@@ -2223,7 +2224,7 @@ export function createAidenRemoteRequestHandler(
           botSessionEventsMatch[1]!,
           response,
           admitDevice(device.id),
-          { cards: device.capabilities.has("bot:cards"), activity: device.capabilities.has("bot:activity") },
+          { cards: device.capabilities.has("bot:cards"), activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies) },
         );
         return;
       }
@@ -2508,11 +2509,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(
-          response,
-          200,
-          botDetailForDevice(await dependencies.bots.get(botMatch[1]!, device.id), device),
-        );
+        writeBotDetail(response, 200, await dependencies.bots.get(botMatch[1]!, device.id), device);
         return;
       }
       if (botMatch && request.method === "PATCH") {
@@ -2526,13 +2523,11 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(
+        writeBotDetail(
           response,
           200,
-          botDetailForDevice(
-            await dependencies.bots.updateIdentity(botMatch[1]!, revision, body, device.id),
-            device,
-          ),
+          await dependencies.bots.updateIdentity(botMatch[1]!, revision, body, device.id),
+          device,
         );
         return;
       }
