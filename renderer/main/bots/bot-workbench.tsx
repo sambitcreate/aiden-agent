@@ -11,7 +11,8 @@ import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchVie
 import { resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
 import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
-import { BotLiveProvider, useSharedBotLive } from "../../lib/use-bot-live";
+import { useBotLive } from "../../lib/use-bot-live";
+import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
@@ -25,27 +26,26 @@ const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{
   routines: { label: "Routines", icon: CalendarClock },
 };
 
-/** Wraps a Bot's chat with its side panel; both read the Bot's one live subscription. */
-export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  return (
-    <BotLiveProvider botId={botId}>
-      <BotWorkbenchLayout botId={botId}>{children}</BotWorkbenchLayout>
-    </BotLiveProvider>
-  );
-}
+/**
+ * The log redraws only when its entries or running state change, never for a
+ * streamed token (`partial`) or other live fields it doesn't show.
+ */
+const MemoBotPanelActivity = React.memo(BotPanelActivity);
+const NO_ENTRIES: readonly BotTranscriptEntry[] = [];
 
 /**
  * The Activity tab owns its read of the live conversation, so a live event
- * re-renders this subtree and not the rest of the panel.
+ * re-renders this subtree and not the rest of the panel. It shares the Bot's
+ * one live subscription with the chat beside it.
  */
 function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
-  const live = useSharedBotLive(botId);
+  const live = useBotLive(botId);
   // Always the full log: the Bot's Chat activity level shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
-    <BotPanelActivity
+    <MemoBotPanelActivity
       botName={botName}
-      entries={live.snapshot?.entries ?? []}
+      entries={live.snapshot?.entries ?? NO_ENTRIES}
       running={live.snapshot?.state.kind === "running"}
       loading={live.snapshot === null && !live.failed}
       failed={live.snapshot === null && live.failed}
@@ -54,7 +54,11 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
   );
 }
 
-function BotWorkbenchLayout({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
+/**
+ * Wraps a Bot's chat with its side panel. The chat holds the Bot's live
+ * subscription for as long as it is shown; the Activity tab shares it.
+ */
+export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
   const { open, tab, fileRequest, focusRequest, close, consumeFocusRequest, setTab } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -139,8 +143,9 @@ function BotWorkbenchLayout({ botId, children }: React.PropsWithChildren<{ botId
     render: ({ presented, selected }) =>
       visited.has(id) ? (
         <div
-          // The log has no controls of its own, so its scroller takes a tab stop to scroll by keyboard.
-          {...(id === "activity" ? { role: "region", "aria-label": "Activity", tabIndex: 0 } : {})}
+          // The log has no controls of its own, so its scroller takes a tab stop to scroll by
+          // keyboard. The tab panel around it already carries the "Activity" name.
+          {...(id === "activity" ? { tabIndex: 0 } : {})}
           className="h-full min-h-0 overflow-y-auto px-3 py-4 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
         >
           {body(id, presented && selected)}

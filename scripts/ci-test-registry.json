@@ -867,6 +867,7 @@
         "renderer/main/bots/bot-memory-page.test.tsx",
         "renderer/lib/bot-routes.test.ts",
         "renderer/lib/bot-sidebar-preferences.test.ts",
+        "renderer/lib/search-fold.test.ts",
         "renderer/main/bots/bot-panel.test.tsx",
         "renderer/main/bots/bot-activity-log.test.ts",
         "renderer/main/bots/bot-sidebar.test.tsx",

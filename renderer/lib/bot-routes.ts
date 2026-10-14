@@ -27,7 +27,7 @@ export function botRouteBotId(pathname: string): string | null {
   return decodedSegment(BOT_ROUTE.exec(pathname)?.[1]);
 }
 
-export type EnvironmentToggleTarget = "bot-panel" | "workspace" | "none";
+type EnvironmentToggleTarget = "bot-panel" | "workspace" | "none";
 
 /** What `environment.toggle` acts on: the Bot panel in a Bot chat, nothing on other Bots pages, else the workspace panel. */
 export function environmentToggleTarget(pathname: string): EnvironmentToggleTarget {

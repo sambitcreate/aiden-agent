@@ -14,25 +14,23 @@ export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query
 /**
  * Bots that live on paired Macs, grouped by Mac, as rows in the Bots sidebar.
  * Opening one opens its chat on that Mac; nothing about a remote Bot is stored
- * or run on this one. `query` narrows them with the sidebar's search.
+ * or run on this one. The sidebar narrows `groups` with its search first
+ * (`remoteBotGroupsMatching`).
  */
 export function RemoteBotsSection({
   groups,
   opening,
   onOpen,
-  query = "",
 }: {
   groups: readonly RemoteBotGroup[];
   /** `hostId/botId` of the Bot whose chat is being opened. */
   opening: string | null;
   onOpen(hostId: string, botId: string): void;
-  query?: string;
 }) {
-  const shown = remoteBotGroupsMatching(groups, query);
-  if (shown.length === 0) return null;
+  if (groups.length === 0) return null;
   return (
     <div className="mt-5 flex flex-col gap-5" data-remote-bots="true">
-      {shown.map(({ host, bots }) => (
+      {groups.map(({ host, bots }) => (
         <section key={host.id} aria-labelledby={`remote-bots-${host.id}`}>
           <div className="mb-1 flex items-center gap-1.5 px-2">
             <RemoteHostMarker hostLabel={host.label} stale={host.availability !== "online"} />

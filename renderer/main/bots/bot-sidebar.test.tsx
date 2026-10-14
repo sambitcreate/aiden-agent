@@ -1,7 +1,9 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+// Before anything loads react-dom, so React reports its commits to the probe.
+import { countRenders } from "./test-render-probe";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { rememberRoute } from "../../lib/bot-routes";
 import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
@@ -11,8 +13,9 @@ import {
   parseBotSidebarPreferences,
   serializeBotSidebarPreferences,
 } from "../../lib/bot-sidebar-preferences";
-import type { BotLiveSummary } from "../../shared/bot-live";
+import type { BotLiveSnapshot, BotLiveSummary, BotTranscriptEntry } from "../../shared/bot-live";
 import type { BotDefinition } from "../../shared/bots";
+import { BotRowMenus } from "./bot-menu";
 import { BotSidebar } from "./bot-sidebar";
 import { createBotTestQueryClient, mountWithBotRouter } from "./test-providers";
 import { botFixture } from "./test-fixtures";
@@ -26,6 +29,20 @@ const SCOUT = botFixture({ id: "bot-3", name: "Scout", description: "Finds place
 
 function summary(botId: string, patch: Partial<BotLiveSummary> = {}): BotLiveSummary {
   return { botId, preview: null, updatedAt: null, state: { kind: "idle" }, needsYou: false, lastReplyAt: null, ...patch };
+}
+
+function liveSnapshot(botId: string, entries: BotTranscriptEntry[] = [], partial: string | null = null): BotLiveSnapshot {
+  return {
+    botId,
+    epoch: "e1",
+    seq: 0,
+    entries,
+    partial,
+    state: partial === null ? { kind: "idle" } : { kind: "running", submissionId: "s1" },
+    question: null,
+    activity: null,
+    queued: [],
+  };
 }
 
 function sidebarIpc(
@@ -131,7 +148,7 @@ test("a working Bot's face works and its line reads Thinking…, and Needs you a
   assert.equal(within(rowButton("Planner")).getByTitle("Planner").hasAttribute("data-working"), true);
   assert.equal(within(rowButton("Inbox Helper")).getByTitle("Inbox Helper").hasAttribute("data-working"), false);
   asking = true;
-  emitBotTestNotification("bots:attention", { botId: "bot-1" });
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
   await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Needs you")));
   assert.ok(within(rowButton("Planner")).getByText("Waiting for you"));
   assert.equal(within(rowButton("Inbox Helper")).queryByText("Needs you") === null, true);
@@ -141,13 +158,24 @@ test("a working Bot's face works and its line reads Thinking…, and Needs you a
 test("a reply since the person last looked shows an unread dot, but not on the open Bot or on replies from before the sidebar existed", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1_000, pinnedBotId: null, lastViewed: { "bot-2": 5_000 } }),
+    serializeBotSidebarPreferences({ since: 1_000, pinnedBotId: null, lastViewed: { "bot-2": 5_000 }, seenReplyAt: { "bot-2": 5_000 } }),
   );
-  sidebarIpc([PLANNER, INBOX, SCOUT], {
-    "bot-1": summary("bot-1", { lastReplyAt: 9_000, updatedAt: 9_000 }),
-    "bot-2": summary("bot-2", { lastReplyAt: 6_000, updatedAt: 6_000 }),
-    "bot-3": summary("bot-3", { lastReplyAt: 500, updatedAt: 500 }),
-  });
+  sidebarIpc(
+    [PLANNER, INBOX, SCOUT],
+    {
+      "bot-1": summary("bot-1", { lastReplyAt: 9_000, updatedAt: 9_000 }),
+      "bot-2": summary("bot-2", { lastReplyAt: 6_000, updatedAt: 6_000 }),
+      "bot-3": summary("bot-3", { lastReplyAt: 500, updatedAt: 500 }),
+    },
+    {
+      // Main's chat and its summary agree: Inbox Helper's newest reply is the one at 6 000.
+      "bots:live:subscribe": (botId) =>
+        liveSnapshot(
+          botId as string,
+          botId === "bot-2" ? [{ id: "a1", type: "assistant", text: "Inbox is clear.", toolCalls: [], stopReason: "stop", at: 6_000 }] : [],
+        ),
+    },
+  );
   const { router } = await mountSidebar("/bots/bot-1");
   await waitFor(() => assert.ok(within(rowButton("Inbox Helper")).getByRole("img", { name: "Unread" })));
   assert.ok(screen.getByRole("button", { name: /^Inbox Helper.*Unread/u }), "the row's name says it is unread");
@@ -158,15 +186,52 @@ test("a reply since the person last looked shows an unread dot, but not on the o
   fireEvent.click(rowButton("Inbox Helper"));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
   await screen.findByRole("button", { name: "Inbox Helper profile" });
-  await router.navigate({ to: "/bots/$botId", params: { botId: "bot-1" } });
+  await act(() => router.navigate({ to: "/bots/$botId", params: { botId: "bot-1" } }));
   await waitFor(() => assert.equal(rowButton("Planner").getAttribute("aria-current"), "page"));
   assert.ok(noUnread("Inbox Helper"), "viewing its chat marked it read");
+});
+
+test("leaving a chat while a reply still streams shows that reply as unread once it finishes", async () => {
+  const replied = Date.now() - 60_000;
+  const streamStarted = Date.now() - 30_000;
+  let plannerReplyAt = replied;
+  sidebarIpc(
+    [PLANNER, INBOX],
+    {},
+    {
+      "bots:live:summary": (botId) =>
+        botId === "bot-1" ? summary("bot-1", { lastReplyAt: plannerReplyAt, updatedAt: plannerReplyAt }) : summary("bot-2"),
+      "bots:live:subscribe": (botId) =>
+        liveSnapshot(
+          botId as string,
+          botId === "bot-1"
+            ? [
+                { id: "u1", type: "user", text: "Plan dinners", imageCount: 0, at: replied - 1_000 },
+                { id: "a1", type: "assistant", text: "Here's Monday.", toolCalls: [], stopReason: "stop", at: replied },
+                { id: "u2", type: "user", text: "And Tuesday?", imageCount: 0, at: streamStarted - 1_000 },
+              ]
+            : [],
+          botId === "bot-1" ? "Tuesday is" : null,
+        ),
+    },
+  );
+  const { router } = await mountSidebar("/bots/bot-1/chat");
+  await screen.findByText("Here's Monday.");
+  // The person leaves while Tuesday's reply is still streaming.
+  fireEvent.click(rowButton("Inbox Helper"));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
+  await screen.findByRole("button", { name: "Inbox Helper profile" });
+  assert.ok(noUnread("Planner"), "nothing new yet");
+  // It finishes. Main times it from when it started streaming: before the person left.
+  plannerReplyAt = streamStarted;
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
+  await waitFor(() => assert.ok(within(rowButton("Planner")).getByRole("img", { name: "Unread" })));
 });
 
 test("Needs you outranks the unread dot, and the row still tells a screen reader it is unread", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1_000, pinnedBotId: null, lastViewed: {} }),
+    serializeBotSidebarPreferences({ since: 1_000, pinnedBotId: null, lastViewed: {}, seenReplyAt: {} }),
   );
   sidebarIpc([PLANNER], { "bot-1": summary("bot-1", { needsYou: true, lastReplyAt: 9_000 }) });
   await mountSidebar();
@@ -189,14 +254,14 @@ test("a Needs-you change re-reads only that Bot, and an older answer that arrive
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:live:summary").length, 2));
   const before = calls.length;
   hold = true;
-  emitBotTestNotification("bots:attention", { botId: "bot-1" });
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
   await waitFor(() => assert.equal(pending.length, 1));
-  emitBotTestNotification("bots:attention", { botId: "bot-1" });
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
   await waitFor(() => assert.equal(pending.length, 2));
   pending[1]!(summary("bot-1", { needsYou: true }));
   await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Needs you")));
   pending[0]!(summary("bot-1", { needsYou: false }));
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
   assert.ok(within(rowButton("Planner")).getByText("Needs you"), "the late, older answer is dropped");
   const reads = calls
     .slice(before)
@@ -277,7 +342,7 @@ test("Files from a row's right-click menu opens the panel, and closing the panel
   const filesTab = () => within(botPanel()).getByRole("tab", { name: "Files" });
   await waitFor(() => assert.equal(document.activeElement === filesTab(), true));
   // The menu's own close must not pull focus back out of the panel.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(document.activeElement === filesTab(), true);
   fireEvent.click(within(botPanel()).getByRole("button", { name: "Close Bot panel" }));
   await waitFor(() => assert.equal(document.activeElement === rowButton("Planner"), true));
@@ -327,7 +392,7 @@ test("Pin to top shows the Bot large above the rows, Unpin puts it back, and a d
 test("search narrows rows by name, subtitle or last message, finds the pinned Bot, and Clear brings everything back", async () => {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-3", lastViewed: {} }),
+    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-3", lastViewed: {}, seenReplyAt: {} }),
   );
   sidebarIpc([PLANNER, INBOX, SCOUT], { "bot-1": summary("bot-1", { preview: "Lisbon in May" }) });
   await mountSidebar();
@@ -411,7 +476,7 @@ test("a Bot's state change re-reads only that Bot's row; other changes to a Bot 
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:live:summary").length, 3));
   const readsAfter = (emit: () => void) => {
     const before = calls.length;
-    emit();
+    act(emit);
     return () =>
       calls
         .slice(before)
@@ -424,7 +489,7 @@ test("a Bot's state change re-reads only that Bot's row; other changes to a Bot 
     emitBotTestNotification("bots:changed", { botId: "bot-2", session: { kind: "running", submissionId: "s1" } }),
   );
   await waitFor(() => assert.deepEqual(session(), ["bot-2"]));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.deepEqual(session(), ["bot-2"], "one summary read, for that Bot only");
 
   const edited = readsAfter(() => emitBotTestNotification("bots:changed", { botId: "bot-2" }));
@@ -496,7 +561,7 @@ test("deleting a Bot from its own chat leaves nothing behind for it, not even a 
   fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
   fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete Bot" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots"));
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
   const stored = parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
   assert.equal(stored.lastViewed["bot-2"], undefined, "leaving the deleted Bot's chat does not mark it viewed");
 });
@@ -562,4 +627,93 @@ test("Bots on a paired Mac count: with only those, and with a search only they m
   assert.equal(screen.queryByText("No matching Bots") === null, true);
   fireEvent.change(screen.getByRole("searchbox", { name: "Search Bots" }), { target: { value: "zebra" } });
   assert.ok(screen.getByText("No matching Bots"));
+});
+
+test("Cancel in a row's Delete puts focus back on that row", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT]);
+  await mountSidebar();
+  const row = await screen.findByRole("button", { name: /^Inbox Helper/u });
+  row.focus();
+  fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog") === null, true));
+  await waitFor(() => assert.equal(document.activeElement === rowButton("Inbox Helper"), true));
+});
+
+test("the Menu key on a focused row opens that row's menu", async () => {
+  sidebarIpc([PLANNER, INBOX]);
+  const { router } = await mountSidebar();
+  const row = await screen.findByRole("button", { name: /^Planner/u });
+  row.focus();
+  fireEvent.keyDown(row, { key: "ContextMenu" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
+  assert.equal(router.state.location.searchStr, "?page=advanced");
+});
+
+test("deleting the pinned Bot leaves focus on the row below it on screen, not the next by activity", async () => {
+  localStorage.setItem(
+    BOT_SIDEBAR_PREFERENCES_KEY,
+    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-3", lastViewed: {}, seenReplyAt: {} }),
+  );
+  let bots = [PLANNER, INBOX, SCOUT];
+  sidebarIpc([], {
+    "bot-1": summary("bot-1", { updatedAt: 300 }),
+    "bot-2": summary("bot-2", { updatedAt: 200 }),
+    "bot-3": summary("bot-3", { updatedAt: 100 }),
+  }, {
+    "bots:list": () => bots,
+    "bots:delete": (botId) => {
+      bots = bots.filter((bot) => bot.id !== botId);
+    },
+  });
+  await mountSidebar();
+  const hero = await screen.findByRole("region", { name: "Pinned Bot" });
+  await waitFor(() => assert.deepEqual(rowOrder(), ["Planner", "Inbox Helper"]));
+  // Scout is pinned, so on screen it sits above Planner, though its activity is the oldest.
+  const heroRow = within(hero).getByRole("button", { name: /^Scout/u });
+  heroRow.focus();
+  fireEvent.keyDown(heroRow, { key: "F10", shiftKey: true });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Bot" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete Bot" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog") === null, true));
+  await waitFor(() => assert.equal(document.activeElement === rowButton("Planner"), true));
+});
+
+test("the pinned Bot says when it is working, as the rows do", async () => {
+  localStorage.setItem(
+    BOT_SIDEBAR_PREFERENCES_KEY,
+    serializeBotSidebarPreferences({ since: 1, pinnedBotId: "bot-1", lastViewed: {}, seenReplyAt: {} }),
+  );
+  sidebarIpc([PLANNER, INBOX], { "bot-1": summary("bot-1", { state: { kind: "running", submissionId: "s1" } }) });
+  await mountSidebar();
+  const hero = await screen.findByRole("region", { name: "Pinned Bot" });
+  const heroRow = within(hero).getByRole("button", { name: /^Planner/u });
+  const description = () => {
+    const id = heroRow.getAttribute("aria-describedby");
+    return id ? document.getElementById(id)?.textContent ?? "" : "";
+  };
+  await waitFor(() => assert.equal(description(), "Thinking…"));
+});
+
+test("opening another Bot redraws only the two rows whose selection changed", async () => {
+  const rowRenders = countRenders(BotRowMenus);
+  const MOSS = botFixture({ id: "bot-4", name: "Moss", description: "Garden" });
+  sidebarIpc([PLANNER, INBOX, SCOUT, MOSS], {
+    "bot-1": summary("bot-1", { updatedAt: 400 }),
+    "bot-2": summary("bot-2", { updatedAt: 300 }),
+    "bot-3": summary("bot-3", { updatedAt: 200 }),
+    "bot-4": summary("bot-4", { updatedAt: 100 }),
+  });
+  const { router } = await mountSidebar("/bots/bot-1/chat");
+  await waitFor(() => assert.deepEqual(rowOrder(), ["Planner", "Inbox Helper", "Scout", "Moss"]));
+  await screen.findByRole("button", { name: "Planner profile" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const before = rowRenders();
+  await act(() => router.navigate({ to: "/bots/$botId/chat", params: { botId: "bot-3" } }));
+  await screen.findByRole("button", { name: "Scout profile" });
+  await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(rowRenders() - before, 2, "Planner and Scout, not every row");
 });

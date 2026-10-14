@@ -4,7 +4,8 @@
 // redacted; read-only. One pass over the transcript, no rescans per reply.
 
 import type { BotTranscriptEntry } from "../../shared/bot-live";
-import { botSettleSteps, botStepFromCall, type BotRecapStep } from "./bot-activity-steps";
+import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
+import { walkBotTurns, type BotTurn } from "./bot-turns";
 
 export interface BotActivityReply {
   id: string;
@@ -16,14 +17,6 @@ export interface BotActivityReply {
 }
 
 export const BOT_ACTIVITY_TITLE_CHARS = 60;
-
-interface OpenReply extends BotActivityReply {
-  byCall: Map<string, BotRecapStep>;
-  /** The person pressed Stop during this reply. */
-  stopped: boolean;
-  /** The app restarted mid-reply; a call with no result was cut short, not failed. */
-  interrupted: boolean;
-}
 
 /** Enough of a message to fill a title after its spaces collapse; a huge message is never copied whole. */
 const TITLE_SCAN_UNITS = BOT_ACTIVITY_TITLE_CHARS * 4;
@@ -39,17 +32,21 @@ function shortTitle(text: string, fallback: string): string {
   return `${points.slice(0, BOT_ACTIVITY_TITLE_CHARS - 1).join("").trimEnd()}…`;
 }
 
-function openReply(id: string, title: string, routine: boolean, at: number | undefined): OpenReply {
-  return {
-    id,
-    title,
-    routine,
-    ...(at === undefined ? {} : { at }),
-    steps: [],
-    byCall: new Map(),
-    stopped: false,
-    interrupted: false,
-  };
+/** What started the turn, as a group title. */
+function replyTitle(start: BotTurn["start"]): { title: string; routine: boolean } {
+  switch (start.type) {
+    case "user": {
+      const photos = start.imageCount === 1 ? "Photo" : `${start.imageCount} photos`;
+      return { title: shortTitle(start.text, start.imageCount > 0 ? photos : "Message"), routine: false };
+    }
+    case "question_answer":
+      return { title: shortTitle(start.text, "Answer"), routine: false };
+    case "routine":
+      return { title: shortTitle(start.label, "Routine"), routine: true };
+    default:
+      // A reply with no visible input (the self-intro) still gets a group.
+      return { title: "Reply", routine: false };
+  }
 }
 
 /** Newest reply first; steps in the order they ran; a reply with no steps is left out. */
@@ -57,88 +54,22 @@ export function botActivityLog(
   entries: readonly BotTranscriptEntry[],
   { running }: { running: boolean },
 ): BotActivityReply[] {
-  const replies: OpenReply[] = [];
-  // Held in an object so the closure below does not narrow it to `never`.
-  const state: { current: OpenReply | null } = { current: null };
-
-  const begin = (id: string, title: string, routine: boolean, at: number | undefined) => {
-    state.current = openReply(id, title, routine, at);
-    replies.push(state.current);
-  };
-
-  // Same reading as the chat: a run that carries on after a stop marker was
-  // cut short by a restart, not stopped by the person.
-  const carriedOn = (reply: OpenReply) => {
-    if (!reply.stopped) return;
-    reply.stopped = false;
-    reply.interrupted = true;
-  };
-
-  for (const entry of entries) {
-    switch (entry.type) {
-      case "user": {
-        const photos = entry.imageCount === 1 ? "Photo" : `${entry.imageCount} photos`;
-        begin(entry.id, shortTitle(entry.text, entry.imageCount > 0 ? photos : "Message"), false, entry.at);
-        break;
-      }
-      case "question_answer":
-        begin(entry.id, shortTitle(entry.text, "Answer"), false, entry.at);
-        break;
-      case "routine":
-        begin(entry.id, shortTitle(entry.label, "Routine"), true, entry.at);
-        break;
-      case "assistant": {
-        // A reply with no visible input (the self-intro) still gets a group.
-        if (!state.current) begin(entry.id, "Reply", false, entry.at);
-        const reply = state.current!;
-        for (const call of entry.toolCalls) {
-          // Asking the person a question is not an action, as in the chat recap.
-          if (call.kind === "waiting") continue;
-          const step = botStepFromCall(call);
-          reply.steps.push(step);
-          reply.byCall.set(call.id, step);
-        }
-        if (entry.stopReason === "aborted") reply.stopped = true;
-        else carriedOn(reply);
-        break;
-      }
-      case "tool_result": {
-        const reply = state.current;
-        const step = reply?.byCall.get(entry.toolCallId);
-        if (step) step.status = entry.status;
-        if (entry.status === "stopped" && reply) reply.stopped = true;
-        break;
-      }
-      case "notice": {
-        const reply = state.current;
-        if (entry.notice === "interrupted" && reply) {
-          reply.stopped = false;
-          reply.interrupted = true;
-        }
-        state.current = null;
-        break;
-      }
-      case "failed_turn":
-        if (state.current) carriedOn(state.current);
-        break;
-      default:
-        break;
-    }
-  }
-
-  // Only the reply still open is live: one a restart notice closed has settled.
-  const open: OpenReply | null = state.current;
-  const liveId = running ? open?.id : undefined;
   const log: BotActivityReply[] = [];
-  for (let index = replies.length - 1; index >= 0; index -= 1) {
-    const { byCall: _byCall, stopped, interrupted, ...reply } = replies[index]!;
-    if (reply.steps.length === 0) continue;
-    log.push({
-      ...reply,
-      steps: reply.id === liveId ? reply.steps : botSettleSteps(reply.steps, stopped || interrupted),
-    });
-  }
-  return log;
+  // Same turns as the chat; only the reply still open is live.
+  walkBotTurns(entries, running, {
+    end(turn, live) {
+      // Asking the person a question is not an action, as in the chat recap.
+      const steps = turn.steps.filter((step) => step.kind !== "waiting");
+      if (steps.length === 0) return;
+      log.push({
+        id: turn.start.id,
+        ...replyTitle(turn.start),
+        ...(turn.startAt === undefined ? {} : { at: turn.startAt }),
+        steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
+      });
+    },
+  });
+  return log.reverse();
 }
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });

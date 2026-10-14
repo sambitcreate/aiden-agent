@@ -149,6 +149,11 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
 
 const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen, onAction }: RowProps) {
   const rowRef = React.useRef<HTMLButtonElement>(null);
+  const lineId = React.useId();
+  // The hero shows no preview; like the rows, it says when the Bot is working
+  // or why it stopped, as its description. "Needs you" is its own badge.
+  const line = botRowLine(row);
+  const description = line && (line.kind === "working" || line.kind === "status") ? line.text : null;
   return (
     <section aria-label="Pinned Bot" className="group relative mb-2">
       <BotRowMenus
@@ -163,6 +168,7 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
           type="button"
           data-bot-row={row.bot.id}
           aria-current={selected ? "page" : undefined}
+          aria-describedby={description ? lineId : undefined}
           className={cn(
             "flex w-full min-w-0 flex-col items-center gap-2 rounded-card px-3 py-3 transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover motion-reduce:transition-none",
             ROW_FOCUS,
@@ -188,6 +194,11 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
             <RowMarkers row={row} unread={unread} />
           </span>
+          {description ? (
+            <span id={lineId} hidden>
+              {description}
+            </span>
+          ) : null}
         </button>
       </BotRowMenus>
     </section>
@@ -241,11 +252,11 @@ export function BotSidebar() {
   const navRef = React.useRef<HTMLElement>(null);
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<{ bot: BotDefinition; neighbours: string[] } | null>(null);
-  const rowsRef = React.useRef(rows);
-  rowsRef.current = rows;
-  // Deleting a row's Bot leaves focus on the nearest row (below, then above), else New Bot.
+  // The rows in the order they are on screen: the pinned Bot first, then the list.
+  const visibleIdsRef = React.useRef<string[]>([]);
+  // Deleting a row's Bot leaves focus on the nearest row on screen (below, then above), else New Bot.
   const startDelete = React.useCallback((bot: BotDefinition) => {
-    const ids = rowsRef.current.map((row) => row.bot.id);
+    const ids = visibleIdsRef.current;
     const at = ids.indexOf(bot.id);
     const neighbours = at < 0 ? [] : [...ids.slice(at + 1), ...ids.slice(0, at).reverse()];
     setDeleting({ bot, neighbours });
@@ -267,6 +278,7 @@ export function BotSidebar() {
   const pinnedBotId = preferences.pinnedBotId;
   const pinnedRow = searching ? undefined : rows.find((row) => row.bot.id === pinnedBotId);
   const visible = rows.filter((row) => row !== pinnedRow && matchesBotSearch(row, query));
+  visibleIdsRef.current = [...(pinnedRow ? [pinnedRow.bot.id] : []), ...visible.map((row) => row.bot.id)];
   const remoteShown = remoteBotGroupsMatching(remote.groups, query);
   const openChat = React.useCallback((bot: BotDefinition) => void navigate(botChatPath(bot.id)), [navigate]);
   const closeSearch = () => {

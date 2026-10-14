@@ -22,8 +22,8 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { queryKeys, useBot } from "../../lib/queries";
-import { useSharedBotLive } from "../../lib/use-bot-live";
-import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import { useBotLive } from "../../lib/use-bot-live";
+import { BOT_FAILED_TURN_TEXT, botLastReplyAt, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
@@ -36,7 +36,7 @@ import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
 import { useBotMenuActions } from "./bot-menu";
 import { useBotPanelActions } from "./bot-panel-context";
-import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
+import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-preferences";
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
@@ -474,10 +474,12 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
-  const live = useSharedBotLive(botId);
+  const live = useBotLive(botId);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
-  const { preferences, markViewed } = useBotSidebarPreferences();
+  // Only the pin is read here, so another Bot's view or pin never redraws the transcript.
+  const pinned = useIsBotPinned(botId);
+  const { markViewed } = botSidebarPreferenceActions;
   const menuAction = useBotMenuActions(() => setDeleteOpen(true));
   const [retrying, setRetrying] = React.useState(false);
   const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
@@ -485,18 +487,20 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
-  const entryCount = snapshot?.entries.length ?? 0;
+  const replyAt = snapshot ? botLastReplyAt(snapshot.entries) : null;
   const botFound = Boolean(bot.data);
-  // Seeing the chat, every message that arrives while it is open, and leaving
-  // it all clear its unread dot: a reply's time can be when it began streaming.
-  // A Bot that is gone (not found, or just deleted) is never marked: its
-  // preferences were forgotten with it.
+  // The chat has seen every finished reply it shows: opening it, and each reply
+  // that finishes while it is open, move the seen-reply watermark (main's time
+  // for that reply) so its unread dot clears. A reply still streaming when the
+  // person leaves is not in `entries` yet, so it is unread once it finishes.
+  // Leaving records only when the chat was last open. A Bot that is gone (not
+  // found, or just deleted) is never marked: its preferences were forgotten with it.
   React.useEffect(() => {
-    if (botFound) markViewed(botId);
-  }, [botFound, botId, entryCount, markViewed]);
+    if (botFound) markViewed(botId, replyAt);
+  }, [botFound, botId, replyAt, markViewed]);
   React.useEffect(
     () => () => {
-      if (qc.getQueryData(queryKeys.bot(botId))) markViewed(botId);
+      if (qc.getQueryData(queryKeys.bot(botId))) markViewed(botId, null);
     },
     [botId, markViewed, qc],
   );
@@ -537,7 +541,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             <BotPanelToggle />
             <BotChatActions
               bot={current}
-              pinned={preferences.pinnedBotId === current.id}
+              pinned={pinned}
               onAction={(action, returnFocus) => menuAction(current, action, returnFocus)}
             />
           </>

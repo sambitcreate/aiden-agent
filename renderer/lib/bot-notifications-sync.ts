@@ -12,7 +12,7 @@ import { invalidateBotCanonicalPhotos } from "./bot-canonical-photo-cache";
 import { onNotification } from "./ipc";
 import { queryKeys } from "./queries";
 
-export async function invalidateForBotsChanged(queryClient: QueryClient, payload: unknown): Promise<void> {
+async function invalidateForBotsChanged(queryClient: QueryClient, payload: unknown): Promise<void> {
   const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const botId = typeof record.botId === "string" && record.botId ? record.botId : null;
   if (botId && "session" in record) {
@@ -30,7 +30,7 @@ export async function invalidateForBotsChanged(queryClient: QueryClient, payload
 }
 
 /** "Re-read this Bot's summary", never the whole list; a payload without a Bot is ignored. */
-export async function invalidateForBotAttention(queryClient: QueryClient, payload: unknown): Promise<void> {
+async function invalidateForBotAttention(queryClient: QueryClient, payload: unknown): Promise<void> {
   const botId = payload && typeof payload === "object" ? (payload as { botId?: unknown }).botId : undefined;
   if (typeof botId === "string" && botId) await queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(botId) });
 }

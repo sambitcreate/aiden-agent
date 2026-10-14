@@ -6,7 +6,7 @@
 import type { BotApprovals } from "./bot-approvals.js";
 import type { BotQuestions } from "./bot-questions.js";
 
-export interface BotAttentionDeps {
+interface BotAttentionDeps {
   questions: Pick<BotQuestions, "onChange">;
   approvals: Pick<BotApprovals, "onChange">;
   broadcast(channel: "bots:attention", payload: { botId: string }): void;

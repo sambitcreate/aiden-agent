@@ -23,12 +23,10 @@ export interface BotSidebarRow {
   lastReplyAt: number | null;
 }
 
-export const BOT_WORKING_LINE = "Thinking…";
-export const BOT_WAITING_LINE = "Waiting for you";
+const BOT_WORKING_LINE = "Thinking…";
+const BOT_WAITING_LINE = "Waiting for you";
 
-export const botLiveSummaryKey = queryKeys.botLiveSummary;
-
-export function botSidebarRows(
+function botSidebarRows(
   bots: readonly BotDefinition[],
   summaries: ReadonlyArray<BotLiveSummary | undefined>,
 ): BotSidebarRow[] {
@@ -51,7 +49,7 @@ export function matchesBotSearch(row: BotSidebarRow, query: string): boolean {
   return matchesSearch([row.bot.name, row.bot.description ?? "", row.preview ?? ""], query);
 }
 
-export type BotRowLine = { kind: "working" | "waiting" | "status" | "preview"; text: string };
+type BotRowLine = { kind: "working" | "waiting" | "status" | "preview"; text: string };
 
 export function botRowLine(row: BotSidebarRow): BotRowLine | null {
   if (row.needsYou) return { kind: "waiting", text: BOT_WAITING_LINE };
@@ -71,7 +69,7 @@ async function readLiveSummary(queryClient: QueryClient, botId: string): Promise
   latestSummaryRead.set(botId, read);
   const summary = await botsApi.liveSummary(botId);
   if (latestSummaryRead.get(botId) === read) return summary;
-  return queryClient.getQueryData<BotLiveSummary>(botLiveSummaryKey(botId)) ?? summary;
+  return queryClient.getQueryData<BotLiveSummary>(queryKeys.botLiveSummary(botId)) ?? summary;
 }
 
 export function useBotRows() {
@@ -80,7 +78,7 @@ export function useBotRows() {
   const list = bots.data ?? [];
   const summaries = useQueries({
     queries: list.map((bot) => ({
-      queryKey: botLiveSummaryKey(bot.id),
+      queryKey: queryKeys.botLiveSummary(bot.id),
       queryFn: () => readLiveSummary(queryClient, bot.id),
       retry: false,
     })),

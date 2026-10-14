@@ -4,7 +4,7 @@ import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RemoteBotsSection } from "../components/remote-bots-section";
+import { RemoteBotsSection, remoteBotGroupsMatching } from "../components/remote-bots-section";
 import { SCRATCH_PROJECT } from "../components/remote-new-chat-pickers";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
@@ -276,9 +276,11 @@ test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac 
     { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },
     { host: laptop, bots: [{ id: "bot-3", name: "Planner" }] },
   ];
-  const searched = dom(renderToStaticMarkup(<RemoteBotsSection groups={groups} opening={null} onOpen={noop} query="pull requests" />));
+  const shown = (query: string) =>
+    renderToStaticMarkup(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
+  const searched = dom(shown("pull requests"));
   assert.equal(searched.button(/^Reviewer, on Studio$/u) !== undefined, true);
   assert.equal(searched.button(/^Scribe, on Studio$/u) === undefined, true);
   assert.doesNotMatch(searched.text, /On Laptop/u);
-  assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={groups} opening={null} onOpen={noop} query="zebra" />), "");
+  assert.equal(shown("zebra"), "");
 });

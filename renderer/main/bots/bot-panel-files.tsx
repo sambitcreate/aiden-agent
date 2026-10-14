@@ -48,6 +48,34 @@ export function BotPanelFiles({
   // Try again re-reads only what failed: the list or the open file.
   const [listAttempt, setListAttempt] = React.useState(0);
   const [documentAttempt, setDocumentAttempt] = React.useState(0);
+  // Opening a file or going back to All files unmounts the focused button; the
+  // view that replaces it takes focus, so it never falls to the page (where
+  // Escape no longer closes the panel). Only a person's choice here moves it.
+  const focusAfterSwap = React.useRef<{ to: "heading" } | { to: "row"; path: string } | null>(null);
+  const headingRef = React.useRef<HTMLHeadingElement>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
+  const openFile = (next: string) => {
+    focusAfterSwap.current = { to: "heading" };
+    setPath(next);
+  };
+  const showAllFiles = () => {
+    if (path !== null) focusAfterSwap.current = { to: "row", path };
+    setPath(null);
+  };
+
+  React.useLayoutEffect(() => {
+    const target = focusAfterSwap.current;
+    focusAfterSwap.current = null;
+    if (!target) return;
+    if (target.to === "heading") {
+      headingRef.current?.focus();
+      return;
+    }
+    const row = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-file-path]") ?? []).find(
+      (element) => element.dataset.filePath === target.path,
+    );
+    (row ?? listRef.current)?.focus();
+  }, [path]);
 
   React.useLayoutEffect(() => {
     if (pendingKey === null || pendingPath === null) return;
@@ -129,14 +157,19 @@ export function BotPanelFiles({
     return (
       <div className="flex min-h-0 flex-col gap-2">
         <div>
-          <Button variant="transparent" size="small" onClick={() => setPath(null)}>
+          <Button variant="transparent" size="small" onClick={showAllFiles}>
             <ChevronLeft aria-hidden="true" />
             All files
           </Button>
         </div>
-        <Text as="h2" variant="strong" className="truncate px-1" title={path}>
+        <h2
+          ref={headingRef}
+          tabIndex={-1}
+          className="truncate rounded-control px-1 text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+          title={path}
+        >
           {path.split("/").pop() || path}
-        </Text>
+        </h2>
         {document === null || document.status === "loading" ? (
           loading("Opening file")
         ) : document.status === "failed" ? (
@@ -174,7 +207,7 @@ export function BotPanelFiles({
           description={`When ${botName} writes a list, a note, or a plan, it shows up here.`}
         />
       ) : (
-        <ul aria-label="Files" className="flex flex-col gap-0.5">
+        <ul ref={listRef} aria-label="Files" tabIndex={-1} className="flex flex-col gap-0.5 outline-none">
           {files.map((entry) => (
             <li key={entry.path} style={{ paddingLeft: `${entry.depth * 16}px` }}>
               {entry.kind === "file" ? (
@@ -182,7 +215,8 @@ export function BotPanelFiles({
                   variant="transparent"
                   size="medium"
                   className="w-full justify-start gap-2"
-                  onClick={() => setPath(entry.path)}
+                  data-file-path={entry.path}
+                  onClick={() => openFile(entry.path)}
                 >
                   <File aria-hidden="true" className="text-secondary" />
                   <span className="truncate">{entry.name}</span>

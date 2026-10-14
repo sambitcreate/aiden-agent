@@ -58,7 +58,7 @@ class BotLiveStore {
     // A subscribe that failed before this consumer arrived must not leave it
     // looking at an error nobody is retrying. This runs only when a consumer
     // joins or `reload` is called, never in a loop.
-    else if (this.state.failed) this.restart();
+    else if (this.state.failed) this.restart(true);
     return () => {
       this.listeners.delete(listener);
       if (this.listeners.size > 0) return;
@@ -83,10 +83,16 @@ class BotLiveStore {
     for (const listener of [...this.listeners]) listener();
   }
 
-  private restart(): void {
+  /**
+   * `reload` starts over from nothing. A consumer joining a failed store keeps
+   * the last view on screen, still flagged as failed, until the new snapshot
+   * arrives; a retry that fails too leaves that view in place.
+   */
+  private restart(keepView = false): void {
+    const kept = keepView ? this.state.snapshot : null;
     this.stop();
-    this.publish(EMPTY_STATE);
-    this.start();
+    this.publish(kept ? { snapshot: kept, failed: true } : EMPTY_STATE);
+    this.start(kept);
   }
 
   private stop(): void {
@@ -96,7 +102,7 @@ class BotLiveStore {
     this.state = EMPTY_STATE;
   }
 
-  private start(): void {
+  private start(kept: BotLiveSnapshot | null = null): void {
     const { botId } = this;
     let active = true;
     let current: BotLiveSnapshot | null = null;
@@ -134,8 +140,9 @@ class BotLiveStore {
           if (!active || request !== latestRequest) return;
           buffered = [];
           if (!shown) {
-            // Nothing to show yet: say so, and let the person retry (`reload`).
-            this.publish({ snapshot: null, failed: true });
+            // Nothing new to show: say so, keeping any view a join retry kept,
+            // and let the person retry (`reload`).
+            this.publish({ snapshot: kept, failed: true });
             return;
           }
           // A re-subscribe after a gap failed: keep the last view and try again
@@ -214,19 +221,4 @@ export function useBotLive(botId: string | undefined): BotLiveView {
   const { snapshot, failed } = state;
   const reload = store.reload;
   return React.useMemo(() => ({ snapshot, failed, reload }), [snapshot, failed, reload]);
-}
-
-/**
- * Holds a Bot's live subscription open for everything inside (the chat and the
- * side panel), so a tab or panel closing never decides whether the chat keeps
- * updating.
- */
-export function BotLiveProvider({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  useBotLive(botId);
-  return React.createElement(React.Fragment, null, children);
-}
-
-/** Reads a Bot's live view; shares the one subscription with every other reader of that Bot. */
-export function useSharedBotLive(botId: string | undefined): BotLiveView {
-  return useBotLive(botId);
 }

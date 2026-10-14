@@ -1,5 +1,5 @@
 import * as React from "react";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../../lib/command-system";
 import { BotChatRoute } from "../bot-chat-route";
@@ -50,7 +50,10 @@ export async function mountWithBotRouter(
 ) {
   const harness = createBotRouterHarness(children, options);
   await harness.router.load();
-  render(harness.element);
+  // The router settles its first match after mounting; let it inside act.
+  await act(async () => {
+    render(harness.element);
+  });
   return { router: harness.router, queryClient: harness.queryClient };
 }
 

@@ -4,7 +4,7 @@
 // panel on that tab, beside that Bot's chat.
 
 import * as React from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
 import {
   Button,
@@ -34,7 +34,7 @@ const PANEL_ACTIONS: ReadonlySet<BotMenuAction> = new Set(["files", "memory", "r
  * menu's close leaves focus with the panel instead of pulling it back to the
  * trigger. Each menu owns one, so a choice in one menu never affects another.
  */
-export interface BotMenuFocusGuard {
+interface BotMenuFocusGuard {
   /** Pass as the menu content's `onCloseAutoFocus`. */
   onCloseAutoFocus(event: Event): void;
   /** The chosen action ran and opened the panel. */
@@ -195,9 +195,10 @@ export function BotRowMenus({
 /** What each menu item does for a Bot. Delete is the caller's, because it owns the confirmation. */
 export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
   const navigate = useNavigate();
+  const router = useRouter();
   const { show } = useBotPanelActions();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const chatBotId = botChatRouteBotId(pathname);
+  // Read when an item is chosen, not subscribed to: switching Bots must not hand
+  // every memoised row a new callback.
   return React.useCallback(
     (bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null) => {
       switch (action) {
@@ -211,7 +212,7 @@ export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
         case "memory":
         case "routines":
           show(action, { returnFocus });
-          if (chatBotId !== bot.id) void navigate(botChatPath(bot.id));
+          if (botChatRouteBotId(router.state.location.pathname) !== bot.id) void navigate(botChatPath(bot.id));
           return;
         case "pin":
           botSidebarPreferenceActions.togglePin(bot.id);
@@ -221,6 +222,6 @@ export function useBotMenuActions(onDelete: (bot: BotDefinition) => void) {
           return;
       }
     },
-    [chatBotId, navigate, onDelete, show],
+    [navigate, onDelete, router, show],
   );
 }

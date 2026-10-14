@@ -42,7 +42,7 @@ export interface BotPanelActions {
   consumeFocusRequest(): boolean;
 }
 
-export interface BotPanelState {
+interface BotPanelState {
   open: boolean;
   tab: BotPanelTab;
   /** Cleared when the chat moves to a different Bot. Apply it only when `botId` is the Bot on screen. */
@@ -51,9 +51,9 @@ export interface BotPanelState {
   focusRequest: number;
 }
 
-export type BotPanelValue = BotPanelState & BotPanelActions;
+type BotPanelValue = BotPanelState & BotPanelActions;
 
-export function parseBotPanelTab(value: string | null): BotPanelTab {
+function parseBotPanelTab(value: string | null): BotPanelTab {
   return (BOT_PANEL_TABS as readonly string[]).includes(value ?? "") ? (value as BotPanelTab) : "activity";
 }
 

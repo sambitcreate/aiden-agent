@@ -14,7 +14,7 @@ import {
 } from "@tanstack/react-router";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 import type { BotMemoryView } from "../../shared/bot-memory";
-import { BotLiveProvider, useBotLive, useSharedBotLive } from "../../lib/use-bot-live";
+import { useBotLive } from "../../lib/use-bot-live";
 import {
   BOT_PANEL_OPEN_KEY,
   BOT_PANEL_TAB_KEY,
@@ -26,6 +26,8 @@ import {
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 import { BotPanelFiles } from "./bot-panel-files";
 import { BotPanelActivity } from "./bot-panel-activity";
+import { BotChatPane } from "./bot-chat-pane";
+import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 import { shouldRestoreEnvironmentFocus } from "../../lib/environment-panel-state";
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
@@ -305,16 +307,16 @@ const liveCalls = (calls: { channel: string }[], channel: "subscribe" | "unsubsc
   calls.filter((call) => call.channel === `bots:live:${channel}`).length;
 
 function LiveProbe({ label }: { label: string }) {
-  const live = useSharedBotLive("bot-1");
+  const live = useBotLive("bot-1");
   return <p aria-label={label}>{live.snapshot ? `${live.snapshot.entries.length} entries` : "loading"}</p>;
 }
 
 function SharedLive({ second }: { second: boolean }) {
   return (
-    <BotLiveProvider botId="bot-1">
+    <>
       <LiveProbe label="Chat view" />
       {second ? <LiveProbe label="Activity view" /> : null}
-    </BotLiveProvider>
+    </>
   );
 }
 
@@ -326,13 +328,13 @@ test("a Bot's chat and its Activity tab share one live subscription, and closing
   const view = render(<SharedLive second />);
   await waitFor(() => assert.equal(screen.getByLabelText("Activity view").textContent, "0 entries"));
   view.rerender(<SharedLive second={false} />);
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "e1",
     seq: 1,
     type: "entry",
     entry: { id: "u1", type: "user", text: "Plan dinners", imageCount: 0 },
-  });
+  }));
   await waitFor(() => assert.equal(screen.getByLabelText("Chat view").textContent, "1 entries"));
   assert.equal(liveCalls(calls, "subscribe"), 1);
   assert.equal(liveCalls(calls, "unsubscribe"), 0);
@@ -394,15 +396,15 @@ test("switching Bots never shows the old Bot's conversation, even for an old eve
   await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-1:bot-1-u0"));
   view.rerender(tree("bot-2"));
   assert.equal(screen.getByLabelText("Switched").textContent, "loading", "not the old Bot's view, not even for one render");
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "e1",
     seq: 1,
     type: "entry",
     entry: { id: "late", type: "user", text: "too late", imageCount: 0 },
-  });
+  }));
   assert.equal(screen.getByLabelText("Switched").textContent, "loading");
-  answerSecond(liveSnapshot("bot-2", "second Bot's message"));
+  act(() => answerSecond(liveSnapshot("bot-2", "second Bot's message")));
   await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-2:bot-2-u0"));
   assert.deepEqual(
     calls.filter((call) => call.channel.startsWith("bots:live:")).map((call) => `${call.channel}:${String(call.args[0])}`),
@@ -527,6 +529,49 @@ test("a consumer joining a store that failed after it had a view retries it", as
     assert.equal(calls, 6, "joining retried the subscription once");
     assert.equal(liveCalls(ipc, "subscribe"), 6);
     assert.equal(screen.getByLabelText("Panel").textContent, "ready");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a joining consumer's retry that fails too keeps the last view on screen, flagged as failed", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    let calls = 0;
+    installBotTestIpc({
+      "bots:live:subscribe": () => {
+        calls += 1;
+        if (calls === 1) return liveSnapshot("bot-1", "still here");
+        throw new Error("main went away");
+      },
+      "bots:live:unsubscribe": () => undefined,
+    });
+    function Kept({ label }: { label: string }) {
+      const live = useBotLive("bot-1");
+      return <p aria-label={label}>{`${live.snapshot ? live.snapshot.entries.length : "none"} ${live.failed ? "failed" : "ok"}`}</p>;
+    }
+    const flush = () => act(async () => { for (let index = 0; index < 5; index += 1) await Promise.resolve(); });
+    const view = render(<Kept label="Chat" />);
+    await flush();
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "e1", seq: 9, type: "partial", text: "x" }));
+    await flush();
+    for (const delay of [500, 1000, 1500]) {
+      mock.timers.tick(delay);
+      await flush();
+    }
+    assert.equal(screen.getByLabelText("Chat").textContent, "1 failed");
+    assert.equal(calls, 5, "the first view, the gap's re-subscribe and three retries");
+    view.rerender(
+      <>
+        <Kept label="Chat" />
+        <Kept label="Panel" />
+      </>,
+    );
+    assert.equal(screen.getByLabelText("Panel").textContent, "1 failed", "the joiner sees the kept view while it retries");
+    await flush();
+    assert.equal(calls, 6, "joining retried the subscription once");
+    assert.equal(screen.getByLabelText("Chat").textContent, "1 failed", "the retry failed, and the view is still there");
+    assert.equal(screen.getByLabelText("Panel").textContent, "1 failed");
   } finally {
     mock.timers.reset();
   }
@@ -696,15 +741,29 @@ test("Activity shows every step even when the chat keeps its activity quiet", as
   );
 });
 
-test("Files lists the Bot's folder and opens a file read-only, with All files to go back", async () => {
+test("Files lists the Bot's folder and opens a file read-only, with All files to go back, keeping focus in the panel", async () => {
   const { calls } = await mountBotChat(FILE_HANDLERS);
   fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
   fireEvent.click(panelTab("Files"));
-  fireEvent.click(await within(botPanel()).findByRole("button", { name: "groceries.md" }));
+  const fileRow = await within(botPanel()).findByRole("button", { name: "groceries.md" });
+  fileRow.focus();
+  fireEvent.click(fileRow);
   assert.equal((await within(botPanel()).findByLabelText("Contents of lists/groceries.md")).textContent, "eggs\nmilk");
   assert.deepEqual(calls.find((call) => call.channel === "bots:files:read")?.args, ["bot-1", "lists/groceries.md"]);
-  fireEvent.click(within(botPanel()).getByRole("button", { name: "All files" }));
+  // The row it was on is gone; focus lands on the open file's name, not on the page.
+  await waitFor(() =>
+    assert.equal(document.activeElement === within(botPanel()).getByRole("heading", { name: "groceries.md" }), true),
+  );
+  const allFiles = within(botPanel()).getByRole("button", { name: "All files" });
+  allFiles.focus();
+  fireEvent.click(allFiles);
   assert.ok(await within(botPanel()).findByRole("list", { name: "Files" }));
+  await waitFor(() =>
+    assert.equal(document.activeElement === within(botPanel()).getByRole("button", { name: "groceries.md" }), true),
+  );
+  // Escape still closes the panel, because focus never fell out of it.
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
 });
 
 test("Files opens a requested file only for its own Bot, once, and not again after a remount", async () => {
@@ -920,11 +979,13 @@ test("Activity says when the conversation couldn't be read, and Try again reads 
   );
 });
 
-test("the Activity log's scroller can be reached by keyboard and is named", async () => {
+test("the Activity log's scroller can be reached by keyboard, inside a tab panel named once", async () => {
   await mountBotChat();
   fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
-  const region = await within(botPanel()).findByRole("region", { name: "Activity" });
-  assert.equal(region.tabIndex, 0);
+  const tabPanel = await within(botPanel()).findByRole("tabpanel", { name: "Activity" });
+  const scroller = within(tabPanel).getByText("No activity yet").closest("[tabindex]") as HTMLElement | null;
+  assert.equal(scroller?.tabIndex, 0, "the scroller takes a tab stop");
+  assert.equal(within(botPanel()).queryByRole("region", { name: "Activity" }) === null, true, "no second landmark repeats the name");
 });
 
 function deferred<T>() {
@@ -1063,4 +1124,43 @@ test("a live event re-renders the Activity tab and leaves the Files tab alone", 
   }
   await waitFor(() => assert.ok(activityRenders() >= activityBefore + 3, "the probe sees Activity re-render"));
   assert.equal(filesRenders(), filesBefore, "Files did not re-render");
+});
+
+test("a streamed token leaves a mounted Activity log alone; a new step redraws it", async () => {
+  const activityRenders = countRenders(BotPanelActivity);
+  await mountBotChat();
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  await within(botPanel()).findByText("No activity yet");
+  const before = activityRenders();
+  for (let seq = 1; seq <= 3; seq += 1) {
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "e1", seq, type: "partial", text: "Here".repeat(seq) }));
+  }
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  assert.equal(activityRenders(), before, "tokens don't redraw the log");
+  act(() =>
+    emitBotTestNotification("bots:live:event", {
+      botId: "bot-1",
+      epoch: "e1",
+      seq: 4,
+      type: "entry",
+      entry: { id: "u1", type: "user", text: "Plan dinners", imageCount: 0 },
+    }),
+  );
+  await waitFor(() => assert.ok(activityRenders() > before, "an entry does"));
+});
+
+test("another Bot's pin or visit leaves the open chat alone; its own pin redraws it", async () => {
+  const chatRenders = countRenders(BotChatPane);
+  await mountBotChat();
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  const before = chatRenders();
+  act(() => botSidebarPreferenceActions.togglePin("bot-9"));
+  act(() => botSidebarPreferenceActions.markViewed("bot-9", 5));
+  assert.equal(chatRenders(), before, "the transcript is not redrawn for another Bot");
+  act(() => botSidebarPreferenceActions.togglePin("bot-1"));
+  assert.ok(chatRenders() > before, "its own pin is shown in its menu");
 });

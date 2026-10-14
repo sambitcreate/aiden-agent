@@ -1,7 +1,7 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
@@ -117,22 +117,22 @@ test("a question leaves the chat when the live view reports it settled, and its 
       }),
   });
   assert.ok(await screen.findByRole("heading", { name: "Which colour should the banner use?" }));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "question",
     question: null,
-  });
+  }));
   // Read textContent: a Testing Library query here stalls the test DOM once the composer remounts.
   await waitFor(() => assert.equal(document.body.textContent?.includes("Which colour should the banner use?"), false));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "entry",
     entry: { id: "qa1", type: "question_answer", text: "Blue" },
-  });
+  }));
   assert.ok(await screen.findByText("Blue"));
   assert.ok(screen.getByPlaceholderText("Ask Planner"), "the composer is back");
 });
@@ -151,13 +151,13 @@ test("a sequence gap re-subscribes and shows the fresh snapshot", async () => {
     },
   });
   assert.ok(await screen.findByText("Plan Lisbon"));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 3,
     type: "entry",
     entry: assistantEntry("a1", "Here is a plan for Lisbon."),
-  });
+  }));
   assert.ok(await screen.findByText("Here is a plan for Lisbon."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
 });
@@ -173,13 +173,13 @@ test("a new epoch from a reopened Bot replaces the view with a fresh snapshot", 
     },
   });
   assert.ok(await screen.findByText("Old session message"));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-2",
     seq: 1,
     type: "partial",
     text: null,
-  });
+  }));
   assert.ok(await screen.findByText("Back after reopening"));
   assert.equal(screen.queryByText("Old session message"), null);
 });
@@ -340,13 +340,13 @@ test("a tool call that needs approval asks in the chat and answers by wait id", 
     "bots:pendingApprovals": () => [],
     "bots:approve": () => ({ decided: true }),
   });
-  emitBotTestNotification("bots:approval", {
+  act(() => emitBotTestNotification("bots:approval", {
     botId: "bot-1",
     waitId: "wait-7",
     toolCallId: "call-7",
     toolName: "send_email",
     summary: "Send the weekly update to the team.",
-  });
+  }));
   const card = await screen.findByRole("group", { name: "Planner needs approval" });
   assert.ok(within(card).getByText("Send the weekly update to the team."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
@@ -385,13 +385,13 @@ test("an approval whose answer fails to send comes back so it can be answered ag
     "bots:pendingApprovals": () => [],
     "bots:approve": () => Promise.reject(new Error("The approval could not be sent.")),
   });
-  emitBotTestNotification("bots:approval", {
+  act(() => emitBotTestNotification("bots:approval", {
     botId: "bot-1",
     waitId: "wait-8",
     toolCallId: "call-8",
     toolName: "share_image",
     summary: "Share the chart.",
-  });
+  }));
   const card = await screen.findByRole("group", { name: "Planner needs approval" });
   assert.ok(within(card).getByText("Planner wants to use Share image."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
@@ -435,14 +435,14 @@ test("the status line follows live activity, and hides while the reply's words s
       }),
   });
   await waitFor(() => assert.equal(announced(), "Reading, groceries.md"));
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "activity",
     activity: { phase: "writing", startedAt: Date.now() },
-  });
-  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." });
+  }));
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." }));
   await waitFor(() => assert.equal(screen.queryByText("Reading") === null, true));
   assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
 });
@@ -456,31 +456,31 @@ test("one status region stays mounted from an idle chat through streaming, so ea
   assert.ok(region, "the region is there before the Bot does anything");
   assert.equal(announced(), "");
 
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "state",
     state: { kind: "running", submissionId: "s1" },
-  });
-  emitBotTestNotification("bots:live:event", {
+  }));
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "activity",
     activity: { phase: "writing", startedAt: Date.now() },
-  });
+  }));
   await waitFor(() => assert.equal(announced(), "Writing"));
-  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 3, type: "partial", text: "Let me check." });
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 3, type: "partial", text: "Let me check." }));
   await waitFor(() => assert.equal(announced(), "", "words are streaming, so the region is quiet"));
 
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 4,
     type: "activity",
     activity: { phase: "reading", startedAt: Date.now(), step: { kind: "reading", label: "Reading", detail: "notes.md" } },
-  });
+  }));
   await waitFor(() => assert.equal(announced(), "Reading, notes.md"), { timeout: 3_000 });
   assert.equal(statusRegion() === region, true, "the same region announced both stretches");
 });
@@ -553,13 +553,13 @@ test("a renderer reload mid-reply shows the partial reply from the fresh snapsho
   // The reloaded document mounts the chat again and subscribes once more.
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
   await screen.findByRole("button", { name: "Planner profile" });
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 5,
     type: "partial",
     text: "Once upon a time there was a fox.",
-  });
+  }));
   assert.ok(await screen.findByText("Once upon a time there was a fox."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
@@ -754,15 +754,15 @@ test("a streaming reply doesn't pull the chat down while the person reads earlie
   const port = measurableScrollport(2_000, 400);
   port.scrollUserTo(300);
 
-  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" });
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "partial", text: "Once upon" }));
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 2,
     type: "partial",
     text: "Once upon a time there was a fox.",
-  });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  }));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(port.scrollTop(), 300, "the reader keeps their place");
 
   // The way back down is one click away.
@@ -859,13 +859,13 @@ test("a failed answer keeps the proposal answerable, and one answered elsewhere 
   );
   assert.ok(within(card).getByText("Add a routine?"));
 
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "entry",
     entry: proposalEntry("accepted", "task-9"),
-  });
+  }));
   assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
 });
 
@@ -920,7 +920,7 @@ test("a queued message leaves the page when the queue event empties it", async (
       snapshot({ ...QUEUED_BASE, queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }] }),
   });
   assert.ok(await screen.findByText("Also add dessert"));
-  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "queued", queued: [] });
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "queued", queued: [] }));
   await waitFor(() => assert.equal(document.body.textContent?.includes("Also add dessert"), false));
   assert.equal(screen.queryByText("Queued"), null);
 });
@@ -958,20 +958,19 @@ test("the chat header's face works only while the Bot works, and a photo gets a 
     assert.equal(face.hasAttribute("data-working"), true);
     assert.ok(face.querySelector('[data-aiden-mark="glance"]'));
   });
-  emitBotTestNotification("bots:live:event", {
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "state",
     state: { kind: "idle" },
-  });
+  }));
   await waitFor(() => assert.equal(face.hasAttribute("data-working"), false));
   assert.equal(face.querySelector('[data-aiden-mark="glance"]'), null);
 });
 
-test("an open chat keeps its Bot read: a reply that arrives while it is open, and leaving it, both mark it viewed", async () => {
-  const viewedAt = () =>
-    parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now()).lastViewed["bot-1"] ?? 0;
+test("an open chat keeps its Bot read: a reply that finishes while it is open is seen, and leaving records the visit", async () => {
+  const stored = () => parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
   installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "Plan Lisbon")] }),
@@ -980,23 +979,25 @@ test("an open chat keeps its Bot read: a reply that arrives while it is open, an
   });
   const { router } = await mountWithBotRouter(null, { initialPath: "/bots/bot-1/chat" });
   await screen.findByText("Plan Lisbon");
-  await waitFor(() => assert.ok(viewedAt() > 0, "opening the chat views it"));
-  const opened = viewedAt();
+  await waitFor(() => assert.ok((stored().lastViewed["bot-1"] ?? 0) > 0, "opening the chat records the visit"));
+  assert.equal(stored().seenReplyAt["bot-1"], undefined, "no reply to have seen yet");
+  const opened = stored().lastViewed["bot-1"] ?? 0;
 
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  emitBotTestNotification("bots:live:event", {
+  // Main times a reply from when it began streaming.
+  const replyAt = Date.now() - 2_000;
+  act(() => emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
     epoch: "epoch-1",
     seq: 1,
     type: "entry",
-    entry: assistantEntry("a1", "Here is a plan for Lisbon."),
-  });
+    entry: { ...assistantEntry("a1", "Here is a plan for Lisbon."), at: replyAt },
+  }));
   await screen.findByText("Here is a plan for Lisbon.");
-  await waitFor(() => assert.ok(viewedAt() > opened, "the reply arrived while the chat was open"));
-  const replied = viewedAt();
+  await waitFor(() => assert.equal(stored().seenReplyAt["bot-1"], replyAt, "the reply that finished while open is seen"));
 
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await router.navigate({ to: "/scheduled" });
+  await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+  await act(() => router.navigate({ to: "/scheduled" }));
   await waitFor(() => assert.equal(screen.queryByText("Plan Lisbon") === null, true, "the chat is gone"));
-  assert.ok(viewedAt() > replied, "leaving the chat");
+  assert.ok((stored().lastViewed["bot-1"] ?? 0) > opened, "leaving records when it was last open");
+  assert.equal(stored().seenReplyAt["bot-1"], replyAt, "leaving never claims a reply the chat didn't show");
 });

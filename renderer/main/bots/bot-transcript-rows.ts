@@ -13,7 +13,8 @@ import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry 
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
-import { botSettleSteps, botStepFromCall, type BotRecapStep } from "./bot-activity-steps";
+import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
+import { walkBotTurns, type BotTurn } from "./bot-turns";
 
 export interface BotTranscriptRowOptions {
   running: boolean;
@@ -48,20 +49,6 @@ export type BotTranscriptRow =
       routineId?: string;
     };
 
-interface Turn {
-  id: string;
-  startAt?: number;
-  lastAt?: number;
-  /** Index of the turn's answer bubble in `rows`, once it has one. */
-  answerRow: number | null;
-  steps: BotRecapStep[];
-  byCall: Map<string, BotRecapStep>;
-  /** The person pressed Stop during this reply. */
-  stopped: boolean;
-  /** The app restarted mid-turn; a call with no result was cut short, not failed. */
-  interrupted: boolean;
-}
-
 export function botTranscriptRows(
   entries: readonly BotTranscriptEntry[],
   partial: string | null,
@@ -69,139 +56,80 @@ export function botTranscriptRows(
 ): BotTranscriptRow[] {
   const rows: BotTranscriptRow[] = [];
   const retryable = running ? null : botRetryableFailedTurn(entries);
-  // The current turn, once a message has started one.
-  const state: { turn: Turn | null } = { turn: null };
+  /** Index of each turn's answer bubble in `rows`, once it has one. */
+  const answerRows = new Map<BotTurn, number>();
 
-  const endTurn = (live: boolean) => {
-    const turn = state.turn;
-    state.turn = null;
-    if (!turn) return;
-    const steps = turn.steps.filter((step) => step.kind !== "waiting");
-    if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
-      const recap: BotTranscriptRow = {
-        kind: "recap",
-        id: `${turn.id}:recap`,
-        steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
-        durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
-        live,
-      };
-      if (live || turn.answerRow === null) rows.push(recap);
-      else rows.splice(turn.answerRow, 0, recap);
-    }
-    if (turn.stopped && !live) rows.push({ kind: "stopped", id: `${turn.id}:stopped` });
-  };
-
-  const beginTurn = (id: string, at: number | undefined) => {
-    endTurn(false);
-    state.turn = {
-      id,
-      ...(at === undefined ? {} : { startAt: at, lastAt: at }),
-      answerRow: null,
-      steps: [],
-      byCall: new Map(),
-      stopped: false,
-      interrupted: false,
-    };
-  };
-
-  // A person's Stop ends the run. If the run carries on after a stop marker, a
-  // restart cut it short and Resume or a retry picked it up: no stopped line.
-  const carriedOn = (turn: Turn) => {
-    if (!turn.stopped) return;
-    turn.stopped = false;
-    turn.interrupted = true;
-  };
-
-  const touch = (at: number | undefined) => {
-    if (state.turn && at !== undefined) state.turn.lastAt = at;
-  };
-
-  for (const entry of entries) {
-    switch (entry.type) {
-      case "user":
-        // Every message starts a turn: a steer is placed after the round's tool results, so it never splits a step from its result.
-        beginTurn(entry.id, entry.at);
-        rows.push({ kind: "user", id: entry.id, text: entry.text });
-        break;
-      case "question_answer":
-        beginTurn(entry.id, entry.at);
-        rows.push({ kind: "user", id: entry.id, text: entry.text });
-        break;
-      case "routine":
-        beginTurn(entry.id, entry.at);
-        rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
-        break;
-      case "assistant": {
-        // A reply with no visible input (the self-intro) still gets a turn.
-        if (!state.turn) beginTurn(entry.id, entry.at);
-        const turn = state.turn!;
-        touch(entry.at);
-        for (const call of entry.toolCalls) {
-          const recapStep = botStepFromCall(call);
-          turn.steps.push(recapStep);
-          turn.byCall.set(call.id, recapStep);
-        }
-        if (entry.stopReason === "aborted") turn.stopped = true;
-        else carriedOn(turn);
-        if (entry.text.trim()) {
-          if (entry.toolCalls.length === 0) turn.answerRow = rows.length;
-          rows.push({ kind: "assistant", id: entry.id, text: entry.text });
-        }
-        break;
+  walkBotTurns(entries, running, {
+    end(turn, live) {
+      const steps = turn.steps.filter((step) => step.kind !== "waiting");
+      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live))) {
+        const recap: BotTranscriptRow = {
+          kind: "recap",
+          id: `${turn.start.id}:recap`,
+          steps: live ? steps : botSettleSteps(steps, turn.stopped || turn.interrupted),
+          durationMs: Math.max(0, (turn.lastAt ?? 0) - (turn.startAt ?? turn.lastAt ?? 0)),
+          live,
+        };
+        const answerRow = answerRows.get(turn);
+        if (live || answerRow === undefined) rows.push(recap);
+        else rows.splice(answerRow, 0, recap);
       }
-      case "file":
-        rows.push({ kind: "file", id: entry.id, path: entry.path, operation: entry.operation });
-        break;
-      case "shared_image":
-        rows.push({ kind: "image", id: entry.id, name: entry.name, mimeType: entry.mimeType, size: entry.size, data: entry.data });
-        break;
-      case "notice":
-        // A restart cut the turn short; the person did not stop it.
-        if (entry.notice === "interrupted" && state.turn) {
-          state.turn.stopped = false;
-          state.turn.interrupted = true;
-        }
-        endTurn(false);
-        rows.push({ kind: "notice", id: entry.id, notice: entry.notice });
-        break;
-      case "connect_card":
-        rows.push({ kind: "connect", id: entry.id, card: entry.card });
-        break;
-      case "failed_turn":
-        if (state.turn) carriedOn(state.turn);
-        rows.push({
-          kind: "failed",
-          id: entry.id,
-          retryText: retryable?.id === entry.id ? entry.retryText : null,
-          ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
-        });
-        break;
-      case "memory_update":
-        // Back-to-back saves read as one update.
-        if (rows[rows.length - 1]?.kind !== "memory_update") rows.push({ kind: "memory_update", id: entry.id });
-        break;
-      case "routine_proposal":
-        rows.push({
-          kind: "routine_proposal",
-          id: entry.id,
-          proposal: entry.proposal,
-          status: entry.status,
-          ...(entry.routineId ? { routineId: entry.routineId } : {}),
-        });
-        break;
-      case "tool_result": {
-        touch(entry.at);
-        const recapStep = state.turn?.byCall.get(entry.toolCallId);
-        if (recapStep) recapStep.status = entry.status;
-        // A Stop during a tool run writes only the round's results; no aborted reply follows.
-        // A later "interrupted" notice still turns it back into a restart.
-        if (entry.status === "stopped" && state.turn) state.turn.stopped = true;
-        break;
+      if (turn.stopped && !live) rows.push({ kind: "stopped", id: `${turn.start.id}:stopped` });
+    },
+    entry(entry, turn) {
+      switch (entry.type) {
+        case "user":
+        case "question_answer":
+          // Every message starts a turn: a steer is placed after the round's tool results, so it never splits a step from its result.
+          rows.push({ kind: "user", id: entry.id, text: entry.text });
+          break;
+        case "routine":
+          rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
+          break;
+        case "assistant":
+          if (entry.text.trim()) {
+            if (entry.toolCalls.length === 0 && turn) answerRows.set(turn, rows.length);
+            rows.push({ kind: "assistant", id: entry.id, text: entry.text });
+          }
+          break;
+        case "file":
+          rows.push({ kind: "file", id: entry.id, path: entry.path, operation: entry.operation });
+          break;
+        case "shared_image":
+          rows.push({ kind: "image", id: entry.id, name: entry.name, mimeType: entry.mimeType, size: entry.size, data: entry.data });
+          break;
+        case "notice":
+          rows.push({ kind: "notice", id: entry.id, notice: entry.notice });
+          break;
+        case "connect_card":
+          rows.push({ kind: "connect", id: entry.id, card: entry.card });
+          break;
+        case "failed_turn":
+          rows.push({
+            kind: "failed",
+            id: entry.id,
+            retryText: retryable?.id === entry.id ? entry.retryText : null,
+            ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
+          });
+          break;
+        case "memory_update":
+          // Back-to-back saves read as one update.
+          if (rows[rows.length - 1]?.kind !== "memory_update") rows.push({ kind: "memory_update", id: entry.id });
+          break;
+        case "routine_proposal":
+          rows.push({
+            kind: "routine_proposal",
+            id: entry.id,
+            proposal: entry.proposal,
+            status: entry.status,
+            ...(entry.routineId ? { routineId: entry.routineId } : {}),
+          });
+          break;
+        case "tool_result":
+          break;
       }
-    }
-  }
-
-  endTurn(running);
+    },
+  });
   if (partial !== null && partial.trim()) {
     rows.push({ kind: "assistant", id: "partial", text: partial, ...(running ? { streaming: true } : {}) });
   }
