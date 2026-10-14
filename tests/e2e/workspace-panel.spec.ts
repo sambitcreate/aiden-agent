@@ -84,12 +84,18 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
     });
   await setWindowWidth(1600);
   let panel = page.getByRole("complementary", { name: "Environment work surface" });
+  const tabNames = () => panel.getByRole("tab").allTextContents();
   await page.locator("[data-environment-toggle]").click();
+  await expect(panel).toBeVisible();
+  await expect
+    .poll(async () => (await panel.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(0);
   await panel.getByRole("button", { name: "Files", exact: true }).click();
   await panel.getByRole("button", { name: "New workspace tab" }).click();
   await panel.getByRole("button", { name: "Context", exact: true }).click();
   let separator = panel.getByRole("separator", { name: "Resize environment panel" });
   await expect(separator).toHaveAttribute("aria-valuenow", "560");
+  await expect.poll(tabNames).toEqual(["Files", "Context"]);
   await separator.focus();
   await page.keyboard.press("ArrowRight");
   await expect(separator).toHaveAttribute("aria-valuenow", "544");
@@ -103,13 +109,21 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
   await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveCount(1);
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
   await expect(separator).toHaveAttribute("aria-valuenow", "544");
+  await expect.poll(tabNames).toEqual(["Files", "Context", "New tab"]);
 
+  // Select a real tab so reopening on the launcher is a real oracle.
+  await panel.getByRole("tab", { name: "Files", exact: true }).click();
+  await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await sendToggle();
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "closed");
   await sendToggle();
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
   await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveCount(1);
+  await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveCount(1);
 });
 
 test("Quick View docks beside the chat on a narrower window and floats over it when there is no room", async ({
