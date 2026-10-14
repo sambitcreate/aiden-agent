@@ -815,3 +815,94 @@ test("Stop pressed while nothing runs is ignored, so the next reply never starts
     await live.close();
   }
 });
+
+/** Every distinct (turn start, phase) the line showed, in order. */
+function observedTurns(events: readonly BotLiveEvent[]): Array<{ startedAt: number; phase: string }> {
+  const seen: Array<{ startedAt: number; phase: string }> = [];
+  for (const event of events) {
+    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : null;
+    if (!activity) continue;
+    const last = seen[seen.length - 1];
+    if (last?.startedAt !== activity.startedAt || last.phase !== activity.phase) {
+      seen.push({ startedAt: activity.startedAt, phase: activity.phase });
+    }
+  }
+  return seen;
+}
+
+test("a Resume that never started a run does not mark the next turn, and one that did marks only its own", async () => {
+  const fauxModels = createFauxModels(
+    [fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30))],
+    { tokensPerSecond: 40 },
+  );
+  let interrupted = false;
+  const holder: { live?: Harness } = {};
+  const live = await start(fauxModels, {
+    projection: {
+      state: async (botId) => (interrupted ? { kind: "interrupted", submissionId: "earlier" } : holder.live!.service.state(botId)),
+    },
+  });
+  holder.live = live;
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const reply = async (text: string, requestId: string) => {
+      const sent = await live.service.send("bot:a", { text, requestId });
+      await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+      await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    };
+
+    // A Resume while the Bot is not interrupted (stale button, second window) is refused.
+    await live.projection.notifyResuming("bot:a");
+    await reply("first", "desk-1");
+    assert.equal(observedPhases(tape.events).includes("resuming"), false);
+
+    // A Resume that failed before any run began is forgotten.
+    interrupted = true;
+    await live.projection.notifyResuming("bot:a");
+    interrupted = false;
+    live.projection.cancelResuming("bot:a");
+    const before = tape.events.length;
+    await reply("second", "desk-2");
+    assert.equal(observedPhases(tape.events.slice(before)).includes("resuming"), false);
+
+    // A Resume that did start the run reads "resuming" for that run only.
+    interrupted = true;
+    await live.projection.notifyResuming("bot:a");
+    interrupted = false;
+    const resumedFrom = tape.events.length;
+    await reply("third", "desk-3");
+    assert.ok(observedPhases(tape.events.slice(resumedFrom)).includes("resuming"));
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a follow-up turn queued behind a running one gets its own start time and a clean line", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("word ".repeat(20))], { tokensPerSecond: 40 });
+  let tick = 1_000;
+  const live = await start(fauxModels, { projection: { now: () => (tick += 1_000) } });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "writing", { what: "the first reply to stream" });
+    live.projection.notifyStopping("bot:a");
+    await waitFor(() => tape.view?.activity?.phase === "stopping", { what: "the stopping line" });
+    const queued = await live.service.send("bot:a", { text: "and another", requestId: "desk-2" });
+    await live.service.awaitReply("bot:a", queued.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the replies to land" });
+    const turns = observedTurns(tape.events);
+    const starts = [...new Set(turns.map((turn) => turn.startedAt))];
+    assert.ok(starts.length >= 2, JSON.stringify(turns));
+    assert.ok(starts[1]! > starts[0]!, JSON.stringify(turns));
+    const second = turns.filter((turn) => turn.startedAt === starts[1]);
+    assert.notEqual(second[0]?.phase, "stopping", JSON.stringify(turns));
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});

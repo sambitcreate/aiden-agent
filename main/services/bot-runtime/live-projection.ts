@@ -407,6 +407,15 @@ export function livePartialText(docs: Readonly<Record<string, unknown>>): string
   return text;
 }
 
+/** The run's identity, or null when none: a queued follow-up starts a new run while `pi.live.run` stays present. */
+function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
+  const live = docs["pi.live"] as { run?: { taskId?: unknown; inputs?: unknown } } | undefined;
+  const run = live?.run;
+  if (run === undefined) return null;
+  const inputs = Array.isArray(run.inputs) ? run.inputs : [];
+  return `${String(run.taskId)}:${String(inputs[0])}`;
+}
+
 function liveRunActive(docs: Readonly<Record<string, unknown>>): boolean {
   const live = docs["pi.live"] as { run?: unknown } | undefined;
   return live?.run !== undefined;
@@ -526,8 +535,15 @@ export interface BotLiveProjection {
   refreshQuestion(botId: string): Promise<void>;
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
-  /** The next run starts from Resume: it reads "Picking up where it left off" until it moves on. */
-  notifyResuming(botId: string): void;
+  /**
+   * The next run starts from Resume: it reads "Picking up where it left off" until it moves on.
+   * Honoured only while the Bot is interrupted; resolves once the flag is set or refused.
+   */
+  notifyResuming(botId: string): Promise<void>;
+  /** The Resume did not start a run (it failed or was refused): forget it. */
+  cancelResuming(botId: string): void;
+  /** The Stop did not take (it failed): the run goes on and no longer reads "Stopping". */
+  cancelStopping(botId: string): void;
   /** An approval appeared or settled: re-derive the activity. */
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
@@ -560,6 +576,8 @@ interface Feed {
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
   runActive: boolean;
+  /** Identity of the current run; a follow-up turn replaces the run without a gap. */
+  runKey: string | null;
   watch: ConversationWatch;
   cancel: () => void;
   ended: boolean;
@@ -655,8 +673,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const subscriber of subscribers.get(feed.botId) ?? []) enqueue(subscriber, feed.botId, event);
   }
 
-  function waitingOn(botId: string): boolean {
-    return (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
+  function waitingOn(feed: Feed): boolean {
+    return feed.question !== null || deps.approvalPending?.(feed.botId) === true;
   }
 
   /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
@@ -665,7 +683,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     return (
       liveBotActivity({
         ...feed.frame,
-        waiting: waitingOn(feed.botId),
+        waiting: waitingOn(feed),
         stopping: feed.stopping,
         resuming: feed.resuming,
         startedAt: feed.startedAt,
@@ -681,6 +699,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     emit(feed, { type: "activity", activity });
   }
 
+  /** A new run began: its start time, Stop and Resume marks belong to it alone. */
   function startRun(feed: Feed): void {
     feed.startedAt = now();
     feed.stopping = false;
@@ -718,6 +737,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
     if (feed.ended) return;
     feed.frame = { entries, docs };
+    const runKey = liveRunKey(docs);
+    // A queued follow-up replaces the run without the feed ever seeing it end.
+    if (runKey !== null && feed.runKey !== null && runKey !== feed.runKey && feed.state.kind === "running") {
+      startRun(feed);
+    }
+    feed.runKey = runKey;
     applyEntries(feed, await resolveCards(feed.botId, projectBotTranscript(entries)));
     const partial = livePartialText(docs);
     if (partial !== feed.partial) {
@@ -735,6 +760,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     setState(feed, state);
     updateActivity(feed);
     if (!runActive) {
+      feed.stopping = false;
+      feed.resuming = false;
+      resumingBots.delete(feed.botId);
       deps.onRunSettled?.(feed.botId, state);
       void closeIfUnwatched(feed);
     }
@@ -783,6 +811,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         resuming: false,
         frame: { entries: initial.entries, docs: initial.docs },
         runActive: liveRunActive(initial.docs),
+        runKey: liveRunKey(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
         ended: false,
@@ -899,8 +928,22 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       });
     },
 
-    notifyResuming(botId) {
-      resumingBots.add(botId);
+    async notifyResuming(botId) {
+      const state = await deps.state(botId).catch(() => null);
+      if (state?.kind === "interrupted") resumingBots.add(botId);
+    },
+
+    cancelResuming(botId) {
+      resumingBots.delete(botId);
+    },
+
+    cancelStopping(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      void enqueueWork(feed, async () => {
+        feed.stopping = false;
+        updateActivity(feed);
+      });
     },
 
     async refreshActivity(botId) {
