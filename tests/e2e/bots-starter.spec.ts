@@ -33,7 +33,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       state.created = true;
       return { bot: fixture, created: true };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
@@ -160,7 +160,7 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
       state.created += 1;
       return { bot: fixture, created: true };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);

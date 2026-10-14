@@ -1,0 +1,32 @@
+# Bot chat activity (2026-10-14)
+
+Spec: docs/superpowers/specs/2026-10-14-bot-chat-activity-design.md (§17 lists the slice B rulings). Slice B plan: docs/superpowers/plans/2026-10-14-bot-chat-activity-b-status-line.md. Branch `claude/bot-chat-activity-b-status-line`, stacked on PR #475.
+
+## Slice B (desktop) — what shipped
+- Phase vocabulary and tool classifier: `renderer/shared/bot-activity.ts` (shared with main, the CLI, and slice D's phones). Unknown ids → `working`. Always "Thinking" keeps waiting/stopping/reconnecting.
+- Main derives `BotLiveSnapshot.activity` + `activity` event in `live-projection.ts` (`liveBotActivity`), gated on session state `running` (a paused Bot still has `pi.live.run`). Stop/Resume reach it through `notifyStopping`/`notifyResuming` in the `bots:stop`/`bots:resume` handlers; approvals refresh it via `botApprovals.onChange`.
+- Run identity is the run's first input (`inputs[0]`), not the generation task id. Resume is marked by the service's `onResumed` callback inside the per-Bot serialize; Stop/Resume flags are run-scoped (a double Stop never leaks "Stopping" into the next turn). `startedAt` renews for a queued follow-up turn.
+- Transcript tool calls carry `kind/label/detail/app` (`bot-activity-detail.ts`). Command steps never show the command: only the model's `description`, redacted with `sanitizeDiagnosticText` before cutting to 80. Tool results carry `status: ok|failed|blocked|stopped` (Pi's `blocked` diagnostic; `stopped` for Stop/restart, rendered neutrally) and `durationMs`.
+- `BotDefinition.chatActivity?` `{ level: quiet|summary|detailed, wording: follows|thinking }`; absent = Quiet/Follows; an update without it keeps the stored value. It is stored last in the Bot record (the revision hashes the record JSON); identity updates merge a partial `chatActivity` onto the freshly read Bot. Remote identity PATCH still rejects it (slice D).
+- Renderer: `BotStatusLine` (hides only while reply text streams with no active tool step; announcements via sr-only text inside `role="status"`, 2 s throttle), `BotActivityRecap` (Bot-specific, not ActivityFeed), progress narration as bubbles (`BotUpdates` and `bot-reply-projection.ts` deleted), "You stopped this reply." derived from `stopReason: "aborted"`. Every user entry begins a turn (pi-durable places steers after a round's tool results).
+- Queue/Steer: `pi.inbox` projected as `snapshot.queued` — the person's own inputs only, classified by durable submission requestId (`routine:`/`intro:`) plus the hidden flag, failing closed. Follow-ups show faded with Remove (`bots:withdraw` → `Harness.abortSubmission`: withdrawn | started | gone); steers are normal bubbles.
+- Advanced → Chat activity (`?page=chat-activity`, `bot-chat-activity-page.tsx`): saves on pick through a serial queue, per-level Reduce Motion still frames, Reduce Motion read live.
+- `BotAvatar` faces glance via `data-working` with a shared off-screen observer; list's green dot removed.
+- Onboarding: the Bots gallery tile (`BotsArt`: name pill, one exchange, routine chip) shows neither the list nor the Updates line, so it needed no redraw.
+
+## For slice D (phones)
+- Remote wire is unchanged by B. D adds `activity` (phase, app ≤ 40, startedAt only) to the session stream and `chatActivity` to detail/PATCH behind `bot-activity-v1`; reuse `botActivityDisplay`, `botElapsedLabel` and `nextBotAnnouncement` semantics and the §5 table as the shared fixture.
+- Remote Stop/Resume bypass the IPC handlers, so phone Stop/Resume don't show Stopping/resuming on the Mac; D's planned `botTurnIntents` covers it.
+- Choosing Chat activity changes the Bot revision, so a phone's next identity edit gets `revision_conflict` and refreshes (safe).
+
+## Follow-ups and deferred minors
+- Pre-existing on main: adding a description to a Bot that had none gives a save/reload revision mismatch (projectBot key order vs update append), a spurious conflict after restart. A canonical-JSON hash would fix it but changes every revision once.
+- Accessibility: the status region and its sr-only text are inserted together, so the first phase may be silent on NVDA/JAWS/VoiceOver. Fix: keep an always-mounted empty `role="status"` wrapper in the pane and populate it. Needs a VoiceOver check before merge. Stale top-of-file comment in `bot-status-line.tsx` ("accessible name changes").
+- `botToolApp` derives the app label from the sanitized MCP tool name (lossy for punctuation or ~50+ char names); a real label from `facts.mcpTools()` would be better. `botToolPhase(toolName, app?)` gives `working` if `app` is forgotten.
+- Untested step phrases (editing, photo, computer, helper, remembering plural, routine, waiting, working); "Using an app" fallback is not in the spec.
+- Model-authored command descriptions pass only the generic redactor (a repeated `-pSecret` flag would show). Infrastructure throws in `checkPolicy` also yield "blocked".
+- Recap: rows/header are not memoised per partial delta; `aria-controls` points to an unrendered region; truncated header has no title; `durationMs` default 0 shows "Worked for 1s"; missing tests for non-adjacent repeats, interrupted-with-unfinished-call, toggle across turn change; stale previous-turn recap when running precedes the new user entry.
+- Transcript: live recap may jump after commit when the partial becomes narration; possible one-frame duplicate partial/committed bubble and remount flash on commit (key "partial" vs entry id) — check manually; desktop no longer de-dupes repeated paragraphs (phones still do).
+- Queue: Remove focus moves before the withdraw resolves; the fade couples to `MessageBubble`'s private `bg-control` class (prefer a variant prop); the hidden flag is not durable (latent); a missing-id streak is never logged; no backoff on permanent inspect failure (1/s per live feed); an `openFeed` failure could orphan a retry timer.
+- Runtime: `deps.state` rejection at run end leaves `{preparing}` stuck (pre-existing fallback); interrupted-with-run and approval-flip lack projection-level tests; `onResumed` → projection wire (`bot-session-main.ts`) is untested end to end and unguarded inside serialize.
+- Chat activity page: `useReducedMotion` subscribe closure re-subscribes every render (hoist); Summary still-frame folded state not asserted; Pause under Reduce Motion freezes mid-loop.
