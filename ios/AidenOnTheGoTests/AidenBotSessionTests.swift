@@ -6,12 +6,13 @@ import XCTest
 private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var _sessions: [Result<AidenBotSession, Error>] = []
-    private var _streams: [[AidenBotSessionEvent]] = []
+    private var _streams: [(events: [AidenBotSessionEvent], staysOpen: Bool)] = []
     private var _sessionRequests = 0
     private var _streamRequests = 0
     private var _resumeKeys: [UUID] = []
     private var _sendKeys: [UUID] = []
     private var _sendTexts: [String] = []
+    private var _sendModes: [AidenStreamInputMode?] = []
     private var _sendErrors: [Error] = []
     private var _connectionKeys: [UUID] = []
     private var _resumeResults: [Result<AidenBotSessionStateView, Error>] = []
@@ -20,6 +21,14 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _proposalResults: [Result<AidenBotRoutineProposalRespondResult, Error>] = []
     private var resumeGate: CheckedContinuation<Void, Never>?
     var holdResume = false
+    private var sendGate: CheckedContinuation<Void, Never>?
+    /// Holds each message request until `releaseSend()`.
+    var holdSend = false
+    private var stopGate: CheckedContinuation<Void, Never>?
+    /// Holds each Stop until `releaseStop()`.
+    var holdStop = false
+    private var _stopResults: [Result<AidenBotSessionStateView, Error>] = []
+    private var _stopKeys: [UUID] = []
 
     private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
@@ -28,10 +37,14 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
 
     func queueSession(_ result: Result<AidenBotSession, Error>) { locked { _sessions.append(result) } }
-    func queueStream(_ events: [AidenBotSessionEvent]) { locked { _streams.append(events) } }
+    func queueStream(_ events: [AidenBotSessionEvent], staysOpen: Bool = false) { locked { _streams.append((events, staysOpen)) } }
     func queueResume(_ result: Result<AidenBotSessionStateView, Error>) { locked { _resumeResults.append(result) } }
     func failConnections(with error: Error) { locked { _connectionError = error } }
     func failNextSend(with error: Error) { locked { _sendErrors.append(error) } }
+    func queueStop(_ result: Result<AidenBotSessionStateView, Error>) { locked { _stopResults.append(result) } }
+    var isHoldingSend: Bool { locked { sendGate != nil } }
+    var isHoldingStop: Bool { locked { stopGate != nil } }
+    var stopKeys: [UUID] { locked { _stopKeys } }
     func queueProposalResult(_ result: Result<AidenBotRoutineProposalRespondResult, Error>) {
         locked { _proposalResults.append(result) }
     }
@@ -44,12 +57,29 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     var resumeKeys: [UUID] { locked { _resumeKeys } }
     var sendKeys: [UUID] { locked { _sendKeys } }
     var sendTexts: [String] { locked { _sendTexts } }
+    var sendModes: [AidenStreamInputMode?] { locked { _sendModes } }
     var connectionKeys: [UUID] { locked { _connectionKeys } }
 
     func releaseResume() {
         let gate = locked { () -> CheckedContinuation<Void, Never>? in
             defer { resumeGate = nil }
             return resumeGate
+        }
+        gate?.resume()
+    }
+
+    func releaseSend() {
+        let gate = locked { () -> CheckedContinuation<Void, Never>? in
+            defer { sendGate = nil }
+            return sendGate
+        }
+        gate?.resume()
+    }
+
+    func releaseStop() {
+        let gate = locked { () -> CheckedContinuation<Void, Never>? in
+            defer { stopGate = nil }
+            return stopGate
         }
         gate?.resume()
     }
@@ -64,13 +94,15 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
 
     func botSessionEvents(botId: String) -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
-        let events = locked { () -> [AidenBotSessionEvent] in
+        let next = locked { () -> (events: [AidenBotSessionEvent], staysOpen: Bool) in
             _streamRequests += 1
-            return _streams.isEmpty ? [] : _streams.removeFirst()
+            return _streams.isEmpty ? ([], false) : _streams.removeFirst()
         }
         return AsyncThrowingStream { continuation in
-            for event in events { continuation.yield(event) }
-            if events.isEmpty {
+            for event in next.events { continuation.yield(event) }
+            // A stream that stays open ends only when its listener is cancelled.
+            if next.staysOpen { return }
+            if next.events.isEmpty {
                 continuation.finish(throwing: URLError(.networkConnectionLost))
             } else {
                 continuation.finish()
@@ -86,7 +118,13 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         let error = locked { () -> Error? in
             _sendKeys.append(idempotencyKey)
             _sendTexts.append(request.text)
+            _sendModes.append(request.whenBusy)
             return _sendErrors.isEmpty ? nil : _sendErrors.removeFirst()
+        }
+        if holdSend {
+            await withCheckedContinuation { continuation in
+                locked { sendGate = continuation }
+            }
         }
         if let error { throw error }
         return try AidenRemoteJSONDecoder.decode(
@@ -111,7 +149,14 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
 
     func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
-        try AidenBotSessionStateView(state: .idle)
+        locked { _stopKeys.append(idempotencyKey) }
+        if holdStop {
+            await withCheckedContinuation { continuation in
+                locked { stopGate = continuation }
+            }
+        }
+        let next = locked { _stopResults.isEmpty ? nil : _stopResults.removeFirst() }
+        return try (next ?? .success(try AidenBotSessionStateView(state: .idle))).get()
     }
 
     func answerBotQuestion(
@@ -1500,6 +1545,11 @@ final class AidenBotActivityContractTests: XCTestCase {
         for id in ["", "Reading", "1abc", "_abc", "a-b", "a b", String(repeating: "a", count: 33), "reading\u{FF21}"] {
             XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, ["phase": id, "startedAt": 0]), id)
         }
+        // startedAt spans every integer JavaScript represents exactly, 0 through 2^53 − 1.
+        let latest = 9_007_199_254_740_991
+        XCTAssertEqual(try decode(AidenBotSessionActivity.self, ["phase": "reading", "startedAt": latest]).startedAt, latest)
+        XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, ["phase": "reading", "startedAt": latest + 1]))
+        XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, ["phase": "reading", "startedAt": -1]))
     }
 
     func testRequestsEncodeExactlyTheFixtureBodies() throws {
@@ -1539,5 +1589,495 @@ final class AidenBotActivityContractTests: XCTestCase {
             let now = try XCTUnwrap(row["now"] as? NSNumber).intValue
             XCTAssertEqual(AidenBotElapsed.label(startedAt: startedAt, nowMs: now), row["label"] as? String, "\(row)")
         }
+    }
+}
+
+/// Contract revision 30 in the session model: the status line, Reconnecting,
+/// Queued messages and Steer/Queue.
+@MainActor
+final class AidenBotSessionActivityTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+    private let started = 1_760_450_000_000
+
+    private func running(
+        _ activity: AidenBotSessionActivity?,
+        epoch: String = "epoch_a",
+        seq: Int = 4,
+        partial: String? = nil,
+        queued: [AidenBotQueuedMessage] = []
+    ) throws -> AidenBotSession {
+        AidenBotSession(
+            botId: botID,
+            epoch: epoch,
+            seq: seq,
+            stateView: try AidenBotSessionStateView(state: .running),
+            partial: partial,
+            entries: [],
+            hasOlder: false,
+            activity: activity,
+            queued: queued
+        )
+    }
+
+    private func idle() throws -> AidenBotSession {
+        AidenBotSession(
+            botId: botID,
+            epoch: "epoch_a",
+            seq: 4,
+            stateView: try AidenBotSessionStateView(state: .idle),
+            partial: nil,
+            entries: [],
+            hasOlder: false
+        )
+    }
+
+    private func event(epoch: String = "epoch_a", seq: Int, _ kind: AidenBotSessionEvent.Kind) -> AidenBotSessionEvent {
+        AidenBotSessionEvent(botId: botID, epoch: epoch, seq: seq, kind: kind)
+    }
+
+    private func loaded(
+        _ transport: FakeBotSessionTransport,
+        _ session: AidenBotSession,
+        supported: Bool = true
+    ) async -> AidenBotSessionModel {
+        transport.queueSession(.success(session))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        model.activitySupported = supported
+        await model.load()
+        return model
+    }
+
+    private func waitUntil(_ condition: () -> Bool, what: String) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    // Test 1
+    func testTheLineShowsUntilTheReplyStreamsAndFollowsTheChosenWording() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Reading")
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.mark, .scanGrid)
+        model.wording = .thinking
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Thinking")
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "waiting", startedAt: started))))
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Waiting for you", "a card that needs the person keeps its word")
+        _ = await model.apply(event(seq: 6, .partial("Here is")))
+        XCTAssertEqual(
+            model.statusLine(nowMs: started + 1_000)?.display.word, "Waiting for you",
+            "text from before a running step does not hide the step"
+        )
+        _ = await model.apply(event(seq: 7, .activity(AidenBotSessionActivity(phase: "writing", startedAt: started))))
+        XCTAssertNil(model.statusLine(nowMs: started + 1_000), "the reply's words are the signal")
+        _ = await model.apply(event(seq: 8, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 9, .partial("")))
+        XCTAssertNil(model.statusLine(nowMs: started + 1_000), "nothing shows once the turn ended")
+    }
+
+    // R7: the line hides only while reply text streams with no active tool.
+    func testStreamingTextHidesTheLineOnlyWhileNoToolRuns() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(nil, partial: "Let me check"))
+        XCTAssertNil(model.statusLine(nowMs: started), "words streaming before the first frame are the signal")
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "searching", startedAt: started))))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Searching the web", "a tool that starts mid-narration shows")
+        _ = await model.apply(event(seq: 6, .activity(AidenBotSessionActivity(phase: "thinking", startedAt: started))))
+        XCTAssertNil(model.statusLine(nowMs: started))
+        _ = await model.apply(event(seq: 7, .activity(AidenBotSessionActivity(phase: "browsing", startedAt: started))))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Working", "a newer Mac's phase is not reply text")
+
+        let blank = await loaded(FakeBotSessionTransport(), try running(nil, partial: "  \n"))
+        XCTAssertEqual(blank.statusLine(nowMs: started)?.display.word, "Getting ready", "whitespace is not a reply")
+    }
+
+    // Test 2 (Review Focus 3)
+    func testAnUnknownPhaseReadsAsWorkingAndElapsedTimeAppearsAfterTwentySeconds() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "browsing", startedAt: started)))
+        let early = try XCTUnwrap(model.statusLine(nowMs: started + 19_000))
+        XCTAssertEqual(early.display.word, "Working")
+        XCTAssertEqual(early.display.mark, .quadShuffle)
+        XCTAssertNil(early.elapsed)
+        XCTAssertEqual(early.accessibilityLabel, "Working")
+        let later = try XCTUnwrap(model.statusLine(nowMs: started + 72_000))
+        XCTAssertEqual(later.elapsed, "1m 12s")
+        XCTAssertEqual(later.accessibilityLabel, "Working, 1m 12s")
+    }
+
+    // Test 3
+    func testBeforeTheFirstActivityFrameItSaysGettingReadyAndOlderMacsShowNothing() async throws {
+        let fresh = await loaded(FakeBotSessionTransport(), try running(nil))
+        XCTAssertEqual(fresh.statusLine(nowMs: started)?.display.word, "Getting ready")
+        let older = await loaded(
+            FakeBotSessionTransport(),
+            try running(AidenBotSessionActivity(phase: "reading", startedAt: started)),
+            supported: false
+        )
+        XCTAssertNil(older.statusLine(nowMs: started))
+        XCTAssertFalse(older.offersBusyModes)
+    }
+
+    // Test 4 (Review Focus 2)
+    func testADroppedStreamReadsReconnectingUntilTheNextConnection() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueStream([]) // the first connection drops at once
+        transport.queueStream(
+            [event(epoch: "epoch_b", seq: 1, .snapshot(try running(AidenBotSessionActivity(phase: "searching", startedAt: started), epoch: "epoch_b", seq: 1)))],
+            staysOpen: true
+        )
+        let model = await loaded(
+            transport,
+            try running(AidenBotSessionActivity(phase: "writing", startedAt: started), partial: "Here is")
+        )
+        XCTAssertNil(model.statusLine(nowMs: started + 1_000), "the reply streams before the drop")
+        let listener = Task { await model.listen() }
+
+        try await waitUntil({ model.isStreamDown }, what: "the drop")
+        XCTAssertEqual(
+            model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your Mac",
+            "a dropped stream says so even over streamed text"
+        )
+        model.wording = .thinking
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Reconnecting to your Mac")
+        model.wording = .follows
+        try await waitUntil({ !model.isStreamDown && model.epoch == "epoch_b" }, what: "the next connection")
+        XCTAssertEqual(model.statusLine(nowMs: started + 1_000)?.display.word, "Searching the web")
+
+        listener.cancel()
+        await listener.value
+    }
+
+    func testAReloadedSnapshotRestoresTheLineAndTheQueuedMessages() async throws {
+        let waiting = [
+            AidenBotQueuedMessage(submissionId: "18", mode: .queue, text: "Also add a shopping list."),
+            AidenBotQueuedMessage(submissionId: "19", mode: .steer, text: "Keep it vegetarian."),
+        ]
+        let model = await loaded(
+            FakeBotSessionTransport(),
+            try running(AidenBotSessionActivity(phase: "app", app: "Notion", startedAt: started), queued: waiting)
+        )
+        XCTAssertEqual(model.activity, AidenBotSessionActivity(phase: "app", app: "Notion", startedAt: started))
+        XCTAssertEqual(model.queued, waiting)
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Using Notion")
+        _ = await model.apply(event(seq: 5, .activity(nil)))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready", "a cleared activity never leaves the old phase showing")
+    }
+
+    // Test 5
+    func testSteerAndQueueGoOutOnlyWhileTheBotWorksOnAMacThatOffersThem() async throws {
+        let transport = FakeBotSessionTransport()
+        let supported = await loaded(transport, try running(nil))
+        XCTAssertTrue(supported.offersBusyModes)
+        let steered = await supported.send("Keep it vegetarian.", whenBusy: .steer)
+        XCTAssertTrue(steered)
+        let older = await loaded(transport, try running(nil), supported: false)
+        let queuedOnOlder = await older.send("Also a list.", whenBusy: .queue)
+        XCTAssertTrue(queuedOnOlder)
+        let resting = await loaded(transport, try idle())
+        XCTAssertFalse(resting.offersBusyModes)
+        let sentIdle = await resting.send("Hello.", whenBusy: .steer)
+        XCTAssertTrue(sentIdle)
+        XCTAssertEqual(transport.sendModes, [.steer, nil, nil], "an older Mac would refuse whenBusy, and an idle Bot has nothing to steer")
+    }
+
+    // Test 6
+    func testQueuedMessagesFollowTheirFramesAndAFreshSnapshotReplacesThem() async throws {
+        let waiting = [AidenBotQueuedMessage(submissionId: "18", mode: .queue, text: "Also add a shopping list.")]
+        let model = await loaded(FakeBotSessionTransport(), try running(nil))
+        _ = await model.apply(event(seq: 5, .queued(waiting)))
+        XCTAssertEqual(model.queued, waiting)
+        _ = await model.apply(event(seq: 6, .snapshot(try running(nil, seq: 6))))
+        XCTAssertEqual(model.queued, [])
+    }
+
+    // Test 7
+    func testScreenReadersHearAStatusChangeAtMostEveryTwoSeconds() {
+        var announcer = AidenBotStatusAnnouncer()
+        XCTAssertEqual(announcer.offer("Reading", at: 0).announce, "Reading")
+        XCTAssertNil(announcer.offer("Reading", at: 0.5).announce, "the same word is not repeated")
+        let early = announcer.offer("Searching the web", at: 1)
+        XCTAssertNil(early.announce)
+        XCTAssertEqual(early.retryAfter ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(announcer.offer("Searching the web", at: 2).announce, "Searching the web")
+        XCTAssertNil(announcer.offer("Writing", at: 3.9).announce)
+        XCTAssertEqual(announcer.offer("Writing", at: 4).announce, "Writing")
+    }
+}
+
+/// R14: every phone Bot action applies at once and reconciles with the Mac later.
+@MainActor
+final class AidenBotSessionOptimisticTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+    private let started = 1_760_450_000_000
+
+    private func session(
+        _ state: AidenBotSessionStateKind,
+        seq: Int = 4,
+        entries: [AidenBotSessionEntry] = [],
+        activity: AidenBotSessionActivity? = nil,
+        queued: [AidenBotQueuedMessage] = []
+    ) throws -> AidenBotSession {
+        AidenBotSession(
+            botId: botID,
+            epoch: "epoch_a",
+            seq: seq,
+            stateView: try AidenBotSessionStateView(state: state),
+            partial: nil,
+            entries: entries,
+            hasOlder: false,
+            activity: activity,
+            queued: queued
+        )
+    }
+
+    private func user(_ id: String, _ text: String) -> AidenBotSessionEntry {
+        .message(AidenBotSessionMessage(id: id, role: .user, text: text, createdAt: nil, label: nil, interrupted: false))
+    }
+
+    private func event(seq: Int, _ kind: AidenBotSessionEvent.Kind) -> AidenBotSessionEvent {
+        AidenBotSessionEvent(botId: botID, epoch: "epoch_a", seq: seq, kind: kind)
+    }
+
+    private func model(_ transport: FakeBotSessionTransport) -> AidenBotSessionModel {
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        model.activitySupported = true
+        return model
+    }
+
+    private func loaded(_ transport: FakeBotSessionTransport, _ snapshot: AidenBotSession) async -> AidenBotSessionModel {
+        transport.queueSession(.success(snapshot))
+        let model = model(transport)
+        await model.load()
+        return model
+    }
+
+    private func serverError(status: Int, code: String) throws -> AidenRemoteClientError {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"\#(code)","message":"No.","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        return .server(statusCode: status, body: body)
+    }
+
+    private func waitUntil(_ condition: () -> Bool, what: String) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Every bubble of one text the chat would draw: transcript, the Mac's Queued, and outgoing.
+    private func bubbles(_ text: String, in model: AidenBotSessionModel) -> Int {
+        let transcript = model.entries.filter { entry in
+            if case let .message(message) = entry { return message.role == .user && message.text == text }
+            return false
+        }.count
+        return transcript + model.queued.filter { $0.text == text }.count + model.outgoing.filter { $0.text == text }.count
+    }
+
+    func testAMessageShowsAtOnceAndTheLineSaysGettingReadyBeforeTheMacAnswers() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
+        transport.holdSend = true
+        let sending = Task { await model.send("Plan my week.") }
+        try await waitUntil({ transport.isHoldingSend }, what: "the request")
+
+        let shown = try XCTUnwrap(model.outgoing.first)
+        XCTAssertEqual(shown.text, "Plan my week.")
+        XCTAssertEqual(model.look(of: shown), .sending)
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready")
+
+        transport.releaseSend()
+        let taken = await sending.value
+        XCTAssertTrue(taken)
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sent, "it is the turn the Bot now works on, not a queued message")
+        XCTAssertEqual(model.state, .running)
+    }
+
+    func testOneSendAndItsEntryFromTheMacLeaveExactlyOneBubble() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle, entries: [user("entry_1", "Hi")]))
+        _ = await model.send("Hi")
+        XCTAssertEqual(bubbles("Hi", in: model), 2, "the earlier Hi and this one")
+
+        _ = await model.apply(event(seq: 5, .entry(user("entry_2", "Hi"))))
+        XCTAssertEqual(model.outgoing, [], "the Mac's entry stands in for it")
+        XCTAssertEqual(bubbles("Hi", in: model), 2)
+        _ = await model.apply(event(seq: 6, .entry(user("entry_2", "Hi"))))
+        XCTAssertEqual(bubbles("Hi", in: model), 2, "a repeated entry is still one bubble")
+
+        // A fresh snapshot reconciles the same way.
+        _ = await model.send("Thanks")
+        _ = await model.apply(event(seq: 7, .snapshot(try session(.running, seq: 7, entries: [
+            user("entry_1", "Hi"), user("entry_2", "Hi"), user("entry_3", "Thanks"),
+        ]))))
+        XCTAssertEqual(bubbles("Thanks", in: model), 1)
+    }
+
+    func testWhileTheBotWorksAMessageIsQueuedInItsModeAndTheMacsBubbleReplacesIt() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        transport.holdSend = true
+        let sending = Task { await model.send("Keep it vegetarian.", whenBusy: .steer) }
+        try await waitUntil({ transport.isHoldingSend }, what: "the request")
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .queued(.steer), "Queued at once, before the Mac answers")
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Reading", "the running turn keeps its line")
+
+        // The Mac's Queued frame can arrive before its receipt.
+        let onMac = AidenBotQueuedMessage(submissionId: "17", mode: .steer, text: "Keep it vegetarian.")
+        _ = await model.apply(event(seq: 5, .queued([onMac])))
+        XCTAssertEqual(bubbles("Keep it vegetarian.", in: model), 1)
+        transport.releaseSend()
+        _ = await sending.value
+        XCTAssertEqual(bubbles("Keep it vegetarian.", in: model), 1)
+
+        // The turn takes it in: the queue empties, and then its entry lands.
+        _ = await model.apply(event(seq: 6, .queued([])))
+        XCTAssertEqual(bubbles("Keep it vegetarian.", in: model), 1, "between the Mac's frames it keeps its bubble")
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sent)
+        _ = await model.apply(event(seq: 7, .entry(user("entry_9", "Keep it vegetarian."))))
+        XCTAssertEqual(bubbles("Keep it vegetarian.", in: model), 1)
+        XCTAssertEqual(model.outgoing, [])
+    }
+
+    func testBeforeTheConnectionAMessageWaitsAndGoesOutOnConnectWithItsKey() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = model(transport)
+        XCTAssertTrue(model.showsSkeleton, "skeleton bubbles, not a spinner")
+        XCTAssertTrue(model.isConnecting)
+        XCTAssertTrue(model.canSend, "the composer never waits for the connection")
+
+        let taken = await model.send("Plan my week.")
+        XCTAssertTrue(taken)
+        XCTAssertEqual(model.outgoing.map(\.text), ["Plan my week."])
+        XCTAssertEqual(transport.sendKeys, [], "nothing goes out before the Mac answers")
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready")
+
+        transport.queueSession(.success(try session(.idle)))
+        await model.load()
+        XCTAssertFalse(model.showsSkeleton)
+        XCTAssertFalse(model.isConnecting)
+        XCTAssertEqual(transport.sendKeys.count, 1)
+        XCTAssertEqual(model.outgoing.first?.key, transport.sendKeys.first)
+        XCTAssertEqual(model.outgoing.first?.status, .sent(submissionId: "17"))
+    }
+
+    func testAMessageForABotThatNeedsAModelIsMarkedNotSentOnConnect() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = model(transport)
+        _ = await model.send("Hello")
+        transport.queueSession(.success(try session(.needsModel)))
+        await model.load()
+        XCTAssertEqual(transport.sendKeys, [])
+        XCTAssertEqual(model.outgoing.map { model.look(of: $0) }, [.failed], "never dropped silently")
+        let again = await model.send("Again")
+        XCTAssertFalse(again, "a Bot that needs a model takes nothing new")
+    }
+
+    func testALostConnectionKeepsTheMessageAndItsKeyUntilTheMacIsBack() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+        _ = await model.send("Plan my week.")
+        let waiting = try XCTUnwrap(model.outgoing.first)
+        XCTAssertEqual(model.look(of: waiting), .sending, "it keeps its place")
+        XCTAssertEqual(transport.sendKeys.count, 1)
+
+        transport.queueSession(.success(try session(.idle)))
+        await model.load()
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertEqual(transport.sendKeys[0], transport.sendKeys[1], "the same message, the same key")
+        XCTAssertEqual(model.outgoing.first?.status, .sent(submissionId: "17"))
+    }
+
+    func testMessagesThatNeverReachTheMacSayCouldntSendAndTryAgainPicksTheRightKey() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.idle))
+
+        // Refused outright: the Mac never took it, so Try again is a new request.
+        transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
+        _ = await model.send("First")
+        let refused = try XCTUnwrap(model.outgoing.first)
+        XCTAssertEqual(model.look(of: refused), .failed)
+        let retried = await model.retrySend(refused.id)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(transport.sendKeys.count, 2)
+        XCTAssertNotEqual(transport.sendKeys[0], transport.sendKeys[1])
+
+        // The Mac may have it (a server error, or the connection kept failing): Try again replays the key.
+        transport.failNextSend(with: try serverError(status: 500, code: "internal_error"))
+        _ = await model.send("Second")
+        let unsure = try XCTUnwrap(model.outgoing.last)
+        XCTAssertEqual(model.look(of: unsure), .failed)
+        _ = await model.retrySend(unsure.id)
+        XCTAssertEqual(transport.sendKeys[3], transport.sendKeys[2])
+
+        for _ in 0..<AidenBotSessionModel.maxConnectionAttempts {
+            transport.failNextSend(with: URLError(.timedOut))
+        }
+        _ = await model.send("Third")
+        for _ in 1..<AidenBotSessionModel.maxConnectionAttempts {
+            transport.queueSession(.success(try session(.idle)))
+            await model.load()
+        }
+        // The snapshots hold neither First nor Second, so the Mac no longer has them to show.
+        XCTAssertEqual(model.outgoing.map(\.text), ["Third"])
+        let lost = try XCTUnwrap(model.outgoing.last)
+        XCTAssertEqual(model.look(of: lost), .failed, "after a few tries it says so")
+        _ = await model.retrySend(lost.id)
+        XCTAssertEqual(Set(transport.sendKeys.suffix(4)).count, 1, "every attempt of one message used one key")
+        XCTAssertEqual(model.outgoing.last?.status, .sent(submissionId: "17"))
+
+        model.discardSend(lost.id)
+        XCTAssertEqual(model.outgoing.count, 1, "only a message that couldn't be sent can be removed")
+        transport.failNextSend(with: try serverError(status: 400, code: "invalid_request"))
+        _ = await model.send("Fourth")
+        model.discardSend(try XCTUnwrap(model.outgoing.last).id)
+        XCTAssertEqual(model.outgoing.map(\.text), ["Third"])
+    }
+
+    func testStopSaysStoppingAtOnceAndGoesBackWhenItFails() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        transport.holdStop = true
+        transport.queueStop(.failure(URLError(.notConnectedToInternet)))
+        let stopping = Task { await model.stop() }
+        try await waitUntil({ transport.isHoldingStop }, what: "the Stop request")
+        XCTAssertTrue(model.isStopping)
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Stopping")
+        transport.releaseStop()
+        await stopping.value
+        XCTAssertFalse(model.isStopping)
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Reading", "a Stop the Mac didn't take goes back")
+
+        // Taken while the turn winds down: "Stopping" holds until the Mac speaks.
+        transport.holdStop = false
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Stopping")
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "stopping", startedAt: started))))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Stopping")
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 7, .activity(nil)))
+        _ = await model.apply(event(seq: 8, .state(try AidenBotSessionStateView(state: .running))))
+        XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready", "the next turn never starts at Stopping")
+    }
+
+    func testAChatOpensOnItsLastTranscriptWhileTheMacAnswers() async throws {
+        let cache = AidenBotSessionCache()
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.idle, entries: [user("entry_1", "Hi")])))
+        let first = AidenBotSessionModel(botID: botID, transport: transport, cacheKey: "mac_a/\(botID)", cache: cache)
+        await first.load()
+
+        let reopened = AidenBotSessionModel(botID: botID, transport: transport, cacheKey: "mac_a/\(botID)", cache: cache)
+        XCTAssertEqual(reopened.entries.map(\.id), ["entry_1"])
+        XCTAssertFalse(reopened.showsSkeleton)
+        XCTAssertFalse(reopened.hasLoaded, "cards and answers wait for the Mac")
+        XCTAssertTrue(reopened.isConnecting)
+
+        let otherMac = AidenBotSessionModel(botID: botID, transport: transport, cacheKey: "mac_b/\(botID)", cache: cache)
+        XCTAssertTrue(otherMac.showsSkeleton)
     }
 }

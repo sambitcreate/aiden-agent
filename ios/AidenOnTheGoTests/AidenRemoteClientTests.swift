@@ -3544,6 +3544,52 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(reloaded.activeInstallation?.hasNegotiatedAccess(to: .simulatorsMobile), true)
     }
 
+    /// Contract revision 30: `bot:activity` persists like the other negotiable
+    /// grants, survives a reload, and goes away when the Mac stops granting it.
+    @MainActor
+    func testNegotiatedBotActivityGrantPersistsAndDropsWhenTheMacStopsGrantingIt() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            let body = try Self.jsonBody(request)
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:activity"])
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"bot:activity\"]}"
+            )
+        }
+        let negotiated = try await client.updateDeviceCapabilities(accepts: [.botActivity])
+        XCTAssertEqual(negotiated, [.serverRead, .workspaceRead, .botActivity])
+
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-activity", deviceId: "device-activity", credential: "credential-activity"),
+            trust: makeSystemTrust(), name: "Activity Mac"
+        )
+        func server(grants: [AidenRemoteCapability]) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "instance-activity", name: "Activity Mac",
+                appVersion: "1.0", capabilities: grants, serverCapabilities: negotiated,
+                connectionMode: .lan, minimumClientVersion: nil, serverTime: Date(),
+                features: [AidenServer.botActivityFeature]
+            )
+        }
+        XCTAssertEqual(store.activeInstallation?.hasNegotiatedAccess(to: .botActivity), false)
+        try store.updateNegotiatedDeviceCapabilities(negotiated, confirmedBy: server(grants: negotiated))
+        XCTAssertEqual(
+            AidenInstallationStore(keychain: keychain).activeInstallation?.hasNegotiatedAccess(to: .botActivity),
+            true
+        )
+
+        // A /server refresh that no longer grants it narrows the stored grants.
+        try store.updateServer(server(grants: [.serverRead, .workspaceRead]))
+        let reloaded = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(reloaded.deviceCapabilities, [.serverRead, .workspaceRead])
+        XCTAssertFalse(reloaded.hasNegotiatedAccess(to: .botActivity))
+    }
+
     @MainActor
     func testServerRefreshCanNarrowButNeverWidenDeviceGrants() throws {
         let keychain = AidenRemoteMemoryKeychain()

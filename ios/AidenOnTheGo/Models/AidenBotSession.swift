@@ -572,11 +572,16 @@ struct AidenBotQueuedMessage: Codable, Equatable, Sendable {
         text = try AidenBotWire.requiredString(values, forKey: .text, maxLength: AidenBotSessionWire.maxMessageLength)
     }
 
-    /// At most 20, each id once.
-    static func validate(_ list: [Self]) throws {
+    /// Decodes a queued list and enforces its limits: at most 20, each id once.
+    ///
+    /// - Warning: Decode a list only through here. A bare `[AidenBotQueuedMessage]`
+    ///   decode checks each message but skips the list limits.
+    static func decodeList<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> [Self] {
+        let list = try container.decode([Self].self, forKey: key)
         guard list.count <= maxCount, Set(list.map(\.submissionId)).count == list.count else {
             throw AidenBotContractError.invalidField("queued")
         }
+        return list
     }
 
     private enum CodingKeys: String, CodingKey { case submissionId, mode, text }
@@ -657,9 +662,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         approval = try values.decode(AidenRemoteBotApproval?.self, forKey: .approval)
         activity = try values.decodeIfPresent(AidenBotSessionActivity.self, forKey: .activity)
         if values.contains(.queued) {
-            let list = try values.decode([AidenBotQueuedMessage].self, forKey: .queued)
-            try AidenBotQueuedMessage.validate(list)
-            queued = list
+            queued = try AidenBotQueuedMessage.decodeList(from: values, forKey: .queued)
         } else {
             queued = []
         }
@@ -793,9 +796,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
             kind = .activity(try fields.decode(AidenBotSessionActivity?.self, forKey: .activity))
         case "queued":
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["queued"])
-            let list = try fields.decode([AidenBotQueuedMessage].self, forKey: .queued)
-            try AidenBotQueuedMessage.validate(list)
-            kind = .queued(list)
+            kind = .queued(try AidenBotQueuedMessage.decodeList(from: fields, forKey: .queued))
         case "closed":
             try AidenBotWire.requireOnlyKeys(payload, allowed: [])
             kind = .closed

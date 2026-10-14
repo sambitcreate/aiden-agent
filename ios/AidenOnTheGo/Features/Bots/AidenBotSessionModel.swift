@@ -166,7 +166,8 @@ enum AidenBotActivityPhase {
     static func display(phase: String, wording: AidenBotChatActivityWording, app: String?) -> Display {
         let known = table[phase] == nil ? "working" : phase
         let shown = wording == .thinking && !keepsItsWord.contains(known) ? "thinking" : known
-        let entry = table[shown] ?? ("Working", .quadShuffle)
+        // `known` and `shown` are both table ids, so the lookup always succeeds.
+        let entry = table[shown]!
         if shown == "app", let app, !app.isEmpty {
             return Display(phase: shown, word: "Using \(app)", mark: entry.mark)
         }
@@ -195,6 +196,105 @@ enum AidenBotElapsed {
         let hours = minutes / 60
         let remainder = minutes % 60
         return remainder > 0 ? "\(hours)h \(remainder)m" : "\(hours)h"
+    }
+}
+
+/// What the Bot chat's status line shows (spec §12).
+struct AidenBotStatusLine: Equatable {
+    let display: AidenBotActivityPhase.Display
+    /// "1m 12s" after 20 seconds, else nil.
+    let elapsed: String?
+
+    var accessibilityLabel: String {
+        elapsed.map { "\(display.word), \($0)" } ?? display.word
+    }
+}
+
+/// Screen readers hear a status change at most once every 2 seconds (§14).
+struct AidenBotStatusAnnouncer {
+    static let gap: TimeInterval = 2
+    private var current: (text: String, at: TimeInterval)?
+
+    /// The text to announce now, or nil. `retryAfter` says when to offer the newest text again.
+    mutating func offer(_ text: String, at now: TimeInterval) -> (announce: String?, retryAfter: TimeInterval?) {
+        if let current, current.text == text { return (nil, nil) }
+        if let current, now - current.at < Self.gap { return (nil, Self.gap - (now - current.at)) }
+        current = (text, now)
+        return (text, nil)
+    }
+}
+
+/// A message the person sent that the Mac's transcript doesn't show yet (R14).
+/// It shows at once and is replaced by the Mac's own entry or Queued bubble.
+struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
+    enum Status: Equatable, Sendable {
+        /// Waiting for a connection, or on its way to the Mac.
+        case sending
+        /// The Mac took it; its transcript entry or Queued bubble is on the way.
+        case sent(submissionId: String)
+        /// It didn't reach the Mac: "Couldn't send · Try again".
+        case failed
+    }
+
+    /// The Idempotency-Key. Every attempt of one message uses it, unless the Mac
+    /// definitely refused it; then Try again is a new request with a new key.
+    fileprivate(set) var key: UUID
+    let text: String
+    /// Steer or Queue, when it was sent while the Bot worked on a Mac that offers them.
+    let mode: AidenStreamInputMode?
+    fileprivate(set) var status: Status
+
+    var id: String { "outgoing:\(key.uuidString)" }
+
+    /// The request body of the first attempt; later attempts with the same key resend it unchanged.
+    fileprivate var request: AidenBotMessageRequest?
+    /// Entry ids the transcript held at the first attempt: the Mac's echo is a newer entry.
+    fileprivate var baseline: Set<String> = []
+    /// The Mac's Queued bubble for it; while that shows, this copy is hidden.
+    fileprivate var queuedID: String?
+    /// Waits for the next sign of a connection before trying again.
+    fileprivate var deferred = false
+    fileprivate var connectionAttempts = 0
+    /// The last failure may have reached the Mac, so Try again keeps the key.
+    fileprivate var keepsKey = false
+
+    /// Whether the Mac may hold it, so its echo can stand in for it.
+    fileprivate var mayHaveReachedMac: Bool {
+        guard request != nil else { return false }
+        if case .failed = status { return keepsKey }
+        return true
+    }
+}
+
+/// How the chat draws an outgoing message (R14).
+enum AidenBotOutgoingLook: Equatable {
+    /// Faded, "Sending…".
+    case sending
+    /// The Mac took it; its own entry replaces it shortly.
+    case sent
+    /// The Bot is working: Queued, as Steer or Queue.
+    case queued(AidenStreamInputMode)
+    /// "Couldn't send · Try again".
+    case failed
+}
+
+/// The last transcript seen for each Bot chat in this run of the app, so a chat
+/// opens on its messages instead of waiting for the Mac (R14). Memory only.
+@MainActor
+final class AidenBotSessionCache {
+    static let shared = AidenBotSessionCache()
+    static let capacity = 16
+
+    private var entries: [String: [AidenBotSessionEntry]] = [:]
+    private var order: [String] = []
+
+    func transcript(for key: String) -> [AidenBotSessionEntry]? { entries[key] }
+
+    func store(_ transcript: [AidenBotSessionEntry], for key: String) {
+        entries[key] = transcript
+        order.removeAll { $0 == key }
+        order.append(key)
+        while order.count > Self.capacity { entries[order.removeFirst()] = nil }
     }
 }
 
@@ -257,10 +357,26 @@ final class AidenBotSessionModel {
     private(set) var sentConnectionRequests: Set<String> = []
     /// Routine proposals with an answer on its way to the Mac, by proposal id.
     private(set) var respondingProposals: Set<String> = []
+    /// Revision 30: the Mac announces `bot-activity-v1` and this phone holds `bot:activity`.
+    var activitySupported = false
+    /// The Bot's Chat activity wording, from its detail.
+    var wording: AidenBotChatActivityWording = .follows
+    /// What the running turn is doing (revision 30), or nil.
+    private(set) var activity: AidenBotSessionActivity?
+    /// The person's messages waiting for the running turn (revision 30).
+    private(set) var queued: [AidenBotQueuedMessage] = []
+    /// The session stream dropped and is reconnecting.
+    private(set) var isStreamDown = false
+    /// Messages sent from this phone the Mac's transcript doesn't show yet, oldest first.
+    private(set) var outbox: [AidenBotOutgoingMessage] = []
+    /// Stop was pressed: the line says "Stopping" until the Mac speaks or the turn ends.
+    private var stopIntent: StopIntent = .none
     var errorMessage: String?
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
-    @ObservationIgnored private var retainedMessage: (text: String, key: UUID)?
+    @ObservationIgnored private var isFlushing = false
+    @ObservationIgnored private let cache: AidenBotSessionCache
+    @ObservationIgnored private let cacheKey: String?
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
     @ObservationIgnored private var connectionKeys: [String: UUID] = [:]
@@ -269,9 +385,25 @@ final class AidenBotSessionModel {
     /// The key of a proposal answer that failed ambiguously, by proposal id.
     @ObservationIgnored private var proposalKeys: [String: (decision: AidenBotRoutineProposalDecision, key: UUID)] = [:]
 
-    init(botID: String, transport: any AidenBotSessionTransport) {
+    private enum StopIntent { case none, requested, acknowledged }
+
+    /// Messages that keep their place while the connection is down before
+    /// they count as not sent.
+    static let maxConnectionAttempts = 3
+
+    /// `cacheKey` names this chat across model instances (its Mac and Bot); with
+    /// one, the chat opens on the transcript last seen in this run of the app.
+    init(
+        botID: String,
+        transport: any AidenBotSessionTransport,
+        cacheKey: String? = nil,
+        cache: AidenBotSessionCache = .shared
+    ) {
         self.botID = botID
         self.transport = transport
+        self.cacheKey = cacheKey
+        self.cache = cache
+        if let cacheKey, let cached = cache.transcript(for: cacheKey) { entries = cached }
     }
 
     var state: AidenBotSessionStateKind? { stateView?.state }
@@ -279,7 +411,75 @@ final class AidenBotSessionModel {
     var isRunning: Bool { state == .running }
     var isInterrupted: Bool { stateView?.interrupted == true }
     var isAccessBlocked: Bool { stateView?.blocked == .accessChanged }
-    var canSend: Bool { hasLoaded && !needsModel && state != .unavailable && !inFlight.contains(.send) }
+    /// The composer takes a message unless the Mac said this Bot can't take one.
+    /// Before the first snapshot it waits in the outbox (R14).
+    var canSend: Bool { !needsModel && state != .unavailable }
+
+    /// No snapshot yet: the chat draws skeleton bubbles where it has no transcript (R14).
+    var showsSkeleton: Bool { !hasLoaded && entries.isEmpty }
+    /// Not connected yet, or reconnecting: a quiet "Connecting…" hint, never a blocking screen.
+    var isConnecting: Bool { !hasLoaded || isStreamDown }
+    /// Connected well enough to send now; otherwise messages wait in the outbox.
+    private var isConnected: Bool { hasLoaded && !isStreamDown }
+
+    /// The outgoing messages to draw after the transcript and the Mac's Queued bubbles.
+    var outgoing: [AidenBotOutgoingMessage] { outbox.filter { !isShownAsQueued($0) } }
+
+    private func isShownAsQueued(_ message: AidenBotOutgoingMessage) -> Bool {
+        guard let id = message.queuedID else { return false }
+        return queued.contains { $0.submissionId == id }
+    }
+
+    /// A message was sent and the turn hasn't started on the Mac yet.
+    var isAwaitingTurn: Bool { outbox.contains { $0.status == .sending } }
+
+    /// Stop was pressed and the turn is still running.
+    var isStopping: Bool { stopIntent != .none && isRunning }
+
+    func look(of message: AidenBotOutgoingMessage) -> AidenBotOutgoingLook {
+        switch message.status {
+        case .failed:
+            return .failed
+        case .sent where message.queuedID != nil:
+            // It left the Mac's queue: the turn took it in, and its entry is on the way.
+            return .sent
+        case _ where activitySupported && isRunning && (message.mode != nil || message.status == .sending):
+            return .queued(message.mode ?? .queue)
+        case .sending:
+            return .sending
+        case .sent:
+            return .sent
+        }
+    }
+
+    /// Steer and Queue while the Bot works need the Mac's `bot-activity-v1`.
+    var offersBusyModes: Bool { activitySupported && isRunning }
+
+    /// Phases with no tool running: while the reply's words stream in them, the
+    /// words are the signal (§5.2), as on the Mac.
+    private static let replyPhases: Set<String> = ["writing", "thinking"]
+
+    /// The status line now (spec §12), or nil when it is hidden.
+    func statusLine(nowMs: Int) -> AidenBotStatusLine? {
+        guard activitySupported, isRunning || isAwaitingTurn else { return nil }
+        func line(_ phase: String, elapsed: String? = nil) -> AidenBotStatusLine {
+            AidenBotStatusLine(display: AidenBotActivityPhase.display(phase: phase, wording: wording, app: nil), elapsed: elapsed)
+        }
+        // A message just sent says "Getting ready" at once, before the Mac's state catches up.
+        guard isRunning else { return line(isStreamDown ? "reconnecting" : "preparing") }
+        let elapsed = activity.flatMap { AidenBotElapsed.label(startedAt: $0.startedAt, nowMs: nowMs) }
+        if isStreamDown { return line("reconnecting", elapsed: elapsed) }
+        if isStopping { return line("stopping", elapsed: elapsed) }
+        // The partial text can outlast narration into a tool call, so a running step keeps the line.
+        let replyStreaming = !(partial ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if replyStreaming, activity.map({ Self.replyPhases.contains($0.phase) }) ?? true { return nil }
+        // Sent, and the first activity frame is on its way.
+        guard let activity else { return line("preparing") }
+        return AidenBotStatusLine(
+            display: AidenBotActivityPhase.display(phase: activity.phase, wording: wording, app: activity.app),
+            elapsed: elapsed
+        )
+    }
 
     // MARK: Loading and the event stream
 
@@ -287,11 +487,13 @@ final class AidenBotSessionModel {
         _ = await fetchSnapshot()
     }
 
-    /// `GET /session`. Returns false when no snapshot was loaded.
+    /// `GET /session`. Returns false when no snapshot was loaded. A snapshot
+    /// means the Mac is reachable, so the outbox goes out.
     private func fetchSnapshot() async -> Bool {
         do {
             apply(snapshot: try await transport.botSession(botId: botID))
             errorMessage = nil
+            await flushOutbox()
             return true
         } catch is CancellationError {
             return false
@@ -309,7 +511,14 @@ final class AidenBotSessionModel {
             do {
                 for try await event in transport.botSessionEvents(botId: botID) {
                     failures = 0
-                    if await apply(event) == .closed { break }
+                    isStreamDown = false
+                    let outcome = await apply(event)
+                    // Any frame shows the Mac is reachable: what waits in the outbox goes out.
+                    if outbox.contains(where: { $0.status == .sending }) {
+                        for index in outbox.indices { outbox[index].deferred = false }
+                        flushOutboxSoon()
+                    }
+                    if outcome == .closed { break }
                 }
             } catch is CancellationError {
                 return
@@ -317,6 +526,9 @@ final class AidenBotSessionModel {
                 failures += 1
             }
             guard !Task.isCancelled else { return }
+            // Closed or dropped: while a turn runs the line says "Reconnecting to your Mac"
+            // until the next connection's first frame.
+            isStreamDown = true
             let delay = min(30.0, 0.5 * pow(2.0, Double(min(failures, 6))))
             try? await Task.sleep(for: .seconds(failures == 0 ? 0.2 : delay))
         }
@@ -341,6 +553,7 @@ final class AidenBotSessionModel {
             apply(snapshot: session, authoritative: true)
             return .applied
         }
+        defer { reconcileOutbox(snapshot: false) }
         guard let epoch, event.epoch == epoch else {
             return await refetch()
         }
@@ -372,14 +585,17 @@ final class AidenBotSessionModel {
             // A newer Mac's entry type: the sequence advances, nothing renders.
             break
         case let .state(view):
-            stateView = view
+            setStateView(view)
         case let .question(next):
             question = next
         case let .approval(next):
             approval = next
-        case .activity, .queued:
-            // Revision 30 frames: the sequence advances; the model stores them in a later change.
-            break
+        case let .activity(next):
+            activity = next
+            // The Mac's own word now stands for a Stop it has heard.
+            if stopIntent == .acknowledged { stopIntent = .none }
+        case let .queued(next):
+            queued = next
         case .closed:
             return .closed
         }
@@ -404,10 +620,68 @@ final class AidenBotSessionModel {
         seq = session.seq
         entries = session.entries
         partial = session.partial.flatMap { $0.isEmpty ? nil : $0 }
-        stateView = session.stateView
+        setStateView(session.stateView)
         question = session.question
         approval = session.approval
+        activity = session.activity
+        queued = session.queued
         hasLoaded = true
+        if let cacheKey { cache.store(entries, for: cacheKey) }
+        for index in outbox.indices { outbox[index].deferred = false }
+        reconcileOutbox(snapshot: true)
+    }
+
+    /// A turn that is no longer running takes its Stop with it, so the next
+    /// turn never starts at "Stopping".
+    private func setStateView(_ view: AidenBotSessionStateView?) {
+        stateView = view
+        if view?.state != .running { stopIntent = .none }
+    }
+
+    /// Server truth replaces optimistic messages (R14). A message the Mac may
+    /// hold gives way to the first newer user entry with its text (the wire
+    /// carries no submission id on entries), and hides while the Mac's Queued
+    /// bubble with its submission id shows it. On a Mac that sends its queue, a
+    /// snapshot also drops a taken message that is neither queued nor echoed.
+    private func reconcileOutbox(snapshot: Bool) {
+        guard !outbox.isEmpty else { return }
+        var claimedEntries = Set<String>()
+        var claimedQueued = Set(outbox.compactMap { message -> String? in
+            if case let .sent(id) = message.status { return id }
+            return nil
+        })
+        let queuedIDs = Set(queued.map(\.submissionId))
+        var kept: [AidenBotOutgoingMessage] = []
+        for var message in outbox {
+            guard message.mayHaveReachedMac else {
+                kept.append(message)
+                continue
+            }
+            let echo = entries.first { entry in
+                guard case let .message(sent) = entry, sent.role == .user,
+                      !message.baseline.contains(sent.id), !claimedEntries.contains(sent.id) else { return false }
+                return sent.text.trimmingCharacters(in: .whitespacesAndNewlines) == message.text
+            }
+            if let echo {
+                claimedEntries.insert(echo.id)
+                continue
+            }
+            if case let .sent(id) = message.status {
+                if queuedIDs.contains(id) {
+                    message.queuedID = id
+                } else if snapshot, activitySupported {
+                    // Taken, not queued and not in the transcript: nothing on the Mac holds it.
+                    continue
+                }
+            } else if message.queuedID == nil,
+                      let match = queued.first(where: { !claimedQueued.contains($0.submissionId) && $0.text == message.text }) {
+                // The Queued frame can beat the receipt.
+                claimedQueued.insert(match.submissionId)
+                message.queuedID = match.submissionId
+            }
+            kept.append(message)
+        }
+        outbox = kept
     }
 
     // MARK: Quick-reply questions
@@ -495,29 +769,105 @@ final class AidenBotSessionModel {
 
     // MARK: Turn controls
 
-    /// Sends one message. A Bot that needs an AI model sends nothing.
+    /// Sends one message (R14). It shows at once as an outgoing message, and
+    /// goes out now when connected, or from the outbox on the next connection,
+    /// under one Idempotency-Key. A Bot that needs an AI model takes nothing.
+    /// While it works, on a Mac offering `bot-activity-v1`, `whenBusy` says
+    /// Steer or Queue; otherwise it is left off, because an older Mac refuses it.
+    ///
+    /// Returns true when the message was taken (it shows), false when refused.
     @discardableResult
-    func send(_ rawText: String) async -> Bool {
+    func send(_ rawText: String, whenBusy mode: AidenStreamInputMode? = nil) async -> Bool {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, let request = try? AidenBotMessageRequest(text: text) else { return false }
-        let key: UUID
-        if let retainedMessage, retainedMessage.text == text {
-            key = retainedMessage.key
+        guard canSend, (try? AidenBotMessageRequest(text: text)) != nil else { return false }
+        outbox.append(AidenBotOutgoingMessage(
+            key: UUID(),
+            text: text,
+            mode: offersBusyModes ? mode ?? .queue : nil,
+            status: .sending
+        ))
+        await flushOutbox()
+        return true
+    }
+
+    /// Try again on a message that couldn't be sent. A message the Mac may hold
+    /// keeps its key, so the Mac replays its receipt instead of taking it twice.
+    @discardableResult
+    func retrySend(_ id: String) async -> Bool {
+        guard let index = outbox.firstIndex(where: { $0.id == id }), outbox[index].status == .failed else { return false }
+        if !outbox[index].keepsKey {
+            outbox[index].key = UUID()
+            outbox[index].request = nil
+        }
+        outbox[index].status = .sending
+        outbox[index].deferred = false
+        outbox[index].connectionAttempts = 0
+        await flushOutbox()
+        return true
+    }
+
+    /// Removes a message that couldn't be sent; nothing else is ever dropped silently.
+    func discardSend(_ id: String) {
+        outbox.removeAll { $0.id == id && $0.status == .failed }
+    }
+
+    private func flushOutboxSoon() {
+        guard !isFlushing else { return }
+        Task { await flushOutbox() }
+    }
+
+    /// Sends what waits in the outbox, oldest first, one at a time.
+    private func flushOutbox() async {
+        guard !isFlushing else { return }
+        isFlushing = true
+        defer { isFlushing = false }
+        while isConnected, let next = outbox.first(where: { $0.status == .sending && !$0.deferred }) {
+            await deliver(next.key)
+        }
+    }
+
+    private func deliver(_ key: UUID) async {
+        guard let index = outbox.firstIndex(where: { $0.key == key }) else { return }
+        if needsModel || state == .unavailable {
+            outbox[index].status = .failed
+            return
+        }
+        let request: AidenBotMessageRequest
+        if let frozen = outbox[index].request {
+            request = frozen
         } else {
-            key = UUID()
-            retainedMessage = (text, key)
+            let whenBusy = offersBusyModes ? outbox[index].mode : nil
+            guard let made = try? AidenBotMessageRequest(text: outbox[index].text, whenBusy: whenBusy) else {
+                outbox[index].status = .failed
+                return
+            }
+            request = made
+            outbox[index].request = made
+            outbox[index].baseline = Set(entries.map(\.id))
         }
         inFlight.insert(.send)
         defer { inFlight.remove(.send) }
         do {
             let receipt = try await transport.sendBotMessage(botId: botID, request: request, idempotencyKey: key)
-            retainedMessage = nil
-            stateView = receipt.stateView
-            return true
+            setStateView(receipt.stateView)
+            if let current = outbox.firstIndex(where: { $0.key == key }) {
+                outbox[current].status = .sent(submissionId: receipt.submissionId)
+                outbox[current].keepsKey = false
+            }
+            reconcileOutbox(snapshot: false)
         } catch {
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedMessage = nil }
-            errorMessage = "That message wasn’t sent. Please try again."
-            return false
+            guard let current = outbox.firstIndex(where: { $0.key == key }) else { return }
+            if error is CancellationError || error is URLError {
+                // The connection went away: it keeps its place and key, and goes
+                // out on the next sign of the Mac, a few times at most.
+                outbox[current].connectionAttempts += 1
+                if outbox[current].connectionAttempts < Self.maxConnectionAttempts {
+                    outbox[current].deferred = true
+                    return
+                }
+            }
+            outbox[current].keepsKey = aidenBotSessionFailureIsAmbiguous(error)
+            outbox[current].status = .failed
         }
     }
 
@@ -548,7 +898,7 @@ final class AidenBotSessionModel {
         do {
             let receipt = try await transport.sendBotMessage(botId: botID, request: request, idempotencyKey: key)
             retainedRetry = nil
-            stateView = receipt.stateView
+            setStateView(receipt.stateView)
             return true
         } catch is CancellationError {
             return false
@@ -573,32 +923,42 @@ final class AidenBotSessionModel {
         }
     }
 
+    /// Stop says "Stopping" at once (R14) and goes back if the Mac didn't take it.
     func stop() async {
-        guard isRunning else { return }
-        await perform(.stop) { [transport, botID] key in
+        guard isRunning, !inFlight.contains(.stop) else { return }
+        stopIntent = .requested
+        let stopped = await perform(.stop) { [transport, botID] key in
             try await transport.stopBotSession(botId: botID, idempotencyKey: key)
+        }
+        if !stopped {
+            stopIntent = .none
+        } else if stopIntent == .requested {
+            stopIntent = .acknowledged
         }
     }
 
     /// One request per logical action at a time. The key survives an
     /// ambiguous failure so a retry is deduplicated by the Mac.
+    @discardableResult
     private func perform(
         _ action: Action,
         _ request: @escaping @Sendable (UUID) async throws -> AidenBotSessionStateView
-    ) async {
-        guard !inFlight.contains(action) else { return }
+    ) async -> Bool {
+        guard !inFlight.contains(action) else { return false }
         let key = retainedKeys[action] ?? UUID()
         retainedKeys[action] = key
         inFlight.insert(action)
         defer { inFlight.remove(action) }
         do {
-            stateView = try await request(key)
+            setStateView(try await request(key))
             retainedKeys[action] = nil
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedKeys[action] = nil }
             errorMessage = "That didn’t work. Please try again."
+            return false
         }
     }
 
