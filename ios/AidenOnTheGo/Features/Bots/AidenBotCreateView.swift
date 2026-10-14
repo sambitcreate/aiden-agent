@@ -122,9 +122,13 @@ struct AidenBotCreateView: View {
                                 AidenBotModelSelection(providerId: $0.providerID, modelId: $0.modelID)
                             }
                         ) { providerID, modelID in
-                            retainedAttempt = nil
-                            retainedCreatedBot = nil
+                            // Re-confirming the checked row changes nothing, so a committed Bot's recovery survives.
+                            let before = draft
                             draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                            if draft != before {
+                                retainedAttempt = nil
+                                retainedCreatedBot = nil
+                            }
                         }
                         switch current.photoModelNeed(catalog: catalog) {
                         case .none:
@@ -140,9 +144,12 @@ struct AidenBotCreateView: View {
                                 modelID: current.visionModelID,
                                 imagesOnly: true
                             ) { providerID, modelID in
-                                retainedAttempt = nil
-                                retainedCreatedBot = nil
+                                let before = draft
                                 draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                                if draft != before {
+                                    retainedAttempt = nil
+                                    retainedCreatedBot = nil
+                                }
                             }
                         }
                     } header: {

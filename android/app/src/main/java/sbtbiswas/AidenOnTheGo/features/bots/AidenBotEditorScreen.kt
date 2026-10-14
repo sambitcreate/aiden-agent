@@ -82,29 +82,42 @@ data class AidenBotCreateDraft(
 }
 
 /**
- * New Bot's idempotency key. Retrying the same request after an uncertain failure reuses
- * the key, so the Mac replays a Bot it may already have made instead of making a second.
- * A different request, or any retry after the Mac refused one, gets a new key: the Mac
- * keeps a refused key, replays its refusal for the same body and answers a different body
- * with `idempotency_conflict`.
+ * One Create as sent: the [request], its idempotency [key], and the [draft] it was built from.
+ */
+class AidenBotCreateAttempt internal constructor(
+    val draft: AidenBotCreateDraft,
+    val request: AidenBotCreateRequest,
+    val key: UUID
+)
+
+/**
+ * New Bot's idempotency keys. After an uncertain failure the Mac may already have made the
+ * Bot, so the next Create replays that exact attempt (same request, same key) while the
+ * person's draft is unchanged, even if the Mac's catalog has since moved or dropped the
+ * model. A changed draft, or any attempt after a definite refusal, builds a new request
+ * with a new key: the Mac keeps a refused key, replays its refusal for the same body and
+ * answers a different body with `idempotency_conflict`.
  */
 class AidenBotCreateAttempts(private val makeKey: () -> UUID = UUID::randomUUID) {
-    private var request: AidenBotCreateRequest? = null
-    private var key: UUID? = null
+    private var uncertain: AidenBotCreateAttempt? = null
 
-    fun keyFor(request: AidenBotCreateRequest): UUID {
-        val current = key
-        if (current != null && request == this.request) return current
-        return makeKey().also {
-            key = it
-            this.request = request
-        }
+    /** True when the last Create failed uncertainly and [draft] is unchanged, so Create replays it. */
+    fun replays(draft: AidenBotCreateDraft): Boolean = uncertain?.draft == draft
+
+    /**
+     * The attempt to send for [draft], or null when no request can be built from it. An
+     * uncertain attempt for the same draft comes back unchanged; [catalog] only shapes a new one.
+     */
+    fun begin(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
+        uncertain?.takeIf { it.draft == draft }?.let { return it }
+        uncertain = null
+        val request = draft.request(catalog) ?: return null
+        return AidenBotCreateAttempt(draft, request, makeKey())
     }
 
-    fun failed(error: Throwable) {
-        if (aidenScheduledRunFailureIsAmbiguous(error)) return
-        request = null
-        key = null
+    /** Records how [attempt] ended: only an uncertain failure stays replayable. */
+    fun failed(attempt: AidenBotCreateAttempt, error: Throwable) {
+        uncertain = if (aidenScheduledRunFailureIsAmbiguous(error)) attempt else null
     }
 }
 
@@ -204,22 +217,22 @@ private fun AidenBotCreateScreen(
     AidenBotEditorScaffold(
         title = stringResource(R.string.bot_editor_new_title),
         actionLabel = if (isSaving) stringResource(R.string.bot_editor_creating) else stringResource(R.string.action_create),
-        actionEnabled = !isSaving && client != null && draft.request(catalog) != null,
+        actionEnabled = !isSaving && client != null && (attempts.replays(draft) || draft.request(catalog) != null),
         onNavigateBack = onNavigateBack,
         onAction = {
             val cl = client ?: return@AidenBotEditorScaffold
-            val request = draft.request(catalog) ?: return@AidenBotEditorScaffold
+            val attempt = attempts.begin(draft, catalog) ?: return@AidenBotEditorScaffold
             scope.launch {
                 isSaving = true
                 error = null
                 try {
-                    val created = cl.createBot(request, attempts.keyFor(request))
+                    val created = cl.createBot(attempt.request, attempt.key)
                     coordinator.botCache.putBotDetail(created)
                     onBotSaved(created.id)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    attempts.failed(e)
+                    attempts.failed(attempt, e)
                     // The Mac may have refused the model (its service was signed out); a fresh
                     // catalog lets the field say so instead of only the generic message.
                     try {
