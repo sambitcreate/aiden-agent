@@ -555,8 +555,8 @@ export const mcpApi = {
   /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
   setPresetKey: (serverId: string, key: string) =>
     invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
-  /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. */
-  save: (server: McpServer, options?: { approveLaunch?: boolean }) => invoke<McpServer>("mcp:save", server, options),
+  /** Resolves to the stored record (env/header values replaced by markers). `approveLaunch`: the editor, which shows the command, approves a local server to run. `fromEditor`: an editor save (sign-in and provider consent included), so kept values may follow an address it changed. */
+  save: (server: McpServer, options?: { approveLaunch?: boolean; fromEditor?: boolean }) => invoke<McpServer>("mcp:save", server, options),
   /** Local servers not approved to run on this device (added or changed outside Aiden). */
   launchApprovals: () => invoke<McpPendingLaunchApproval[]>("mcp:launchApprovals"),
   approveLaunch: (id: string, fingerprint: string) => invoke<{ approved: true }>("mcp:approveLaunch", id, fingerprint),

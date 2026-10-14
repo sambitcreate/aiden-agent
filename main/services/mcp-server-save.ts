@@ -33,6 +33,13 @@ export interface SaveConfiguredMcpServerOptions {
    * the launch is unchanged and never move stored values to a new destination.
    */
   approveLaunch?: boolean;
+  /**
+   * The save comes from the Settings editor (including its sign-in and
+   * provider-consent steps), where the person sees the address or command, so
+   * kept values may follow an address or command change. Implied by
+   * `approveLaunch`.
+   */
+  fromEditor?: boolean;
 }
 
 export async function saveConfiguredMcpServer(
@@ -81,7 +88,7 @@ async function saveWithFieldSecrets(
       if (!plan) return current;
       // Additive only: nothing the configured record resolves changes until
       // the new record is published.
-      const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true, current });
+      const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true || options.fromEditor === true, current });
       // Approve before publishing, so the first connection after the save is already allowed.
       const baseline = mcpFieldSecretCleanupBaseline(current, plan);
       const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&

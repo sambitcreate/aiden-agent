@@ -425,6 +425,24 @@ test("signing in after adding a header saves the header first, so sign-in uses t
   assert.deepEqual((channelCalls(calls, "mcp:authorize")[0]!.args[0] as McpServer).headers, { "X-Team": savedMarker });
 });
 
+test("signing in after changing the address of a server with a stored header saves it as an editor change", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...remoteServer, headers: { Authorization: savedMarker } }],
+    "mcp:oauthStatus": () => ({ authorized: false }),
+    "mcp:save": (server: unknown) => server,
+    "mcp:authorize": () => ({ authorized: true }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Remote" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Server URL" }), { target: { value: "https://moved.example.com/mcp" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:authorize").length, 1));
+  const save = channelCalls(calls, "mcp:save")[0]!;
+  assert.equal((save.args[0] as McpServer).url, "https://moved.example.com/mcp");
+  assert.deepEqual((save.args[0] as McpServer).headers, { Authorization: savedMarker }, "the kept value travels as its marker");
+  assert.deepEqual(save.args[1], { fromEditor: true }, "kept values may follow an address changed in the editor");
+});
+
 test("a waiting sign-in can be cancelled, and cancelling a new preset's setup removes it again", async () => {
   let rejectAuthorize: (error: Error) => void = () => undefined;
   const { calls, openChanges } = renderPreset(linearState(), undefined, {
