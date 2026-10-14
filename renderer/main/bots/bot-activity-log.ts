@@ -25,13 +25,18 @@ interface OpenReply extends BotActivityReply {
   interrupted: boolean;
 }
 
+/** Enough of a message to fill a title after its spaces collapse; a huge message is never copied whole. */
+const TITLE_SCAN_UNITS = BOT_ACTIVITY_TITLE_CHARS * 4;
+
 function shortTitle(text: string, fallback: string): string {
-  const line = text.replace(/\s+/gu, " ").trim();
+  const start = text.trimStart();
+  const clipped = start.length > TITLE_SCAN_UNITS;
+  // A cut can split an emoji; drop the half left at the end.
+  const line = start.slice(0, TITLE_SCAN_UNITS).replace(/\s+/gu, " ").trim().replace(/[\uD800-\uDBFF]$/u, "");
   if (!line) return fallback;
   const points = [...line];
-  return points.length > BOT_ACTIVITY_TITLE_CHARS
-    ? `${points.slice(0, BOT_ACTIVITY_TITLE_CHARS - 1).join("").trimEnd()}…`
-    : line;
+  if (points.length <= BOT_ACTIVITY_TITLE_CHARS && !clipped) return line;
+  return `${points.slice(0, BOT_ACTIVITY_TITLE_CHARS - 1).join("").trimEnd()}…`;
 }
 
 function openReply(id: string, title: string, routine: boolean, at: number | undefined): OpenReply {
@@ -80,7 +85,7 @@ export function botActivityLog(
         begin(entry.id, shortTitle(entry.text, "Answer"), false, entry.at);
         break;
       case "routine":
-        begin(entry.id, entry.label, true, entry.at);
+        begin(entry.id, shortTitle(entry.label, "Routine"), true, entry.at);
         break;
       case "assistant": {
         // A reply with no visible input (the self-intro) still gets a group.
@@ -121,7 +126,9 @@ export function botActivityLog(
     }
   }
 
-  const liveId = running ? replies[replies.length - 1]?.id : undefined;
+  // Only the reply still open is live: one a restart notice closed has settled.
+  const open: OpenReply | null = state.current;
+  const liveId = running ? open?.id : undefined;
   const log: BotActivityReply[] = [];
   for (let index = replies.length - 1; index >= 0; index -= 1) {
     const { byCall: _byCall, stopped, interrupted, ...reply } = replies[index]!;

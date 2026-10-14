@@ -65,10 +65,16 @@ test("replies come newest first, each with its steps in the order they ran, and 
   assert.equal(log[0]!.at, 200);
 });
 
-test("a routine run carries the routine's name", () => {
+test("a routine run carries the routine's name, shortened like a message, or Routine when it has none", () => {
   const routine = botActivityLog(ENTRIES, { running: false }).find((reply) => reply.routine);
   assert.equal(routine?.title, "Sunday plan");
   assert.equal(routine?.steps[0]?.detail, "pantry.md");
+  const step = working("a1", [call("c1", "grep", "reading", "Read 1 file")]);
+  const [long] = botActivityLog([{ id: "r1", type: "routine", label: "Check ".repeat(30), text: "x" }, step], { running: false });
+  assert.ok([...long!.title].length <= BOT_ACTIVITY_TITLE_CHARS);
+  assert.ok(long!.title.endsWith("…"));
+  const [blank] = botActivityLog([{ id: "r2", type: "routine", label: "  ", text: "x" }, step], { running: false });
+  assert.equal(blank!.title, "Routine");
 });
 
 test("a step still running reads as failed once the Bot stopped, but stays running in the live reply", () => {
@@ -108,12 +114,26 @@ test("a question the Bot asked is not an action and does not appear as a step", 
   assert.deepEqual(log[0]!.steps.map((step) => step.label), ["Read 1 file"]);
 });
 
-test("a step shows only the detail the transcript already carries, and a command never gains text", () => {
+test("a step carries its call's detail and app as the transcript gave them, and none of the call's other fields", () => {
   const log = botActivityLog(
-    [message("u1", "Go"), working("a1", [call("c1", "run_command", "command", "Ran a command")]), result("c1", "ok")],
+    [
+      message("u1", "Go"),
+      working("a1", [{ id: "c1", name: "mail_search", kind: "app", label: "Used Mail", detail: "invoices from May", app: "Mail" }]),
+      result("c1", "ok"),
+    ],
     { running: false },
   );
-  assert.equal(log[0]!.steps[0]!.detail, undefined);
+  assert.deepEqual(log[0]!.steps, [
+    { id: "c1", kind: "app", label: "Used Mail", detail: "invoices from May", app: "Mail", status: "ok" },
+  ]);
+});
+
+test("a reply a restart closed is not live, even while the Bot runs again", () => {
+  const log = botActivityLog(
+    [message("u1", "Go"), working("a1", [call("c1", "grep", "reading", "Read 1 file")]), { id: "n1", type: "notice", notice: "interrupted" }],
+    { running: true },
+  );
+  assert.equal(log[0]!.steps[0]!.status, "stopped");
 });
 
 test("a long message makes a short title, and a photo-only message reads as Photo", () => {
@@ -130,6 +150,12 @@ test("a long message makes a short title, and a photo-only message reads as Phot
   assert.equal(log[0]!.title, "Photo");
   assert.ok([...log[1]!.title].length <= BOT_ACTIVITY_TITLE_CHARS);
   assert.ok(log[1]!.title.endsWith("…"));
+  const [huge] = botActivityLog([message("u3", `${" ".repeat(500)}Plan ${"x".repeat(2_000_000)}`), working("a3", [call("c3", "grep", "reading", "Read 1 file")])], { running: false });
+  assert.equal([...huge!.title].length, BOT_ACTIVITY_TITLE_CHARS);
+  assert.ok(huge!.title.startsWith("Plan x"));
+  assert.ok(huge!.title.endsWith("…"));
+  const [spaced] = botActivityLog([message("u4", `Plan${" ".repeat(400)}dinners`), working("a4", [call("c4", "grep", "reading", "Read 1 file")])], { running: false });
+  assert.equal(spaced!.title, "Plan…", "a message cut before its end still says so");
 });
 
 test("a long transcript projects every reply once, in order", () => {
