@@ -69,7 +69,7 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
   tabs: readonly T[];
   idPrefix: string;
   tabListLabel: string;
-  /** A Git operation (or similar) is in flight: navigation is disabled, Close panel is not. */
+  /** The panel is busy (for example a long-running operation): tab navigation is disabled, Close panel is not. */
   busy?: boolean;
   activeTabRef: React.RefObject<HTMLButtonElement | null>;
   onSelectTab: (tab: T) => void;

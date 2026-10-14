@@ -126,6 +126,26 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
   await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveCount(1);
 });
 
+test.describe("Subagents capability", () => {
+  test.use({ appEnvironment: { AIDEN_SUBAGENTS_ENABLED: "0" } });
+
+  test("the Environment panel mounts no Subagents panel when the capability is off", async ({ aiden }) => {
+    await finishLmStudioOnboarding(aiden.page);
+    await aiden.page.locator("[data-environment-toggle]").click();
+    const panel = aiden.page.getByRole("complementary", { name: "Environment work surface" });
+    await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+    await expect(aiden.page.locator("#environment-subagents-panel")).toHaveCount(0);
+  });
+});
+
+test("the Environment panel mounts the Subagents panel when the capability is on", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  await aiden.page.locator("[data-environment-toggle]").click();
+  const panel = aiden.page.getByRole("complementary", { name: "Environment work surface" });
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  await expect(aiden.page.locator("#environment-subagents-panel")).toHaveCount(1);
+});
+
 test("Quick View docks beside the chat on a narrower window and floats over it when there is no room", async ({
   aiden,
 }) => {

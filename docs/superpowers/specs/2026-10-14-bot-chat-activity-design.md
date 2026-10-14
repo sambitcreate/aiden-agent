@@ -234,6 +234,7 @@ chatActivity?: { level: "quiet" | "summary" | "detailed"; wording: "follows" | "
 
 - **Shell.** The Bot panel reuses the environment panel's shell: the open state, width, resize, tab strip, and the `environment.toggle` shortcut.
   - The shell is extracted from `environment-panel.tsx` into a reusable `WorkbenchPanel`. The workspace tab bodies stay where they are.
+  - Implemented in C1 as `WorkbenchPanel` (`renderer/components/workbench-panel.tsx`). It is controlled. Tabs (`WorkbenchTab`: `id`, `viewId`, `label`, `icon?`, `selected`, `closable?`, rename/wrap hooks) and views (`WorkbenchView`: `id`, `render({ presented, selected, width })`) are separate lists, because several strip tabs can share one view. `newTab` is the launcher hook point; without it there is no "+". The open state, Quick View, Escape and suppression stay in `EnvironmentPanelProvider`/`EnvironmentWorkbench`, so the `environment.toggle` shortcut and the persisted open bit apply to any tab set mounted there.
   - On `/bots/$botId`, the workbench shows Bot tabs instead of workspace tabs. Leaving the Bot restores the workspace tabs.
 - **Tabs:**
   - **Activity:** every step of every reply, newest first, grouped by reply ("Today, 6:41 PM · Plan dinners for this week"). Routine runs carry the routine's name. It uses the transcript tool calls from §6 and is read-only.
