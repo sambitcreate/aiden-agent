@@ -12,6 +12,7 @@ import {
   resolveEnvironmentPanelResizeBounds,
   resolveQuickViewLayout,
   resolveChatCardInset,
+  storedWorkbenchWidth,
   MIN_DOCKED_CHAT_COLUMN_WIDTH,
   SURFACE_GAP,
 } from "./environment-panel-layout.js";
@@ -207,3 +208,15 @@ function describeQuickViewDocking() {
     assert.equal(chatWidth - inset - GUTTER + SURFACE_GAP, chatWidth - CARD);
   });
 }
+
+test("a saved workbench width is used only when it is a number inside the saved range", () => {
+  assert.equal(storedWorkbenchWidth(null), 560);
+  assert.equal(storedWorkbenchWidth("600"), 600);
+  assert.equal(storedWorkbenchWidth("480"), 480);
+  assert.equal(storedWorkbenchWidth("720"), 720);
+  assert.equal(storedWorkbenchWidth("479"), 560);
+  assert.equal(storedWorkbenchWidth("721"), 560);
+  assert.equal(storedWorkbenchWidth(""), 560);
+  assert.equal(storedWorkbenchWidth("wide"), 560);
+  assert.equal(storedWorkbenchWidth("Infinity"), 560);
+});

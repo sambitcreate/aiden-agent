@@ -139,3 +139,12 @@ export function resolveChatCardInset(input: {
   const column = Math.min(maxColumnWidth, chatWidth - inset);
   return column < minColumn ? 0 : Math.ceil(inset);
 }
+
+/** A saved preferred width, or the default when it is missing, unparsable or outside the saved range. */
+export function storedWorkbenchWidth(stored: string | null): number {
+  if (stored === null) return DEFAULT_PANEL_WIDTH;
+  const parsed = Number(stored);
+  return Number.isFinite(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= MAX_PANEL_WIDTH
+    ? parsed
+    : DEFAULT_PANEL_WIDTH;
+}

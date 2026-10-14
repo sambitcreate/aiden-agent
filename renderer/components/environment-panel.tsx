@@ -36,9 +36,6 @@ import { ReviewPanel } from "./review-panel";
 import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
-  DEFAULT_PANEL_WIDTH,
-  MAX_PANEL_WIDTH,
-  MIN_PANEL_WIDTH,
   resolveEnvironmentPanelLayout,
   resolveEnvironmentPanelResizeBounds,
   resolveChatCardInset,
@@ -107,6 +104,7 @@ import {
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
+import { useWorkbenchWidth } from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -238,15 +236,6 @@ const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   handoffSnapshots: [],
   loadedSnapshots: [],
 };
-
-function storedPanelWidth(): number {
-  const stored = localStorage.getItem(WIDTH_STORAGE_KEY);
-  if (stored === null) return DEFAULT_PANEL_WIDTH;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= MAX_PANEL_WIDTH
-    ? parsed
-    : DEFAULT_PANEL_WIDTH;
-}
 
 interface EnvironmentTabCapabilities {
   subagentsEnabled: boolean;
@@ -1239,6 +1228,7 @@ function EnvironmentPanelSurface({
   resizing,
   setResizing,
   setWidth,
+  persistWidth,
 }: {
   width: number;
   containerWidth: number;
@@ -1247,6 +1237,8 @@ function EnvironmentPanelSurface({
   resizing: boolean;
   setResizing: (value: boolean) => void;
   setWidth: (value: number) => void;
+  /** Stores an already-clamped width under the workbench width key. */
+  persistWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
   const toggleShortcut = useShortcutLabel("environment.toggle");
@@ -1394,12 +1386,8 @@ function EnvironmentPanelSurface({
   );
 
   const commitWidth = React.useCallback(
-    (nextWidth: number) => {
-      const clamped = clampToResizeBounds(nextWidth);
-      setWidth(clamped);
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(clamped)));
-    },
-    [clampToResizeBounds, setWidth],
+    (nextWidth: number) => persistWidth(clampToResizeBounds(nextWidth)),
+    [clampToResizeBounds, persistWidth],
   );
 
   const beginResize = React.useCallback(
@@ -1892,11 +1880,11 @@ export function EnvironmentWorkbench({
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
-  const [resizing, setResizing] = React.useState(false);
-  const [preferredWidth, setPreferredWidth] = React.useState(storedPanelWidth);
+  const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
+  const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
   const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
-    preferredWidth,
+    panelWidth.preferredWidth,
     containerWidth,
   );
   const quickViewLayout = resolveQuickViewLayout(
@@ -2031,8 +2019,9 @@ export function EnvironmentWorkbench({
         inline={inline}
         presented={toolsPresented}
         resizing={resizing}
-        setResizing={setResizing}
-        setWidth={setPreferredWidth}
+        setResizing={panelWidth.setResizing}
+        setWidth={panelWidth.setPreferredWidth}
+        persistWidth={panelWidth.commitPreferredWidth}
       />
     </div>
   );
