@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import os
 
 /// Host feature tokens added in contract revision 25.
 enum AidenBotHostFeature {
@@ -226,8 +227,11 @@ struct AidenBotStatusAnnouncer {
 }
 
 /// Names one Bot chat across model instances and launches: its Mac and its Bot.
+/// The pairing's `deviceId` is part of it, so a re-paired phone never sees the
+/// old pairing's messages.
 struct AidenBotSessionKey: Hashable, Sendable {
     let instanceId: String
+    let deviceId: String
     let botID: String
 }
 
@@ -267,6 +271,9 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     /// A transcript entry already stands for it while its request is unsettled;
     /// it stays (hidden) until the receipt or failure settles it.
     fileprivate var echoed = false
+    fileprivate var echoEntryID: String?
+    /// The submission that entry names, if any: only a receipt with that id settles it.
+    fileprivate var echoSubmissionID: String?
     /// Waits for the next connection or backoff before trying again.
     fileprivate var deferred = false
     fileprivate var connectionAttempts = 0
@@ -276,6 +283,14 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     fileprivate var submissionId: String? {
         if case let .sent(id) = status { return id }
         return nil
+    }
+
+    /// Too old to send: "Couldn't send · Try again", keeping the key if the Mac may hold it.
+    fileprivate mutating func expire() {
+        status = .failed
+        keepsKey = request != nil
+        deferred = false
+        echoed = false
     }
 
     /// Whether the Mac may hold it, so its echo can stand in for it.
@@ -328,10 +343,13 @@ final class AidenBotSessionCache {
         return outboxes[key] ?? []
     }
 
-    func storeOutbox(_ outbox: [AidenBotOutgoingMessage], for key: AidenBotSessionKey, owner: ObjectIdentifier) {
-        guard owners[key] == nil || owners[key] == owner else { return }
+    /// Stores the outbox when `owner` writes this chat; false when another model does.
+    @discardableResult
+    func storeOutbox(_ outbox: [AidenBotOutgoingMessage], for key: AidenBotSessionKey, owner: ObjectIdentifier) -> Bool {
+        guard owners[key] == nil || owners[key] == owner else { return false }
         owners[key] = owner
         outboxes[key] = outbox.isEmpty ? nil : outbox
+        return true
     }
 
     /// Access to this chat ended (401/403, accessChanged).
@@ -349,12 +367,16 @@ final class AidenBotSessionCache {
 }
 
 /// The unsent messages of each Bot chat on disk, so they survive a relaunch
-/// (R17): protected until first unlock, kept 24 hours, purged with the pairing.
+/// (R17): protected until first unlock, excluded from backup, keyed by the
+/// pairing, and purged with it. A message still unsent after 24 hours comes
+/// back as "Couldn't send · Try again", never silently gone.
 actor AidenBotOutboxStore {
     static let shared = AidenBotOutboxStore()
     static let lifetime: TimeInterval = 24 * 60 * 60
-    static let maxMessages = 50
+    /// The most messages one chat may hold waiting; another is refused, visibly.
+    static let maxMessages = 20
     private static let maxBytes = 4_000_000
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "sbtbiswas.AidenOnTheGo", category: "BotOutbox")
 
     private struct Record: Codable {
         let key: UUID
@@ -371,11 +393,26 @@ actor AidenBotOutboxStore {
         let keepsKey: Bool
     }
 
-    private struct Envelope: Codable {
+    /// One record decoded on its own, so a bad one costs only itself.
+    private struct Lossy: Decodable {
+        let record: Record?
+        init(from decoder: Decoder) throws { record = try? Record(from: decoder) }
+    }
+
+    private struct Envelope: Encodable {
         let version: Int
         let instanceId: String
+        let deviceId: String
         let botID: String
         let messages: [Record]
+    }
+
+    private struct ReadEnvelope: Decodable {
+        let version: Int
+        let instanceId: String
+        let deviceId: String
+        let botID: String
+        let messages: [Lossy]
     }
 
     private let root: URL
@@ -396,21 +433,32 @@ actor AidenBotOutboxStore {
         }
     }
 
-    /// The chat's unsent messages younger than 24 hours, oldest first.
+    /// The chat's messages, oldest first. One still unsent after 24 hours comes
+    /// back as not sent; a taken one that old is the Mac's now.
     func load(_ key: AidenBotSessionKey) -> [AidenBotOutgoingMessage] {
         let url = fileURL(key)
-        guard let data = try? Data(contentsOf: url),
-              data.count <= Self.maxBytes,
-              let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
-              envelope.version == 1, envelope.instanceId == key.instanceId, envelope.botID == key.botID else {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard data.count <= Self.maxBytes,
+              let envelope = try? JSONDecoder().decode(ReadEnvelope.self, from: data),
+              envelope.version == 1, envelope.instanceId == key.instanceId,
+              envelope.deviceId == key.deviceId, envelope.botID == key.botID else {
+            Self.log.error("event=outbox_unreadable outcome=dropped")
+            try? fileManager.removeItem(at: url)
             return []
         }
-        let cutoff = now().addingTimeInterval(-Self.lifetime)
-        let fresh = envelope.messages.filter { $0.createdAt > cutoff && $0.createdAt <= now().addingTimeInterval(60) }
-        if fresh.count != envelope.messages.count {
-            if fresh.isEmpty { try? fileManager.removeItem(at: url) } else { try? write(fresh, for: key) }
+        let readable = envelope.messages.compactMap(\.record)
+        if readable.count != envelope.messages.count {
+            Self.log.error("event=outbox_record_unreadable outcome=dropped count=\(envelope.messages.count - readable.count, privacy: .public)")
         }
-        return fresh.map { record in
+        let cutoff = now().addingTimeInterval(-Self.lifetime)
+        var changed = readable.count != envelope.messages.count
+        var messages: [AidenBotOutgoingMessage] = []
+        for record in readable {
+            let expired = record.createdAt <= cutoff
+            if expired, record.submissionId != nil {
+                changed = true
+                continue
+            }
             var message = AidenBotOutgoingMessage(
                 key: record.key,
                 text: record.text,
@@ -424,12 +472,18 @@ actor AidenBotOutboxStore {
             message.baseline = Set(record.baseline)
             message.connectionAttempts = record.connectionAttempts
             message.keepsKey = record.keepsKey
-            return message
+            if expired, message.status == .sending {
+                message.expire()
+                changed = true
+            }
+            messages.append(message)
         }
+        if changed { save(messages, for: key) }
+        return messages
     }
 
     func save(_ messages: [AidenBotOutgoingMessage], for key: AidenBotSessionKey) {
-        let records = messages.suffix(Self.maxMessages).map { message in
+        let records = messages.map { message in
             Record(
                 key: message.key,
                 text: message.text,
@@ -447,8 +501,12 @@ actor AidenBotOutboxStore {
         }
         if records.isEmpty {
             remove(key)
-        } else {
-            try? write(Array(records), for: key)
+            return
+        }
+        do {
+            try write(records, for: key)
+        } catch {
+            Self.log.error("event=outbox_write outcome=failed")
         }
     }
 
@@ -461,19 +519,24 @@ actor AidenBotOutboxStore {
     }
 
     private func write(_ records: [Record], for key: AidenBotSessionKey) throws {
-        let data = try JSONEncoder().encode(Envelope(version: 1, instanceId: key.instanceId, botID: key.botID, messages: records))
-        guard data.count <= Self.maxBytes else { return }
+        let data = try JSONEncoder().encode(Envelope(
+            version: 1, instanceId: key.instanceId, deviceId: key.deviceId, botID: key.botID, messages: records
+        ))
         let url = fileURL(key)
-        try fileManager.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
-        )
+        let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
+        // Unsent messages stay on this device: never in a backup.
+        var excluded = URLResourceValues()
+        excluded.isExcludedFromBackup = true
+        var backupRoot = root
+        try? backupRoot.setResourceValues(excluded)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: protection)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     private func fileURL(_ key: AidenBotSessionKey) -> URL {
         root.appending(path: digest(key.instanceId), directoryHint: .isDirectory)
+            .appending(path: digest(key.deviceId), directoryHint: .isDirectory)
             .appending(path: "\(digest(key.botID)).json")
     }
 
@@ -578,12 +641,22 @@ final class AidenBotSessionModel {
     /// The run a Stop was pressed in, by its `startedAt`.
     @ObservationIgnored private var stopStartedAt: Int?
     @ObservationIgnored private var flushTask: Task<Void, Never>?
+    @ObservationIgnored private var isFlushing = false
     @ObservationIgnored private var backoffTask: Task<Void, Never>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
     @ObservationIgnored private var persistTask: Task<Void, Never>?
+    /// The newest disk write not yet made; only the latest one matters.
+    @ObservationIgnored private var pendingPersist: PersistOp?
     @ObservationIgnored private var released = false
+    @ObservationIgnored private let now: () -> Date
+    /// How many times the Mac has written each field, so a failed action rolls
+    /// back only what nothing newer replaced (R18).
+    @ObservationIgnored private var stateWrites = 0
+    @ObservationIgnored private var questionWrites = 0
+    @ObservationIgnored private var approvalWrites = 0
 
     private enum Intent { case none, requested, acknowledged }
+    private enum PersistOp { case save([AidenBotOutgoingMessage]), remove }
 
     /// Tries a message gets on a connection that keeps failing before it says "Couldn't send".
     static let maxConnectionAttempts = 3
@@ -599,7 +672,8 @@ final class AidenBotSessionModel {
         cacheKey: AidenBotSessionKey? = nil,
         cache: AidenBotSessionCache = .shared,
         outboxStore: AidenBotOutboxStore? = .shared,
-        retryDelays: [Duration] = [.seconds(1), .seconds(4)]
+        retryDelays: [Duration] = [.seconds(1), .seconds(4)],
+        now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
         self.transport = transport
@@ -607,22 +681,34 @@ final class AidenBotSessionModel {
         self.cache = cache
         self.outboxStore = cacheKey == nil ? nil : outboxStore
         self.retryDelays = retryDelays
+        self.now = now
         if let cacheKey {
             entries = cache.transcript(for: cacheKey) ?? []
-            outbox = cache.adoptOutbox(for: cacheKey, owner: ObjectIdentifier(self)).map(Self.adopted)
+            let now = now()
+            outbox = cache.adoptOutbox(for: cacheKey, owner: ObjectIdentifier(self)).map { Self.adopted($0, now: now) }
         }
     }
 
-    /// A message another visit left keeps its key and body; what it saw then is stale.
-    private static func adopted(_ message: AidenBotOutgoingMessage) -> AidenBotOutgoingMessage {
+    /// A message another visit left keeps its key and body; what it saw then is
+    /// stale, and one still unsent after 24 hours says it couldn't be sent.
+    private static func adopted(_ message: AidenBotOutgoingMessage, now: Date) -> AidenBotOutgoingMessage {
         var message = message
         message.deferred = false
         message.echoed = false
+        message.echoEntryID = nil
+        message.echoSubmissionID = nil
         message.queuedID = nil
+        if message.status == .sending, isExpired(message, now: now) { message.expire() }
         return message
     }
 
-    /// The chat closed: timers stop, and the unsent messages stay for the next visit.
+    private static func isExpired(_ message: AidenBotOutgoingMessage, now: Date) -> Bool {
+        now.timeIntervalSince(message.createdAt) >= AidenBotOutboxStore.lifetime
+    }
+
+    /// The chat closed: sending and retry timers stop at once, nothing more is
+    /// written, and the unsent messages stay for the next visit. A disk write
+    /// already queued finishes, so the next launch sees the latest outbox.
     func release() {
         released = true
         backoffTask?.cancel()
@@ -717,7 +803,7 @@ final class AidenBotSessionModel {
     func load() async {
         await restoreOutbox()
         _ = await fetchSnapshot()
-        await flushTask?.value
+        await flushOutbox()
     }
 
     /// `GET /session`. Returns false when no snapshot was loaded. A snapshot
@@ -732,7 +818,11 @@ final class AidenBotSessionModel {
         } catch is CancellationError {
             return false
         } catch {
-            if Self.isAccessLoss(error) { purgeForAccessLoss() }
+            // Losing access says so once ("That message wasn't sent"); nothing overwrites it.
+            if Self.isAccessLoss(error) {
+                purgeForAccessLoss()
+                if errorMessage != nil { return false }
+            }
             errorMessage = hasLoaded ? "Couldn’t refresh this chat." : error.localizedDescription
             return false
         }
@@ -755,6 +845,7 @@ final class AidenBotSessionModel {
                 return
             } catch {
                 failures += 1
+                if Self.isAccessLoss(error) { purgeForAccessLoss() }
             }
             guard !Task.isCancelled else { return }
             // A dropped connection says "Reconnecting to your Mac" until the next one's first
@@ -819,13 +910,16 @@ final class AidenBotSessionModel {
             setStateView(view)
         case let .question(next):
             question = next
+            questionWrites += 1
         case let .approval(next):
             approval = next
+            approvalWrites += 1
         case let .activity(next):
             activity = next
             // The Mac's own word now stands for a Stop or Resume it has heard,
-            // and a new run (another `startedAt`) has nothing to stop.
-            if stopIntent == .acknowledged || (next != nil && stopStartedAt != nil && next?.startedAt != stopStartedAt) {
+            // and a new run (another `startedAt`, or a first activity after a Stop
+            // pressed before any) has nothing to stop.
+            if stopIntent == .acknowledged || (next != nil && (stopStartedAt == nil || next?.startedAt != stopStartedAt)) {
                 stopIntent = .none
             }
             if resumeIntent == .acknowledged { resumeIntent = .none }
@@ -860,6 +954,8 @@ final class AidenBotSessionModel {
         setStateView(session.stateView)
         question = session.question
         approval = session.approval
+        questionWrites += 1
+        approvalWrites += 1
         activity = session.activity
         queued = session.queued
         hasLoaded = true
@@ -875,6 +971,7 @@ final class AidenBotSessionModel {
     private func setStateView(_ view: AidenBotSessionStateView?) {
         let wasBlocked = stateView?.blocked == .accessChanged
         stateView = view
+        stateWrites += 1
         if view?.state != .running {
             stopIntent = .none
             resumeIntent = .none
@@ -907,9 +1004,11 @@ final class AidenBotSessionModel {
                 continue
             }
             if !message.echoed, let echo = echoEntry(for: message, owned: owned) {
-                claimedEntries.insert(echo)
+                claimedEntries.insert(echo.id)
                 guard message.status == .sending else { continue }
                 message.echoed = true
+                message.echoEntryID = echo.id
+                message.echoSubmissionID = echo.submissionId
             }
             if !message.echoed {
                 if let id = message.submissionId {
@@ -932,34 +1031,55 @@ final class AidenBotSessionModel {
     }
 
     /// The unclaimed user entry that stands for `message`, if any.
-    private func echoEntry(for message: AidenBotOutgoingMessage, owned: Set<String>) -> String? {
-        var byText: String?
+    private func echoEntry(for message: AidenBotOutgoingMessage, owned: Set<String>) -> AidenBotSessionMessage? {
+        var byText: AidenBotSessionMessage?
         for entry in entries {
             guard case let .message(sent) = entry, sent.role == .user, !claimedEntries.contains(sent.id) else { continue }
-            if let id = message.submissionId, sent.submissionId == id { return sent.id }
+            if let id = message.submissionId, sent.submissionId == id { return sent }
             guard byText == nil, !message.baseline.contains(sent.id),
                   sent.text.trimmingCharacters(in: .whitespacesAndNewlines) == message.text else { continue }
             if let theirs = sent.submissionId {
                 // An entry that names its submission belongs to that submission.
                 if message.submissionId != nil || owned.contains(theirs) { continue }
             }
-            byText = sent.id
+            byText = sent
         }
         return byText
     }
 
     // MARK: The outbox
 
+    /// Writes the outbox to the cache and disk while this model owns the chat;
+    /// an older model left open never overwrites a newer one's messages.
     private func outboxDidChange() {
-        guard let cacheKey, !released else { return }
-        cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self))
-        guard let outboxStore else { return }
-        let snapshot = outbox
-        let previous = persistTask
-        persistTask = Task {
-            await previous?.value
-            await outboxStore.save(snapshot, for: cacheKey)
+        guard let cacheKey, !released,
+              cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
+        persist(.save(outbox))
+    }
+
+    /// One writer per model; a newer write replaces one not yet made, and a
+    /// purge runs after any write already under way.
+    private func persist(_ op: PersistOp) {
+        guard let cacheKey, let outboxStore else { return }
+        pendingPersist = op
+        guard persistTask == nil else { return }
+        persistTask = Task { [weak self] in
+            while let next = self?.takePersistOp() {
+                switch next {
+                case let .save(messages): await outboxStore.save(messages, for: cacheKey)
+                case .remove: await outboxStore.remove(cacheKey)
+                }
+            }
         }
+    }
+
+    private func takePersistOp() -> PersistOp? {
+        guard let op = pendingPersist else {
+            persistTask = nil
+            return nil
+        }
+        pendingPersist = nil
+        return op
     }
 
     /// Adds what a previous launch left on disk, once, before the first snapshot sends it.
@@ -970,7 +1090,8 @@ final class AidenBotSessionModel {
                 let stored = await outboxStore.load(cacheKey)
                 guard let self, !stored.isEmpty else { return }
                 let known = Set(self.outbox.map(\.key))
-                let added = stored.filter { !known.contains($0.key) }.map(Self.adopted)
+                let now = self.now()
+                let added = stored.filter { !known.contains($0.key) }.map { Self.adopted($0, now: now) }
                 if !added.isEmpty {
                     self.outbox = (added + self.outbox).sorted { $0.createdAt < $1.createdAt }
                 }
@@ -985,8 +1106,9 @@ final class AidenBotSessionModel {
         scheduleFlush()
     }
 
+    /// Sends the outbox beside whatever called this (a frame, a snapshot, a backoff).
     private func scheduleFlush() {
-        guard !released, flushTask == nil, nextToDeliver() != nil else { return }
+        guard !released, !isFlushing, nextToDeliver() != nil else { return }
         flushTask = Task { [weak self] in await self?.flushOutbox() }
     }
 
@@ -999,11 +1121,15 @@ final class AidenBotSessionModel {
         return head.key
     }
 
+    /// One sender at a time: a caller that finds one under way leaves the new
+    /// message to it.
     private func flushOutbox() async {
+        guard !isFlushing else { return }
+        isFlushing = true
+        defer { isFlushing = false }
         while let key = nextToDeliver(), !Task.isCancelled {
             await deliver(key)
         }
-        flushTask = nil
     }
 
     private func deliver(_ key: UUID) async {
@@ -1011,6 +1137,11 @@ final class AidenBotSessionModel {
         if needsModel || state == .unavailable {
             outbox[index].status = .failed
             outbox[index].echoed = false
+            return
+        }
+        if Self.isExpired(outbox[index], now: now()) {
+            // Unsent for a day: it says so instead of going out late.
+            outbox[index].expire()
             return
         }
         let request: AidenBotMessageRequest
@@ -1038,6 +1169,13 @@ final class AidenBotSessionModel {
             let receipt = try await transport.sendBotMessage(botId: botID, request: request, idempotencyKey: key)
             if cursor == mark { setStateView(receipt.stateView) }
             guard let current = outbox.firstIndex(where: { $0.key == key }) else { return }
+            if outbox[current].echoed, let echoID = outbox[current].echoSubmissionID, echoID != receipt.submissionId {
+                // The entry it waited on was another submission's: give it back.
+                if let entry = outbox[current].echoEntryID { claimedEntries.remove(entry) }
+                outbox[current].echoed = false
+                outbox[current].echoEntryID = nil
+                outbox[current].echoSubmissionID = nil
+            }
             if outbox[current].echoed {
                 outbox.remove(at: current)
             } else {
@@ -1053,7 +1191,7 @@ final class AidenBotSessionModel {
                 purgeForAccessLoss()
                 return
             }
-            guard aidenBotSessionFailureIsAmbiguous(error) else {
+            guard Self.messageFailureIsAmbiguous(error) else {
                 // Refused outright: it never reached the Mac.
                 outbox[current].status = .failed
                 outbox[current].keepsKey = false
@@ -1088,6 +1226,15 @@ final class AidenBotSessionModel {
         }
     }
 
+    /// Whether a message request may have reached the Mac. A request the Mac is
+    /// still working on (`409 idempotency_in_flight`) keeps its key too.
+    private static func messageFailureIsAmbiguous(_ error: Error) -> Bool {
+        if case let AidenRemoteClientError.server(409, body) = error, body.code.rawValue == "idempotency_in_flight" {
+            return true
+        }
+        return aidenBotSessionFailureIsAmbiguous(error)
+    }
+
     /// 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot.
     private static func isAccessLoss(_ error: Error) -> Bool {
         guard let error = error as? AidenRemoteClientError else { return false }
@@ -1108,13 +1255,7 @@ final class AidenBotSessionModel {
         outbox = []
         if let cacheKey {
             cache.purge(cacheKey)
-            if let outboxStore {
-                let previous = persistTask
-                persistTask = Task {
-                    await previous?.value
-                    await outboxStore.remove(cacheKey)
-                }
-            }
+            persist(.remove)
         }
         if hadUnsent { errorMessage = "That message wasn’t sent. Please try again." }
     }
@@ -1139,7 +1280,7 @@ final class AidenBotSessionModel {
             key = UUID()
             retainedQuestion = (waitId, response, key)
         }
-        let mark = cursor
+        let mark = questionWrites
         question = nil
         inFlight.insert(.answerQuestion)
         defer { inFlight.remove(.answerQuestion) }
@@ -1152,7 +1293,7 @@ final class AidenBotSessionModel {
             )
             retainedQuestion = nil
         } catch {
-            if question == nil, cursor == mark { question = shown }
+            if questionWrites == mark { question = shown }
             if error is CancellationError { return }
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedQuestion = nil }
             errorMessage = "That answer wasn’t sent. Please try again."
@@ -1182,7 +1323,7 @@ final class AidenBotSessionModel {
             key = UUID()
             retainedApproval = (waitId, decision, key)
         }
-        let mark = cursor
+        let mark = approvalWrites
         approval = nil
         inFlight.insert(.answerApproval)
         defer { inFlight.remove(.answerApproval) }
@@ -1200,7 +1341,7 @@ final class AidenBotSessionModel {
                ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) {
                 return
             }
-            if approval == nil, cursor == mark { approval = current }
+            if approvalWrites == mark { approval = current }
             if error is CancellationError { return }
             errorMessage = "That answer wasn’t sent. Please try again."
         }
@@ -1218,23 +1359,30 @@ final class AidenBotSessionModel {
     @discardableResult
     func send(_ rawText: String, whenBusy mode: AidenStreamInputMode? = nil) async -> Bool {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, (try? AidenBotMessageRequest(text: text)) != nil else { return false }
-        enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil)
-        await flushTask?.value
+        guard canSend, (try? AidenBotMessageRequest(text: text)) != nil,
+              enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil) else { return false }
+        await flushOutbox()
         return true
     }
 
-    private func enqueue(_ text: String, mode: AidenStreamInputMode?, retryOf: String?) {
+    static let outboxFull = "Too many messages are waiting to send. Try again once they’ve gone."
+
+    /// Adds a message, unless the chat already holds as many as it can keep: then it says so.
+    private func enqueue(_ text: String, mode: AidenStreamInputMode?, retryOf: String?) -> Bool {
+        guard outbox.count < AidenBotOutboxStore.maxMessages else {
+            errorMessage = Self.outboxFull
+            return false
+        }
         outbox.append(AidenBotOutgoingMessage(
             key: UUID(),
             text: text,
             mode: mode,
             enqueuedWhileRunning: isRunning,
             retryOf: retryOf,
-            createdAt: Date(),
+            createdAt: now(),
             status: .sending
         ))
-        scheduleFlush()
+        return true
     }
 
     /// Try again on a message that couldn't be sent. A message the Mac may hold
@@ -1246,11 +1394,20 @@ final class AidenBotSessionModel {
             outbox[index].key = UUID()
             outbox[index].request = nil
         }
-        outbox[index].status = .sending
-        outbox[index].deferred = false
-        outbox[index].connectionAttempts = 0
-        scheduleFlush()
-        await flushTask?.value
+        outbox[index] = AidenBotOutgoingMessage(
+            key: outbox[index].key,
+            text: outbox[index].text,
+            mode: outbox[index].mode,
+            enqueuedWhileRunning: outbox[index].enqueuedWhileRunning,
+            retryOf: outbox[index].retryOf,
+            // Try again starts its day again.
+            createdAt: now(),
+            status: .sending,
+            request: outbox[index].request,
+            baseline: outbox[index].baseline,
+            keepsKey: outbox[index].keepsKey
+        )
+        await flushOutbox()
         return true
     }
 
@@ -1279,8 +1436,8 @@ final class AidenBotSessionModel {
         if let earlier = outbox.first(where: { $0.retryOf == turn.id }) {
             return await retrySend(earlier.id)
         }
-        enqueue(text, mode: offersBusyModes ? .queue : nil, retryOf: turn.id)
-        await flushTask?.value
+        guard enqueue(text, mode: offersBusyModes ? .queue : nil, retryOf: turn.id) else { return false }
+        await flushOutbox()
         return true
     }
 
@@ -1337,6 +1494,7 @@ final class AidenBotSessionModel {
         retainedKeys[action] = key
         let previous = stateView
         let mark = cursor
+        let writes = stateWrites
         if let optimistic { stateView = optimistic }
         inFlight.insert(action)
         defer { inFlight.remove(action) }
@@ -1346,7 +1504,8 @@ final class AidenBotSessionModel {
             retainedKeys[action] = nil
             return true
         } catch {
-            if optimistic != nil, cursor == mark { stateView = previous }
+            // Only what the Mac hasn't written since the tap goes back.
+            if optimistic != nil, stateWrites == writes { stateView = previous }
             if error is CancellationError { return false }
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedKeys[action] = nil }
             errorMessage = "That didn’t work. Please try again."

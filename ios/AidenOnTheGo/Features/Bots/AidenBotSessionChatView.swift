@@ -365,7 +365,7 @@ struct AidenBotSessionChatView: View {
                 .frame(maxWidth: .infinity)
         case let .failedTurn(turn):
             AidenBotFailedTurnCard(
-                canRetry: model.retryableFailedTurn?.id == turn.id && canWrite && model.canSend,
+                canRetry: model.retryableFailedTurn?.id == turn.id && canWrite && model.canSend && model.hasLoaded,
                 isBusy: model.inFlight.contains(.retry),
                 onRetry: { Task { await model.retry() } }
             )
@@ -654,7 +654,7 @@ struct AidenBotSessionChatView: View {
         let model = AidenBotSessionModel(
             botID: botID,
             transport: client,
-            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, botID: botID)
+            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID)
         )
         model.activitySupported = coordinator.server?.supportsBotActivity == true
         self.model = model
