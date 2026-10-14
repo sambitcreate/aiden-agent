@@ -1010,6 +1010,7 @@ function mapSessionError(error: unknown): never {
       case "access_changed":
         throw new AidenRemoteServiceError("capability_denied", error.message, 403);
       case "needs_model":
+      case "model_error":
       case "unavailable":
       case "bot_paused":
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);

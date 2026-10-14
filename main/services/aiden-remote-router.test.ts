@@ -5281,6 +5281,7 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
       persisted = snapshot as { entries: unknown[] };
     },
   });
+  let modelBroken = true;
   let paused = true;
   const sent: string[] = [];
   let state: BotSessionState = { kind: "interrupted", submissionId: "16" };
@@ -5288,7 +5289,8 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
     bots,
     runtime: async () => ({
       send: async (_botId, input) => {
-        // The session's own refusal from state, before anything is written.
+        // The session's own refusals from state, before anything is written.
+        if (modelBroken) throw new BotSessionError("model_error");
         if (paused) throw new BotSessionError("bot_paused");
         sent.push(input.requestId);
         if (input.text === "explode") throw new Error("The input was written, then the session failed.");
@@ -5315,6 +5317,13 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
   });
   try {
     const message = JSON.stringify({ text: "Plan dinners" });
+    // A model that can't run right now is a refusal from state too, not a server failure.
+    const unusable = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
+    assert.equal(unusable.status, 409);
+    assert.equal((await unusable.json()).error.code, "operation_stale");
+    assert.deepEqual(persisted?.entries, [], "the model refusal left nothing in the durable ledger");
+    modelBroken = false;
+
     const refused = await fetch(`${app.base}/bots/bot-1/messages`, post("message-key-000000001", message));
     assert.equal(refused.status, 409);
     assert.equal((await refused.json()).error.code, "operation_stale");
