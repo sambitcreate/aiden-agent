@@ -1,7 +1,9 @@
-import { installBotTestIpc } from "./test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { BotLiveSnapshot } from "../../shared/bot-live";
+import { BotLiveProvider, useBotLive, useSharedBotLive } from "../../lib/use-bot-live";
 import { BOT_PANEL_OPEN_KEY, BOT_PANEL_TAB_KEY, BotPanelProvider, useBotPanel } from "./bot-panel-context";
 
 beforeEach(() => {
@@ -84,4 +86,143 @@ test("a saved tab this build doesn't know, or a garbled open flag, opens closed 
     </BotPanelProvider>,
   );
   assert.equal(panelState(), "closed activity none");
+});
+
+const liveSnapshot = (botId: string, text?: string): BotLiveSnapshot => ({
+  botId,
+  epoch: "e1",
+  seq: 0,
+  entries: text ? [{ id: `${botId}-u0`, type: "user", text, imageCount: 0 }] : [],
+  partial: null,
+  state: { kind: "idle" },
+  question: null,
+  activity: null,
+  queued: [],
+});
+
+const liveCalls = (calls: { channel: string }[], channel: "subscribe" | "unsubscribe") =>
+  calls.filter((call) => call.channel === `bots:live:${channel}`).length;
+
+function LiveProbe({ label }: { label: string }) {
+  const live = useSharedBotLive("bot-1");
+  return <p aria-label={label}>{live.snapshot ? `${live.snapshot.entries.length} entries` : "loading"}</p>;
+}
+
+function SharedLive({ second }: { second: boolean }) {
+  return (
+    <BotLiveProvider botId="bot-1">
+      <LiveProbe label="Chat view" />
+      {second ? <LiveProbe label="Activity view" /> : null}
+    </BotLiveProvider>
+  );
+}
+
+test("a Bot's chat and its Activity tab share one live subscription, and closing the tab never stops the chat's", async () => {
+  const calls = installBotTestIpc({
+    "bots:live:subscribe": () => liveSnapshot("bot-1"),
+    "bots:live:unsubscribe": () => undefined,
+  });
+  const view = render(<SharedLive second />);
+  await waitFor(() => assert.equal(screen.getByLabelText("Activity view").textContent, "0 entries"));
+  view.rerender(<SharedLive second={false} />);
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "e1",
+    seq: 1,
+    type: "entry",
+    entry: { id: "u1", type: "user", text: "Plan dinners", imageCount: 0 },
+  });
+  await waitFor(() => assert.equal(screen.getByLabelText("Chat view").textContent, "1 entries"));
+  assert.equal(liveCalls(calls, "subscribe"), 1);
+  assert.equal(liveCalls(calls, "unsubscribe"), 0);
+});
+
+function Standalone({ label }: { label: string }) {
+  const live = useBotLive("bot-1");
+  return <p aria-label={label}>{live.snapshot ? "ready" : live.failed ? "failed" : "loading"}</p>;
+}
+
+test("independent consumers of one Bot still make a single subscribe, and the last one out closes it", async () => {
+  const calls = installBotTestIpc({
+    "bots:live:subscribe": () => liveSnapshot("bot-1"),
+    "bots:live:unsubscribe": () => undefined,
+  });
+  const view = render(
+    <>
+      <Standalone label="One" />
+      <Standalone label="Two" />
+      <LiveProbe label="Three" />
+    </>,
+  );
+  await waitFor(() => assert.equal(screen.getByLabelText("Three").textContent, "0 entries"));
+  assert.equal(screen.getByLabelText("One").textContent, "ready");
+  assert.equal(screen.getByLabelText("Two").textContent, "ready");
+  view.rerender(<Standalone label="Two" />);
+  assert.equal(liveCalls(calls, "unsubscribe"), 0, "one consumer is still watching");
+  view.unmount();
+  assert.equal(liveCalls(calls, "unsubscribe"), 1);
+  assert.equal(liveCalls(calls, "subscribe"), 1);
+});
+
+function SwitchProbe({ botId }: { botId: string }) {
+  const live = useBotLive(botId);
+  const seen = live.snapshot ? `${live.snapshot.botId}:${live.snapshot.entries.map((entry) => entry.id).join(",")}` : "loading";
+  return <p aria-label="Switched">{seen}</p>;
+}
+
+test("switching Bots never shows the old Bot's conversation, even for an old event or a slow answer", async () => {
+  let answerSecond: (snapshot: BotLiveSnapshot) => void = () => undefined;
+  const calls = installBotTestIpc({
+    "bots:live:subscribe": (botId) =>
+      botId === "bot-1"
+        ? liveSnapshot("bot-1", "first Bot's message")
+        : new Promise<BotLiveSnapshot>((resolve) => {
+            answerSecond = resolve;
+          }),
+    "bots:live:unsubscribe": () => undefined,
+  });
+  const view = render(<SwitchProbe botId="bot-1" />);
+  await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-1:bot-1-u0"));
+  view.rerender(<SwitchProbe botId="bot-2" />);
+  assert.equal(screen.getByLabelText("Switched").textContent, "loading", "not the old Bot's view, not even for one render");
+  emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "e1",
+    seq: 1,
+    type: "entry",
+    entry: { id: "late", type: "user", text: "too late", imageCount: 0 },
+  });
+  assert.equal(screen.getByLabelText("Switched").textContent, "loading");
+  answerSecond(liveSnapshot("bot-2", "second Bot's message"));
+  await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-2:bot-2-u0"));
+  assert.deepEqual(
+    calls.filter((call) => call.channel.startsWith("bots:live:")).map((call) => `${call.channel}:${String(call.args[0])}`),
+    ["bots:live:subscribe:bot-1", "bots:live:unsubscribe:bot-1", "bots:live:subscribe:bot-2"],
+  );
+});
+
+test("a subscribe that failed is retried when a later consumer joins, instead of wedging it", async () => {
+  let attempts = 0;
+  const calls = installBotTestIpc({
+    "bots:live:subscribe": () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("main was busy");
+      return liveSnapshot("bot-1");
+    },
+    "bots:live:unsubscribe": () => undefined,
+  });
+  const view = render(<Standalone label="First" />);
+  await waitFor(() => assert.equal(screen.getByLabelText("First").textContent, "failed"));
+  view.rerender(
+    <>
+      <Standalone label="First" />
+      <Standalone label="Later" />
+    </>,
+  );
+  await waitFor(() => assert.equal(screen.getByLabelText("Later").textContent, "ready"));
+  assert.equal(screen.getByLabelText("First").textContent, "ready");
+  assert.equal(liveCalls(calls, "subscribe"), 2);
+  view.unmount();
+  render(<Standalone label="After everyone left" />);
+  await waitFor(() => assert.equal(screen.getByLabelText("After everyone left").textContent, "ready"));
 });
