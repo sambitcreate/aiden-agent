@@ -66,6 +66,52 @@ test("workspace launcher opens tools on demand and returns after closing the las
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
 });
 
+test("Environment keeps its tabs, width and open state across a relaunch and answers its toggle command", async ({
+  aiden,
+}) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const setWindowWidth = (width: number) =>
+    aiden.app.evaluate(
+      ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900),
+      width,
+    );
+  const sendToggle = () =>
+    aiden.app.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send("app:command", { commandId: "environment.toggle" });
+      }
+    });
+  await setWindowWidth(1600);
+  let panel = page.getByRole("complementary", { name: "Environment work surface" });
+  await page.locator("[data-environment-toggle]").click();
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: "Context", exact: true }).click();
+  let separator = panel.getByRole("separator", { name: "Resize environment panel" });
+  await expect(separator).toHaveAttribute("aria-valuenow", "560");
+  await separator.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(separator).toHaveAttribute("aria-valuenow", "544");
+
+  page = await aiden.relaunch();
+  await setWindowWidth(1600);
+  panel = page.getByRole("complementary", { name: "Environment work surface" });
+  separator = panel.getByRole("separator", { name: "Resize environment panel" });
+  await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
+  await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveCount(1);
+  await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveCount(1);
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  await expect(separator).toHaveAttribute("aria-valuenow", "544");
+
+  await sendToggle();
+  await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "closed");
+  await sendToggle();
+  await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "open");
+  await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveCount(1);
+});
+
 test("Quick View docks beside the chat on a narrower window and floats over it when there is no room", async ({
   aiden,
 }) => {
