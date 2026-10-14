@@ -549,11 +549,12 @@ export interface BotLiveProjectionDeps {
   /** The question the Bot is waiting on right now, if any. */
   question?(botId: string): BotPendingQuestion | null;
   /**
-   * Which of these queued submission ids are not the person's own messages (a
-   * routine's input or the hidden self-intro). Decided from durable request
-   * ids; a failure hides them until the next frame.
+   * Classify queued submission ids: `true` for a routine's input or the hidden
+   * self-intro, `false` for the person's own message. Decided from durable
+   * request ids. An id the session cannot find is left out of the answer; an
+   * id with no answer, or a failure, stays hidden and is retried.
    */
-  quietInputs?(botId: string, submissionIds: readonly string[]): Promise<ReadonlySet<string>>;
+  quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
   /** Whether a tool approval is waiting on the person. */
   approvalPending?(botId: string): boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
@@ -563,6 +564,8 @@ export interface BotLiveProjectionDeps {
   /** Schedules a subscriber flush. Defaults to the next macrotask. */
   schedule?(flush: () => void): void;
   maxPending?: number;
+  /** Pause before a failed queued-message classification is tried again. Defaults to one second. */
+  classifyRetryMs?: number;
   newEpoch?(): string;
   /** A reply finished (or the Bot paused): list rows refresh from this. */
   onRunSettled?(botId: string, state: BotSessionState): void;
@@ -620,6 +623,11 @@ interface Feed {
   queued: BotQueuedMessage[];
   /** Queued submission ids already classified as quiet (true) or the person's (false). */
   inputKinds: Map<string, boolean>;
+  /** Classifying failed and has not succeeded since; logged once per streak. */
+  classifyFailing: boolean;
+  /** No classification attempt before this time (a throttle for a persistent failure). */
+  classifyNotBefore: number;
+  classifyRetry: ReturnType<typeof setTimeout> | null;
   /** When the current running turn started. */
   startedAt: number;
   stopping: boolean;
@@ -654,6 +662,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const lastSeq = new Map<string, number>();
 
   const report = (botId: string, error: unknown) => deps.onError?.(botId, error);
+  const classifyRetryMs = deps.classifyRetryMs ?? 1_000;
 
   function snapshotOf(feed: Feed): BotLiveSnapshot {
     return {
@@ -786,23 +795,52 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const entry of next.slice(previous.length)) emit(feed, { type: "entry", entry });
   }
 
-  /** The person's queued messages, classifying each new queued id once. */
+  /**
+   * The person's queued messages. Each queued id is classified once; an id that
+   * is not yet classified as the person's own stays hidden (fail closed), so a
+   * routine's prompt never shows as a message the person sent. A failed or
+   * incomplete classification is retried after a pause, not on every frame.
+   */
   async function queuedFor(feed: Feed, docs: Readonly<Record<string, unknown>>): Promise<BotQueuedMessage[]> {
     const ids = liveQueuedInputIds(docs);
     for (const id of [...feed.inputKinds.keys()]) if (!ids.includes(id)) feed.inputKinds.delete(id);
     const unknown = ids.filter((id) => !feed.inputKinds.has(id));
-    if (unknown.length > 0 && deps.quietInputs) {
+    if (unknown.length > 0 && now() >= feed.classifyNotBefore) {
       try {
-        const quiet = await deps.quietInputs(feed.botId, unknown);
-        for (const id of unknown) feed.inputKinds.set(id, quiet.has(id));
+        const answers = await deps.quietInputs(feed.botId, unknown);
+        for (const id of unknown) {
+          const quiet = answers.get(id);
+          if (quiet !== undefined) feed.inputKinds.set(id, quiet);
+        }
+        feed.classifyFailing = false;
       } catch (error) {
-        report(feed.botId, error);
-        // Unclassified ids stay hidden until the next frame can decide.
-        return liveQueuedMessages(docs, new Set(unknown));
+        if (!feed.classifyFailing) report(feed.botId, error);
+        feed.classifyFailing = true;
       }
+      if (unknown.some((id) => !feed.inputKinds.has(id))) scheduleClassifyRetry(feed);
+    } else if (unknown.length > 0) {
+      scheduleClassifyRetry(feed);
     }
-    const quiet = new Set([...feed.inputKinds].filter(([, isQuiet]) => isQuiet).map(([id]) => id));
-    return liveQueuedMessages(docs, quiet);
+    return liveQueuedMessages(docs, new Set(ids.filter((id) => feed.inputKinds.get(id) !== false)));
+  }
+
+  /** One retry after the pause, through the feed queue, even if no frame arrives. */
+  function scheduleClassifyRetry(feed: Feed): void {
+    feed.classifyNotBefore = Math.max(feed.classifyNotBefore, now() + classifyRetryMs);
+    if (feed.classifyRetry !== null || feed.ended) return;
+    feed.classifyRetry = setTimeout(() => {
+      feed.classifyRetry = null;
+      void enqueueWork(feed, async () => {
+        if (feed.ended) return;
+        feed.classifyNotBefore = 0;
+        const queued = await queuedFor(feed, feed.frame.docs);
+        if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
+          feed.queued = queued;
+          emit(feed, { type: "queued", queued });
+        }
+      });
+    }, classifyRetryMs);
+    feed.classifyRetry.unref?.();
   }
 
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
@@ -884,6 +922,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         activity: null,
         queued: [],
         inputKinds: new Map(),
+        classifyFailing: false,
+        classifyNotBefore: 0,
+        classifyRetry: null,
         startedAt: now(),
         stopping: false,
         resuming: false,
@@ -936,6 +977,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
 
   async function stopFeed(feed: Feed): Promise<void> {
     feed.ended = true;
+    if (feed.classifyRetry !== null) clearTimeout(feed.classifyRetry);
+    feed.classifyRetry = null;
     if (feeds.get(feed.botId) === feed) feeds.delete(feed.botId);
     await feed.watch.stop().catch(() => undefined);
     feed.cancel();

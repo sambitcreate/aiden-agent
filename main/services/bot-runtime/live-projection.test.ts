@@ -1074,3 +1074,98 @@ test("a notice left behind by Stop does not hide the person's next queued messag
     await live.close();
   }
 });
+
+test("an intro prompt queued behind a running reply is not listed as the person's message", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("hello there")], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await live.service.send("bot:a", { text: "Introduce yourself", requestId: "intro:bot:a", hidden: true });
+    await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "two") === true, { what: "the person's message" });
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["two"]);
+    assert.equal(queuedTexts(tape.events).includes("Introduce yourself"), false);
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+/** A projection whose classification can be made to fail or come back empty, with every call and report counted. */
+async function startFlaky() {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const control = { mode: "ok" as "ok" | "throw" | "empty", calls: 0, reports: 0 };
+  const live = await start(fauxModels, {
+    projection: {
+      classifyRetryMs: 150,
+      onError: () => {
+        control.reports += 1;
+      },
+      quietInputs: async (botId, ids) => {
+        control.calls += 1;
+        if (control.mode === "throw") throw new Error("inspect failed");
+        if (control.mode === "empty") return new Map();
+        return live.service.quietInputs(botId, ids);
+      },
+    },
+  });
+  return { live, control };
+}
+
+test("while classifying fails, a cached routine stays hidden and the person's classified message stays listed; the new one waits, then appears", async () => {
+  const { live, control } = await startFlaky();
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert, classified" });
+    control.mode = "throw";
+    control.calls = 0;
+    control.reports = 0;
+    await live.service.send("bot:a", { text: "drinks", requestId: "desk-3" });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert"], "drinks waits; the routine never shows");
+    assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
+    assert.equal(control.reports, 1, "one report per failure streak");
+    assert.ok(control.calls <= 6, `retries are throttled, saw ${control.calls}`);
+    control.mode = "ok";
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "drinks") === true, {
+      what: "drinks after the retry, with no new frame needed",
+    });
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert", "drinks"]);
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("an id the session cannot find stays hidden and is retried", async () => {
+  const { live, control } = await startFlaky();
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    control.mode = "empty";
+    await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.deepEqual(tape.view?.queued, []);
+    control.mode = "ok";
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert after the retry" });
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
