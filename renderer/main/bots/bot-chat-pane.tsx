@@ -466,6 +466,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         snapshot?.question?.waitId,
       ]}
       showScrollToBottomButton
+      streaming={running}
       footer={footer}
     >
       {body}

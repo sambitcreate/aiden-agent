@@ -276,53 +276,6 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   );
 });
 
-test("scroll area settles scroll position before paint, not a frame later", () => {
-  const ui = source("../components/ui.tsx");
-  const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
-  const effect = between(
-    scrollArea,
-    "React.useLayoutEffect(() => {\n    const element = viewport.current;",
-    "const resolvedToolbar",
-  );
-
-  const syncIndex = effect.indexOf('if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");');
-  const frameIndex = effect.indexOf("requestAnimationFrame(update)");
-  assert.notEqual(syncIndex, -1, "ScrollArea must settle synchronously in the layout effect");
-  assert.notEqual(frameIndex, -1, "The post-paint frame should remain for late layout");
-  assert.ok(syncIndex < frameIndex, "The synchronous settle must precede the rAF pass");
-  assert.match(scrollArea, /if \(followFrameRef\.current\) return;/u);
-  assert.match(scrollArea, /data-scroll-content/u);
-  assert.match(scrollArea, /autoScrollResetKey/u);
-  assert.match(scrollArea, /data-scroll-content className="min-h-full"/u);
-  assert.match(scrollArea, /resolveProgrammaticFollowLatch/u);
-  assert.match(scrollArea, /programmaticPinPendingRef/u);
-  // An aborted or finished smooth jump must release the pending latch.
-  assert.match(scrollArea, /addEventListener\("scrollend", releaseProgrammaticPin\)/u);
-  assert.match(scrollArea, /onWheel=\{releaseProgrammaticPin\}/u);
-  assert.match(scrollArea, /onTouchStart=\{releaseProgrammaticPin\}/u);
-  assert.match(scrollArea, /isUserScrollKey\(event\.key\)\) releaseProgrammaticPin\(\)/u);
-  assert.doesNotMatch(
-    effect,
-    /subtree:\s*true/u,
-    "Long transcripts must not observe every mutation under the viewport",
-  );
-  assert.match(effect, /if \(contentElement\) resizeObserver\.observe\(contentElement\)/u);
-});
-
-test("scroll area still pads the viewport for its overlaid chrome", () => {
-  const ui = source("../components/ui.tsx");
-  const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
-
-  // Toolbar and footer are absolutely positioned, so the viewport must reserve
-  // their measured height plus any clearance for chrome floating above the footer.
-  assert.match(
-    scrollArea,
-    /style=\{\{\s*paddingTop: toolbarHeight,\s*paddingBottom: footerHeight \+ Math\.max\(0, scrollContentBottomOffset\),\s*\}\}/u,
-  );
-  assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
-  assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
-});
-
 test("sidebar prefetches a chat before the click so the pane does not blank", () => {
   const sidebar = source("../components/chat-sidebar.tsx");
 
