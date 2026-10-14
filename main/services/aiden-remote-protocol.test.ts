@@ -2483,7 +2483,8 @@ test("an optional Bot activity key sent as the literal null is refused, never re
   for (const sample of entries) {
     assert.throws(() => parseAidenRemoteBotSessionEntry(sample), /Only the person's message can carry a submissionId/u);
     const { label: _label, ...withoutLabel } = sample;
-    assert.equal(parseAidenRemoteBotSessionEntry(withoutLabel).type === "message" && parseAidenRemoteBotSessionEntry(withoutLabel).submissionId, "17");
+    const entry = parseAidenRemoteBotSessionEntry(withoutLabel);
+    assert.equal(entry.type === "message" && entry.submissionId, "17", "the same bubble without the key keeps its id");
   }
 });
 
