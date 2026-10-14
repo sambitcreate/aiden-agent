@@ -1024,8 +1024,19 @@ struct AidenBotCanonicalAvatarView: View {
     var working = false
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.aidenReduceMotion) private var appReduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     @State private var canonicalImage: UIImage?
     @State private var loadedCacheKey: AidenBotCanonicalAvatarCacheKey?
+
+    private var cue: AidenBotWorkingCue {
+        aidenBotWorkingCue(
+            working: working,
+            hasPhoto: canonicalImage != nil,
+            motionAllowed: !systemReduceMotion && !appReduceMotion && !lowPowerMode
+        )
+    }
 
     private var loadIdentity: AidenBotCanonicalAvatarLoadIdentity {
         AidenBotCanonicalAvatarLoadIdentity(
@@ -1042,7 +1053,7 @@ struct AidenBotCanonicalAvatarView: View {
                 name: name,
                 size: size,
                 isDecorative: isDecorative,
-                working: working
+                working: cue.glances
             )
             if let canonicalImage {
                 Image(uiImage: canonicalImage)
@@ -1053,8 +1064,9 @@ struct AidenBotCanonicalAvatarView: View {
                     .accessibilityHidden(isDecorative)
                     .accessibilityLabel(isDecorative ? "" : "\(name) Bot photo")
             }
-            // A photo can't glance; a small glance mark says the Bot is working.
-            if working, canonicalImage != nil {
+            // A photo can't glance, and a face holds still under Reduce Motion or Low
+            // Power: a small glance mark in its still pose says the Bot is working (R19).
+            if cue.badge {
                 AidenActivityMark(mark: .glance, size: size * 0.32, color: palette.foreground)
                     .padding(size * 0.04)
                     .background(palette.canvas, in: Circle())

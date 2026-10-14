@@ -306,10 +306,15 @@ struct AidenServer: Codable, Equatable, Sendable {
         serverCapabilities?.contains(.botActivity) == true
     }
 
+    /// The Mac announces `bot-activity-v1`, whatever this device holds.
+    var announcesBotActivity: Bool {
+        features.contains(Self.botActivityFeature)
+    }
+
     /// The Mac announces `bot-activity-v1` and this device holds `bot:activity`:
     /// show the status line, Steer and Queue, Queued bubbles and Chat activity.
     var supportsBotActivity: Bool {
-        features.contains(Self.botActivityFeature) && capabilities.contains(.botActivity)
+        announcesBotActivity && capabilities.contains(.botActivity)
     }
 
     /// This device both may and did negotiate foreign-run observation.

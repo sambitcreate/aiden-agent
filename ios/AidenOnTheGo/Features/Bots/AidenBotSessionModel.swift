@@ -27,6 +27,21 @@ enum AidenBotHostFeature {
     }
 }
 
+/// Whether the Bot activity features show (revision 30): the Mac announces
+/// `bot-activity-v1` and this phone holds `bot:activity`. Until `/server`
+/// answers (a cold or offline open), the pairing's last-known feature and
+/// grant stand in, so the status line, Steer/Queue and the Chat activity row
+/// keep working (R21). Once `/server` answers, it decides.
+func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstallation?) -> Bool {
+    if let server { return server.supportsBotActivity }
+    return installation?.cachedBotActivity == true
+}
+
+@MainActor
+func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
+    aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
+}
+
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
 /// serves one durable session per Bot; older hosts keep the chatId path,
 /// including stream Stop (`POST /streams/{id}/cancel`).
@@ -219,6 +234,9 @@ struct AidenBotStatusAnnouncer {
     static let gap: TimeInterval = 2
     private var current: (text: String, at: TimeInterval)?
 
+    /// The line hid: whatever it says next is announced at once.
+    mutating func reset() { current = nil }
+
     /// The text to announce now, or nil. `retryAfter` says when to offer the newest text again.
     mutating func offer(_ text: String, at now: TimeInterval) -> (announce: String?, retryAfter: TimeInterval?) {
         if let current, current.text == text { return (nil, nil) }
@@ -245,7 +263,7 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
         case sending
         /// The Mac took it; its transcript entry or Queued bubble is on the way.
         case sent(submissionId: String)
-        /// It didn't reach the Mac: "Couldn't send · Try again".
+        /// It didn't reach the Mac: "Couldn’t send · Try again".
         case failed
     }
 
@@ -283,13 +301,17 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     fileprivate var connectionAttempts = 0
     /// The last failure may have reached the Mac, so Try again keeps the key.
     fileprivate var keepsKey = false
+    /// When a snapshot first showed nothing on the Mac holding it (FR-m5). The
+    /// queued list caps at 20 and the Mac leaves out inputs it can't classify,
+    /// so one snapshot is not proof: it goes only after a grace period.
+    fileprivate var unheldSince: Date?
 
     fileprivate var submissionId: String? {
         if case let .sent(id) = status { return id }
         return nil
     }
 
-    /// Too old to send: "Couldn't send · Try again", keeping the key if the Mac may hold it.
+    /// Too old to send: "Couldn’t send · Try again", keeping the key if the Mac may hold it.
     fileprivate mutating func expire() {
         status = .failed
         keepsKey = request != nil
@@ -321,7 +343,7 @@ enum AidenBotOutgoingLook: Equatable {
     case sent
     /// The Bot is working: Queued, as Steer or Queue.
     case queued(AidenStreamInputMode)
-    /// "Couldn't send · Try again".
+    /// "Couldn’t send · Try again".
     case failed
 }
 
@@ -381,7 +403,7 @@ final class AidenBotSessionCache {
 /// The unsent messages of each Bot chat on disk, so they survive a relaunch
 /// (R17): protected until first unlock, excluded from backup, keyed by the
 /// pairing, and purged with it. A message still unsent after 24 hours comes
-/// back as "Couldn't send · Try again", never silently gone.
+/// back as "Couldn’t send · Try again", never silently gone.
 actor AidenBotOutboxStore {
     static let shared = AidenBotOutboxStore()
     static let lifetime: TimeInterval = 24 * 60 * 60
@@ -498,13 +520,11 @@ actor AidenBotOutboxStore {
         }
     }
 
-    /// The chat's messages, oldest first. One still unsent after 24 hours comes
-    /// back as not sent; a taken one that old is the Mac's now.
-    func load(_ key: AidenBotSessionKey) -> [AidenBotOutgoingMessage] { restore(key).messages }
-
-    /// The chat's messages, and whether some couldn't be read back. A file this
-    /// build can't read (too large, damaged, or a newer version) is set aside
-    /// beside it, never deleted, and the chat starts a new one.
+    /// The chat's messages, oldest first, and whether some couldn't be read back.
+    /// One still unsent after 24 hours comes back as not sent; a taken one that
+    /// old is the Mac's now. A file this build can't read (too large, damaged,
+    /// or a newer version) is set aside beside it, never deleted, and the chat
+    /// starts a new one.
     func restore(_ key: AidenBotSessionKey) -> (messages: [AidenBotOutgoingMessage], unreadable: Bool) {
         knownDevices[key.instanceId, default: []].insert(key.deviceId)
         let url = fileURL(key)
@@ -886,8 +906,10 @@ final class AidenBotSessionModel {
 
     private enum Intent { case none, requested, acknowledged }
 
-    /// Tries a message gets on a connection that keeps failing before it says "Couldn't send".
+    /// Tries a message gets on a connection that keeps failing before it says "Couldn’t send".
     static let maxConnectionAttempts = 3
+    /// How long a taken message a snapshot didn't show stays before it goes (FR-m5).
+    static let unheldGrace: TimeInterval = 10
 
     /// `cacheKey` names this chat across model instances and launches (its Mac
     /// and Bot). With one, the chat opens on its last transcript and adopts the
@@ -926,6 +948,7 @@ final class AidenBotSessionModel {
         message.deferred = false
         message.dropEcho()
         message.queuedID = nil
+        message.unheldSince = nil
         if message.status == .sending, isExpired(message, now: now) { message.expire() }
         return message
     }
@@ -999,9 +1022,12 @@ final class AidenBotSessionModel {
     /// words are the signal (§5.2), as on the Mac.
     private static let replyPhases: Set<String> = ["writing", "thinking"]
 
+    /// The line can show, so its clock ticks (FR-m1): an idle chat runs no timer.
+    var statusLineTicks: Bool { activitySupported && (isRunning || isAwaitingTurn) }
+
     /// The status line now (spec §12), or nil when it is hidden.
     func statusLine(nowMs: Int) -> AidenBotStatusLine? {
-        guard activitySupported, isRunning || isAwaitingTurn else { return nil }
+        guard statusLineTicks else { return nil }
         func line(_ phase: String, elapsed: String? = nil) -> AidenBotStatusLine {
             AidenBotStatusLine(display: AidenBotActivityPhase.display(phase: phase, wording: wording, app: nil), elapsed: elapsed)
         }
@@ -1215,8 +1241,11 @@ final class AidenBotSessionModel {
     /// the entry has none (an older Mac), for a request still unsettled, or for a
     /// Queued bubble that beats the receipt. Each entry settles one message for
     /// the life of the epoch. An unsettled message is never removed: it hides
-    /// and settles on its receipt. On a Mac that sends its queue, a snapshot also
-    /// drops a taken message that is neither queued nor echoed.
+    /// and settles on its receipt. On a Mac that sends its queue, a taken message
+    /// that a snapshot shows neither queued nor echoed is marked unheld, and goes
+    /// once `unheldGrace` has passed with nothing holding it (FR-m5): the queued
+    /// list caps at 20 and the Mac leaves out what it can't classify, so one
+    /// snapshot alone never drops it. Seen again, it is held again.
     private func reconcileOutbox(snapshot: Bool) {
         if claimsEpoch != epoch {
             claimsEpoch = epoch
@@ -1243,9 +1272,14 @@ final class AidenBotSessionModel {
                 if let id = message.submissionId {
                     if queuedIDs.contains(id) {
                         message.queuedID = id
-                    } else if snapshot, activitySupported {
-                        // Taken, not queued and not in the transcript: nothing on the Mac holds it.
-                        continue
+                        message.unheldSince = nil
+                    } else if activitySupported {
+                        // Taken, not queued and not in the transcript: nothing on the Mac shows it.
+                        if let since = message.unheldSince {
+                            if now().timeIntervalSince(since) >= Self.unheldGrace { continue }
+                        } else if snapshot {
+                            message.unheldSince = now()
+                        }
                     }
                 } else if message.queuedID == nil,
                           let match = queued.first(where: { !claimedQueued.contains($0.submissionId) && $0.text == message.text }) {
@@ -1439,7 +1473,7 @@ final class AidenBotSessionModel {
                 outbox.remove(at: current)
             } else {
                 // Out of tries. An entry naming another submission isn't this one:
-                // it says "Couldn't send", and Try again keeps the key.
+                // it says "Couldn’t send", and Try again keeps the key.
                 releaseEcho(at: current)
                 outbox[current].status = .failed
             }

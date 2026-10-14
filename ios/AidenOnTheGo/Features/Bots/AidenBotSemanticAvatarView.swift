@@ -91,6 +91,25 @@ struct AidenBotFaceGlancePose: Equatable {
 
 private let aidenBotGlanceSpec = AidenActivityMarkSpec.make(.glance)
 
+/// How a working Bot's avatar says so (ruling 8, R19).
+struct AidenBotWorkingCue: Equatable {
+    /// The canonical face's eyes glance.
+    let glances: Bool
+    /// A small glance mark sits on the avatar's corner.
+    let badge: Bool
+
+    static let none = AidenBotWorkingCue(glances: false, badge: false)
+}
+
+/// A canonical face glances while its Bot works. A photo can't, and a face holds
+/// still under Reduce Motion or Low Power, so both wear the glance badge (whose
+/// mark then holds its still pose): a working Bot always keeps a visible cue.
+func aidenBotWorkingCue(working: Bool, hasPhoto: Bool, motionAllowed: Bool) -> AidenBotWorkingCue {
+    guard working else { return .none }
+    if !hasPhoto, motionAllowed { return AidenBotWorkingCue(glances: true, badge: false) }
+    return AidenBotWorkingCue(glances: false, badge: true)
+}
+
 func aidenBotFaceGlancePose(at time: TimeInterval) -> AidenBotFaceGlancePose {
     let look = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.groups[0].tracks, atTime: time)
     let eye = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.shapes[0].tracks, atTime: time)
@@ -147,7 +166,8 @@ private struct AidenBotEyeMark: View {
     var glancing = false
 
     var body: some View {
-        TimelineView(.animation(paused: !glancing)) { context in
+        // 30 frames a second is plenty for a glance and spares the battery.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !glancing)) { context in
             let pose = glancing ? aidenBotFaceGlancePose(at: context.date.timeIntervalSinceReferenceDate) : .still
             HStack(spacing: size * 0.09) {
                 Capsule()

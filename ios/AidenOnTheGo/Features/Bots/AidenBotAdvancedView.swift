@@ -31,8 +31,8 @@ struct AidenBotAdvancedView: View {
     @State private var isConfirmingDiscard = false
     @State private var chatActivityModel: AidenBotChatActivityModel?
     @State private var isShowingChatActivity = false
-    /// A Chat activity pick saved here, not yet reported to the screens behind Advanced.
-    @State private var chatActivityChanged = false
+    /// Chat activity saves, reported to the screens behind Advanced once, even after it closes.
+    @State private var chatActivityReport = AidenBotChatActivityReport()
 
     private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
         AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
@@ -86,12 +86,11 @@ struct AidenBotAdvancedView: View {
                 reset(for: expectedSession)
                 await load(for: expectedSession)
             }
+            .onAppear { chatActivityReport.advancedOpened() }
             .onDisappear {
-                // Closing Advanced (not opening Chat activity) reports a saved pick once.
-                if chatActivityChanged, !isShowingChatActivity, let baselineBot {
-                    chatActivityChanged = false
-                    onSaved(baselineBot)
-                }
+                // Closing Advanced (not opening Chat activity) reports a saved pick once;
+                // one that lands later is reported when it lands.
+                if !isShowingChatActivity { chatActivityReport.advancedClosed(reportBehind: onSaved) }
             }
             .alert(
                 "Couldn’t Save",
@@ -242,7 +241,11 @@ struct AidenBotAdvancedView: View {
     /// `bot:activity`. It opens from the cached Bot, so it stays reachable offline.
     @ViewBuilder
     private var chatActivitySection: some View {
-        if aidenBotShowsChatActivity(server: coordinator.server, hasBaseline: baselineBot != nil), let baselineBot {
+        if aidenBotShowsChatActivity(
+            server: coordinator.server,
+            installation: coordinator.installationStore.activeInstallation,
+            hasBaseline: baselineBot != nil
+        ), let baselineBot {
             Section {
                 Button {
                     openChatActivity(baselineBot)
@@ -282,12 +285,12 @@ struct AidenBotAdvancedView: View {
                     let client = try coordinator.remoteClient(for: try coordinator.requestContext())
                     return try await client.bot(id: botID)
                 },
-                onSaved: { saved in
+                onSaved: { [report = chatActivityReport, onSaved] saved in
                     // Advanced's own Save, and its summary row, move to the newest revision.
-                    // The screens behind hear about it once, when Advanced closes.
+                    // The screens behind hear about it once Advanced closes, or at once after.
                     baselineBot = saved
-                    chatActivityChanged = true
                     cacheDetail(saved)
+                    report.saved(saved, reportBehind: onSaved)
                 },
                 waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
             )
@@ -441,7 +444,7 @@ struct AidenBotAdvancedView: View {
         isConfirmingDiscard = false
         chatActivityModel = nil
         isShowingChatActivity = false
-        chatActivityChanged = false
+        chatActivityReport = AidenBotChatActivityReport()
     }
 
     @MainActor
@@ -549,7 +552,7 @@ struct AidenBotAdvancedView: View {
                 self.baselineBot = latest
             }
             guard isCurrent(attempt) else { return }
-            chatActivityChanged = false
+            chatActivityReport.reportedByAdvanced()
             onSaved(latest)
             dismiss()
         } catch is CancellationError {
@@ -576,7 +579,7 @@ struct AidenBotAdvancedView: View {
                 self.catalog = refreshedCatalog
                 self.draft = rebasedDraft
                 if (try? rebasedDraft.isSatisfied(by: authoritative, catalog: refreshedCatalog)) == true {
-                    chatActivityChanged = false
+                    chatActivityReport.reportedByAdvanced()
                     onSaved(authoritative)
                     dismiss()
                 } else {
@@ -745,9 +748,10 @@ struct AidenBotModelListView: View {
 // MARK: - Chat activity (spec §7, contract revision 30)
 
 /// Advanced offers Chat activity on a Mac that announces `bot-activity-v1` to a phone that
-/// holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen.
-func aidenBotShowsChatActivity(server: AidenServer?, hasBaseline: Bool) -> Bool {
-    hasBaseline && server?.supportsBotActivity == true
+/// holds `bot:activity`, once a Bot's detail (cached or fresh) is on screen. Offline, the
+/// pairing's last-known capabilities decide (R21).
+func aidenBotShowsChatActivity(server: AidenServer?, installation: AidenInstallation?, hasBaseline: Bool) -> Bool {
+    hasBaseline && aidenBotActivitySupported(server: server, installation: installation)
 }
 
 /// The Bot changed on the Mac since this phone read it (a stale `If-Match`).
@@ -779,6 +783,16 @@ enum AidenBotChatActivityCopy {
     static let phonesFooter = "Always just the line, with the same words."
     static let recommended = "Recommended"
     static let saveFailed = "Aiden couldn’t save that choice."
+    static let saveConflict = "This changed on your Mac. Showing what it has now."
+    static let saveUnreachable = "Aiden couldn’t reach your Mac to save that choice."
+
+    static func message(_ failure: AidenBotChatActivityFailure) -> String {
+        switch failure {
+        case .generic: saveFailed
+        case .offline: saveUnreachable
+        case .conflict: saveConflict
+        }
+    }
 
     static func label(_ level: AidenBotChatActivityLevel) -> String {
         switch level {
@@ -841,7 +855,10 @@ enum AidenBotChatActivityPreview {
 
     private static let phases: [String?] = ["thinking", "reading", "searching", "editing", nil]
     private static let stepLabels = ["Read 1 file", "Searched the web", "Edited 1 file"]
-    private static let runningLabels = ["Reading 1 file…", "Searching the web…", "Editing 1 file…"]
+    /// The step in progress reads in the Mac's own phase words, as its line does.
+    private static let runningLabels = ["reading", "searching", "editing"].map {
+        AidenBotActivityPhase.display(phase: $0, wording: .follows, app: nil).word
+    }
 
     /// Reduce Motion's still frame. Summary's whole point is the recap above the reply, so it
     /// holds the reply; Quiet and Detailed hold the line (and Detailed's steps) mid-turn.
@@ -880,10 +897,60 @@ enum AidenBotChatActivityPreview {
     }
 }
 
-/// A save that outran its limit; the pick returns to the saved choice.
-struct AidenBotChatActivityTimeout: Error {}
 /// The Mac stayed unreachable for the whole hold.
 struct AidenBotChatActivityUnreachable: Error {}
+
+/// Carries a main-actor closure into `aidenBotWithin`'s race; it is only ever called on the main actor.
+struct AidenBotMainActorCall<Function>: @unchecked Sendable {
+    let call: Function
+    init(_ call: Function) { self.call = call }
+}
+
+/// Why a pick didn't stick, so the page says so in the right words (Android parity).
+enum AidenBotChatActivityFailure: Equatable {
+    /// The Mac refused or failed the save.
+    case generic
+    /// The phone couldn't reach the Mac: offline, disconnected, or too slow.
+    case offline
+    /// The Bot changed on the Mac; the page now shows what the Mac holds.
+    case conflict
+}
+
+/// The save may or may not have reached the Mac: no answer came, so a late success is possible.
+func aidenBotChatActivityTransportFailure(_ error: Error) -> Bool {
+    error is AidenBotRequestTimedOut || error is URLError
+}
+
+/// Reports Chat activity saves to the screens behind Advanced. While Advanced is
+/// open it holds the newest, to report once when Advanced closes; a save that
+/// lands after Advanced closed is reported at once, so it is never lost.
+@MainActor
+final class AidenBotChatActivityReport {
+    private var advancedOpen = true
+    private var unreported: AidenBotDetail?
+
+    func saved(_ detail: AidenBotDetail, reportBehind: (AidenBotDetail) -> Void) {
+        if advancedOpen {
+            unreported = detail
+        } else {
+            reportBehind(detail)
+        }
+    }
+
+    func advancedOpened() { advancedOpen = true }
+
+    /// Advanced closed: what it held is reported once, and later saves go straight behind it.
+    func advancedClosed(reportBehind: (AidenBotDetail) -> Void) {
+        advancedOpen = false
+        if let detail = unreported {
+            unreported = nil
+            reportBehind(detail)
+        }
+    }
+
+    /// Advanced's own Save reported the newest Bot; nothing older is held.
+    func reportedByAdvanced() { unreported = nil }
+}
 
 /// Applies each pick at once and saves it with no Save button, like the Mac page.
 /// A failed save returns to the last choice the Mac confirmed. A pick made while a
@@ -896,6 +963,8 @@ final class AidenBotChatActivityModel {
     /// What the page shows: the last pick, saved or not.
     private(set) var value: AidenBotChatActivity
     private(set) var isSaving = false
+    /// Why the last pick didn't stick, until the next pick.
+    private(set) var saveFailure: AidenBotChatActivityFailure?
     var errorMessage: String?
 
     @ObservationIgnored private var saved: AidenBotChatActivity
@@ -935,6 +1004,7 @@ final class AidenBotChatActivityModel {
         guard next != value else { return }
         value = next
         errorMessage = nil
+        saveFailure = nil
         if isSaving {
             pending = next
             return
@@ -943,31 +1013,7 @@ final class AidenBotChatActivityModel {
         defer { isSaving = false }
         var target = next
         while true {
-            do {
-                if let waitForConnection, await waitForConnection(connectionHold) == false {
-                    throw AidenBotChatActivityUnreachable()
-                }
-                let save = save
-                let sending = target
-                let sentRevision = revision
-                let detail = try await Self.within(requestLimit) { try await save(sending, sentRevision) }
-                revision = detail.revision
-                saved = detail.chatActivity ?? target
-                onSaved(detail)
-            } catch {
-                pending = nil
-                if error is CancellationError {
-                    value = saved
-                    return
-                }
-                if aidenBotIsRevisionConflict(error) {
-                    await adoptTheMacsChoice()
-                }
-                pending = nil
-                value = saved
-                errorMessage = AidenBotChatActivityCopy.saveFailed
-                return
-            }
+            guard await send(target) else { return }
             guard let following = pending else { break }
             pending = nil
             if following == saved { break }
@@ -976,29 +1022,57 @@ final class AidenBotChatActivityModel {
         value = saved
     }
 
-    /// The Bot changed on the Mac: take its revision and choice, so the next pick can save.
-    private func adoptTheMacsChoice() async {
-        let refresh = refresh
-        guard let fresh = try? await Self.within(requestLimit, { try await refresh() }) else { return }
+    /// One save: true when the Mac holds `target` afterwards. A stale revision, a
+    /// timeout or a transport failure re-reads the Bot first, so a save that landed
+    /// late shows as saved with no error, and anything else returns to what the Mac holds.
+    private func send(_ target: AidenBotChatActivity) async -> Bool {
+        do {
+            if let waitForConnection, await waitForConnection(connectionHold) == false {
+                throw AidenBotChatActivityUnreachable()
+            }
+            // The closures run on the main actor; the box only carries them across the race.
+            let save = AidenBotMainActorCall(save)
+            let sentRevision = revision
+            let detail = try await aidenBotWithin(requestLimit) { try await save.call(target, sentRevision) }
+            revision = detail.revision
+            saved = detail.chatActivity ?? target
+            onSaved(detail)
+            return true
+        } catch {
+            pending = nil
+            if error is CancellationError {
+                value = saved
+                return false
+            }
+            let conflict = aidenBotIsRevisionConflict(error)
+            if conflict || aidenBotChatActivityTransportFailure(error),
+               let fresh = await adoptTheMacsChoice(),
+               (fresh.chatActivity ?? .standard) == target {
+                return true
+            }
+            let failure: AidenBotChatActivityFailure
+            if conflict {
+                failure = .conflict
+            } else if aidenBotChatActivityTransportFailure(error) || error is AidenBotChatActivityUnreachable {
+                failure = .offline
+            } else {
+                failure = .generic
+            }
+            value = saved
+            saveFailure = failure
+            errorMessage = AidenBotChatActivityCopy.message(failure)
+            return false
+        }
+    }
+
+    /// The Mac may hold something else now: take its revision and choice, so the next pick can save.
+    private func adoptTheMacsChoice() async -> AidenBotDetail? {
+        let refresh = AidenBotMainActorCall(refresh)
+        guard let fresh = try? await aidenBotWithin(requestLimit, { try await refresh.call() }) else { return nil }
         revision = fresh.revision
         saved = fresh.chatActivity ?? .standard
         onSaved(fresh)
-    }
-
-    nonisolated private static func within<T: Sendable>(
-        _ limit: Duration,
-        _ operation: @escaping @MainActor () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(for: limit)
-                throw AidenBotChatActivityTimeout()
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw AidenBotChatActivityTimeout() }
-            return first
-        }
+        return fresh
     }
 }
 
@@ -1159,7 +1233,9 @@ struct AidenBotChatActivityPreviewView: View {
         }
         .padding(10)
         .background(palette.canvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onScrollVisibilityChange(threshold: 0.05) { onScreen = $0 }
+        // A Form's rows come and go as they scroll, so appearing is being on screen.
+        .onAppear { onScreen = true }
+        .onDisappear { onScreen = false }
         .accessibilityHidden(true)
     }
 
