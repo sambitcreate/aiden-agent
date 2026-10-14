@@ -847,6 +847,17 @@ test("the live phase reads stop, a waiting card, compaction, the newest running 
   assert.equal(liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase, "preparing");
   assert.equal(liveBotActivity({ ...base, docs: docs({}) })?.phase, "thinking");
   assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
+  // A paused run's text and tool, still in `pi.live` when the Resume began, are not the resumed run's work.
+  const paused = docs({ tools, generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } });
+  const resumed = { ...base, resuming: true, resumedFrom: paused["pi.live"] };
+  assert.equal(liveBotActivity({ ...resumed, docs: paused })?.phase, "resuming");
+  assert.equal(liveBotActivity({ ...resumed, stopping: true, docs: paused })?.phase, "stopping");
+  assert.equal(liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1 } }) })?.phase, "resuming");
+  assert.equal(
+    liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } }) })?.phase,
+    "writing",
+    "once anything live happened, text is the resumed run's",
+  );
   assert.equal(
     liveBotActivity({ ...base, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } } }) })?.phase,
     "writing",
@@ -1057,6 +1068,51 @@ test("Resume is announced only for a Resume the session carried out, and before 
     await waitFor(async () => (await live.service.state("bot:killed")).kind === "idle", { what: "the resumed turn to finish" });
     assert.equal(heard.filter((line) => line.startsWith("resuming")).length, 1, heard.join(", "));
   } finally {
+    unwire();
+    await live.close();
+  }
+});
+
+test("a Resume after a crash mid-reply picks up where it left off; the killed run's text is not new writing", async () => {
+  const profileDir = tempProfile();
+  const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
+  await child.waitFor("STREAMING");
+  await child.kill();
+  const answer = gatedAnswer("resumed answer");
+  const intents = createBotTurnIntents();
+  let projection: BotLiveProjection | undefined;
+  const live = await start(createFauxModels([answer.step]), {
+    service: {
+      profileDir,
+      knownBotIds: async () => new Set(["bot:killed"]),
+      // The desktop wiring (`bot-session-main.ts`).
+      onResumed: (botId) => intents.announce(botId, "resuming"),
+      onStateChange: (botId, state) => projection?.notifyState(botId, state),
+    },
+  });
+  projection = live.projection;
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    await live.service.initialize();
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:killed", tape.sink);
+    tape.start(snapshot);
+    assert.equal(snapshot.state.kind, "interrupted");
+    assert.ok(snapshot.partial?.includes("word"), "the killed run's text is still on screen");
+
+    await live.service.resume("bot:killed", "desk-1");
+    // The model has not answered yet: the line holds through the resumed run's first live events.
+    await waitFor(() => tape.view?.activity != null, { what: "the resumed run's line" });
+    await live.projection.refreshActivity("bot:killed");
+    assert.equal(tape.view?.activity?.phase, "resuming", observedPhases(tape.events).join(" → "));
+    answer.open();
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the resumed turn to land" });
+    const phases = observedPhases(tape.events).filter((phase) => phase !== null);
+    assert.equal(phases[0], "resuming", phases.join(" → "));
+    assert.ok(inOrder(phases, ["resuming", "writing"]), phases.join(" → "));
+    unsubscribe();
+  } finally {
+    answer.open();
     unwire();
     await live.close();
   }

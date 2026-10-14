@@ -445,6 +445,12 @@ export interface BotLiveActivityInput {
   stopping: boolean;
   /** This run is a Resume and has not moved on yet. */
   resuming: boolean;
+  /**
+   * `pi.live` as it was when the Resume began. While it is unchanged nothing
+   * live has happened since, so a killed run's partial text or tool still in it
+   * predates the Resume and is not the resumed run's work.
+   */
+  resumedFrom?: unknown;
   startedAt: number;
 }
 
@@ -471,10 +477,11 @@ function callArguments(entries: readonly EntryRecord[], callId: string): unknown
 
 /**
  * The phase of a run from `pi.live` (spec §5): Stop, then an open card,
- * then compaction inside the turn, then the newest running tool (§5.2), then
- * the reply's text, then Resume, then thinking (or "getting ready" before
- * the model produced anything). Thinking content is read only to know the
- * model is generating; its text is never copied.
+ * then a Resume nothing live has happened since, then compaction inside the
+ * turn, then the newest running tool (§5.2), then the reply's text, then
+ * Resume, then thinking (or "getting ready" before the model produced
+ * anything). Thinking content is read only to know the model is generating;
+ * its text is never copied.
  */
 export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | null {
   const live = input.docs["pi.live"] as LiveDocView | undefined;
@@ -482,6 +489,10 @@ export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | 
   const at = (phase: BotActivityPhase): BotLiveActivity => ({ phase, startedAt: input.startedAt });
   if (input.stopping) return at("stopping");
   if (input.waiting) return at("waiting");
+  // After a crash the paused run's text stays in `pi.live` until the resumed run's first event.
+  if (input.resuming && JSON.stringify(input.resumedFrom) === JSON.stringify(live)) {
+    return at("resuming");
+  }
   if (live.compactions?.some((compaction) => compaction.blocking === true)) return at("tidying");
   const slot = pickActiveToolSlot(live.tools);
   if (slot) {
@@ -634,6 +645,8 @@ interface Feed {
   startedAt: number;
   stopping: boolean;
   resuming: boolean;
+  /** `pi.live` when this run's Resume began (`BotLiveActivityInput.resumedFrom`). */
+  resumedFrom: unknown;
   /** The newest frame, so approvals, questions and Stop can re-derive the activity. */
   frame: { entries: readonly EntryRecord[]; docs: Readonly<Record<string, unknown>> };
   runActive: boolean;
@@ -749,6 +762,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         waiting: waitingOn(feed),
         stopping: feed.stopping,
         resuming: feed.resuming,
+        resumedFrom: feed.resumedFrom,
         startedAt: feed.startedAt,
       }) ?? { phase: "preparing", startedAt: feed.startedAt }
     );
@@ -767,6 +781,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     feed.startedAt = now();
     feed.stopping = false;
     feed.resuming = resumingBots.delete(feed.botId);
+    feed.resumedFrom = feed.frame.docs["pi.live"];
   }
 
   async function resolveCards(botId: string, entries: BotTranscriptEntry[]): Promise<BotTranscriptEntry[]> {
@@ -930,6 +945,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         startedAt: now(),
         stopping: false,
         resuming: false,
+        resumedFrom: undefined,
         frame: { entries: initial.entries, docs: initial.docs },
         runActive: liveRunActive(initial.docs),
         runKey: liveRunKey(initial.docs),

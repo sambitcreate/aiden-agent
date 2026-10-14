@@ -883,6 +883,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 questions: botQuestions,
                 approvals: botApprovals,
                 turnIntents: botTurnIntents,
+                onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued messages could not be classified.`, error),
                 presets: {
                   list: () => BOT_PRESETS,
                   // The one process-wide starter the desktop uses: a Mac tap and a
