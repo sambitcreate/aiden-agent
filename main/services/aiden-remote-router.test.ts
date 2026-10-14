@@ -5128,6 +5128,25 @@ test("bot-activity-v1 and bot:activity are offered only while activity frames an
     } finally {
       await app.close();
     }
+
+    // A phone that already holds the grant (paired while this Mac was fully wired) is
+    // served activity on its session and stream only while both halves are wired now.
+    const seen: string[] = [];
+    const holder = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read", "bot:activity"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions(seen, sessionsActivity),
+      chatActivity,
+    });
+    try {
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session`, { headers })).status, 200);
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session/events`, { headers })).status, 204);
+      const served = wired ? "activity" : "plain";
+      assert.deepEqual(seen, [`session:${served}`, `events:${served}`], `${sessionsActivity}/${chatActivity}`);
+    } finally {
+      await holder.close();
+    }
   }
 });
 
