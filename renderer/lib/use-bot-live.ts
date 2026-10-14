@@ -43,25 +43,37 @@ class BotLiveStore {
 
   constructor(
     private readonly botId: string,
-    private readonly onIdle: (store: BotLiveStore) => void,
+    private readonly adopt: (store: BotLiveStore) => void,
+    private readonly release: (store: BotLiveStore) => void,
   ) {}
 
   getState = (): LiveState => this.state;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
+    // A same-commit remount tears a store down before any new consumer
+    // subscribes; make sure the next `storeFor` finds this one, not a second.
+    this.adopt(this);
     if (this.stopRun === null) this.start();
     // A subscribe that failed before this consumer arrived must not leave it
-    // looking at an error nobody is retrying.
-    else if (this.state.failed && this.state.snapshot === null) this.restart();
+    // looking at an error nobody is retrying. This runs only when a consumer
+    // joins or `reload` is called, never in a loop.
+    else if (this.state.failed) this.restart();
     return () => {
       this.listeners.delete(listener);
       if (this.listeners.size > 0) return;
-      this.stop();
-      this.onIdle(this);
+      // React runs every cleanup of a commit before any subscribe, so a
+      // remount in the same commit must find this store, and main's
+      // subscription, still open. Settle after the commit.
+      queueMicrotask(() => {
+        if (this.listeners.size > 0 || this.stopRun === null) return;
+        this.stop();
+        this.release(this);
+      });
     };
   };
 
+  /** Restarts the subscription for every consumer of this Bot, not only the caller. */
   reload = (): void => {
     if (this.stopRun !== null) this.restart();
   };
@@ -134,7 +146,7 @@ class BotLiveStore {
               if (active && request === latestRequest) subscribe();
             }, RESUBSCRIBE_DELAY_MS * retries);
           } else {
-            this.publish({ snapshot: current, failed: true });
+            this.publish({ snapshot: this.state.snapshot, failed: true });
           }
         });
     };
@@ -170,9 +182,15 @@ const stores = new Map<string, BotLiveStore>();
 function storeFor(botId: string): BotLiveStore {
   let store = stores.get(botId);
   if (!store) {
-    store = new BotLiveStore(botId, (idle) => {
-      if (stores.get(botId) === idle) stores.delete(botId);
-    });
+    store = new BotLiveStore(
+      botId,
+      (live) => {
+        if (!stores.has(botId)) stores.set(botId, live);
+      },
+      (idle) => {
+        if (stores.get(botId) === idle) stores.delete(botId);
+      },
+    );
     stores.set(botId, store);
   }
   return store;

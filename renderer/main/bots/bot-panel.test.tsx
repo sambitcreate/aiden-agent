@@ -1,7 +1,7 @@
 import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, mock, test } from "node:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BotLiveSnapshot } from "../../shared/bot-live";
 import { BotLiveProvider, useBotLive, useSharedBotLive } from "../../lib/use-bot-live";
 import {
@@ -268,7 +268,7 @@ test("independent consumers of one Bot still make a single subscribe, and the la
   view.rerender(<Standalone label="Two" />);
   assert.equal(liveCalls(calls, "unsubscribe"), 0, "one consumer is still watching");
   view.unmount();
-  assert.equal(liveCalls(calls, "unsubscribe"), 1);
+  await waitFor(() => assert.equal(liveCalls(calls, "unsubscribe"), 1));
   assert.equal(liveCalls(calls, "subscribe"), 1);
 });
 
@@ -289,9 +289,17 @@ test("switching Bots never shows the old Bot's conversation, even for an old eve
           }),
     "bots:live:unsubscribe": () => undefined,
   });
-  const view = render(<SwitchProbe botId="bot-1" />);
+  // A sibling keeps Bot 1's feed open, so its events still reach this window:
+  // only the Bot id filter stands between them and the Bot 2 view.
+  const tree = (botId: string) => (
+    <>
+      <SwitchProbe botId={botId} />
+      <Standalone label="Bot 1 elsewhere" />
+    </>
+  );
+  const view = render(tree("bot-1"));
   await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-1:bot-1-u0"));
-  view.rerender(<SwitchProbe botId="bot-2" />);
+  view.rerender(tree("bot-2"));
   assert.equal(screen.getByLabelText("Switched").textContent, "loading", "not the old Bot's view, not even for one render");
   emitBotTestNotification("bots:live:event", {
     botId: "bot-1",
@@ -305,7 +313,7 @@ test("switching Bots never shows the old Bot's conversation, even for an old eve
   await waitFor(() => assert.equal(screen.getByLabelText("Switched").textContent, "bot-2:bot-2-u0"));
   assert.deepEqual(
     calls.filter((call) => call.channel.startsWith("bots:live:")).map((call) => `${call.channel}:${String(call.args[0])}`),
-    ["bots:live:subscribe:bot-1", "bots:live:unsubscribe:bot-1", "bots:live:subscribe:bot-2"],
+    ["bots:live:subscribe:bot-1", "bots:live:subscribe:bot-2"],
   );
 });
 
@@ -333,4 +341,100 @@ test("a subscribe that failed is retried when a later consumer joins, instead of
   view.unmount();
   render(<Standalone label="After everyone left" />);
   await waitFor(() => assert.equal(screen.getByLabelText("After everyone left").textContent, "ready"));
+});
+
+test("remounting a consumer in one commit, then a second root joining mid-subscribe, still leaves one open subscription", async () => {
+  let answer: (snapshot: BotLiveSnapshot) => void = () => undefined;
+  const calls = installBotTestIpc({
+    "bots:live:subscribe": () =>
+      new Promise<BotLiveSnapshot>((resolve) => {
+        answer = resolve;
+      }),
+    "bots:live:unsubscribe": () => undefined,
+  });
+  const first = render(<Standalone key="before" label="Chat" />);
+  first.rerender(<Standalone key="after" label="Chat" />);
+  const second = render(<Standalone label="Panel" />);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  answer(liveSnapshot("bot-1"));
+  await waitFor(() => assert.equal(screen.getByLabelText("Panel").textContent, "ready"));
+  assert.equal(screen.getByLabelText("Chat").textContent, "ready");
+  assert.equal(liveCalls(calls, "subscribe"), 1);
+  const liveChannels = calls.filter((call) => call.channel.startsWith("bots:live:"));
+  assert.notEqual(liveChannels[liveChannels.length - 1]?.channel, "bots:live:unsubscribe", "main is still subscribed");
+  second.unmount();
+  first.unmount();
+  await waitFor(() => assert.equal(liveCalls(calls, "unsubscribe"), 1));
+});
+
+test("a gap that cannot be re-subscribed keeps the last view, flagged as failed, once retries run out", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    let calls = 0;
+    installBotTestIpc({
+      "bots:live:subscribe": () => {
+        calls += 1;
+        if (calls === 1) return liveSnapshot("bot-1", "still here");
+        throw new Error("main went away");
+      },
+      "bots:live:unsubscribe": () => undefined,
+    });
+    function Last() {
+      const live = useBotLive("bot-1");
+      return <p aria-label="Last">{`${live.snapshot ? live.snapshot.entries.length : "none"} ${live.failed ? "failed" : "ok"}`}</p>;
+    }
+    const flush = () => act(async () => { for (let index = 0; index < 5; index += 1) await Promise.resolve(); });
+    render(<Last />);
+    await flush();
+    assert.equal(screen.getByLabelText("Last").textContent, "1 ok");
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "e1", seq: 9, type: "partial", text: "x" }));
+    await flush();
+    for (const delay of [500, 1000, 1500]) {
+      assert.equal(screen.getByLabelText("Last").textContent, "1 ok", "still retrying");
+      mock.timers.tick(delay);
+      await flush();
+    }
+    assert.equal(screen.getByLabelText("Last").textContent, "1 failed");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a consumer joining a store that failed after it had a view retries it", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    let calls = 0;
+    const ipc = installBotTestIpc({
+      "bots:live:subscribe": () => {
+        calls += 1;
+        if (calls === 2 || calls === 3 || calls === 4 || calls === 5) throw new Error("main went away");
+        return liveSnapshot("bot-1", `reply ${calls}`);
+      },
+      "bots:live:unsubscribe": () => undefined,
+    });
+    const flush = () => act(async () => { for (let index = 0; index < 5; index += 1) await Promise.resolve(); });
+    const view = render(<Standalone label="Chat" />);
+    await flush();
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "e1", seq: 9, type: "partial", text: "x" }));
+    await flush();
+    for (const delay of [500, 1000, 1500]) {
+      mock.timers.tick(delay);
+      await flush();
+    }
+    assert.equal(screen.getByLabelText("Chat").textContent, "ready", "failed, but its last view is kept");
+    view.rerender(
+      <>
+        <Standalone label="Chat" />
+        <Standalone label="Panel" />
+      </>,
+    );
+    await flush();
+    assert.equal(calls, 6, "joining retried the subscription once");
+    assert.equal(liveCalls(ipc, "subscribe"), 6);
+    assert.equal(screen.getByLabelText("Panel").textContent, "ready");
+  } finally {
+    mock.timers.reset();
+  }
 });
