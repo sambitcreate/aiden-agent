@@ -94,7 +94,7 @@ function useReducedMotion(): boolean {
 }
 const PREVIEW_STARTED_AT = 0;
 
-export function BotChatActivityPreview({
+function BotChatActivityPreview({
   level,
   wording,
   label,

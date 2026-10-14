@@ -458,16 +458,12 @@ export function BotAdvanced({
 
   const accessChanged = draft !== null && !sameDraft(draft, baseline);
   const dirty = accessChanged;
-  const guard = useDiscardChangesGuard({
-    dirty,
-    onLeave: onClose,
-    description: `Your changes to ${bot.name}’s Advanced settings won’t be saved.`,
-  });
-
+  const discardDescription = `Your changes to ${bot.name}’s Advanced settings won’t be saved.`;
+  const guard = useDiscardChangesGuard({ dirty, onLeave: onClose, description: discardDescription });
   const chatActivityGuard = useDiscardChangesGuard({
     dirty,
     onLeave: onOpenChatActivity,
-    description: `Your changes to ${bot.name}’s Advanced settings won’t be saved.`,
+    description: discardDescription,
   });
 
   const saveAccess = async (current: BotAccessDraft, start: BotAccessDraft) => {

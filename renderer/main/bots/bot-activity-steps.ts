@@ -47,7 +47,7 @@ function lowerFirst(text: string): string {
 }
 
 /** "read 2 files, searched the web, used Notion": successful steps, grouped in first-seen order. */
-export function botRecapSentence(steps: readonly BotRecapStep[]): string {
+function botRecapSentence(steps: readonly BotRecapStep[]): string {
   const groups = new Map<string, { kind: BotToolPhase; app?: string; count: number }>();
   for (const step of steps) {
     if (step.status !== "ok" || step.kind === "waiting") continue;

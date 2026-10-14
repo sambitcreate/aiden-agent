@@ -109,7 +109,7 @@ export interface BotChatActivity {
 }
 
 /** What an absent setting means; new Bots never store it. */
-export const DEFAULT_BOT_CHAT_ACTIVITY: BotChatActivity = { level: "quiet", wording: "follows" };
+const DEFAULT_BOT_CHAT_ACTIVITY: BotChatActivity = { level: "quiet", wording: "follows" };
 
 /** Exact check: both keys, current values, nothing else. */
 export function parseBotChatActivity(value: unknown): BotChatActivity | undefined {

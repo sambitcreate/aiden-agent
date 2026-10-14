@@ -92,7 +92,7 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
 
 const PHASE_IDS: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
 
-export function isBotActivityPhase(value: unknown): value is BotActivityPhase {
+function isBotActivityPhase(value: unknown): value is BotActivityPhase {
   return typeof value === "string" && PHASE_IDS.has(value);
 }
 
@@ -185,7 +185,7 @@ export function botStepInfinitive(kind: BotToolPhase, app?: string): string {
   return stepPhrases(kind, app).infinitive;
 }
 
-export const BOT_ELAPSED_AFTER_MS = 20_000;
+const BOT_ELAPSED_AFTER_MS = 20_000;
 export const BOT_STILL_GOING_AFTER_MS = 120_000;
 
 /** "18s", "1m 12s", "2m", "1h 2m". Never less than one second. */
