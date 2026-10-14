@@ -835,7 +835,7 @@ function McpEditor({
   const handleProviderConsent = async (allowed: boolean) => {
     setProviderAuthorizing(true);
     try {
-      const record = await mcpApi.save(build());
+      const record = await mcpApi.save(build(), { fromEditor: true });
       await mcpApi.providerAuth(record, allowed);
       setApprovedProviderConnection(allowed ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport]) : undefined);
       onSaved();
@@ -875,7 +875,7 @@ function McpEditor({
       // only against the saved record, so they must be saved first.
       const headersChanged = JSON.stringify(server.headers ?? {}) !== JSON.stringify(record.headers ?? {});
       if (isNew || storedForSignIn.current || headersChanged || mcpConnectionChanged(server, record)) {
-        stored = await mcpApi.save(record);
+        stored = await mcpApi.save(record, { fromEditor: true });
         if (isNew) storedForSignIn.current = true;
       }
       await mcpApi.authorize(stored);

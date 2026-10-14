@@ -417,8 +417,12 @@ export function registerPhase2Handlers(): void {
     const parsed = parseMcpServer(server);
     assertMcpPresetServer(parsed);
     // Only the editor, which shows the command, approves a local server to run.
-    const approveLaunch = typeof options === "object" && options !== null && (options as { approveLaunch?: unknown }).approveLaunch === true;
-    const saved = await saveConfiguredMcpServer(parsed, isCurrent, { approveLaunch });
+    const flags = typeof options === "object" && options !== null ? options as { approveLaunch?: unknown; fromEditor?: unknown } : {};
+    const approveLaunch = flags.approveLaunch === true;
+    // Editor saves (sign-in and provider consent included) may carry kept
+    // values to an address the person changed there; other saves cannot.
+    const fromEditor = flags.fromEditor === true;
+    const saved = await saveConfiguredMcpServer(parsed, isCurrent, { approveLaunch, fromEditor });
     if (approveLaunch) mcpManager.clearFailure(saved.id);
     // Saving (or enabling) connects in the background so the next turn is warm.
     prewarmMcpServers([saved]);
