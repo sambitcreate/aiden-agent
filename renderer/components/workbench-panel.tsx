@@ -136,6 +136,10 @@ export interface WorkbenchViewContext {
 
 export interface WorkbenchView {
   id: string;
+  /**
+   * Called as a plain function inside WorkbenchPanel's render, NOT mounted as a component.
+   * Do not call hooks here; return an element (e.g. `<BotActivityView />`) whose component owns any hooks.
+   */
   render: (context: WorkbenchViewContext) => React.ReactNode;
 }
 

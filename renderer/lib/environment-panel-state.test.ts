@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ENVIRONMENT_PANEL_TABS,
   availableEnvironmentPanelTabs,
   environmentPanelViewOrder,
   reduceEnvironmentSurfaceState,
@@ -97,4 +98,9 @@ test("the tools surface mounts workspace views in a fixed order and leaves out d
   assert.deepEqual(environmentPanelViewOrder(true, false), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser"]);
   assert.deepEqual(environmentPanelViewOrder(false, true), ["new-tab", "context", "terminal", "review", "files", "browser", "devices"]);
   assert.deepEqual(environmentPanelViewOrder(true, true), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "devices"]);
+});
+
+test("the view order is a permutation of the tab list, so every tab has a mounted view", () => {
+  const mounted = environmentPanelViewOrder(true, true);
+  assert.deepEqual([...mounted].sort(), [...ENVIRONMENT_PANEL_TABS].sort());
 });

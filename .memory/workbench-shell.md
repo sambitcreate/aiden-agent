@@ -1,6 +1,6 @@
 # Workbench shell (Bot chat activity slice C1) — 2026-10-14
 
-- `renderer/components/workbench-panel.tsx` holds `useWorkbenchWidth(storageKey)`, `WorkbenchTabStrip` and `WorkbenchPanel`. The shell is controlled and workspace-agnostic. It always renders `data-environment-surface="tools"`, so Escape, focus restoration and `activateSurface` in `EnvironmentWorkbench` cover any tab set.
+- `renderer/components/workbench-panel.tsx` holds `useWorkbenchWidth(storageKey)`, `WorkbenchTabStrip` and `WorkbenchPanel`. The shell is controlled and workspace-agnostic. It always renders `data-environment-surface="tools"`. Escape and focus restoration key off `data-environment-surface`; a consumer must pass `onActivate` to front the surface.
 - Tabs vs views: `WorkbenchTab` (strip entries; browser pages and device viewers are many tabs over one view) and `WorkbenchView` (`render({ presented, selected, width })`, all mounted, `hidden` unless selected). Ids are `${idPrefix}-${viewId}-tab` / `-panel`.
 - The workspace tab set is still `EnvironmentPanelSurface` in `environment-panel.tsx`. It maps open tabs to `WorkbenchTab`s (device rename and context menu via `onRename`/`editor`/`wrap`/`dataAttributes`) and bodies to views in `environmentPanelViewOrder(...)` order. The focus-on-open and Subagents heading hand-off effects stay there.
 - Open state, Quick View, persistence keys (`aiden-agent.environment.*`, `aiden-agent.quick-view.open`) and the `environment.toggle` handler (root-view) did not move. Width is still `aiden-agent.environment.width`, parsed by `storedWorkbenchWidth`.
@@ -11,3 +11,4 @@
   - `onCloseTab` is required. A tab with `closable: false` shows no Close button and ignores Delete, but the prop must still be supplied.
   - The strip's Close button always advertises the `environment.toggle` shortcut in its title and `aria-keyshortcuts`, whichever tab set is mounted.
   - `busy` is a generic "disable tab navigation, keep Close panel usable" flag. The workspace passes its Git-operation state.
+  - Swapping `views`/`tabs` on the same `WorkbenchPanel` unmounts the previous bodies (workspace Files edits, terminal target, browser webviews, device streams), so a Bot tab set should use its own shell instance and keep the workspace surface mounted.
