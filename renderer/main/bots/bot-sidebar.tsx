@@ -68,25 +68,18 @@ function sameRowProps(previous: RowProps, next: RowProps): boolean {
   );
 }
 
-/** "Needs you" outranks the unread dot; a row that is both still says "Unread" to a screen reader. */
-function RowMarkers({ row, unread }: { row: BotSidebarRow; unread: boolean }) {
-  if (row.needsYou) {
-    return (
-      <>
-        <Badge color="warning" className="h-5 shrink-0 px-1.5 text-mini">
-          Needs you
-        </Badge>
-        {unread ? <span className="sr-only">Unread</span> : null}
-      </>
-    );
-  }
-  if (!unread) return null;
+/** The unread dot, inline after the name: it takes room only when it is there. */
+function UnreadDot() {
   return (
-    <span role="img" aria-label="Unread" title="New reply" className="inline-flex size-5 shrink-0 items-center justify-center">
-      <span aria-hidden="true" className="size-2 rounded-full bg-accent" />
-    </span>
+    <span role="img" aria-label="Unread" title="New reply" className="inline-flex size-2 shrink-0 rounded-full bg-accent" />
   );
 }
+
+const NeedsYouBadge = () => (
+  <Badge color="warning" className="h-5 shrink-0 px-1.5 text-mini">
+    Needs you
+  </Badge>
+);
 
 const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
   const line = botRowLine(row);
@@ -124,23 +117,33 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
               working={row.state?.kind === "running"}
             />
           </span>
+          {/* Every row's text spans the same width, so names and previews line up. */}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-regular font-medium text-primary">{row.bot.name}</span>
-            {line ? (
-              // Read as the row's description, so its name stays the Bot's name and status.
-              <span
-                id={lineId}
-                aria-hidden="true"
-                className={cn(
-                  "mt-0.5 block truncate text-small text-secondary",
-                  line.kind === "working" && "agent-thinking-shimmer",
-                )}
-              >
-                {boundedLine(line.text)}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-regular font-medium text-primary">{row.bot.name}</span>
+              {/* "Needs you" outranks the dot; the row still says "Unread" to a screen reader. */}
+              {unread && !row.needsYou ? <UnreadDot /> : null}
+            </span>
+            {line || row.needsYou ? (
+              <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                {row.needsYou ? <NeedsYouBadge /> : null}
+                {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
+                {line ? (
+                  // Read as the row's description, so its name stays the Bot's name and status.
+                  <span
+                    id={lineId}
+                    aria-hidden="true"
+                    className={cn(
+                      "block min-w-0 truncate text-small text-secondary",
+                      line.kind === "working" && "agent-thinking-shimmer",
+                    )}
+                  >
+                    {boundedLine(line.text)}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </span>
-          <RowMarkers row={row} unread={unread} />
         </button>
       </BotRowMenus>
     </li>
@@ -192,7 +195,8 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
           </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
-            <RowMarkers row={row} unread={unread} />
+            {row.needsYou ? <NeedsYouBadge /> : unread ? <UnreadDot /> : null}
+            {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
           </span>
           {description ? (
             <span id={lineId} hidden>
@@ -441,7 +445,10 @@ export function BotSidebar() {
           <div className="relative mx-2.5 mb-2">
             <Input
               ref={searchRef}
-              type="search"
+              // A text field in the search role: type="search" adds WebKit's own clear
+              // button beside the "Clear search" one below.
+              type="text"
+              role="searchbox"
               aria-label="Search Bots"
               placeholder="Search Bots"
               className="pr-8"

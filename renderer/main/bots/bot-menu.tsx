@@ -5,7 +5,8 @@
 
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Ellipsis } from "lucide-react";
+import { CalendarClock, Ellipsis, Files, Pin, PinOff, SlidersHorizontal, Trash2, UserRound } from "lucide-react";
+import { MemoryCardIcon } from "../../components/memory-card-icon";
 import {
   Button,
   ContextMenu,
@@ -28,6 +29,9 @@ import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
 export type BotMenuAction = "profile" | "files" | "memory" | "routines" | "advanced" | "pin" | "delete";
 
 const PANEL_ACTIONS: ReadonlySet<BotMenuAction> = new Set(["files", "memory", "routines"]);
+
+/** Leading icons, as in the app's other menus; Files, Memory and Routines match the panel's tabs. */
+const MENU_ICON = "size-4 shrink-0";
 
 /**
  * One menu's focus hand-off. When its chosen item opened the side panel, the
@@ -97,14 +101,33 @@ export function BotMenuItems({
   };
   return (
     <>
-      <Item onSelect={choose("profile")}>Profile</Item>
-      <Item onSelect={choose("files")}>Files</Item>
-      <Item onSelect={choose("memory")}>Memory</Item>
-      <Item onSelect={choose("routines")}>Routines</Item>
-      <Item onSelect={choose("advanced")}>Advanced</Item>
-      <Item onSelect={choose("pin")}>{pinned ? "Unpin" : "Pin to top"}</Item>
+      <Item onSelect={choose("profile")}>
+        <UserRound className={MENU_ICON} />
+        Profile
+      </Item>
+      <Item onSelect={choose("files")}>
+        <Files className={MENU_ICON} />
+        Files
+      </Item>
+      <Item onSelect={choose("memory")}>
+        <MemoryCardIcon className={MENU_ICON} />
+        Memory
+      </Item>
+      <Item onSelect={choose("routines")}>
+        <CalendarClock className={MENU_ICON} />
+        Routines
+      </Item>
+      <Item onSelect={choose("advanced")}>
+        <SlidersHorizontal className={MENU_ICON} />
+        Advanced
+      </Item>
+      <Item onSelect={choose("pin")}>
+        {pinned ? <PinOff className={MENU_ICON} /> : <Pin className={MENU_ICON} />}
+        {pinned ? "Unpin" : "Pin to top"}
+      </Item>
       <Separator />
       <Item color="status-red" onSelect={choose("delete")}>
+        <Trash2 className={MENU_ICON} />
         Delete Bot
       </Item>
     </>

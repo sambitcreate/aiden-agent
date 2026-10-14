@@ -30,12 +30,15 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
     ]) ipcMain.removeHandler(channel);
     ipcMain.handle("bots:list", () => bots);
     ipcMain.handle("bots:get", (_event, botId: string) => byId.get(botId) ?? null);
+    const asking = new Set<string>();
+    // A test seam: the next summary read for this Bot reports a pending question.
+    (globalThis as { __aidenE2eAsk?: (botId: string) => void }).__aidenE2eAsk = (botId) => asking.add(botId);
     ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
       botId,
       preview: botId === plannerBot!.id ? "Here’s your week." : "Inbox is clear.",
       updatedAt: botId === plannerBot!.id ? 2_000 : 1_000,
       state: { kind: "idle" },
-      needsYou: false,
+      needsYou: asking.has(botId),
       lastReplyAt: null,
     }));
     ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
@@ -75,19 +78,39 @@ test("the Bots page lists only Bots, opens the latest one, and its panel shows a
     }));
   }, [planner, inbox]);
 
+  // The size the visual check found the panel covering the composer at.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
   await page.getByRole("button", { name: "Bots", exact: true }).click();
   const botsNav = page.getByRole("navigation", { name: "Bots" });
   await expect(botsNav.getByRole("button", { name: /^Planner/u })).toBeVisible();
   await expect(botsNav.getByRole("button", { name: /^Inbox Helper/u })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary" })).toHaveCount(0);
   await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
-  // Still open, but covered: the workspace panel keeps its state while a Bots page is showing.
+  // Still open, but out of reach: the workspace panel keeps its state while a Bots page is showing,
+  // and nobody can see, read or tab into it.
   await expect(page.locator("#environment-panel")).toHaveAttribute("data-state", "covered");
+  await expect(page.locator("#environment-panel")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("complementary", { name: "Environment work surface" })).toHaveCount(0);
+
+  // A question from a Bot reaches its row through the app's own notification sync.
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    (globalThis as { __aidenE2eAsk?: (botId: string) => void }).__aidenE2eAsk?.(botId);
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("bots:attention", { botId });
+  }, inbox.id);
+  await expect(botsNav.getByRole("button", { name: /^Inbox Helper/u }).getByText("Needs you")).toBeVisible();
 
   await page.getByRole("button", { name: "Open groceries.md" }).click();
   const panel = page.getByRole("complementary", { name: "Bot panel" });
   await expect(panel.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
   await expect(panel.getByLabel("Contents of lists/groceries.md")).toHaveText("eggs\nmilk");
+  // At this width the panel sits beside the chat: the composer moves over rather than being covered.
+  await expect
+    .poll(async () => {
+      const composer = await page.getByPlaceholder("Ask Planner").boundingBox();
+      const surface = await page.locator("#bot-panel").boundingBox();
+      return Boolean(composer && surface && composer.x + composer.width <= surface.x);
+    })
+    .toBe(true);
 
   const sendToggle = () =>
     aiden.app.evaluate(({ BrowserWindow }) => {

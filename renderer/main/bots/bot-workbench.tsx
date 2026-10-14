@@ -8,7 +8,7 @@ import * as React from "react";
 import { CalendarClock, Files, ListChecks } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
-import { resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
+import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
 import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
@@ -64,8 +64,9 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   const containerRef = React.useRef<HTMLDivElement>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
-  const panelWidth = useWorkbenchWidth(BOT_PANEL_WIDTH_KEY);
-  const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
+  const panelWidth = useWorkbenchWidth(BOT_PANEL_WIDTH_KEY, BOT_PANEL_WIDTH_BOUNDS);
+  // Beside the chat, reflowing it, wherever the chat keeps a usable column.
+  const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth, BOT_PANEL_WIDTH_BOUNDS);
   const [visited, setVisited] = React.useState<ReadonlySet<BotPanelTab>>(() => new Set());
   // Mark the shown tab visited in the same render, so its body never paints a blank frame.
   if (open && !visited.has(tab)) setVisited(new Set([...visited, tab]));
@@ -174,6 +175,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         inline={inline}
         width={width}
         containerWidth={containerWidth}
+        widthBounds={BOT_PANEL_WIDTH_BOUNDS}
         resizing={panelWidth.resizing}
         onResizingChange={panelWidth.setResizing}
         onWidthChange={panelWidth.setPreferredWidth}
