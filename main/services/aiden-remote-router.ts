@@ -32,6 +32,8 @@ import {
   AIDEN_REMOTE_BOT_ROUTINES_FEATURE,
   AIDEN_REMOTE_BOT_MEMORY_FEATURE,
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
+  AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
@@ -57,6 +59,7 @@ import {
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
   parseAidenRemoteQuestionRespondRequest,
+  type AidenRemoteBotDetail,
   type AidenRemoteCapability,
   type AidenRemoteProgressCapability,
   type AidenRemoteBotConversationQuery,
@@ -251,6 +254,7 @@ export interface AidenRemoteRouterDependencies {
   > & Partial<Pick<
     AidenRemoteBotService,
     "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
+    | "supportsChatActivity"
   >>;
   /**
    * Durable Bot sessions, routines, connection requests and starter presets
@@ -290,6 +294,7 @@ export interface AidenRemoteRouterDependencies {
         | "routineNotificationFeed"
         | "supportsMemory"
         | "supportsProactive"
+        | "supportsActivity"
       >
     >;
   /**
@@ -1470,6 +1475,21 @@ function agentInterruptSupported(dependencies: AidenRemoteRouterDependencies): b
   );
 }
 
+/** Revision 30: the activity frames and the Chat activity field ship together, or not at all. */
+function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
+}
+
+/** Bot detail as one device may read it: `chatActivity` only for `bot:activity` holders. */
+function botDetailForDevice(
+  detail: AidenRemoteBotDetail,
+  device: AidenRemoteRouterAuthenticatedDevice,
+): AidenRemoteBotDetail {
+  if (device.capabilities.has("bot:activity")) return detail;
+  const { chatActivity: _hidden, ...visible } = detail;
+  return visible;
+}
+
 function advertisedServerCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1483,6 +1503,9 @@ function advertisedServerCapabilities(
     // so a client can confirm its negotiated grant from `/server`.
     ...(device.acceptsBotCapabilities === true && dependencies.botSessions
       ? AIDEN_REMOTE_BOT_CARD_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botActivityWired(dependencies)
+      ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
       : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -1828,6 +1851,8 @@ export function createAidenRemoteRequestHandler(
             // Bot memory and proactivity (contract revision 27).
             ...(dependencies.botSessions?.supportsMemory === true ? [AIDEN_REMOTE_BOT_MEMORY_FEATURE] : []),
             ...(dependencies.botSessions?.supportsProactive === true ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
+            // Bot chat activity on phones (contract revision 30).
+            ...(botActivityWired(dependencies) ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
             // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
             ...(!isDesktopDevice(device) && dependencies.simulators?.host("mobile")
               ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE]
@@ -1891,6 +1916,11 @@ export function createAidenRemoteRequestHandler(
             // device may hold it while the host serves Bot sessions.
             if (!dependencies.botSessions) {
               throw new AidenRemoteServiceError("not_found", "Bot sessions are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 30: an opt-in to the activity frames and the detail field, offered only while they are wired.
+            if (!botActivityWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -1979,7 +2009,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           201,
-          await dependencies.bots.create(device.id, key, body),
+          botDetailForDevice(await dependencies.bots.create(device.id, key, body), device),
         );
         return;
       }
@@ -2173,7 +2203,10 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!, { cards: device.capabilities.has("bot:cards") }),
+          await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!, {
+            cards: device.capabilities.has("bot:cards"),
+            activity: device.capabilities.has("bot:activity"),
+          }),
         );
         return;
       }
@@ -2190,7 +2223,7 @@ export function createAidenRemoteRequestHandler(
           botSessionEventsMatch[1]!,
           response,
           admitDevice(device.id),
-          { cards: device.capabilities.has("bot:cards") },
+          { cards: device.capabilities.has("bot:cards"), activity: device.capabilities.has("bot:activity") },
         );
         return;
       }
@@ -2475,7 +2508,11 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        writeJson(response, 200, await dependencies.bots.get(botMatch[1]!, device.id));
+        writeJson(
+          response,
+          200,
+          botDetailForDevice(await dependencies.bots.get(botMatch[1]!, device.id), device),
+        );
         return;
       }
       if (botMatch && request.method === "PATCH") {
@@ -2492,11 +2529,9 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.bots.updateIdentity(
-            botMatch[1]!,
-            revision,
-            body,
-            device.id,
+          botDetailForDevice(
+            await dependencies.bots.updateIdentity(botMatch[1]!, revision, body, device.id),
+            device,
           ),
         );
         return;

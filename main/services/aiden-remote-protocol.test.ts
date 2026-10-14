@@ -2421,15 +2421,43 @@ test("Bot activity frames carry only the §11 allow-list, and every privacy samp
     const frame = { ...raw.botActivity.events[0], payload: { activity: sample } };
     assert.throws(() => parseAidenRemoteBotSessionEvent(frame), Error, JSON.stringify(sample));
   }
+  // A few samples are pinned to their reason, so a TypeError can never pass for a refusal.
+  const refusedWith = (field: string, pattern: RegExp) => {
+    const sample = raw.botActivityPrivacy.rejectedActivities.find((candidate: Record<string, unknown>) => field in candidate);
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), pattern, field);
+  };
+  refusedWith("detail", /unsupported field detail/u);
+  refusedWith("step", /unsupported field step/u);
+  refusedWith("query", /unsupported field query/u);
   for (const sample of raw.botActivityPrivacy.rejectedQueued) {
     assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: [sample] }), Error, JSON.stringify(sample));
+  }
+  const [duplicateIds, twentyOneItems] = raw.botActivityPrivacy.rejectedQueuedLists;
+  assert.equal(duplicateIds.length, 2);
+  assert.equal(twentyOneItems.length, 21);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: duplicateIds }), /ids must be unique/u);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOneItems }), /at most 20/u);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: "not a list" }), /must be an array/u);
+  const repeated = ({ unit, count }: { unit: string; count: number }) => unit.repeat(count);
+  const bounds = raw.botActivityPrivacy.textBounds;
+  const queuedWith = (text: string) => ({ ...raw.botActivity.session, queued: [{ submissionId: "18", mode: "queue", text }] });
+  for (const sample of bounds.queuedText.rejected) {
+    assert.throws(() => parseAidenRemoteBotSession(queuedWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+  }
+  for (const sample of bounds.queuedText.accepted) {
+    assert.equal(parseAidenRemoteBotSession(queuedWith(repeated(sample))).queued![0]!.text, repeated(sample));
+  }
+  const appWith = (app: string) => ({ phase: "app", app, startedAt: 1_760_450_000_000 });
+  for (const sample of bounds.app.rejected) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(appWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+  }
+  for (const sample of bounds.app.accepted) {
+    assert.equal(parseAidenRemoteBotSessionActivity(appWith(repeated(sample))).app, repeated(sample));
   }
   for (const sample of raw.botActivityPrivacy.rejectedChatActivity) {
     assert.throws(() => parseAidenRemoteBotDetail({ ...raw.botActivity.detail, chatActivity: sample }), Error, JSON.stringify(sample));
     assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({ chatActivity: sample }, { allowChatActivity: true }));
   }
-  const twentyOne = Array.from({ length: 21 }, (_, index) => ({ submissionId: String(index), mode: "queue", text: "x" }));
-  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOne }), /at most 20/u);
 });
 
 test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {

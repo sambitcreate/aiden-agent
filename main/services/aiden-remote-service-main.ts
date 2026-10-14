@@ -853,6 +853,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 throw error;
               }
             },
+            chatActivity: true,
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),

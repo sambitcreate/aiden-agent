@@ -67,6 +67,8 @@ async function fixture(options: {
   /** "plain" forks; "summary" also forks with a summary. */
   forks?: "plain" | "summary";
   platform?: "mac" | "linux" | "windows";
+  /** The Bot service serves and accepts Chat activity (contract revision 30). */
+  chatActivity?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -210,6 +212,7 @@ async function fixture(options: {
               capability !== "host:events" &&
               capability !== "runs:observe" &&
               capability !== "runs:control" &&
+              capability !== "bot:activity" &&
               capability !== "bot:cards",
           )
         ) {
@@ -503,13 +506,19 @@ async function fixture(options: {
       }),
     },
     bots: {
+      ...(options.chatActivity ? { supportsChatActivity: true } : {}),
       list: async () => {
         calls.push("bots:list");
         return { bots: [botDetail], maxBots: 256 };
       },
       get: async (botId) => {
         calls.push(`bots:get:${botId}`);
-        return { ...botDetail, id: botId, access: { ...botAccess, botId } };
+        return {
+          ...botDetail,
+          id: botId,
+          access: { ...botAccess, botId },
+          ...(options.chatActivity ? { chatActivity: { level: "summary" as const, wording: "follows" as const } } : {}),
+        };
       },
       create: async (deviceId, key) => {
         calls.push(`bots:create:${deviceId}:${key}`);
@@ -5057,4 +5066,87 @@ test("the Bot question answer route needs Bot write access", async () => {
   } finally {
     await app.close();
   }
+});
+
+function recordingActivitySessions(seen: string[], supportsActivity: boolean) {
+  const base = recordingRevision27Sessions([], { memory: false, proactive: false }) as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    supportsActivity,
+    session: async (botId: string, options: { activity?: boolean } = {}) => {
+      seen.push(`session:${options.activity === true ? "activity" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries: [], hasOlder: false };
+    },
+    openEvents: async (
+      _deviceId: string,
+      _botId: string,
+      response: import("node:http").ServerResponse,
+      admit: () => void,
+      options: { activity?: boolean } = {},
+    ) => {
+      seen.push(`events:${options.activity === true ? "activity" : "plain"}`);
+      admit();
+      response.writeHead(204);
+      response.end();
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("bot-activity-v1 and bot:activity are offered only while activity frames and chatActivity are both wired", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:activity"] }) };
+  for (const [sessionsActivity, chatActivity, wired] of [
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+  ] as const) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions([], sessionsActivity),
+      chatActivity,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.features.includes("bot-activity-v1"), wired, `${sessionsActivity}/${chatActivity}`);
+      assert.equal(server.serverCapabilities.includes("bot:activity"), wired);
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      if (!wired) {
+        assert.equal((await response.json()).error?.code, "not_found", "never the misleading credential_revoked");
+      }
+    } finally {
+      await app.close();
+    }
+  }
+});
+
+test("only a device holding bot:activity is served activity frames and a Bot's chatActivity", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  for (const capabilities of [
+    ["server:read", "bot:read", "chat:read"],
+    ["server:read", "bot:read", "chat:read", "bot:activity"],
+  ] as AidenRemoteCapability[][]) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingActivitySessions(seen, true),
+      chatActivity: true,
+    });
+    try {
+      await fetch(`${app.base}/bots/bot-1/session`, { headers });
+      await fetch(`${app.base}/bots/bot-1/session/events`, { headers });
+      const detail = await (await fetch(`${app.base}/bots/bot-1`, { headers })).json();
+      seen.push(`detail:${"chatActivity" in detail ? "activity" : "plain"}`);
+    } finally {
+      await app.close();
+    }
+  }
+  assert.deepEqual(seen, [
+    "session:plain", "events:plain", "detail:plain",
+    "session:activity", "events:activity", "detail:activity",
+  ]);
 });

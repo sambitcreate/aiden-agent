@@ -967,3 +967,13 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
   assert.equal((await restored.registry.authenticate(mac.credential))?.capabilities.has("simulators:mobile"), false);
   assert.equal((await restored.registry.authenticate(phone.credential))?.capabilities.has("simulators:mobile"), true);
 });
+
+test("bot:activity is an opt-in any paired device may negotiate and keep", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:cards", "bot:activity"]);
+  assert.deepEqual(upgraded?.capabilities.slice(-2), ["bot:cards", "bot:activity"]);
+  const authenticated = await state.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.capabilities.has("bot:activity"), true);
+  assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
+});

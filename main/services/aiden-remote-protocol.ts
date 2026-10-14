@@ -5328,7 +5328,8 @@ export function parseAidenRemoteBotQueuedMessage(value: unknown): AidenRemoteBot
 }
 
 function parseBotQueuedList(value: unknown): AidenRemoteBotQueuedMessage[] {
-  if (!Array.isArray(value) || value.length > AIDEN_REMOTE_BOT_QUEUED_MAX) {
+  if (!Array.isArray(value)) throw new Error("Bot queued messages must be an array.");
+  if (value.length > AIDEN_REMOTE_BOT_QUEUED_MAX) {
     throw new Error(`Bot queued messages must contain at most ${AIDEN_REMOTE_BOT_QUEUED_MAX} items.`);
   }
   const queued = value.map(parseAidenRemoteBotQueuedMessage);

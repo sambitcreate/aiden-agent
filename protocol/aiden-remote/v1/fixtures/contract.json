@@ -2210,6 +2210,8 @@
       { "phase": "Reading!", "startedAt": 1760450000000 },
       { "phase": "thinking", "startedAt": -1 },
       { "phase": "thinking", "startedAt": "1760450000000" },
+      { "phase": "thinking", "startedAt": 1.5 },
+      { "phase": "thinking", "startedAt": 9007199254740992 },
       { "startedAt": 1760450000000 }
     ],
     "rejectedQueued": [
@@ -2217,6 +2219,56 @@
       { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list.", "images": 1 },
       { "submissionId": "18 19", "mode": "queue", "text": "Also add a shopping list." }
     ],
+    "rejectedQueuedLists": [
+      [
+        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
+        { "submissionId": "18", "mode": "steer", "text": "Keep it vegetarian." }
+      ],
+      [
+        { "submissionId": "1", "mode": "queue", "text": "x" },
+        { "submissionId": "2", "mode": "queue", "text": "x" },
+        { "submissionId": "3", "mode": "queue", "text": "x" },
+        { "submissionId": "4", "mode": "queue", "text": "x" },
+        { "submissionId": "5", "mode": "queue", "text": "x" },
+        { "submissionId": "6", "mode": "queue", "text": "x" },
+        { "submissionId": "7", "mode": "queue", "text": "x" },
+        { "submissionId": "8", "mode": "queue", "text": "x" },
+        { "submissionId": "9", "mode": "queue", "text": "x" },
+        { "submissionId": "10", "mode": "queue", "text": "x" },
+        { "submissionId": "11", "mode": "queue", "text": "x" },
+        { "submissionId": "12", "mode": "queue", "text": "x" },
+        { "submissionId": "13", "mode": "queue", "text": "x" },
+        { "submissionId": "14", "mode": "queue", "text": "x" },
+        { "submissionId": "15", "mode": "queue", "text": "x" },
+        { "submissionId": "16", "mode": "queue", "text": "x" },
+        { "submissionId": "17", "mode": "queue", "text": "x" },
+        { "submissionId": "18", "mode": "queue", "text": "x" },
+        { "submissionId": "19", "mode": "queue", "text": "x" },
+        { "submissionId": "20", "mode": "queue", "text": "x" },
+        { "submissionId": "21", "mode": "queue", "text": "x" }
+      ]
+    ],
+    "textBounds": {
+      "note": "Each entry is `count` repetitions of `unit`; counts are Unicode code points, so an astral emoji counts once. Rejected entries must be refused and accepted entries must decode unchanged.",
+      "queuedText": {
+        "rejected": [
+          { "unit": "x", "count": 0 },
+          { "unit": "😀", "count": 32001 }
+        ],
+        "accepted": [
+          { "unit": "x", "count": 1 },
+          { "unit": "😀", "count": 32000 }
+        ]
+      },
+      "app": {
+        "rejected": [
+          { "unit": "😀", "count": 41 }
+        ],
+        "accepted": [
+          { "unit": "😀", "count": 40 }
+        ]
+      }
+    },
     "rejectedChatActivity": [
       { "level": "verbose", "wording": "follows" },
       { "level": "quiet" },
