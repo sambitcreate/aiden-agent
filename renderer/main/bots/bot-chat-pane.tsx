@@ -503,6 +503,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         current ? (
           <BotChatNamePill
             bot={current}
+            working={running}
             onOpenProfile={() => void navigate({ to: "/bots/$botId", params: { botId: current.id } })}
           />
         ) : bot.isLoading ? (

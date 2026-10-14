@@ -6,6 +6,7 @@ import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
+import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 
 afterEach(cleanup);
@@ -943,4 +944,17 @@ test("each queued message has its own Remove, and removing one moves focus on: t
   await waitFor(() => assert.equal(document.activeElement, second));
   fireEvent.click(second);
   await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Ask Planner"));
+});
+
+test("the chat header's face works while the Bot works, and a photo gets a small activity badge", async () => {
+  invalidateBotCanonicalPhotos();
+  await mountChat({
+    "bots:getCanonicalPhoto": () => ({ assetRevision: "a1", dataUrl: "data:image/png;base64,AAAA" }),
+    "bots:live:subscribe": () =>
+      snapshot({ state: { kind: "running", submissionId: "s1" }, activity: { phase: "thinking", startedAt: Date.now() } }),
+  });
+  const pill = await screen.findByRole("button", { name: "Planner profile" });
+  const face = within(pill).getByTitle("Planner");
+  assert.equal(face.hasAttribute("data-working"), true);
+  await waitFor(() => assert.ok(face.querySelector('[data-aiden-mark="glance"]')));
 });

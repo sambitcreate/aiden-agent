@@ -2975,6 +2975,16 @@ textarea {
 .aiden-mark[data-aiden-mark="bounce"] circle { animation: aiden-mark-bounce 1.2s cubic-bezier(.45, 0, .55, 1) infinite both; }
 @keyframes aiden-mark-bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
 
+/* Bot faces glance and blink while their Bot works (spec §6), reusing the glance
+   keyframes. Motion runs only with Reduce Motion off and on screen; otherwise the
+   face holds its still pose. */
+:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
+.bot-avatar[data-offscreen] * { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) {
+  .bot-avatar[data-working] * { animation: none !important; }
+}
+
 /* Helix family (Live). Position and depth run on the same period with depth a
    quarter behind (per-circle delays are inline), so the strands read as
    passing in front of each other. */

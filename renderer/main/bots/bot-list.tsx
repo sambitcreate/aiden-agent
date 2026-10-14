@@ -121,13 +121,8 @@ function BotListItem({
                 name={bot.name}
                 photoLoading="visible"
                 size="large"
+                working={working}
               />
-              {working ? (
-                <span
-                  className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-status-green ring-2 ring-background"
-                  aria-hidden="true"
-                />
-              ) : null}
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-2">
