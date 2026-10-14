@@ -308,6 +308,23 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(access["modelId"] as? String, "vision_model_fixture", "Create sends the chosen model")
     }
 
+    /// Re-confirming the checked primary or photo row must leave the draft equal to before, so
+    /// the create view keeps a committed Bot's recovery state instead of posting a duplicate.
+    func testReSelectingTheCurrentModelsLeavesTheDraftEqual() throws {
+        let catalog = try fixtureCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+
+        let beforePrimary = draft
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft, beforePrimary, "the checked primary model is a no-op")
+
+        let beforePhotos = draft
+        XCTAssertTrue(draft.selectVisionModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertEqual(draft, beforePhotos, "the checked photo model is a no-op")
+    }
+
     func testModelListOffersOnlyImageModelsForPhotosAndFiltersBySearch() throws {
         let catalog = try fixtureCatalog()
         XCTAssertEqual(
