@@ -5,6 +5,7 @@ import {
   DEFAULT_BOT_AVATAR,
   isBotAvatar,
   isBotAvatarAppearance,
+  parseBotChatActivity,
   type BotAvatarAppearance,
   type BotCreateInput,
   type BotDefinition,
@@ -108,6 +109,7 @@ function projectBot(value: unknown): StoredBotDefinition | null {
   const avatar: BotAvatarAppearance = isBotAvatarAppearance(bot.avatar)
     ? { version: 1, shape: bot.avatar.shape, color: bot.avatar.color }
     : { ...DEFAULT_BOT_AVATAR };
+  const chatActivity = parseBotChatActivity(bot.chatActivity);
   const projected = {
     id: bot.id as string,
     name: (bot.name as string).trim(),
@@ -120,6 +122,9 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     createdAt: bot.createdAt as number,
     updatedAt: bot.updatedAt as number,
     ...(typeof bot.archivedAt === "number" ? { archivedAt: bot.archivedAt } : {}),
+    // Last, so a freshly saved choice and a reloaded record serialise (and hash into the revision) alike.
+    // A choice this build does not know reads as absent (Quiet); the Bot itself is kept.
+    ...(chatActivity ? { chatActivity } : {}),
   };
   return projected;
 }
@@ -256,6 +261,8 @@ export function createBotStore(options: {
     async update(input: BotUpdateInput): Promise<BotDefinition> {
       return queueMutation(async () => {
         const normalized = normalizeInput(input);
+        const chatActivity = input.chatActivity === undefined ? undefined : parseBotChatActivity(input.chatActivity);
+        if (input.chatActivity !== undefined && !chatActivity) throw new Error("Choose a valid chat activity.");
         await loadBotState();
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === input.id);
@@ -270,6 +277,7 @@ export function createBotStore(options: {
           if (normalized.description) bot.description = normalized.description;
           else delete bot.description;
           bot.avatar = { version: 1, shape: normalized.avatar.shape, color: normalized.avatar.color };
+          if (chatActivity) bot.chatActivity = chatActivity;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));
         });

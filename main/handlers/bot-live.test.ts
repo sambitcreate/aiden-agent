@@ -39,12 +39,18 @@ function fakeProjection() {
         partial: null,
         state: { kind: "idle" },
         question: null,
+        activity: null,
+        queued: [],
       };
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },
     notifyState: () => undefined,
     refresh: async () => undefined,
     refreshQuestion: async () => undefined,
+    notifyStopping: () => undefined,
+    notifyResuming: () => undefined,
+    cancelStopping: () => undefined,
+    refreshActivity: async () => undefined,
     summary: async (botId) => ({ botId, preview: "hi", updatedAt: 1, state: { kind: "idle" } }),
     close: async () => undefined,
   };

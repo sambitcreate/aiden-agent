@@ -169,7 +169,7 @@ When a new tool kind ships (a browser, image generation), it gets its own phase 
 | Summary | Same as Quiet. | One collapsed recap above the reply: "Worked for 18s · read 1 file, searched the web, edited 1 file, used Notion". It opens to the step trail. |
 | Detailed | The status line plus the last three steps, the active one shimmering. | The same recap, open while live and auto-folded when the reply lands. A manual open or close during the run sticks. |
 
-The recap reuses `summarizeActivity`. The trail reuses `ActivityFeed` and the `agent-steps` verbs. Repeats merge: reading six files becomes "Read 6 files", and page visits become "Browsed 3 pages".
+The recap is a Bot-specific fold (`renderer/main/bots/bot-activity-recap.tsx`). It reuses the activity feed's tone tokens, shimmer and row rhythm. Its wording comes from the shared step phrases in `renderer/shared/bot-activity.ts`, because `ActivityFeed` owns its own open state and `summarizeActivity` cannot name apps. Repeats merge: reading six files becomes "Read 6 files", and page visits become "Browsed 3 pages".
 
 Shown at every level:
 
@@ -363,3 +363,19 @@ Every new test file is registered in the matching `package.json` script and `scr
 - Workbench shell: its own PR, with C2 stacked on it (decision 12, §4).
 - Tool categories: §5.1 (decision 13).
 - Left to the plan: whether Pi Durable can withdraw a single queued submission (decides the Remove button).
+
+- **Slice B rulings (2026-10-14):**
+  - Pi Durable 1.0.3 withdraws one queued submission (`Harness.abortSubmission`), so the Queued bubble has Remove. It reports `withdrawn`, `started` or `gone`; only `withdrawn` removes the bubble.
+  - Refusals are told from failures by Pi's `blocked` tool diagnostic. A fourth result status, `stopped`, covers steps cut off by Stop or a restart; it renders neutrally, never red.
+  - `chatActivity` left out of an update keeps the stored value. Identity updates merge a partial `chatActivity` onto the freshly read Bot. It is stored last in the Bot record because the revision hashes the record JSON. Remote's identity PATCH still rejects it (slice D).
+  - The app label is read from the MCP agent tool name.
+  - A command step never shows the command. It shows only the model's `description`, redacted before it is cut to 80 characters; with no description the step has no detail.
+  - Always "Thinking" hides the peek.
+  - The recap shows red "N issues" and amber "N blocked" separately.
+  - The snapshot also carries `queued` from `pi.inbox`. The queued list holds only the person's own inputs: it is classified by the durable submission request id (`routine:`, `intro:`) plus the hidden flag, and fails closed when an id is missing.
+  - Run identity is the run's first input (`inputs[0]`), not the generation task id. A Resume is marked by the service's `onResumed` callback inside the per-Bot serialize, and the Stop and Resume flags are scoped to that run, so a double Stop never carries "Stopping" into the next turn.
+  - Every user entry begins a turn in the transcript rows (Pi Durable places a steer after the round's tool results).
+  - The status line hides only while reply text streams with no active tool step. Announcements go through sr-only text inside `role="status"`, throttled to one per 2 seconds.
+  - The Chat activity page saves on pick through a serial queue (a failed save returns the radio to the saved choice with a toast). Each level has its own Reduce Motion still frame, and Reduce Motion is read live.
+  - Faces glance through `data-working` on the avatar, with one shared off-screen observer.
+  - The Bots onboarding tile needed no redraw: it shows neither the list nor the Updates line (it draws the name pill, one exchange and a routine chip).

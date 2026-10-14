@@ -90,42 +90,66 @@ class AidenBotModelChoiceTest {
         AidenRemoteErrorEnvelope.Body(code = code, message = "refused", requestId = "req", retryable = false)
     )
 
+    private val chosenDraft = AidenBotCreateDraft(name = "Seer", model = AidenModelRoute("provider_fixture", "model_fixture"))
+
     @Test
-    fun aRetryOfTheSameCreateAfterAnUncertainFailureReusesItsKey() {
+    fun anUncertainCreateReplaysTheSameRequestAndKeyAfterTheCatalogRevisionMoves() {
         val keys = ArrayDeque(List(3) { UUID.randomUUID() })
         val attempts = AidenBotCreateAttempts { keys.removeFirst() }
-        val request = AidenBotCreateDraft(name = "Seer").request(catalog)!!
-        val first = attempts.keyFor(request)
-        attempts.failed(IOException("connection lost"))
-        assertEquals("the Mac may have made it, so it replays that Bot", first, attempts.keyFor(request))
+        val first = attempts.begin(chosenDraft, catalog)!!
+        attempts.failed(first, IOException("connection lost"))
+
+        // Something unrelated in the Mac's catalog changed, so a rebuilt request would differ.
+        val refreshed = catalog.copy(revision = catalog.revision + "-next")
+        assertNotEquals("the trap: a rebuilt request carries a new revision", first.request, chosenDraft.request(refreshed))
+
+        assertTrue(attempts.replays(chosenDraft))
+        val retry = attempts.begin(chosenDraft, refreshed)!!
+        assertEquals("the Mac may have made it, so it replays that Bot", first.key, retry.key)
+        assertEquals("the exact original body is resent", first.request, retry.request)
     }
 
     @Test
-    fun aChangedRequestOrARefusedOneGetsANewKey() {
-        val keys = ArrayDeque(List(3) { UUID.randomUUID() })
-        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
-        val writer = AidenBotCreateDraft(name = "Seer", model = AidenModelRoute("provider_fixture", "model_fixture"))
-        val first = attempts.keyFor(writer.request(catalog)!!)
+    fun anUncertainCreateStaysReplayableWhenTheChosenModelVanishedFromTheCatalog() {
+        val attempts = AidenBotCreateAttempts()
+        val first = attempts.begin(chosenDraft, catalog)!!
+        attempts.failed(first, IOException("timed out"))
 
-        // The Mac refused it (the model's service was signed out); the person picks another model.
-        attempts.failed(refused(AidenRemoteErrorCode.INVALID_REQUEST))
-        val seer = writer.copy(model = AidenModelRoute("provider_fixture", "vision_model_fixture")).request(catalog)!!
-        val second = attempts.keyFor(seer)
-        assertNotEquals("a different body under the old key is an idempotency_conflict", first, second)
-
-        // Even an uncertain failure doesn't carry a key over to a different request.
-        attempts.failed(IOException("connection lost"))
-        val renamed = attempts.keyFor(seer.copy(name = "Seer 2"))
-        assertNotEquals(second, renamed)
+        val withoutIt = catalog.copy(
+            providers = catalog.providers.map { p -> p.copy(models = p.models.map { m -> m.copy(available = false) }) }
+        )
+        assertTrue(chosenDraft.modelIsGone(withoutIt))
+        assertTrue(attempts.replays(chosenDraft))
+        assertEquals(first, attempts.begin(chosenDraft, withoutIt))
     }
 
     @Test
-    fun retryingTheSameRequestAfterTheMacRefusedItGetsANewKey() {
-        val keys = ArrayDeque(List(2) { UUID.randomUUID() })
+    fun aChangedModelAfterAnUncertainCreateGetsANewKey() {
+        val keys = ArrayDeque(List(3) { UUID.randomUUID() })
         val attempts = AidenBotCreateAttempts { keys.removeFirst() }
-        val request = AidenBotCreateDraft(name = "Seer").request(catalog)!!
-        val first = attempts.keyFor(request)
-        attempts.failed(refused(AidenRemoteErrorCode.INVALID_REQUEST))
-        assertNotEquals("the Mac replays a refused key's refusal", first, attempts.keyFor(request))
+        val first = attempts.begin(chosenDraft, catalog)!!
+        attempts.failed(first, IOException("connection lost"))
+
+        val changed = chosenDraft.copy(model = AidenModelRoute("provider_fixture", "vision_model_fixture"))
+        assertFalse(attempts.replays(changed))
+        val second = attempts.begin(changed, catalog)!!
+        assertNotEquals("a different body under the old key is an idempotency_conflict", first.key, second.key)
+
+        // Even an uncertain failure doesn't carry the key over to a renamed draft.
+        attempts.failed(second, IOException("connection lost"))
+        val renamed = attempts.begin(changed.copy(name = "Seer 2"), catalog)!!
+        assertNotEquals(second.key, renamed.key)
+    }
+
+    @Test
+    fun aDefiniteRefusalGetsANewKeyForTheSameDraft() {
+        val keys = ArrayDeque(List(3) { UUID.randomUUID() })
+        val attempts = AidenBotCreateAttempts { keys.removeFirst() }
+        val first = attempts.begin(chosenDraft, catalog)!!
+        attempts.failed(first, refused(AidenRemoteErrorCode.INVALID_REQUEST))
+
+        assertFalse(attempts.replays(chosenDraft))
+        val retry = attempts.begin(chosenDraft, catalog)!!
+        assertNotEquals("the Mac replays a refused key's refusal", first.key, retry.key)
     }
 }

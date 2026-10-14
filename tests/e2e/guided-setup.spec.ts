@@ -111,7 +111,7 @@ async function substituteBotIpc(app: ElectronApplication, options: { failFirstCr
       state.accessUpdates.push(input);
       return { ...fixture.access.access, revision: "access-2", accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => fixture.idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);

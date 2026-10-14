@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenEmptyState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
@@ -240,23 +241,38 @@ fun AidenBotsHomeScreen(
     val canOpenMemory = serverInfo?.supportsBotMemory == true
     // A row's Advanced opens the same sheet as the chat's ••• → Advanced.
     var advancedBot by remember { mutableStateOf<AidenBotDetail?>(null) }
+    // The client the sheet was opened with; it keeps saving to the Mac the Bot came from.
+    var advancedClient by remember { mutableStateOf<AidenRemoteClient?>(null) }
     var openingAdvanced by remember { mutableStateOf(false) }
     fun openAdvanced(botId: String) {
         val cl = client ?: return
         if (openingAdvanced) return
         openingAdvanced = true
         scope.launch {
+            // The pairing this read belongs to; a removed or switched pairing never gets it back.
+            val requestInstance = coordinator.activeInstanceId
             try {
                 val detail = cl.bot(botId)
+                if (!coordinator.holdsReadAuthority(cl, requestInstance)) return@launch
                 coordinator.botCache.putBotDetail(detail)
+                advancedClient = cl
                 advancedBot = detail
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                if (coordinator.holdsReadAuthority(cl, requestInstance)) {
+                    coordinator.presentError(resources.getString(R.string.bot_session_unreachable))
+                }
             } finally {
                 openingAdvanced = false
             }
+        }
+    }
+    // The sheet belongs to the pairing it was opened in; a switched or revoked client closes it.
+    LaunchedEffect(client) {
+        if (advancedClient != null && advancedClient !== client) {
+            advancedBot = null
+            advancedClient = null
         }
     }
 
@@ -413,11 +429,15 @@ fun AidenBotsHomeScreen(
     advancedBot?.let { bot ->
         AidenBotAdvancedSheet(
             bot = bot,
-            client = client,
-            onDismiss = { advancedBot = null },
+            client = advancedClient,
+            onDismiss = {
+                advancedBot = null
+                advancedClient = null
+            },
             onSaved = { saved ->
                 coordinator.botCache.putBotDetail(saved)
                 advancedBot = null
+                advancedClient = null
                 scope.launch { viewModel.loadBots(force = true) }
             }
         )
