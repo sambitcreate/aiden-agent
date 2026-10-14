@@ -263,7 +263,7 @@ On any `/bots` route, `chat-sidebar.tsx` renders `BotSidebar` instead of the pro
   - Profile, Files, Memory, Routines, Advanced, Pin to top/Unpin (desktop only), separator, Delete Bot.
   - Phones have no side panel, so Files and Memory open the existing sheets.
 - **New Bot model field (desktop).** An "AI model" field in step 1 of `bot-create-flow.tsx`.
-  - It opens the shared `ModelPicker`, through a small adapter from `BotCapabilityCatalog`.
+  - It opens `BotModelPicker` (`renderer/main/bots/bot-model-picker.tsx`), a Bot-specific searchable popover built from the same `Popover`/`Command` primitives as the composer picker. The composer's `ModelPicker` needs real provider ids for its icons, model info and Pad, and Bot catalog ids are deliberately opaque, so it can't be reused. Provider logos fall back to initials until the catalog carries a non-secret icon slug.
   - It defaults to today's `recommendedFullAccess` choice, marked Recommended.
   - When the chosen model reads text only, a "For photos" row is filled with `firstAvailableVisionModel`.
   - With no model set up, the field reads "No AI model set up yet", with Set up…, and creating still works.
