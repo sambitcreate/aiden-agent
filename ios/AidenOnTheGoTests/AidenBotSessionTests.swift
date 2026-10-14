@@ -2081,3 +2081,82 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertTrue(otherMac.showsSkeleton)
     }
 }
+
+/// A working Bot's face follows the shared `glance` keyframes (docs/activity-marks.md).
+final class AidenBotFaceGlanceTests: XCTestCase {
+    func testTheEyesLookLeftThenRightAndBlinkOnTheGlanceTimeline() {
+        XCTAssertEqual(aidenBotFaceGlancePose(at: 0), .still, "t = 0 is the still pose Reduce Motion shows")
+        // 1.28 s is 32% of the 4 s period: held at translateX −2.6 of 24.
+        XCTAssertEqual(aidenBotFaceGlancePose(at: 1.28).dx, -2.6 / 24, accuracy: 0.0005)
+        // 2.4 s is 60%: held at +2.6.
+        XCTAssertEqual(aidenBotFaceGlancePose(at: 2.4).dx, 2.6 / 24, accuracy: 0.0005)
+        // 3.6 s is 90%: the blink's lowest point.
+        XCTAssertEqual(aidenBotFaceGlancePose(at: 3.6).blink, 0.1, accuracy: 0.0005)
+        XCTAssertEqual(aidenBotFaceGlancePose(at: 4).dx, 0, accuracy: 0.0005, "the timeline loops")
+    }
+}
+
+/// The chat's quiet connection hint (R14): it never blocks the chat, and it
+/// stays out of the way while the status line already says "Reconnecting".
+@MainActor
+final class AidenBotConnectionHintTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+    private let started = 1_760_450_000_000
+
+    private func session(_ state: AidenBotSessionStateKind, epoch: String = "epoch_a", seq: Int = 4) throws -> AidenBotSession {
+        AidenBotSession(
+            botId: botID,
+            epoch: epoch,
+            seq: seq,
+            stateView: try AidenBotSessionStateView(state: state),
+            partial: nil,
+            entries: [],
+            hasOlder: false,
+            activity: state == .running ? AidenBotSessionActivity(phase: "reading", startedAt: started) : nil,
+            queued: []
+        )
+    }
+
+    private func waitUntil(_ condition: () -> Bool, what: String) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    func testAChatSaysConnectingUntilTheMacAnswersAndAFailedFirstLoadOffersTryAgain() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        XCTAssertEqual(aidenBotConnectionHint(for: model, nowMs: started), .connecting, "before the first snapshot")
+
+        await model.load() // nothing queued: the Mac can't be reached
+        guard case .unreachable = aidenBotConnectionHint(for: model, nowMs: started) else {
+            return XCTFail("a failed first load is a quiet hint with Try again, not a blocking screen")
+        }
+
+        transport.queueSession(.success(try session(.idle)))
+        await model.load()
+        XCTAssertNil(aidenBotConnectionHint(for: model, nowMs: started), "connected: no hint")
+    }
+
+    func testADroppedStreamSaysConnectingOnlyWhenTheStatusLineDoesNotAlreadySayReconnecting() async throws {
+        for (state, expected) in [(AidenBotSessionStateKind.running, nil), (.idle, AidenBotConnectionHint.connecting)] {
+            let transport = FakeBotSessionTransport()
+            transport.queueSession(.success(try session(state)))
+            transport.queueStream([]) // the first connection drops at once
+            transport.queueStream([], staysOpen: true)
+            let model = AidenBotSessionModel(botID: botID, transport: transport)
+            model.activitySupported = true
+            await model.load()
+            let listener = Task { await model.listen() }
+            try await waitUntil({ model.isStreamDown }, what: "the drop")
+            XCTAssertEqual(aidenBotConnectionHint(for: model, nowMs: started), expected, "\(state)")
+            if state == .running {
+                XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Reconnecting to your Mac")
+            }
+            listener.cancel()
+            await listener.value
+        }
+    }
+}

@@ -79,11 +79,36 @@ extension AidenBotAvatarShape {
     }
 }
 
+/// The canonical face's glance while its Bot works: the eyes look left and
+/// right and blink, on the shared `glance` keyframes. `dx` is a fraction of the
+/// avatar's size; `blink` scales the eyes' height.
+struct AidenBotFaceGlancePose: Equatable {
+    var dx: Double
+    var blink: Double
+
+    static let still = AidenBotFaceGlancePose(dx: 0, blink: 1)
+}
+
+private let aidenBotGlanceSpec = AidenActivityMarkSpec.make(.glance)
+
+func aidenBotFaceGlancePose(at time: TimeInterval) -> AidenBotFaceGlancePose {
+    let look = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.groups[0].tracks, atTime: time)
+    let eye = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.shapes[0].tracks, atTime: time)
+    // The mark's view box is 24 wide.
+    return AidenBotFaceGlancePose(dx: look.translateX / 24, blink: eye.scaleY)
+}
+
 struct AidenBotSemanticAvatarView: View {
     let avatar: AidenBotSemanticAvatar
     let name: String
     let size: CGFloat
     var isDecorative = true
+    /// The Bot is in a running turn: its eyes glance (spec §12, ruling 8).
+    var working = false
+
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.aidenReduceMotion) private var appReduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
 
     private var presentation: AidenBotAvatarPresentation {
         aidenBotAvatarPresentation(avatar)
@@ -93,7 +118,7 @@ struct AidenBotSemanticAvatarView: View {
         ZStack {
             AidenBotAvatarShapeMask(shape: presentation.shape)
                 .fill(presentation.color.swatch)
-            AidenBotEyeMark(size: size)
+            AidenBotEyeMark(size: size, glancing: working && !systemReduceMotion && !appReduceMotion && !lowPowerMode)
         }
         .frame(width: size, height: size)
         .contentShape(AidenBotAvatarShapeMask(shape: presentation.shape))
@@ -116,17 +141,27 @@ struct AidenBotShapeSwatch: View {
 }
 
 /// The one eye mark every Bot shares: two short, slightly tilted strokes.
+/// While its Bot works they glance; otherwise (and under Reduce Motion) they hold still.
 private struct AidenBotEyeMark: View {
     let size: CGFloat
+    var glancing = false
 
     var body: some View {
-        HStack(spacing: size * 0.09) {
-            Capsule().frame(width: size * 0.09, height: size * 0.2)
-            Capsule().frame(width: size * 0.09, height: size * 0.2)
+        TimelineView(.animation(paused: !glancing)) { context in
+            let pose = glancing ? aidenBotFaceGlancePose(at: context.date.timeIntervalSinceReferenceDate) : .still
+            HStack(spacing: size * 0.09) {
+                Capsule()
+                    .frame(width: size * 0.09, height: size * 0.2)
+                    .scaleEffect(x: 1, y: pose.blink)
+                Capsule()
+                    .frame(width: size * 0.09, height: size * 0.2)
+                    .scaleEffect(x: 1, y: pose.blink)
+            }
+            .foregroundStyle(Color(aidenRGB: aidenBotAvatarFaceRGB))
+            .offset(x: pose.dx * size)
+            .rotationEffect(.degrees(-12))
+            .offset(x: size * 0.08, y: -size * 0.02)
         }
-        .foregroundStyle(Color(aidenRGB: aidenBotAvatarFaceRGB))
-        .rotationEffect(.degrees(-12))
-        .offset(x: size * 0.08, y: -size * 0.02)
         .accessibilityHidden(true)
     }
 }

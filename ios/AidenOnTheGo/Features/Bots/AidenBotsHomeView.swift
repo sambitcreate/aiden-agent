@@ -585,18 +585,9 @@ struct AidenBotsHomeView: View {
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,
-                size: 52
+                size: 52,
+                working: row.isWorking
             )
-            .overlay(alignment: .bottomTrailing) {
-                if row.isWorking {
-                    Circle()
-                        .fill(palette.success)
-                        .frame(width: 14, height: 14)
-                        .padding(2)
-                        .background(palette.canvas, in: Circle())
-                        .accessibilityHidden(true)
-                }
-            }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(row.bot.name)

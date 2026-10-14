@@ -24,13 +24,20 @@ struct AidenBotSessionChatView: View {
     /// is offered only when they grant file access.
     @State private var filesTools: AidenBotChatToolsModel?
     @State private var presentedFilesGrant: AidenBotConversationFileGrant?
+    /// Steer or Queue while the Bot works; back to Queue when the turn ends.
+    @State private var busyMode: AidenStreamInputMode = .queue
     @FocusState private var composerFocused: Bool
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
     private var canWrite: Bool {
-        coordinator.connectionState == .connected
-            && coordinator.installationStore.activeInstallation?.canWriteBots == true
+        coordinator.connectionState == .connected && canCompose
+    }
+
+    /// Messages are taken while the Mac is still connecting: they wait in the
+    /// outbox and go out on connect (R14).
+    private var canCompose: Bool {
+        coordinator.installationStore.activeInstallation?.canWriteBots == true
     }
 
     /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
@@ -50,7 +57,8 @@ struct AidenBotSessionChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript
-            if let model, model.hasLoaded {
+            // The composer is there at once; messages wait for the Mac (R14).
+            if let model {
                 footer(model)
             }
         }
@@ -118,6 +126,21 @@ struct AidenBotSessionChatView: View {
         }
         .task(id: filesLookupKey) {
             await loadFilesTools()
+        }
+        // Chat activity is changed in Advanced; reread the Bot when it closes.
+        .onChange(of: isShowingAdvanced) { _, showing in
+            if !showing { Task { await loadSummary() } }
+        }
+        .onChange(of: model?.isRunning == true) { _, running in
+            if !running { busyMode = .queue }
+        }
+        .onChange(of: coordinator.server?.supportsBotActivity == true) { _, supported in
+            model?.activitySupported = supported
+        }
+        // A first load that failed is a quiet hint while the chat keeps
+        // reconnecting; once a snapshot arrives it is no longer news.
+        .onChange(of: model?.hasLoaded == true) { _, loaded in
+            if loaded { model?.errorMessage = nil }
         }
     }
 
@@ -239,12 +262,17 @@ struct AidenBotSessionChatView: View {
         .accessibilityHint("Opens the Bot’s profile")
     }
 
+    /// Never a spinner or a blocking error (R14): the last transcript, or
+    /// skeleton bubbles, with the person's own messages drawn at once.
     @ViewBuilder
     private var transcript: some View {
-        if let model, model.hasLoaded {
+        if let model {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
+                        if model.showsSkeleton {
+                            AidenBotSessionSkeletonBubbles()
+                        }
                         ForEach(AidenBotTranscriptRow.rows(for: model.entries)) { row in
                             rowView(row, model: model)
                                 .id(row.id)
@@ -253,6 +281,14 @@ struct AidenBotSessionChatView: View {
                             assistantBubble(partial, interrupted: false)
                                 .id("partial")
                         }
+                        ForEach(model.queued, id: \.submissionId) { message in
+                            queuedBubble(message)
+                        }
+                        ForEach(model.outgoing) { message in
+                            outgoingBubble(message, model: model)
+                        }
+                        AidenBotStatusLineView(model: model)
+                            .id("status")
                         Color.clear.frame(height: 1).id("bottom")
                     }
                     .padding(.horizontal, 16)
@@ -261,21 +297,17 @@ struct AidenBotSessionChatView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: model.entries.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: model.partial) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: model.queued.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: model.outgoing.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-        } else if let message = model?.errorMessage {
-            ContentUnavailableView {
-                Label("Couldn’t Load Chat", systemImage: "exclamationmark.bubble")
-            } description: {
-                Text(message)
-            } actions: {
-                Button("Try Again") { Task { await model?.load() } }
-            }
-            .frame(maxHeight: .infinity)
         } else {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("Loading chat")
+            ScrollView {
+                AidenBotSessionSkeletonBubbles()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+            }
+            .scrollDisabled(true)
         }
     }
 
@@ -352,6 +384,88 @@ struct AidenBotSessionChatView: View {
         }
     }
 
+    /// A user bubble the Mac's transcript doesn't hold yet: a Queued message,
+    /// or one of the person's own on its way.
+    private func pendingBubble<Caption: View>(
+        _ text: String,
+        faded: Bool,
+        @ViewBuilder caption: () -> Caption
+    ) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(text)
+                .foregroundStyle(palette.foreground)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .opacity(faded ? 0.55 : 1)
+            caption()
+                .font(.caption)
+                .foregroundStyle(palette.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 48)
+    }
+
+    /// A message the Mac holds until the reply finishes (Queue) or has already
+    /// joined the reply (Steer).
+    private func queuedBubble(_ message: AidenBotQueuedMessage) -> some View {
+        queuedLook(message.text, mode: message.mode)
+    }
+
+    private func queuedLook(_ text: String, mode: AidenStreamInputMode) -> some View {
+        // A queued message waits for the reply; a steer has already joined it.
+        pendingBubble(text, faded: mode == .queue) {
+            if mode == .queue {
+                Text(AidenBotSessionCopy.queued)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(mode == .queue ? "Sends when the current reply finishes" : "")
+    }
+
+    /// The person's own message before the Mac's transcript shows it (R14).
+    @ViewBuilder
+    private func outgoingBubble(_ message: AidenBotOutgoingMessage, model: AidenBotSessionModel) -> some View {
+        switch model.look(of: message) {
+        case .sending:
+            pendingBubble(message.text, faded: true) {
+                Text(AidenBotSessionCopy.sending)
+            }
+            .accessibilityElement(children: .combine)
+        case .sent:
+            pendingBubble(message.text, faded: false) { EmptyView() }
+        case let .queued(mode):
+            queuedLook(message.text, mode: mode)
+        case .failed:
+            pendingBubble(message.text, faded: false) {
+                HStack(spacing: 6) {
+                    Label(AidenBotSessionCopy.couldNotSend, systemImage: "exclamationmark.circle.fill")
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(palette.danger)
+                    Text("·")
+                        .accessibilityHidden(true)
+                    Button(AidenBotSessionCopy.tryAgain) {
+                        Task { await model.retrySend(message.id) }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.accent)
+                    .disabled(!canCompose)
+                    Button {
+                        model.discardSend(message.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Remove message")
+                }
+                .buttonStyle(.plain)
+            }
+            .accessibilityElement(children: .contain)
+        }
+    }
+
     private func assistantBubble(_ text: String, interrupted: Bool) -> some View {
         AidenMarkdownView(content: text)
             .foregroundStyle(palette.foreground)
@@ -363,6 +477,9 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func footer(_ model: AidenBotSessionModel) -> some View {
         VStack(spacing: 10) {
+            if let hint = aidenBotConnectionHint(for: model, nowMs: Int(Date().timeIntervalSince1970 * 1_000)) {
+                connectionHint(hint, model: model)
+            }
             if let question = model.question, !model.needsModel {
                 // The Bot's A–E quick replies. A Bot question has no deadline.
                 AidenQuestionCard(
@@ -417,6 +534,76 @@ struct AidenBotSessionChatView: View {
         .padding(.vertical, 10)
     }
 
+    /// A quiet line above the composer, never a blocking screen (R14).
+    private func connectionHint(_ hint: AidenBotConnectionHint, model: AidenBotSessionModel) -> some View {
+        HStack(spacing: 6) {
+            switch hint {
+            case .connecting:
+                Text(AidenBotSessionCopy.connecting)
+            case let .unreachable(message):
+                Text(message)
+                    .lineLimit(2)
+                Button(AidenBotSessionCopy.tryAgain) { Task { await model.load() } }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.accent)
+                    .buttonStyle(.plain)
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(palette.secondary)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var draftIsEmpty: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The draft clears at once and the bubble shows (R14); a refused message
+    /// comes back to the composer.
+    private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
+        let text = draft
+        draft = ""
+        Task {
+            if !(await model.send(text, whenBusy: mode)), draft.isEmpty { draft = text }
+        }
+    }
+
+    /// Steer or Queue while the Bot works (desktop and Android parity): the mode's
+    /// name sends in that mode; touch and hold for the menu.
+    private func busyPill(_ model: AidenBotSessionModel) -> some View {
+        let enabled = canCompose && model.canSend && !draftIsEmpty
+        return Menu {
+            ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
+                Button {
+                    busyMode = mode
+                } label: {
+                    if busyMode == mode {
+                        Label { Text(mode.busyLabel); Text(mode.busyDetail) } icon: { Image(systemName: "checkmark") }
+                    } else {
+                        Text(mode.busyLabel)
+                        Text(mode.busyDetail)
+                    }
+                }
+                .accessibilityAddTraits(busyMode == mode ? .isSelected : [])
+            }
+        } label: {
+            Text(busyMode.busyLabel)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(minHeight: 40)
+                .foregroundStyle(enabled ? palette.onAccent : palette.secondary)
+                .background(enabled ? palette.accent : palette.raised, in: Capsule())
+        } primaryAction: {
+            submit(model, whenBusy: busyMode)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(busyMode.busyActionLabel)
+        .accessibilityHint("Touch and hold to choose Steer or Queue")
+    }
+
     private func composer(_ model: AidenBotSessionModel) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Message", text: $draft, axis: .vertical)
@@ -425,8 +612,11 @@ struct AidenBotSessionChatView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(palette.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .disabled(!canWrite)
+                .disabled(!canCompose)
             if model.isRunning {
+                if model.offersBusyModes {
+                    busyPill(model)
+                }
                 Button {
                     Task { await model.stop() }
                 } label: {
@@ -436,14 +626,11 @@ struct AidenBotSessionChatView: View {
                         .background(palette.raised, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!canWrite || model.inFlight.contains(.stop))
+                .disabled(!canWrite || model.isStopping || model.inFlight.contains(.stop))
                 .accessibilityLabel("Stop")
             } else {
                 Button {
-                    let text = draft
-                    Task {
-                        if await model.send(text) { draft = "" }
-                    }
+                    submit(model, whenBusy: nil)
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.semibold))
@@ -452,8 +639,7 @@ struct AidenBotSessionChatView: View {
                         .background(palette.accent, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!canWrite || !model.canSend
-                          || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canCompose || !model.canSend || draftIsEmpty)
                 .accessibilityLabel("Send")
             }
         }
@@ -463,7 +649,13 @@ struct AidenBotSessionChatView: View {
     private func start() async {
         guard let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context) else { return }
-        let model = AidenBotSessionModel(botID: botID, transport: client)
+        // The chat opens on its last transcript from this run of the app (R14).
+        let model = AidenBotSessionModel(
+            botID: botID,
+            transport: client,
+            cacheKey: "\(context.instanceId)/\(botID)"
+        )
+        model.activitySupported = coordinator.server?.supportsBotActivity == true
         self.model = model
         async let summaryLoad: Void = loadSummary()
         await model.load()
@@ -482,6 +674,7 @@ struct AidenBotSessionChatView: View {
         if let detail = try? await coordinator.remoteClient(for: context).bot(id: botID),
            coordinator.isCurrent(context) {
             summary = AidenBotSummary(detail: detail)
+            model?.wording = detail.chatActivity?.wording ?? .follows
         }
     }
 }
@@ -494,6 +687,99 @@ func aidenBotSessionConversationChatID(
     conversations: [AidenBotConversationItem]
 ) -> String? {
     aidenCanonicalBotConversations(conversations.filter { $0.botId == botID }).first?.chatId
+}
+
+extension AidenBotSessionCopy {
+    static let sending = "Sending…"
+    static let couldNotSend = "Couldn't send"
+    static let tryAgain = "Try again"
+    static let connecting = "Connecting…"
+}
+
+/// The quiet hint under a Bot chat while the Mac isn't reachable (R14).
+enum AidenBotConnectionHint: Equatable {
+    /// "Connecting…": no snapshot yet, or the stream dropped.
+    case connecting
+    /// The first load failed: its message, with Try again. The chat stays usable
+    /// and keeps reconnecting.
+    case unreachable(String)
+}
+
+/// The hint to show, or nil when connected. While a turn runs the status line
+/// already says "Reconnecting to your Mac", so the hint stays out of the way.
+@MainActor
+func aidenBotConnectionHint(for model: AidenBotSessionModel, nowMs: Int) -> AidenBotConnectionHint? {
+    guard model.isConnecting else { return nil }
+    if model.statusLine(nowMs: nowMs)?.display.phase == "reconnecting" { return nil }
+    if !model.hasLoaded, let message = model.errorMessage { return .unreachable(message) }
+    return .connecting
+}
+
+/// Skeleton bubbles while a chat opens with nothing cached (R14), shaped like
+/// the shell's Bot chat skeleton so nothing jumps; never a spinner.
+private struct AidenBotSessionSkeletonBubbles: View {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AidenBotSkeletonBlock(width: 206, height: 48, radius: 20, reduceMotion: reduceMotion)
+            AidenBotSkeletonBlock(width: 252, height: 70, radius: 20, reduceMotion: reduceMotion)
+            HStack {
+                Spacer(minLength: 72)
+                AidenBotSkeletonBlock(width: 164, height: 48, radius: 20, reduceMotion: reduceMotion)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading chat")
+    }
+}
+
+/// The status line while a Bot works (spec §12): a native activity mark and the
+/// shared word, plus the elapsed time after 20 seconds. No steps, no Stop.
+struct AidenBotStatusLineView: View {
+    let model: AidenBotSessionModel
+
+    @Environment(\.aidenPalette) private var palette
+    @State private var announcer = AidenBotStatusAnnouncer()
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if let line = model.statusLine(nowMs: Int(context.date.timeIntervalSince1970 * 1_000)) {
+                HStack(spacing: 8) {
+                    AidenActivityMark(mark: line.display.mark, size: 18, color: palette.secondary)
+                    Text(line.display.word)
+                    if let elapsed = line.elapsed {
+                        Text("· \(elapsed)").monospacedDigit()
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // The accessible name is the word; the elapsed time is its value.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(line.display.word)
+                .accessibilityValue(line.elapsed ?? "")
+                .accessibilityAddTraits(.updatesFrequently)
+                .onChange(of: line.display.word, initial: true) { _, word in announce(word) }
+            }
+        }
+    }
+
+    /// VoiceOver hears a change at most once every 2 seconds; the newest word wins.
+    private func announce(_ word: String) {
+        let offer = announcer.offer(word, at: Date().timeIntervalSinceReferenceDate)
+        if let text = offer.announce {
+            AccessibilityNotification.Announcement(text).post()
+        } else if let retry = offer.retryAfter {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(retry))
+                if let latest = model.statusLine(nowMs: Int(Date().timeIntervalSince1970 * 1_000))?.display.word {
+                    announce(latest)
+                }
+            }
+        }
+    }
 }
 
 /// A centred, quiet "Memory updated" line. Tapping it opens Profile → Memory.

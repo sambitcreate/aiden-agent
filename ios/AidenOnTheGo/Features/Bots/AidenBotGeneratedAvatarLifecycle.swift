@@ -1020,7 +1020,10 @@ struct AidenBotCanonicalAvatarView: View {
     let name: String
     let size: CGFloat
     var isDecorative = true
+    /// The Bot is in a running turn: the face glances, or a photo wears a glance mark.
+    var working = false
 
+    @Environment(\.aidenPalette) private var palette
     @State private var canonicalImage: UIImage?
     @State private var loadedCacheKey: AidenBotCanonicalAvatarCacheKey?
 
@@ -1038,7 +1041,8 @@ struct AidenBotCanonicalAvatarView: View {
                 avatar: avatar.semantic,
                 name: name,
                 size: size,
-                isDecorative: isDecorative
+                isDecorative: isDecorative,
+                working: working
             )
             if let canonicalImage {
                 Image(uiImage: canonicalImage)
@@ -1048,6 +1052,13 @@ struct AidenBotCanonicalAvatarView: View {
                     .clipShape(Circle())
                     .accessibilityHidden(isDecorative)
                     .accessibilityLabel(isDecorative ? "" : "\(name) Bot photo")
+            }
+            // A photo can't glance; a small glance mark says the Bot is working.
+            if working, canonicalImage != nil {
+                AidenActivityMark(mark: .glance, size: size * 0.32, color: palette.foreground)
+                    .padding(size * 0.04)
+                    .background(palette.canvas, in: Circle())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
         .frame(width: size, height: size)
