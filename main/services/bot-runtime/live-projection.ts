@@ -413,9 +413,10 @@ export function livePartialText(docs: Readonly<Record<string, unknown>>): string
  * The turn's identity, or null when no run: its first input. A queued follow-up
  * starts a new run (fresh inputs) while `pi.live.run` stays present; steering
  * appends to the inputs and a tool round hands the run to a new generation
- * task, so neither changes the key (and neither is a new turn).
+ * task, so neither changes the key (and neither is a new turn). Remote
+ * projectors scope a run's start time and Stop by the same key.
  */
-function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
+export function liveRunKey(docs: Readonly<Record<string, unknown>>): string | null {
   const live = docs["pi.live"] as { run?: { inputs?: unknown } } | undefined;
   const run = live?.run;
   if (run === undefined) return null;

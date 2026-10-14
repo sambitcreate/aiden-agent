@@ -23,6 +23,7 @@ import {
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
 import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
+import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import {
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
@@ -208,6 +209,43 @@ test("Stop ends a running turn but leaves an interrupted one for Dismiss", async
   const view = await sessionService(paused.runtime).stop(DEVICE_ID, BOT_ID, "stop-request-0002", {});
   assert.equal(paused.calls.abort, 0, "a paused turn is not aborted by Stop");
   assert.equal(view.state, "interrupted");
+});
+
+test("a phone's Stop reads Stopping wherever the Bot is open, a Stop that fails takes it back, and Resume is the runtime's to announce", async () => {
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let refuse = false;
+  const intents = createBotTurnIntents();
+  const heard: string[] = [];
+  intents.onIntent((botId, intent) => void heard.push(`${intent} ${botId}`));
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({
+      ...fake.runtime,
+      async stop(botId: string) {
+        if (refuse) throw new Error("The Bot is held by another Aiden.");
+        return fake.runtime.stop(botId);
+      },
+    }),
+    turnIntents: intents,
+  });
+  try {
+    assert.equal((await service.stop(DEVICE_ID, BOT_ID, "stop-request-0101", {})).state, "idle");
+    assert.deepEqual(heard, [`stopping ${BOT_ID}`]);
+    await service.stop(DEVICE_ID, BOT_ID, "stop-request-0101", {});
+    assert.deepEqual(heard, [`stopping ${BOT_ID}`], "a replayed request is not a second press");
+
+    fake.setState({ kind: "running", submissionId: "sub_2" });
+    refuse = true;
+    await assert.rejects(service.stop(DEVICE_ID, BOT_ID, "stop-request-0102", {}));
+    assert.deepEqual(heard.slice(1), [`stopping ${BOT_ID}`, `stopCancelled ${BOT_ID}`]);
+
+    // The session announces a Resume it carried out (`onResumed`); the route never guesses ahead of it.
+    fake.setState({ kind: "interrupted", submissionId: "sub_2" });
+    assert.equal((await service.resume(DEVICE_ID, BOT_ID, RESUME_KEY, {})).state, "running");
+    assert.equal(heard.length, 3);
+  } finally {
+    await service.close();
+  }
 });
 
 test("a session reopened on the host gets a new epoch, so clients refetch instead of folding", async () => {

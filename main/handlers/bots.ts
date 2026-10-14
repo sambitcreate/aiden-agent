@@ -17,6 +17,8 @@ import {
   dismissBotConnection,
 } from "../services/bot-runtime/bot-session-main.js";
 import { botStarter } from "../services/bot-runtime/bot-starter-main.js";
+import { stopWithIntents } from "../services/bot-runtime/bot-turn-intents.js";
+import { botTurnIntents } from "../services/bot-runtime/bot-turn-intents-main.js";
 import {
   parseAidenRemoteBotAvatarUploadRequest,
   type AidenRemoteBotAvatarUploadRequest,
@@ -209,13 +211,8 @@ export function registerBotHandlers(): void {
   });
   ipcMain.handle("bots:stop", async (_event, id: unknown) => {
     const botId = parseBotId(id);
-    botLiveProjection().notifyStopping(botId);
-    try {
-      return await (await botSessionRuntime()).stop(botId);
-    } catch (error) {
-      botLiveProjection().cancelStopping(botId);
-      throw error;
-    }
+    // "Stopping" in every open chat, on the Mac and on phones; taken back if the Stop fails.
+    return stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
   });
   ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, access } = parseBotCreateFromPreset(input);

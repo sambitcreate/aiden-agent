@@ -86,6 +86,7 @@ import type { BotApprovals } from "./bot-runtime/bot-approvals.js";
 import type { BotQuestions } from "./bot-runtime/bot-questions.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
 import { BotSessionError, type BotSessionState } from "./bot-runtime/bot-session-service.js";
+import { stopWithIntents, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { livePartialText, projectBotTranscript } from "./bot-runtime/live-projection.js";
 import {
   botRoutineLabel,
@@ -130,6 +131,12 @@ export interface AidenRemoteBotSessionServiceOptions {
   questions?: Pick<BotQuestions, "pending" | "answer" | "onChange">;
   /** The Bot's waiting tool approvals (the same bridge the desktop answers through). */
   approvals?: Pick<BotApprovals, "pending" | "decide" | "onChange">;
+  /**
+   * Stop and Resume from any surface (`botTurnIntents`). A phone's Stop is
+   * announced here, and taken back if it fails, so open desktop chats read
+   * "Stopping" too. Resume is announced by the session itself (`onResumed`).
+   */
+  turnIntents?: Pick<BotTurnIntents, "announce" | "onIntent">;
   routines?: Pick<BotRoutineService, "list" | "create" | "update" | "delete">;
   presets?: {
     list(): readonly BotPreset[];
@@ -1145,8 +1152,13 @@ export class AidenRemoteBotSessionService {
           const requestId = `remote:${deviceId}:${key}`;
           if (action === "resume") return projectBotSessionState(await runtime.resume(bot.id, requestId));
           if (action === "dismiss") return projectBotSessionState(await runtime.dismiss(bot.id, requestId));
-          // Stop ends a running turn; a paused one belongs to Dismiss.
-          return projectBotSessionState(await runtime.stop(bot.id));
+          // Stop ends a running turn; a paused one belongs to Dismiss. Every
+          // surface reads "Stopping" until the run ends, or until the Stop fails.
+          const stop = () => runtime.stop(bot.id);
+          const state = this.options.turnIntents
+            ? await stopWithIntents(this.options.turnIntents, bot.id, stop)
+            : await stop();
+          return projectBotSessionState(state);
         },
       );
       await this.afterAction(bot.id);

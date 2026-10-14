@@ -43,6 +43,8 @@ import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/te
 import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
+import { botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import {
@@ -342,6 +344,12 @@ wireBotAttention({
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
+// A Stop from any surface (the Mac or a phone), a Stop that failed, and a
+// Resume the session carried out reach open desktop chats as "Stopping",
+// back to the work, and "Picking up where it left off". Remote projectors
+// listen to the same emitter (`aiden-remote-service-main.ts`).
+wireBotLiveTurnIntents({ intents: botTurnIntents, projection: botLiveProjection });
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
@@ -392,7 +400,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       unbindTelegram,
       eraseBotData,
     ],
-    onResumed: (botId) => botLiveProjection().notifyResuming(botId),
+    // Announced only here, after the session resumed, never by a route ahead of `resume`.
+    onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
