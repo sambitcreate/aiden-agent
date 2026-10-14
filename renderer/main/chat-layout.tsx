@@ -23,10 +23,17 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
 import { isStudioPath } from "../shared/studio-routes";
+import { isBotsPath, rememberRoute } from "../lib/bot-routes";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const href = useRouterState({ select: (state) => state.location.href });
+  // ‹ in the Bots sidebar returns to the last page outside Bots (spec §9).
+  React.useEffect(() => rememberRoute(href), [href]);
+  // The workspace Environment, Quick View and device mini player are hidden, not
+  // closed, on Bots pages: the Bot has its own panel, and leaving restores them.
+  const botsSurface = isBotsPath(pathname);
   // A paired host's chat is selected separately so its ID never matches a local chat.
   const activeRemoteChat = React.useMemo(
     () =>
@@ -103,7 +110,7 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface}>
+      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface || botsSurface}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />

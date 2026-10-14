@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider } from "../../lib/command-system";
 import { BotChatRoute } from "../bot-chat-route";
+import { BotPanelProvider } from "./bot-panel-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -30,6 +31,8 @@ function BotChatFromParams() {
 
 export const BOT_TEST_PATHS = [
   "/",
+  "/profile",
+  "/scheduled",
   "/bots",
   "/bots/$botId",
   "/bots/$botId/chat",
@@ -43,7 +46,7 @@ export const BOT_TEST_PATHS = [
  */
 export async function mountWithBotRouter(
   children: React.ReactNode,
-  options: { initialPath?: string; queryClient?: QueryClient } = {},
+  options: { initialPath?: string; queryClient?: QueryClient; sidebar?: React.ReactNode } = {},
 ) {
   const harness = createBotRouterHarness(children, options);
   await harness.router.load();
@@ -53,10 +56,19 @@ export async function mountWithBotRouter(
 
 function createBotRouterHarness(
   children: React.ReactNode,
-  options: { initialPath?: string; queryClient?: QueryClient } = {},
+  options: { initialPath?: string; queryClient?: QueryClient; sidebar?: React.ReactNode } = {},
 ) {
   const queryClient = options.queryClient ?? createBotTestQueryClient();
-  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  // As in the app: the Bot panel's state outlives route changes, and a sidebar
+  // (when a test passes one) stays mounted beside the routed page.
+  const rootRoute = createRootRoute({
+    component: () => (
+      <BotPanelProvider>
+        {options.sidebar}
+        <Outlet />
+      </BotPanelProvider>
+    ),
+  });
   const routes = BOT_TEST_PATHS.map((path) =>
     createRoute({
       getParentRoute: () => rootRoute,

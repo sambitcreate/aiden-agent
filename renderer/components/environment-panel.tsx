@@ -1753,7 +1753,8 @@ export function EnvironmentWorkbench({
 }: React.PropsWithChildren<{
   /**
    * Hides the Environment and Quick View surfaces without changing whether
-   * they are open, for content that is not on this Mac (a paired host's chat).
+   * they are open, for content that is not on this Mac (a paired host's chat)
+   * and for Bots pages, which have their own panel.
    */
   suppressed?: boolean;
 }>) {

@@ -9,6 +9,8 @@ import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context"
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
+import { BotPanelProvider, useBotPanel } from "./bots/bot-panel-context";
+import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -48,9 +50,11 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <CommandSystemProvider>
-            <RootContent />
-          </CommandSystemProvider>
+          <BotPanelProvider>
+            <CommandSystemProvider>
+              <RootContent />
+            </CommandSystemProvider>
+          </BotPanelProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
@@ -61,6 +65,7 @@ function RootContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
+  const botPanel = useBotPanel();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
@@ -138,6 +143,13 @@ function RootContent() {
   useCommandHandler(
     "environment.toggle",
     () => {
+      // In a Bot chat the shortcut is the Bot panel's; the workspace panel stays as it is.
+      const target = environmentToggleTarget(pathname);
+      if (target === "bot-panel") {
+        botPanel.toggle();
+        return;
+      }
+      if (target === "none") return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
@@ -149,6 +161,8 @@ function RootContent() {
   useCommandHandler(
     "quick-view.toggle",
     () => {
+      // Quick View is suppressed on Bots pages; toggling it there would change hidden state.
+      if (isBotsPath(pathname)) return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
