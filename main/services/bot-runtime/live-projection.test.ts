@@ -1232,6 +1232,48 @@ test("the last reply time ignores the person's newer messages and replies with n
   );
 });
 
+test("the last reply time falls back past a reply that has no time", () => {
+  assert.equal(
+    botLastReplyAt([
+      { id: "a1", type: "assistant", text: "Older reply.", toolCalls: [], stopReason: "stop", at: 10 },
+      { id: "a2", type: "assistant", text: "Newer reply with no time.", toolCalls: [], stopReason: "stop" },
+    ]),
+    10,
+  );
+});
+
+test("a Bot held by another process is never reported as needing the person", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      state: async () => ({ kind: "unavailable", reason: "held_by_live_process" }),
+      approvalPending: () => true,
+    },
+  });
+  try {
+    const summary = await live.projection.summary("bot:a");
+    assert.equal(summary.needsYou, false);
+    assert.equal(summary.lastReplyAt, null);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a message the person sent after the last reply does not move the last reply time", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), slowAnswer()], { tokensPerSecond: 40 }));
+  try {
+    const first = await live.service.send("bot:a", { text: "One", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    const answered = await live.projection.summary("bot:a");
+    await live.service.send("bot:a", { text: "Two", requestId: "desk-2" });
+    const waiting = await live.projection.summary("bot:a");
+    assert.equal(waiting.preview, "Two", "the newest message is the person's");
+    assert.equal(waiting.lastReplyAt, answered.lastReplyAt);
+    assert.equal(typeof waiting.lastReplyAt, "number");
+  } finally {
+    await live.close();
+  }
+});
+
 test("a list summary says when the last reply arrived and whether the Bot is waiting on the person", async () => {
   let waiting = false;
   const live = await start(createFauxModels([fauxAssistantMessage("Here is your meal plan.")]), {

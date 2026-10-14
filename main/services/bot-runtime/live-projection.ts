@@ -1083,8 +1083,9 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     },
 
     async summary(botId) {
-      // Read from the same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYou = (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
+      // Read right before each return, so a slow summary never reports a stale wait. It uses the
+      // same sources as the chat, so a row agrees with it whether or not a chat is open.
+      const needsYouNow = () => (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1094,7 +1095,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou,
+          needsYou: needsYouNow(),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1110,7 +1111,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         preview: preview?.text ?? null,
         updatedAt: preview?.at ?? null,
         state,
-        needsYou,
+        needsYou: needsYouNow(),
         lastReplyAt: botLastReplyAt(entries),
       };
     },
