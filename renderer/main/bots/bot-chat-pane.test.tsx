@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
+import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 
@@ -879,8 +880,67 @@ test("a queued message shows faded as Queued, and Remove withdraws that one subm
   });
   assert.ok(await screen.findByText("Also add dessert"));
   assert.ok(screen.getByText("Queued"));
-  fireEvent.click(screen.getByRole("button", { name: "Remove queued message" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove queued message: Also add dessert" }));
   await waitFor(() =>
     assert.deepEqual(calls.find((call) => call.channel === "bots:withdraw")?.args, [{ botId: "bot-1", submissionId: "8" }]),
   );
+});
+
+const QUEUED_BASE = {
+  entries: [userEntry("u1", "Plan dinners")],
+  state: { kind: "running", submissionId: "s1" } as const,
+};
+
+test("Remove on a message that already started says it stays", async () => {
+  // The test DOM does not mount sonner's viewport, so observe the toast the person would be shown.
+  const shown: string[] = [];
+  const original = toast.info;
+  toast.info = ((message: unknown) => {
+    shown.push(String(message));
+    return "toast";
+  }) as typeof toast.info;
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () =>
+        snapshot({ ...QUEUED_BASE, queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }] }),
+      "bots:withdraw": () => "started",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Remove queued message: Also add dessert" }));
+    await waitFor(() => assert.deepEqual(shown, ["That message already started, so it stays."]));
+    assert.equal(calls.filter((call) => call.channel === "bots:withdraw").length, 1);
+  } finally {
+    toast.info = original;
+  }
+});
+
+test("a queued message leaves the page when the queue event empties it", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ ...QUEUED_BASE, queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }] }),
+  });
+  assert.ok(await screen.findByText("Also add dessert"));
+  emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "queued", queued: [] });
+  await waitFor(() => assert.equal(document.body.textContent?.includes("Also add dessert"), false));
+  assert.equal(screen.queryByText("Queued"), null);
+});
+
+test("each queued message has its own Remove, and removing one moves focus on: the next Remove, else the composer", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        ...QUEUED_BASE,
+        queued: [
+          { submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 },
+          { submissionId: "9", mode: "followUp", text: "And a drinks list", imageCount: 0 },
+        ],
+      }),
+    "bots:withdraw": () => "withdrawn",
+  });
+  const first = await screen.findByRole("button", { name: "Remove queued message: Also add dessert" });
+  const second = screen.getByRole("button", { name: "Remove queued message: And a drinks list" });
+  first.focus();
+  fireEvent.click(first);
+  await waitFor(() => assert.equal(document.activeElement, second));
+  fireEvent.click(second);
+  await waitFor(() => assert.equal((document.activeElement as HTMLElement | null)?.getAttribute("placeholder"), "Ask Planner"));
 });

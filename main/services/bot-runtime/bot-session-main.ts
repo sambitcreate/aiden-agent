@@ -338,6 +338,7 @@ export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
     conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     state: async (botId) => (await botSessionRuntime()).state(botId),
+    quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,

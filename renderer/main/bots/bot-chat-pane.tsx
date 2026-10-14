@@ -290,16 +290,35 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   );
 }
 
-/** A follow-up waiting for the running turn: a faded bubble, "Queued", and Remove. */
-function BotQueuedBubble({ text, removing, onRemove }: { text: string; removing: boolean; onRemove(): void }) {
+const QUEUED_PREVIEW_CHARS = 40;
+
+/** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove. */
+function BotQueuedBubble({
+  text,
+  removing,
+  onRemove,
+}: {
+  text: string;
+  removing: boolean;
+  onRemove(button: HTMLButtonElement): void;
+}) {
+  const oneLine = text.replace(/\s+/gu, " ").trim();
+  const preview = oneLine.length > QUEUED_PREVIEW_CHARS ? `${oneLine.slice(0, QUEUED_PREVIEW_CHARS).trimEnd()}…` : oneLine;
   return (
     <div className="flex flex-col items-end gap-1" data-bot-queued>
-      <div className="max-w-full opacity-60">
+      <div className="max-w-full [&_.bg-control]:bg-[color-mix(in_srgb,var(--color-control)_55%,transparent)]">
         <SafeMessageBubble role="user" content={text} showCopy={false} />
       </div>
       <div className="flex items-center gap-2 text-small text-tertiary">
         <span>Queued</span>
-        <Button variant="transparent" size="small" disabled={removing} aria-label="Remove queued message" onClick={onRemove}>
+        <Button
+          variant="transparent"
+          size="small"
+          disabled={removing}
+          aria-label={`Remove queued message: ${preview}`}
+          data-bot-queued-remove
+          onClick={(event) => onRemove(event.currentTarget)}
+        >
           Remove
         </Button>
       </div>
@@ -332,9 +351,9 @@ function TranscriptEntries({
   running: boolean;
   level: BotChatActivityLevel;
   queued: readonly BotQueuedMessage[];
-  removing: string | null;
+  removing: ReadonlySet<string>;
   retrying: boolean;
-  onRemoveQueued(submissionId: string): void;
+  onRemoveQueued(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection(pluginId: string): void;
   onOpenFile(path: string): void;
@@ -381,8 +400,8 @@ function TranscriptEntries({
               <BotQueuedBubble
                 key={row.id}
                 text={row.text}
-                removing={removing === row.submissionId}
-                onRemove={() => onRemoveQueued(row.submissionId)}
+                removing={removing.has(row.submissionId)}
+                onRemove={(button) => onRemoveQueued(row.submissionId, button)}
               />
             );
           case "stopped":
@@ -457,7 +476,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
   const [retrying, setRetrying] = React.useState(false);
-  const [removing, setRemoving] = React.useState<string | null>(null);
+  const [removing, setRemoving] = React.useState<ReadonlySet<string>>(new Set());
   const [pausedBusy, setPausedBusy] = React.useState(false);
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -681,15 +700,23 @@ export function BotChatPane({ botId }: { botId: string }) {
     });
   };
 
-  const removeQueued = async (submissionId: string) => {
-    setRemoving(submissionId);
+  const removeQueued = async (submissionId: string, button: HTMLButtonElement) => {
+    // The row leaves the page, so keyboard focus moves on first: the next Remove, else the composer.
+    const removes = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"));
+    const next = removes[removes.indexOf(button) + 1];
+    (next ?? composerRef.current)?.focus();
+    setRemoving((ids) => new Set(ids).add(submissionId));
     try {
       const result = await botsApi.withdraw(current.id, submissionId);
       if (result === "started") toast.info("That message already started, so it stays.");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t remove that message."));
     } finally {
-      setRemoving(null);
+      setRemoving((ids) => {
+        const rest = new Set(ids);
+        rest.delete(submissionId);
+        return rest;
+      });
     }
   };
 
@@ -786,7 +813,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           level={chatActivity.level}
           queued={snapshot.queued}
           removing={removing}
-          onRemoveQueued={(id) => void removeQueued(id)}
+          onRemoveQueued={(id, button) => void removeQueued(id, button)}
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}

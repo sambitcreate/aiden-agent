@@ -16,6 +16,7 @@ import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
   liveBotActivity,
+  liveQueuedInputIds,
   liveQueuedMessages,
   projectBotTranscript,
   type BotLiveProjection,
@@ -60,6 +61,7 @@ async function start(
   projection = createBotLiveProjection({
     conversation: (botId) => service.conversation(botId),
     state: (botId) => service.state(botId),
+    quietInputs: (botId, ids) => service.quietInputs(botId, ids),
     ...options.projection,
   });
   return {
@@ -974,44 +976,98 @@ test("Remove on a queued message whose turn already started withdraws nothing", 
   }
 });
 
-test("queued routine and hidden prompts are not shown as the person's messages", () => {
+test("queued inputs are listed by the person's ids only; passive writes never show", () => {
   const notice = (data: unknown) => ({ id: 1, mode: "write", entry: { kind: "aiden.bot-notice", data } });
-  assert.deepEqual(
-    liveQueuedMessages({
-      "pi.inbox": {
-        items: [
-          notice({ notice: "routine", label: "Morning check-in", requestId: "routine:r1:1" }),
-          { id: 2, mode: "followUp", content: "Check in on today" },
-          notice({ notice: "hidden_input", requestId: "intro:1" }),
-          { id: 4, mode: "followUp", content: "Introduce yourself" },
-          { id: 5, mode: "steer", content: [{ type: "text", text: "Make it vegetarian" }, { type: "image", data: "AA", mimeType: "image/png" }] },
-        ],
-      },
-    }),
-    [{ submissionId: "5", mode: "steer", text: "Make it vegetarian", imageCount: 1 }],
-  );
+  const docs = {
+    "pi.inbox": {
+      items: [
+        notice({ notice: "routine", label: "Morning check-in", requestId: "routine:r1:1" }),
+        { id: 2, mode: "followUp", content: "Check in on today" },
+        { id: 4, mode: "followUp", content: "Introduce yourself" },
+        { id: 5, mode: "steer", content: [{ type: "text", text: "Make it vegetarian" }, { type: "image", data: "AA", mimeType: "image/png" }] },
+      ],
+    },
+  };
+  assert.deepEqual(liveQueuedInputIds(docs), ["2", "4", "5"]);
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["2", "4"])), [
+    { submissionId: "5", mode: "steer", text: "Make it vegetarian", imageCount: 1 },
+  ]);
   assert.deepEqual(liveQueuedMessages({}), []);
 });
 
-test("a routine or hidden prompt waiting behind a running reply never appears as a queued message", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("routine done"), fauxAssistantMessage("hello")], {
-    tokensPerSecond: 40,
+/** Wait, outside the projection, until the conversation's `pi.inbox` satisfies `predicate`. */
+async function waitForInbox(
+  service: BotSessionRuntime,
+  botId: string,
+  predicate: (items: Array<{ mode?: string }>) => boolean,
+): Promise<void> {
+  const watch = await (await service.conversation(botId)).watch(ctx);
+  const items = () => ((watch.value.docs["pi.inbox"] as { items?: Array<{ mode?: string }> } | undefined)?.items ?? []);
+  watch.start(async () => undefined);
+  try {
+    await waitFor(() => predicate(items()), { what: "the inbox" });
+  } finally {
+    await watch.stop();
+  }
+}
+
+const queuedTexts = (events: readonly BotLiveEvent[]) =>
+  events.flatMap((event) => (event.type === "queued" ? event.queued.map((item) => item.text) : []));
+
+test("a routine queued behind a reply that calls a tool is never listed, even once its notice is placed", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
   });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(10)),
+      fauxAssistantMessage("routine reply"),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the tool to run" });
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await waitForInbox(live.service, "bot:a", (items) => items.some((item) => item.mode === "followUp"));
+    release();
+    await waitFor(() => visibleText(tape.view).includes("assistant:routine reply"), { what: "the routine's reply" });
+    await waitFor(() => tape.view?.state.kind === "idle", { what: "the Bot to settle" });
+    assert.deepEqual(queuedTexts(tape.events), []);
+    assert.deepEqual(tape.view?.queued, []);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a notice left behind by Stop does not hide the person's next queued message", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
-    await live.service.send("bot:a", { text: "Plan dinners", requestId: "desk-1" });
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
     await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
-    await live.service.send("bot:a", { text: "Check in", requestId: "routine:r1:1", label: "Morning check-in" });
-    await live.service.send("bot:a", { text: "Introduce yourself", requestId: "intro:1", hidden: true });
-    await live.service.send("bot:a", { text: "Also dessert", requestId: "desk-2", whenBusy: "steer" });
-    await waitFor(() => tape.view?.queued.some((item) => item.text === "Also dessert") === true, { what: "the steer" });
-    assert.deepEqual(
-      tape.events.flatMap((event) => (event.type === "queued" ? event.queued.map((item) => item.text) : [])).filter((text) => text !== "Also dessert"),
-      [],
-    );
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await live.service.stop("bot:a");
+    await waitFor(() => tape.view?.state.kind === "idle", { what: "the stop" });
+    await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the next reply to stream" });
+    await live.service.send("bot:a", { text: "three", requestId: "desk-3", whenBusy: "followUp" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "three") === true, { what: "the queued message" });
+    assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
     await live.service.stop("bot:a");
     unsubscribe();
   } finally {

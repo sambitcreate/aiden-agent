@@ -498,30 +498,39 @@ export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | 
   return at(inputAnswered(input.entries) ? "thinking" : "preparing");
 }
 
+/** The submission ids of inputs (not passive writes) waiting in `pi.inbox`. */
+export function liveQueuedInputIds(docs: Readonly<Record<string, unknown>>): string[] {
+  const items = (docs["pi.inbox"] as { items?: unknown } | undefined)?.items;
+  if (!Array.isArray(items)) return [];
+  const ids: string[] = [];
+  for (const value of items) {
+    const item = value as { id?: unknown; mode?: unknown };
+    if (item.mode !== "steer" && item.mode !== "followUp") continue;
+    if (typeof item.id === "number" || typeof item.id === "string") ids.push(String(item.id));
+  }
+  return ids;
+}
+
 /**
- * Inputs waiting in `pi.inbox`, as the person sent them. A routine's input and
- * the hidden self-intro are preceded by their notice write and are not shown.
+ * Inputs waiting in `pi.inbox` that the person sent. `quiet` holds the ids of
+ * routine and hidden (self-intro) submissions, which are decided by their
+ * request id and never shown.
  */
-export function liveQueuedMessages(docs: Readonly<Record<string, unknown>>): BotQueuedMessage[] {
+export function liveQueuedMessages(
+  docs: Readonly<Record<string, unknown>>,
+  quiet: ReadonlySet<string> = new Set(),
+): BotQueuedMessage[] {
   const items = (docs["pi.inbox"] as { items?: unknown } | undefined)?.items;
   if (!Array.isArray(items)) return [];
   const queued: BotQueuedMessage[] = [];
-  let skipNext = false;
   for (const value of items) {
-    const item = value as { id?: unknown; mode?: unknown; content?: unknown; entry?: { kind?: unknown; data?: unknown } };
-    if (item.mode === "write") {
-      const notice = (item.entry?.data as { notice?: unknown } | undefined)?.notice;
-      if (item.entry?.kind === BOT_NOTICE_ENTRY_KIND && (notice === "routine" || notice === "hidden_input")) skipNext = true;
-      continue;
-    }
+    const item = value as { id?: unknown; mode?: unknown; content?: unknown };
     if (item.mode !== "steer" && item.mode !== "followUp") continue;
-    if (skipNext) {
-      skipNext = false;
-      continue;
-    }
+    if (typeof item.id !== "number" && typeof item.id !== "string") continue;
+    const submissionId = String(item.id);
     const content = item.content as UserContent | undefined;
-    if (content === undefined || (typeof item.id !== "number" && typeof item.id !== "string")) continue;
-    queued.push({ submissionId: String(item.id), mode: item.mode, text: textOf(content), imageCount: imageCount(content) });
+    if (content === undefined || quiet.has(submissionId)) continue;
+    queued.push({ submissionId, mode: item.mode, text: textOf(content), imageCount: imageCount(content) });
   }
   return queued;
 }
@@ -539,6 +548,12 @@ export interface BotLiveProjectionDeps {
   state(botId: string): Promise<BotSessionState>;
   /** The question the Bot is waiting on right now, if any. */
   question?(botId: string): BotPendingQuestion | null;
+  /**
+   * Which of these queued submission ids are not the person's own messages (a
+   * routine's input or the hidden self-intro). Decided from durable request
+   * ids; a failure hides them until the next frame.
+   */
+  quietInputs?(botId: string, submissionIds: readonly string[]): Promise<ReadonlySet<string>>;
   /** Whether a tool approval is waiting on the person. */
   approvalPending?(botId: string): boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
@@ -603,6 +618,8 @@ interface Feed {
   question: BotPendingQuestion | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
+  /** Queued submission ids already classified as quiet (true) or the person's (false). */
+  inputKinds: Map<string, boolean>;
   /** When the current running turn started. */
   startedAt: number;
   stopping: boolean;
@@ -769,6 +786,25 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     for (const entry of next.slice(previous.length)) emit(feed, { type: "entry", entry });
   }
 
+  /** The person's queued messages, classifying each new queued id once. */
+  async function queuedFor(feed: Feed, docs: Readonly<Record<string, unknown>>): Promise<BotQueuedMessage[]> {
+    const ids = liveQueuedInputIds(docs);
+    for (const id of [...feed.inputKinds.keys()]) if (!ids.includes(id)) feed.inputKinds.delete(id);
+    const unknown = ids.filter((id) => !feed.inputKinds.has(id));
+    if (unknown.length > 0 && deps.quietInputs) {
+      try {
+        const quiet = await deps.quietInputs(feed.botId, unknown);
+        for (const id of unknown) feed.inputKinds.set(id, quiet.has(id));
+      } catch (error) {
+        report(feed.botId, error);
+        // Unclassified ids stay hidden until the next frame can decide.
+        return liveQueuedMessages(docs, new Set(unknown));
+      }
+    }
+    const quiet = new Set([...feed.inputKinds].filter(([, isQuiet]) => isQuiet).map(([id]) => id));
+    return liveQueuedMessages(docs, quiet);
+  }
+
   async function onFrame(feed: Feed, entries: readonly EntryRecord[], docs: Readonly<Record<string, unknown>>) {
     if (feed.ended) return;
     feed.frame = { entries, docs };
@@ -784,7 +820,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.partial = partial;
       emit(feed, { type: "partial", text: partial });
     }
-    const queued = liveQueuedMessages(docs);
+    const queued = await queuedFor(feed, docs);
     if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
       feed.queued = queued;
       emit(feed, { type: "queued", queued });
@@ -846,7 +882,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
         activity: null,
-        queued: liveQueuedMessages(initial.docs),
+        queued: [],
+        inputKinds: new Map(),
         startedAt: now(),
         stopping: false,
         resuming: false,
@@ -860,6 +897,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       };
       if (feed.state.kind === "running") startRun(feed);
       feed.activity = computeActivity(feed);
+      feed.queued = await queuedFor(feed, initial.docs);
       feeds.set(botId, feed);
       watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
       void watch.closed.then(() => {

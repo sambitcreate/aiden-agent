@@ -148,22 +148,44 @@ test("a queued follow-up is a faded row at the end, and a steer is a normal bubb
   ]);
 });
 
-test("a steer that lands before a running tool's result keeps that step in its turn, not failed", () => {
+test("a steer placed after the round's tool results keeps the step ok and reads in order", () => {
+  // pi-durable places a steer at the post-tools boundary: result first, then the steer, then the reply continues.
   const entries = [
     userAt("u1", "Find flights", 1_000),
     step("a1", ""),
-    user("u2", "Make it cheap"),
     { ...result("a1"), at: 4_000 } as BotTranscriptEntry,
+    user("u2", "Make it cheap"),
     answerAt("a2", "TAP on Friday.", 9_000),
   ];
   const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
   assert.deepEqual(
     rows.map((row) => (row.kind === "user" ? `user:${row.text}` : row.kind)),
-    ["user:Find flights", "user:Make it cheap", "recap", "assistant"],
+    ["user:Find flights", "recap", "user:Make it cheap", "assistant"],
   );
   const recap = rows.find((row) => row.kind === "recap");
   assert.ok(recap?.kind === "recap");
   assert.deepEqual(recap.steps.map((s) => [s.kind, s.status]), [["searching", "ok"]]);
+});
+
+test("a new message after a reply stopped mid tool call starts its own turn; the stopped line stays with the first", () => {
+  const aborted: BotTranscriptEntry = {
+    id: "a1",
+    type: "assistant",
+    text: "",
+    toolCalls: [{ id: "a1-call", name: "web_search", kind: "searching", label: "Searched the web" }],
+    stopReason: "aborted",
+    at: 2_000,
+  };
+  const entries = [userAt("u1", "Find flights", 1_000), aborted, userAt("u2", "Never mind, hotels", 3_600_000), answerAt("a3", "Hotel X.", 3_601_000)];
+  const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
+  assert.deepEqual(
+    rows.map((row) => (row.kind === "user" ? `user:${row.text}` : row.kind)),
+    ["user:Find flights", "recap", "stopped", "user:Never mind, hotels", "assistant"],
+  );
+  const recap = rows.find((row) => row.kind === "recap");
+  assert.ok(recap?.kind === "recap");
+  assert.equal(recap.durationMs, 1_000);
+  assert.deepEqual(recap.steps.map((s) => s.status), ["stopped"]);
 });
 
 test("a new message after a finished tool starts a new turn with its own recap", () => {

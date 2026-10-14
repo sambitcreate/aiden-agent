@@ -215,6 +215,8 @@ test("a Bot update may carry an exact chat activity choice, and nothing else new
 test("Remove names an exact Bot and one numeric submission id", () => {
   assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "42" }), { botId: "bot-1", submissionId: "42" });
   assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42; drop" }), /submission/u);
+  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "9007199254740993" }), /submission/u, "too long to stay exact");
+  assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "999999999999999" }).submissionId, "999999999999999");
   assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42", extra: true }), /withdraw fields/u);
   assert.throws(() => parseBotWithdraw({ botId: "../x", submissionId: "1" }), /bot id/u);
 });

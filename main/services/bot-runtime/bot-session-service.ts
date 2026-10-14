@@ -36,6 +36,7 @@ import {
   type BotRegistry,
 } from "./bot-extension.js";
 import { writeFileAtomic } from "../durable-fs.js";
+import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import {
   createBotHarnessHost,
   isBotHarnessHostUnavailable,
@@ -169,6 +170,12 @@ export interface BotSessionRuntime extends BotSessionService {
   /** The Bot's conversation, opened lazily (for live projection). */
   conversation(botId: string): Promise<Conversation>;
   /**
+   * Of these queued submission ids, the ones that are not the person's own
+   * messages: a routine's input and the hidden self-intro, known from their
+   * durable request ids.
+   */
+  quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
    * Compact the Bot's one conversation now (Telegram `/new`), focused on what
    * the person shared and what the Bot promised (`compactionInstructions`).
    * Resolves once the compaction is admitted; it summarizes in the background.
@@ -291,6 +298,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   });
   const host: BotHarnessHost | null = isBotHarnessHostUnavailable(hostOrUnavailable) ? null : hostOrUnavailable;
   const serialize = createKeyedQueue();
+  /** Submissions sent with `hidden`, whatever their request id. */
+  const hiddenSubmissions = new Set<string>();
   /** Outcomes of resume/dismiss requests, so a retried request replays its answer. */
   const answered = new Map<string, BotSessionState>();
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
@@ -426,6 +435,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return (await openBot(botId)).conversation;
     },
 
+    async quietInputs(botId, submissionIds) {
+      const quiet = new Set<string>();
+      if (submissionIds.length === 0 || deleted.has(botId)) return quiet;
+      const opened = await requireHost().open(botId);
+      const inspection = await opened.harness.inspect(ctx);
+      const wanted = new Set(submissionIds);
+      for (const record of inspection.submissions) {
+        const id = String(record.id);
+        if (!wanted.has(id)) continue;
+        const requestId = record.requestId ?? "";
+        if (requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(id)) {
+          quiet.add(id);
+        }
+      }
+      return quiet;
+    },
+
     state(botId) {
       return currentState(botId);
     },
@@ -458,6 +484,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           },
           ctx,
         );
+        if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
         return { submissionId: String(submission.id), deduped: false };
@@ -516,10 +543,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     withdraw(botId, submissionId) {
       return serialize(botId, async () => {
+        const id = Number(submissionId);
+        // A rounded id could name a different submission.
+        if (!Number.isSafeInteger(id)) return "gone";
         await openBot(botId);
         const opened = await requireHost().open(botId);
         const result = await opened.harness.abortSubmission(
-          Number(submissionId) as SubmissionId,
+          id as SubmissionId,
           ctx,
           opened.conversation.id,
         );
@@ -549,6 +579,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       if (deleted.has(botId)) return { kind: "interrupted", settled: true };
       const opened = await requireHost().open(botId);
       const id = Number(submissionId) as SubmissionId;
+      if (!Number.isSafeInteger(id)) return { kind: "failed", error: "This reply is no longer tracked." };
       const submission = await opened.harness.submission(id, ctx);
       if (submission === undefined) return { kind: "failed", error: "This reply is no longer tracked." };
       // `wait()` would start a paused scheduler, which is Resume's decision.

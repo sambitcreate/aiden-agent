@@ -207,7 +207,8 @@ export function parseBotSessionAction(
   return { botId: parseBotId(fields.botId), requestId: fields.requestId };
 }
 
-const BOT_SUBMISSION_ID = /^\d{1,16}$/u;
+/** At most 15 digits, so `Number()` stays exact (below 2^53). */
+const BOT_SUBMISSION_ID = /^\d{1,15}$/u;
 
 /** Remove on a queued message: the Bot and one durable submission id. */
 export function parseBotWithdraw(input: unknown): { botId: string; submissionId: string } {

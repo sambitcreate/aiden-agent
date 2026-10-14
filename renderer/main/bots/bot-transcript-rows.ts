@@ -114,10 +114,8 @@ export function botTranscriptRows(
   for (const entry of entries) {
     switch (entry.type) {
       case "user":
-        // A steer lands while a tool is still running and joins that turn; a
-        // new message after the turn's tools reported back starts a new turn.
-        if (!state.turn?.steps.some((step) => step.status === "running")) beginTurn(entry.id, entry.at);
-        else touch(entry.at);
+        // Every message starts a turn: a steer is placed after the round's tool results, so it never splits a step from its result.
+        beginTurn(entry.id, entry.at);
         rows.push({ kind: "user", id: entry.id, text: entry.text });
         break;
       case "question_answer":
