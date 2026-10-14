@@ -31,6 +31,7 @@ import {
   type BotLiveActivity,
   type BotLiveEvent,
   type BotPendingQuestion,
+  type BotQueuedMessage,
   type BotLiveEventBody,
   type BotLiveSnapshot,
   type BotLiveSummary,
@@ -497,6 +498,34 @@ export function liveBotActivity(input: BotLiveActivityInput): BotLiveActivity | 
   return at(inputAnswered(input.entries) ? "thinking" : "preparing");
 }
 
+/**
+ * Inputs waiting in `pi.inbox`, as the person sent them. A routine's input and
+ * the hidden self-intro are preceded by their notice write and are not shown.
+ */
+export function liveQueuedMessages(docs: Readonly<Record<string, unknown>>): BotQueuedMessage[] {
+  const items = (docs["pi.inbox"] as { items?: unknown } | undefined)?.items;
+  if (!Array.isArray(items)) return [];
+  const queued: BotQueuedMessage[] = [];
+  let skipNext = false;
+  for (const value of items) {
+    const item = value as { id?: unknown; mode?: unknown; content?: unknown; entry?: { kind?: unknown; data?: unknown } };
+    if (item.mode === "write") {
+      const notice = (item.entry?.data as { notice?: unknown } | undefined)?.notice;
+      if (item.entry?.kind === BOT_NOTICE_ENTRY_KIND && (notice === "routine" || notice === "hidden_input")) skipNext = true;
+      continue;
+    }
+    if (item.mode !== "steer" && item.mode !== "followUp") continue;
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    const content = item.content as UserContent | undefined;
+    if (content === undefined || (typeof item.id !== "number" && typeof item.id !== "string")) continue;
+    queued.push({ submissionId: String(item.id), mode: item.mode, text: textOf(content), imageCount: imageCount(content) });
+  }
+  return queued;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Feeds and subscribers                                                     */
 /* ------------------------------------------------------------------------- */
@@ -573,6 +602,7 @@ interface Feed {
   state: BotSessionState;
   question: BotPendingQuestion | null;
   activity: BotLiveActivity | null;
+  queued: BotQueuedMessage[];
   /** When the current running turn started. */
   startedAt: number;
   stopping: boolean;
@@ -618,6 +648,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       state: feed.state,
       question: feed.question,
       activity: feed.activity,
+      queued: feed.queued,
     };
   }
 
@@ -753,6 +784,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.partial = partial;
       emit(feed, { type: "partial", text: partial });
     }
+    const queued = liveQueuedMessages(docs);
+    if (JSON.stringify(queued) !== JSON.stringify(feed.queued)) {
+      feed.queued = queued;
+      emit(feed, { type: "queued", queued });
+    }
     const runActive = liveRunActive(docs);
     if (runActive === feed.runActive) {
       updateActivity(feed);
@@ -810,6 +846,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
         activity: null,
+        queued: liveQueuedMessages(initial.docs),
         startedAt: now(),
         stopping: false,
         resuming: false,

@@ -40,6 +40,7 @@ function fakeProjection() {
         state: { kind: "idle" },
         question: null,
         activity: null,
+        queued: [],
       };
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },

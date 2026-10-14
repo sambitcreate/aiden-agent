@@ -9,6 +9,7 @@ import {
   parseBotSend,
   parseBotSessionAction,
   parseBotUpdate,
+  parseBotWithdraw,
 } from "./bot-params.js";
 
 test("bot mutation and conversation envelopes are exact and bounded", () => {
@@ -209,4 +210,11 @@ test("a Bot update may carry an exact chat activity choice, and nothing else new
     /chat activity/u,
   );
   assert.throws(() => parseBotUpdate({ ...fields, chatActivity: "quiet" }), /chat activity/u);
+});
+
+test("Remove names an exact Bot and one numeric submission id", () => {
+  assert.deepEqual(parseBotWithdraw({ botId: "bot-1", submissionId: "42" }), { botId: "bot-1", submissionId: "42" });
+  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42; drop" }), /submission/u);
+  assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42", extra: true }), /withdraw fields/u);
+  assert.throws(() => parseBotWithdraw({ botId: "../x", submissionId: "1" }), /bot id/u);
 });

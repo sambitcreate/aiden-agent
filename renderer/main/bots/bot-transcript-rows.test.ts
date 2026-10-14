@@ -131,3 +131,50 @@ test("a paused reply keeps what it wrote as a bubble", () => {
   const rows = botTranscriptRows([user("u1", "Summarize")], "Here is what I have so far", quiet);
   assert.deepEqual(rows[rows.length - 1], { kind: "assistant", id: "partial", text: "Here is what I have so far" });
 });
+
+test("a queued follow-up is a faded row at the end, and a steer is a normal bubble right away", () => {
+  const rows = botTranscriptRows([user("u1", "Plan dinner")], null, {
+    running: true,
+    level: "quiet",
+    queued: [
+      { submissionId: "7", mode: "steer", text: "Make it vegetarian", imageCount: 0 },
+      { submissionId: "8", mode: "followUp", text: "", imageCount: 2 },
+      { submissionId: "9", mode: "followUp", text: "", imageCount: 0 },
+    ],
+  });
+  assert.deepEqual(rows.slice(1), [
+    { kind: "user", id: "queued:7", text: "Make it vegetarian" },
+    { kind: "queued", id: "queued:8", submissionId: "8", text: "2 photos" },
+  ]);
+});
+
+test("a steer that lands before a running tool's result keeps that step in its turn, not failed", () => {
+  const entries = [
+    userAt("u1", "Find flights", 1_000),
+    step("a1", ""),
+    user("u2", "Make it cheap"),
+    { ...result("a1"), at: 4_000 } as BotTranscriptEntry,
+    answerAt("a2", "TAP on Friday.", 9_000),
+  ];
+  const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
+  assert.deepEqual(
+    rows.map((row) => (row.kind === "user" ? `user:${row.text}` : row.kind)),
+    ["user:Find flights", "user:Make it cheap", "recap", "assistant"],
+  );
+  const recap = rows.find((row) => row.kind === "recap");
+  assert.ok(recap?.kind === "recap");
+  assert.deepEqual(recap.steps.map((s) => [s.kind, s.status]), [["searching", "ok"]]);
+});
+
+test("a new message after a finished tool starts a new turn with its own recap", () => {
+  const entries = [
+    user("u1", "Find flights"),
+    step("a1", ""),
+    result("a1"),
+    answer("a2", "TAP."),
+    user("u2", "And hotels"),
+    answer("a3", "Hotel X."),
+  ];
+  const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
+  assert.deepEqual(kinds(rows), ["user", "recap", "assistant", "user", "assistant"]);
+});

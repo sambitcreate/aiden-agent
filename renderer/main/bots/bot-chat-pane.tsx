@@ -23,7 +23,7 @@ import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
-import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotTranscriptEntry } from "../../shared/bot-live";
+import { BOT_FAILED_TURN_TEXT, type BotPendingQuestion, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
@@ -290,6 +290,23 @@ function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
   );
 }
 
+/** A follow-up waiting for the running turn: a faded bubble, "Queued", and Remove. */
+function BotQueuedBubble({ text, removing, onRemove }: { text: string; removing: boolean; onRemove(): void }) {
+  return (
+    <div className="flex flex-col items-end gap-1" data-bot-queued>
+      <div className="max-w-full opacity-60">
+        <SafeMessageBubble role="user" content={text} showCopy={false} />
+      </div>
+      <div className="flex items-center gap-2 text-small text-tertiary">
+        <span>Queued</span>
+        <Button variant="transparent" size="small" disabled={removing} aria-label="Remove queued message" onClick={onRemove}>
+          Remove
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Chat transcript rows: bubbles, recaps, chips, cards. */
 function TranscriptEntries({
   name,
@@ -297,7 +314,10 @@ function TranscriptEntries({
   partial,
   running,
   level,
+  queued,
+  removing,
   retrying,
+  onRemoveQueued,
   onConnect,
   onDismissConnection,
   onOpenFile,
@@ -311,7 +331,10 @@ function TranscriptEntries({
   partial: string | null;
   running: boolean;
   level: BotChatActivityLevel;
+  queued: readonly BotQueuedMessage[];
+  removing: string | null;
   retrying: boolean;
+  onRemoveQueued(submissionId: string): void;
   onConnect(pluginId: string): void;
   onDismissConnection(pluginId: string): void;
   onOpenFile(path: string): void;
@@ -323,7 +346,7 @@ function TranscriptEntries({
     decision: BotRoutineProposalDecision,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
 }) {
-  const rows = botTranscriptRows(entries, partial, { running, level });
+  const rows = botTranscriptRows(entries, partial, { running, level, queued });
   return (
     <>
       {rows.map((row) => {
@@ -353,6 +376,15 @@ function TranscriptEntries({
             );
           case "recap":
             return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} />;
+          case "queued":
+            return (
+              <BotQueuedBubble
+                key={row.id}
+                text={row.text}
+                removing={removing === row.submissionId}
+                onRemove={() => onRemoveQueued(row.submissionId)}
+              />
+            );
           case "stopped":
             return (
               <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
@@ -425,6 +457,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [files, setFiles] = React.useState<{ open: boolean; path: string | null }>({ open: false, path: null });
   const [retrying, setRetrying] = React.useState(false);
+  const [removing, setRemoving] = React.useState<string | null>(null);
   const [pausedBusy, setPausedBusy] = React.useState(false);
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -480,6 +513,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         approvals.prompts.length,
         snapshot?.question?.waitId,
         snapshot?.activity?.phase,
+        snapshot?.queued.length,
         statusLayout,
       ]}
       showScrollToBottomButton
@@ -647,6 +681,18 @@ export function BotChatPane({ botId }: { botId: string }) {
     });
   };
 
+  const removeQueued = async (submissionId: string) => {
+    setRemoving(submissionId);
+    try {
+      const result = await botsApi.withdraw(current.id, submissionId);
+      if (result === "started") toast.info("That message already started, so it stays.");
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t remove that message."));
+    } finally {
+      setRemoving(null);
+    }
+  };
+
   const respondToProposal = async (proposalId: string, decision: BotRoutineProposalDecision) => {
     try {
       const result = await botsApi.routineProposals.respond({ botId: current.id, proposalId, decision });
@@ -738,6 +784,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
+          queued={snapshot.queued}
+          removing={removing}
+          onRemoveQueued={(id) => void removeQueued(id)}
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}

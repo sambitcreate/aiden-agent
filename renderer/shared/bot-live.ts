@@ -200,6 +200,15 @@ export interface BotLiveActivity {
   step?: BotLiveActivityStep;
 }
 
+/** A message waiting for the running turn: a follow-up (queued) or a steer (joins at the next step). */
+export interface BotQueuedMessage {
+  /** The durable submission id; Remove withdraws it. */
+  submissionId: string;
+  mode: "steer" | "followUp";
+  text: string;
+  imageCount: number;
+}
+
 export interface BotLiveSnapshot {
   botId: string;
   epoch: string;
@@ -212,6 +221,8 @@ export interface BotLiveSnapshot {
   question: BotPendingQuestion | null;
   /** What the Bot is doing in the running turn, or null. */
   activity: BotLiveActivity | null;
+  /** Messages waiting for the running turn, oldest first. */
+  queued: BotQueuedMessage[];
 }
 
 export type BotLiveEventBody =
@@ -220,6 +231,7 @@ export type BotLiveEventBody =
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
   | { type: "activity"; activity: BotLiveActivity | null }
+  | { type: "queued"; queued: BotQueuedMessage[] }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
   | { type: "snapshot"; snapshot: BotLiveSnapshot };
 
@@ -283,5 +295,7 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, question: event.question };
     case "activity":
       return { ...snapshot, seq: event.seq, activity: event.activity };
+    case "queued":
+      return { ...snapshot, seq: event.seq, queued: event.queued };
   }
 }

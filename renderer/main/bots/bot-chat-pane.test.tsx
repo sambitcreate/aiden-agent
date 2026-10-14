@@ -21,6 +21,7 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
     state: { kind: "idle" },
     question: null,
     activity: null,
+    queued: [],
     ...overrides,
   };
 }
@@ -864,4 +865,22 @@ test("a failed answer keeps the proposal answerable, and one answered elsewhere 
     entry: proposalEntry("accepted", "task-9"),
   });
   assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
+});
+
+test("a queued message shows faded as Queued, and Remove withdraws that one submission", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Plan dinners")],
+        state: { kind: "running", submissionId: "s1" },
+        queued: [{ submissionId: "8", mode: "followUp", text: "Also add dessert", imageCount: 0 }],
+      }),
+    "bots:withdraw": () => "withdrawn",
+  });
+  assert.ok(await screen.findByText("Also add dessert"));
+  assert.ok(screen.getByText("Queued"));
+  fireEvent.click(screen.getByRole("button", { name: "Remove queued message" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:withdraw")?.args, [{ botId: "bot-1", submissionId: "8" }]),
+  );
 });

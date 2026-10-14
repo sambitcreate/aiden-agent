@@ -9,7 +9,7 @@
 // A reply the person stopped ends with a "stopped" line that is derived here
 // and never stored.
 
-import { botRetryableFailedTurn, type BotTranscriptEntry } from "../../shared/bot-live";
+import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
@@ -18,6 +18,8 @@ import type { BotRecapStep } from "./bot-activity-steps";
 export interface BotTranscriptRowOptions {
   running: boolean;
   level: BotChatActivityLevel;
+  /** Messages waiting for the running turn (a follow-up is faded; a steer reads as sent). */
+  queued?: readonly BotQueuedMessage[];
 }
 
 export type BotTranscriptRow =
@@ -28,6 +30,8 @@ export type BotTranscriptRow =
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
   /** "You stopped this reply." */
   | { kind: "stopped"; id: string }
+  /** A follow-up waiting for the running turn; shown faded with Remove. */
+  | { kind: "queued"; id: string; submissionId: string; text: string }
   | { kind: "file"; id: string; path: string; operation: "written" | "edited" }
   | { kind: "image"; id: string; name: string; mimeType: string; size: number; data: string }
   | { kind: "notice"; id: string; notice: "interrupted" | "session_reset" }
@@ -61,7 +65,7 @@ interface Turn {
 export function botTranscriptRows(
   entries: readonly BotTranscriptEntry[],
   partial: string | null,
-  { running, level }: BotTranscriptRowOptions,
+  { running, level, queued }: BotTranscriptRowOptions,
 ): BotTranscriptRow[] {
   const rows: BotTranscriptRow[] = [];
   const retryable = running ? null : botRetryableFailedTurn(entries);
@@ -110,7 +114,10 @@ export function botTranscriptRows(
   for (const entry of entries) {
     switch (entry.type) {
       case "user":
-        beginTurn(entry.id, entry.at);
+        // A steer lands while a tool is still running and joins that turn; a
+        // new message after the turn's tools reported back starts a new turn.
+        if (!state.turn?.steps.some((step) => step.status === "running")) beginTurn(entry.id, entry.at);
+        else touch(entry.at);
         rows.push({ kind: "user", id: entry.id, text: entry.text });
         break;
       case "question_answer":
@@ -196,6 +203,19 @@ export function botTranscriptRows(
   endTurn(running);
   if (partial !== null && partial.trim()) {
     rows.push({ kind: "assistant", id: "partial", text: partial, ...(running ? { streaming: true } : {}) });
+  }
+  for (const message of queued ?? []) {
+    const text = message.text.trim()
+      ? message.text
+      : message.imageCount === 1
+        ? "Photo"
+        : message.imageCount > 1
+          ? `${message.imageCount} photos`
+          : "";
+    if (!text) continue;
+    // A steer joins the running turn: it reads as sent right away.
+    if (message.mode === "steer") rows.push({ kind: "user", id: `queued:${message.submissionId}`, text });
+    else rows.push({ kind: "queued", id: `queued:${message.submissionId}`, submissionId: message.submissionId, text });
   }
   return rows;
 }

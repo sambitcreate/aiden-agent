@@ -133,6 +133,9 @@ function defaultMessage(reason: BotSessionErrorReason): string {
   }
 }
 
+/** Remove's outcome: withdrawn before it ran, already started, or no longer waiting. */
+export type BotWithdrawResult = "withdrawn" | "started" | "gone";
+
 export interface BotSessionService {
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
@@ -143,6 +146,11 @@ export interface BotSessionService {
    * paused (interrupted) turn is left for Resume or Dismiss.
    */
   stop(botId: string): Promise<BotSessionState>;
+  /**
+   * Withdraw one queued message before its turn starts (Pi's
+   * `abortSubmission`). A message already placed in a turn keeps running.
+   */
+  withdraw(botId: string, submissionId: string): Promise<BotWithdrawResult>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
   /**
@@ -503,6 +511,20 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const { conversation } = await openBot(botId);
         await conversation.abort(ctx);
         return publish(botId, await currentState(botId));
+      });
+    },
+
+    withdraw(botId, submissionId) {
+      return serialize(botId, async () => {
+        await openBot(botId);
+        const opened = await requireHost().open(botId);
+        const result = await opened.harness.abortSubmission(
+          Number(submissionId) as SubmissionId,
+          ctx,
+          opened.conversation.id,
+        );
+        if (result === "aborted") return "withdrawn";
+        return result === "already_placed" ? "started" : "gone";
       });
     },
 

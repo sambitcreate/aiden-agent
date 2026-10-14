@@ -207,6 +207,21 @@ export function parseBotSessionAction(
   return { botId: parseBotId(fields.botId), requestId: fields.requestId };
 }
 
+const BOT_SUBMISSION_ID = /^\d{1,16}$/u;
+
+/** Remove on a queued message: the Bot and one durable submission id. */
+export function parseBotWithdraw(input: unknown): { botId: string; submissionId: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot withdraw fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "submissionId")) {
+    throw new Error("Invalid bot withdraw fields.");
+  }
+  if (typeof fields.submissionId !== "string" || !BOT_SUBMISSION_ID.test(fields.submissionId)) {
+    throw new Error("Invalid bot submission id.");
+  }
+  return { botId: parseBotId(fields.botId), submissionId: fields.submissionId };
+}
+
 const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** A Bot approval answer: the durable `waitId` and allow or deny. */
