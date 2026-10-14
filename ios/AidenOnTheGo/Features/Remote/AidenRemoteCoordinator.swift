@@ -796,6 +796,7 @@ final class AidenRemoteCoordinator {
         if server.supportsPhoneRunControl { requested += [.runsObserve, .runsControl] }
         if server.supportsMobileSimulators { requested.append(.simulatorsMobile) }
         if server.supportsBotCards { requested.append(.botCards) }
+        if server.offersBotActivity { requested.append(.botActivity) }
         guard !requested.isEmpty,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return

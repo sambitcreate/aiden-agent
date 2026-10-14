@@ -12,6 +12,8 @@ enum AidenBotHostFeature {
     /// Contract revision 27: routine proposal answers, the daily check-in
     /// suggestion and the Bot routine notification feed.
     static let proactive = "bot-proactive-v1"
+    /// Contract revision 30: the status line, Steer and Queue, Queued bubbles and Chat activity.
+    static let activity = "bot-activity-v1"
 
     static func isAdvertised(_ token: String, by features: [String]?) -> Bool {
         features?.contains(token) == true
@@ -100,6 +102,7 @@ enum AidenBotSessionCopy {
     static let needsModel = "Needs an AI model"
     static let needsModelHint = "Set up on your Mac"
     static let setUp = "Set up"
+    static let queued = "Queued"
 
     static func needsModelDetail(botName: String) -> String {
         "Set up an AI model so \(botName) can reply."
@@ -123,6 +126,76 @@ enum AidenBotSessionCopy {
 
     static func proposalBody(name: String, label: String) -> String { "\(name) · \(label)" }
     static func proposalAdded(label: String) -> String { "Added ✓ · \(label)" }
+}
+
+/// The status line's words and marks (spec §5). Kept in step with
+/// `renderer/shared/bot-activity.ts` by the shared fixture's `botActivity.phases`.
+enum AidenBotActivityPhase {
+    struct Display: Equatable {
+        let phase: String
+        let word: String
+        let mark: AidenActivityMarkKind
+    }
+
+    static let table: [String: (word: String, mark: AidenActivityMarkKind)] = [
+        "preparing": ("Getting ready", .bounce),
+        "thinking": ("Thinking", .triStep),
+        "reading": ("Reading", .scanGrid),
+        "photo": ("Looking at your photo", .scanGrid),
+        "searching": ("Searching the web", .scanGrid),
+        "command": ("Running a command", .quadShuffle),
+        "editing": ("Editing files", .quadShuffle),
+        "app": ("Using an app", .quadShuffle),
+        "helper": ("Asking a helper", .quadShuffle),
+        "computer": ("Using your Mac", .quadShuffle),
+        "remembering": ("Remembering", .compose),
+        "routine": ("Setting up a routine", .triStep),
+        "working": ("Working", .quadShuffle),
+        "writing": ("Writing", .compose),
+        "waiting": ("Waiting for you", .glance),
+        "tidying": ("Tidying up its notes", .bounce),
+        "stopping": ("Stopping", .bounce),
+        "resuming": ("Picking up where it left off", .bounce),
+        "reconnecting": ("Reconnecting to your Mac", .bounce),
+    ]
+
+    /// These change what the person should do, so Always "Thinking" keeps them.
+    static let keepsItsWord: Set<String> = ["waiting", "stopping", "reconnecting"]
+
+    /// What the line shows for any phase id: an id this build doesn't know reads as Working.
+    static func display(phase: String, wording: AidenBotChatActivityWording, app: String?) -> Display {
+        let known = table[phase] == nil ? "working" : phase
+        let shown = wording == .thinking && !keepsItsWord.contains(known) ? "thinking" : known
+        let entry = table[shown] ?? ("Working", .quadShuffle)
+        if shown == "app", let app, !app.isEmpty {
+            return Display(phase: shown, word: "Using \(app)", mark: entry.mark)
+        }
+        return Display(phase: shown, word: entry.word, mark: entry.mark)
+    }
+}
+
+/// Elapsed time on the status line (§5.2): from the Mac's `startedAt`, after 20 seconds.
+enum AidenBotElapsed {
+    static let showAfterMs = 20_000
+
+    /// Nil before 20 seconds, and while this phone's clock reads behind the Mac's.
+    static func label(startedAt: Int, nowMs: Int) -> String? {
+        let elapsed = nowMs - startedAt
+        guard elapsed >= showAfterMs else { return nil }
+        return duration(ms: elapsed)
+    }
+
+    /// "18s", "1m 12s", "2m", "1h 2m", the Mac's wording.
+    static func duration(ms: Int) -> String {
+        let seconds = max(1, ms / 1_000)
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        let rest = seconds % 60
+        if minutes < 60 { return rest > 0 ? "\(minutes)m \(rest)s" : "\(minutes)m" }
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        return remainder > 0 ? "\(hours)h \(remainder)m" : "\(hours)h"
+    }
 }
 
 /// One row of the durable Bot transcript. Consecutive `memory_update` entries
@@ -304,6 +377,9 @@ final class AidenBotSessionModel {
             question = next
         case let .approval(next):
             approval = next
+        case .activity, .queued:
+            // Revision 30 frames: the sequence advances; the model stores them in a later change.
+            break
         case .closed:
             return .closed
         }

@@ -1386,3 +1386,158 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
         throw URLError(.unsupportedURL)
     }
 }
+
+/// Contract revision 30: the activity wire, read from the fixture every client shares.
+final class AidenBotActivityContractTests: XCTestCase {
+    private func shared() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    private func section(_ name: String) throws -> [String: Any] {
+        try XCTUnwrap(try shared()[name] as? [String: Any])
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {
+        try AidenRemoteJSONDecoder.decode(type, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func encoded<T: Encodable>(_ value: T) throws -> NSDictionary {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? NSDictionary)
+    }
+
+    /// Expands a fixture `{unit, count}` descriptor: `count` repetitions of `unit`,
+    /// counted in code points.
+    private func expand(_ descriptor: Any?) throws -> String {
+        let value = try XCTUnwrap(descriptor as? [String: Any])
+        let unit = try XCTUnwrap(value["unit"] as? String)
+        let count = try XCTUnwrap(value["count"] as? Int)
+        return String(repeating: unit, count: count)
+    }
+
+    func testActivitySessionFramesAndDetailDecodeAsTheMacSendsThem() throws {
+        let activity = try section("botActivity")
+        let started = 1_760_450_000_000
+        let session = try decode(AidenBotSession.self, try XCTUnwrap(activity["session"]))
+        XCTAssertEqual(session.activity, AidenBotSessionActivity(phase: "app", app: "Notion", startedAt: started))
+        XCTAssertEqual(session.queued.map(\.submissionId), ["18", "19"])
+        XCTAssertEqual(session.queued.map(\.mode), [.queue, .steer])
+
+        let events = try XCTUnwrap(activity["events"] as? [Any]).map { try decode(AidenBotSessionEvent.self, $0) }
+        XCTAssertEqual(events.map(\.kind), [
+            .activity(AidenBotSessionActivity(phase: "searching", startedAt: started)),
+            .queued([AidenBotQueuedMessage(submissionId: "18", mode: .queue, text: "Also add a shopping list.")]),
+            .activity(AidenBotSessionActivity(phase: "teleporting", startedAt: started)),
+            .activity(nil),
+        ])
+        // A newer Mac's phase decodes and reads as Working.
+        XCTAssertEqual(
+            AidenBotActivityPhase.display(phase: "teleporting", wording: .follows, app: nil),
+            AidenBotActivityPhase.display(phase: "working", wording: .follows, app: nil)
+        )
+
+        let detail = try decode(AidenBotDetail.self, try XCTUnwrap(activity["detail"]))
+        XCTAssertEqual(detail.chatActivity, AidenBotChatActivity(level: .summary, wording: .thinking))
+        let older = try decode(AidenBotDetail.self, try XCTUnwrap(try shared()["botDetail"]))
+        XCTAssertNil(older.chatActivity, "a revision-29 detail has no choice to show")
+    }
+
+    func testEveryPrivacySampleIsRefused() throws {
+        let privacy = try section("botActivityPrivacy")
+        for sample in try XCTUnwrap(privacy["rejectedActivities"] as? [Any]) {
+            XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, sample), "\(sample)")
+        }
+        for sample in try XCTUnwrap(privacy["rejectedQueued"] as? [Any]) {
+            XCTAssertThrowsError(try decode(AidenBotQueuedMessage.self, sample), "\(sample)")
+        }
+        for sample in try XCTUnwrap(privacy["rejectedChatActivity"] as? [Any]) {
+            XCTAssertThrowsError(try decode(AidenBotChatActivity.self, sample), "\(sample)")
+        }
+        for list in try XCTUnwrap(privacy["rejectedQueuedLists"] as? [Any]) {
+            // A list is refused wherever it arrives: a snapshot and a queued frame.
+            var session = try XCTUnwrap(try section("botActivity")["session"] as? [String: Any])
+            session["queued"] = list
+            XCTAssertThrowsError(try decode(AidenBotSession.self, session), "snapshot: \(list)")
+            let frame: [String: Any] = [
+                "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9,
+                "type": "queued", "payload": ["queued": list],
+            ]
+            XCTAssertThrowsError(try decode(AidenBotSessionEvent.self, frame), "frame: \(list)")
+        }
+    }
+
+    func testTextBoundsAreCountedInCodePoints() throws {
+        let bounds = try XCTUnwrap(try section("botActivityPrivacy")["textBounds"] as? [String: Any])
+        let queuedText = try XCTUnwrap(bounds["queuedText"] as? [String: Any])
+        func queued(_ text: String) -> [String: Any] {
+            ["submissionId": "18", "mode": "queue", "text": text]
+        }
+        for sample in try XCTUnwrap(queuedText["rejected"] as? [Any]) {
+            XCTAssertThrowsError(try decode(AidenBotQueuedMessage.self, queued(try expand(sample))), "\(sample)")
+        }
+        for sample in try XCTUnwrap(queuedText["accepted"] as? [Any]) {
+            let text = try expand(sample)
+            XCTAssertEqual(try decode(AidenBotQueuedMessage.self, queued(text)).text, text, "\(sample)")
+        }
+        let app = try XCTUnwrap(bounds["app"] as? [String: Any])
+        func activity(_ app: String) -> [String: Any] {
+            ["phase": "app", "app": app, "startedAt": 1_760_450_000_000]
+        }
+        for sample in try XCTUnwrap(app["rejected"] as? [Any]) {
+            XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, activity(try expand(sample))), "\(sample)")
+        }
+        for sample in try XCTUnwrap(app["accepted"] as? [Any]) {
+            let label = try expand(sample)
+            XCTAssertEqual(try decode(AidenBotSessionActivity.self, activity(label)).app, label, "\(sample)")
+        }
+    }
+
+    func testPhaseIdsOutsideTheWireShapeAreRefusedAndOthersDecode() throws {
+        for id in ["teleporting", "a", "a_b", String(repeating: "a", count: 32)] {
+            XCTAssertEqual(
+                try decode(AidenBotSessionActivity.self, ["phase": id, "startedAt": 0]).phase, id)
+        }
+        for id in ["", "Reading", "1abc", "_abc", "a-b", "a b", String(repeating: "a", count: 33), "reading\u{FF21}"] {
+            XCTAssertThrowsError(try decode(AidenBotSessionActivity.self, ["phase": id, "startedAt": 0]), id)
+        }
+    }
+
+    func testRequestsEncodeExactlyTheFixtureBodies() throws {
+        let activity = try section("botActivity")
+        let send = try XCTUnwrap((activity["send"] as? [String: Any])?["request"] as? NSDictionary)
+        XCTAssertEqual(try encoded(try AidenBotMessageRequest(text: "Keep it vegetarian.", whenBusy: .steer)), send)
+        XCTAssertEqual(try encoded(try AidenBotMessageRequest(text: "Hi")), ["text": "Hi"] as NSDictionary, "no whenBusy unless one was chosen")
+        let patch = try XCTUnwrap((activity["identityPatch"] as? [String: Any])?["request"] as? NSDictionary)
+        XCTAssertEqual(try encoded(try AidenBotIdentityPatch(chatActivity: AidenBotChatActivity(level: .detailed, wording: .follows))), patch)
+    }
+
+    func testThePhaseTableIsTheOneTheMacDraws() throws {
+        let activity = try section("botActivity")
+        let phases = try XCTUnwrap(activity["phases"] as? [[String: String]])
+        let keeps = Set(try XCTUnwrap(activity["thinkingKeeps"] as? [String]))
+        XCTAssertEqual(Set(AidenBotActivityPhase.table.keys), Set(phases.compactMap { $0["id"] }))
+        for row in phases {
+            let id = try XCTUnwrap(row["id"])
+            let shown = AidenBotActivityPhase.display(phase: id, wording: .follows, app: nil)
+            XCTAssertEqual(shown.phase, id)
+            XCTAssertEqual(shown.word, row["word"], id)
+            XCTAssertEqual(shown.mark.rawValue, row["mark"], id)
+            XCTAssertEqual(
+                AidenBotActivityPhase.display(phase: id, wording: .thinking, app: nil).phase,
+                keeps.contains(id) ? id : "thinking",
+                id
+            )
+        }
+        let app = try XCTUnwrap(activity["app"] as? [String: String])
+        XCTAssertEqual(AidenBotActivityPhase.display(phase: "app", wording: .follows, app: app["app"]).word, app["word"])
+    }
+
+    func testElapsedTimeMatchesTheMacIncludingAPhoneWhoseClockIsBehind() throws {
+        let rows = try XCTUnwrap(try section("botActivity")["elapsed"] as? [[String: Any]])
+        for row in rows {
+            let startedAt = try XCTUnwrap(row["startedAt"] as? NSNumber).intValue
+            let now = try XCTUnwrap(row["now"] as? NSNumber).intValue
+            XCTAssertEqual(AidenBotElapsed.label(startedAt: startedAt, nowMs: now), row["label"] as? String, "\(row)")
+        }
+    }
+}

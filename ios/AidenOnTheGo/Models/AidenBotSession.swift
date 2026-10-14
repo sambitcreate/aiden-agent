@@ -497,6 +497,91 @@ struct AidenBotQuestionAnswerReceipt: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: Contract revision 30 (`bot-activity-v1`, `bot:activity`)
+
+/// What a Bot in a running turn is doing (spec §5). Exactly `phase`, `app`
+/// and `startedAt` cross the wire; any other key is refused (§11).
+struct AidenBotSessionActivity: Codable, Equatable, Sendable {
+    static let maxAppLength = 40
+
+    let phase: String
+    /// The connection's label for the `app` phase.
+    let app: String?
+    /// When the turn started: the Mac's clock, milliseconds since 1970.
+    let startedAt: Int
+
+    init(phase: String, app: String? = nil, startedAt: Int) {
+        self.phase = phase
+        self.app = app
+        self.startedAt = startedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["phase", "app", "startedAt"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try values.decode(String.self, forKey: .phase)
+        guard Self.isPhaseID(phase) else { throw AidenBotContractError.invalidField("activity.phase") }
+        app = try AidenBotWire.optionalString(values, forKey: .app, maxLength: Self.maxAppLength)
+        startedAt = try values.decode(Int.self, forKey: .startedAt)
+        guard (0...AidenRemoteProtocol.maxSafeInteger).contains(startedAt) else {
+            throw AidenBotContractError.invalidField("activity.startedAt")
+        }
+    }
+
+    /// `^[a-z][a-z_]{0,31}$`: a newer Mac's phase still decodes, and reads as Working.
+    static func isPhaseID(_ value: String) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        guard (1...32).contains(scalars.count), let first = scalars.first, (97...122).contains(first.value) else {
+            return false
+        }
+        return scalars.allSatisfy { (97...122).contains($0.value) || $0 == "_" }
+    }
+
+    private enum CodingKeys: String, CodingKey { case phase, app, startedAt }
+}
+
+/// A message waiting for the running turn: `steer` joins it, `queue` runs after it.
+struct AidenBotQueuedMessage: Codable, Equatable, Sendable {
+    static let maxCount = 20
+
+    let submissionId: String
+    let mode: AidenStreamInputMode
+    let text: String
+
+    init(submissionId: String, mode: AidenStreamInputMode, text: String) {
+        self.submissionId = submissionId
+        self.mode = mode
+        self.text = text
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["submissionId", "mode", "text"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        submissionId = try AidenBotWire.requiredString(
+            values,
+            forKey: .submissionId,
+            maxLength: AidenBotSessionWire.maxSubmissionIDLength
+        )
+        guard submissionId.unicodeScalars.allSatisfy({ scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
+            default: false
+            }
+        }) else { throw AidenBotContractError.invalidField("queued.submissionId") }
+        mode = try values.decode(AidenStreamInputMode.self, forKey: .mode)
+        text = try AidenBotWire.requiredString(values, forKey: .text, maxLength: AidenBotSessionWire.maxMessageLength)
+    }
+
+    /// At most 20, each id once.
+    static func validate(_ list: [Self]) throws {
+        guard list.count <= maxCount, Set(list.map(\.submissionId)).count == list.count else {
+            throw AidenBotContractError.invalidField("queued")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case submissionId, mode, text }
+}
+
 /// `GET /bots/{botId}/session`: the newest entries (newest last) plus the
 /// in-flight assistant text, stamped with the `(epoch, seq)` it reflects.
 struct AidenBotSession: Codable, Equatable, Sendable {
@@ -511,6 +596,10 @@ struct AidenBotSession: Codable, Equatable, Sendable {
     let question: AidenRemoteBotQuestion?
     /// The oldest tool approval the Bot is waiting on, or nil.
     let approval: AidenRemoteBotApproval?
+    /// Revision 30 (`bot:activity`): what the running turn is doing, or nil.
+    let activity: AidenBotSessionActivity?
+    /// Revision 30 (`bot:activity`): the person's messages waiting for the turn.
+    let queued: [AidenBotQueuedMessage]
 
     var state: AidenBotSessionStateKind { stateView.state }
 
@@ -523,7 +612,9 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         entries: [AidenBotSessionEntry],
         hasOlder: Bool,
         question: AidenRemoteBotQuestion? = nil,
-        approval: AidenRemoteBotApproval? = nil
+        approval: AidenRemoteBotApproval? = nil,
+        activity: AidenBotSessionActivity? = nil,
+        queued: [AidenBotQueuedMessage] = []
     ) {
         self.botId = botId
         self.epoch = epoch
@@ -534,12 +625,14 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         self.hasOlder = hasOlder
         self.question = question
         self.approval = approval
+        self.activity = activity
+        self.queued = queued
     }
 
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(
             decoder,
-            allowed: ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval"]
+            allowed: ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued"]
         )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         botId = try AidenBotWire.identifier(values, forKey: .botId, maxLength: AidenRemoteProtocol.maxBotIdentifierLength)
@@ -562,6 +655,14 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         hasOlder = try values.decode(Bool.self, forKey: .hasOlder)
         question = try values.decode(AidenRemoteBotQuestion?.self, forKey: .question)
         approval = try values.decode(AidenRemoteBotApproval?.self, forKey: .approval)
+        activity = try values.decodeIfPresent(AidenBotSessionActivity.self, forKey: .activity)
+        if values.contains(.queued) {
+            let list = try values.decode([AidenBotQueuedMessage].self, forKey: .queued)
+            try AidenBotQueuedMessage.validate(list)
+            queued = list
+        } else {
+            queued = []
+        }
         guard entries.count <= AidenBotSessionWire.maxEntries,
               Set(entries.map(\.id)).count == entries.count else {
             throw AidenBotContractError.invalidField("entries")
@@ -579,10 +680,12 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         try values.encode(hasOlder, forKey: .hasOlder)
         try values.encode(question, forKey: .question)
         try values.encode(approval, forKey: .approval)
+        try values.encodeIfPresent(activity, forKey: .activity)
+        if !queued.isEmpty { try values.encode(queued, forKey: .queued) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case botId, epoch, seq, partial, entries, hasOlder, question, approval
+        case botId, epoch, seq, partial, entries, hasOlder, question, approval, activity, queued
     }
 }
 
@@ -603,6 +706,10 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case question(AidenRemoteBotQuestion?)
         /// The waiting tool approval appeared (`approval`) or was settled (nil).
         case approval(AidenRemoteBotApproval?)
+        /// Revision 30: what the running turn is doing now, or nil when none runs.
+        case activity(AidenBotSessionActivity?)
+        /// Revision 30: the person's messages still waiting for the turn.
+        case queued([AidenBotQueuedMessage])
         /// The host closed this session; reconnect for a new epoch.
         case closed
     }
@@ -627,6 +734,8 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case .state: "state"
         case .question: "question"
         case .approval: "approval"
+        case .activity: "activity"
+        case .queued: "queued"
         case .closed: "closed"
         }
     }
@@ -678,6 +787,15 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case "approval":
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["approval"])
             kind = .approval(try fields.decode(AidenRemoteBotApproval?.self, forKey: .approval))
+        case "activity":
+            try AidenBotWire.requireOnlyKeys(payload, allowed: ["activity"])
+            guard fields.contains(.activity) else { throw AidenBotContractError.invalidField("activity") }
+            kind = .activity(try fields.decode(AidenBotSessionActivity?.self, forKey: .activity))
+        case "queued":
+            try AidenBotWire.requireOnlyKeys(payload, allowed: ["queued"])
+            let list = try fields.decode([AidenBotQueuedMessage].self, forKey: .queued)
+            try AidenBotQueuedMessage.validate(list)
+            kind = .queued(list)
         case "closed":
             try AidenBotWire.requireOnlyKeys(payload, allowed: [])
             kind = .closed
@@ -705,6 +823,8 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .state(view): try view.encode(to: payload)
         case let .question(question): try fields.encode(question, forKey: .question)
         case let .approval(approval): try fields.encode(approval, forKey: .approval)
+        case let .activity(activity): try fields.encode(activity, forKey: .activity)
+        case let .queued(list): try fields.encode(list, forKey: .queued)
         case .closed: break
         }
     }
@@ -714,29 +834,35 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
     }
 
     private enum PayloadKeys: String, CodingKey {
-        case session, text, entry, question, approval
+        case session, text, entry, question, approval, activity, queued
     }
 }
 
 /// `POST /bots/{botId}/messages` body.
 struct AidenBotMessageRequest: Codable, Equatable, Sendable {
     let text: String
+    /// Revision 30 (`bot-activity-v1`): Steer joins the running turn; Queue runs after it.
+    let whenBusy: AidenStreamInputMode?
 
-    init(text: String) throws {
+    init(text: String, whenBusy: AidenStreamInputMode? = nil) throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               text.unicodeScalars.count <= AidenBotSessionWire.maxMessageLength else {
             throw AidenBotContractError.invalidField("text")
         }
         self.text = text
+        self.whenBusy = whenBusy
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["text"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["text", "whenBusy"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(text: try values.decode(String.self, forKey: .text))
+        try self.init(
+            text: try values.decode(String.self, forKey: .text),
+            whenBusy: try values.decodeIfPresent(AidenStreamInputMode.self, forKey: .whenBusy)
+        )
     }
 
-    private enum CodingKeys: String, CodingKey { case text }
+    private enum CodingKeys: String, CodingKey { case text, whenBusy }
 }
 
 /// The empty `{}` body of resume, dismiss, and stop.
