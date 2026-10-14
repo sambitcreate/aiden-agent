@@ -29,9 +29,11 @@ import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
 import {
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
+  parseAidenSseFrames,
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -1279,6 +1281,8 @@ async function openAudienceStream(
   const response = await fetch(`http://127.0.0.1:${port}/`);
   const frames: Frame[] = [];
   const raw: string[] = [];
+  /** The SSE blocks as sent on the wire (id, event and data lines, without the blank separator). */
+  const blocks: string[] = [];
   const decoder = new TextDecoder();
   let buffer = "";
   const reading = (async () => {
@@ -1290,6 +1294,7 @@ async function openAudienceStream(
         buffer = buffer.slice(index + 2);
         const data = block.split("\n").find((line) => line.startsWith("data: "));
         if (!data) continue;
+        blocks.push(block);
         raw.push(data.slice(6));
         frames.push(parseAidenRemoteBotSessionEvent(JSON.parse(data.slice(6))) as unknown as Frame);
       }
@@ -1298,6 +1303,7 @@ async function openAudienceStream(
   return {
     frames,
     raw,
+    blocks,
     async until(predicate: () => boolean, what: string) {
       const deadline = Date.now() + 10_000;
       while (!predicate()) {
@@ -1723,6 +1729,112 @@ test("Steer and Queue reach the runtime as steer and followUp, and only the pers
     assert.deepEqual(stream.frames.find((frame) => frame.type === "queued")!.payload.queued, expected);
     assert.deepEqual((await service.session(BOT_ID, { activity: true })).queued, expected, "the snapshot agrees");
     assert.equal(stream.raw.some((data) => data.includes("Weekly reset")), false, "a routine's input is not the person's message");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+/** A message of `codePoints` CJK code points (three UTF-8 bytes each), led by a label that tells it apart. */
+function cjkMessage(label: string, codePoints = 32_000): string {
+  return `${label} ${"一".repeat(codePoints - [...label].length - 1)}`;
+}
+
+/** The person's waiting follow-ups as the Mac's `pi.inbox` holds them; each id is its submission id. */
+function waitingInbox(texts: readonly string[]): Record<string, unknown> {
+  return {
+    "pi.inbox": {
+      items: texts.map((text, index) => ({ id: 30 + index, mode: "followUp", content: [{ type: "text", text }] })),
+    },
+  };
+}
+
+/** Every SSE block a device was sent parses through the native frame reader and stays inside the transport limit. */
+function assertEveryFrameFits(blocks: readonly string[]) {
+  assert.ok(blocks.length > 0, "the device was sent frames");
+  for (const block of blocks) {
+    assert.ok(Buffer.byteLength(block, "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "a frame exceeds the transport limit");
+    assert.equal(parseAidenSseFrames(block).length, 1);
+  }
+}
+
+test("twenty maximum-length CJK queued messages keep every frame and snapshot inside the transport's frame limit", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    await driven.emitView(
+      [user(1, "Plan dinners")],
+      waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
+    );
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
+    const shown = queuedFrames[queuedFrames.length - 1]!.payload.queued;
+    assert.ok(shown.length >= 1 && shown.length < 20, "some of the twenty fit, and the rest are left out");
+    assert.deepEqual(session.queued, shown, "the snapshot agrees with the queued frame");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("the queued frame keeps the oldest messages that fit, in the order sent, and each kept text is whole", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const texts = [...Array.from({ length: 19 }, (_, index) => cjkMessage(`m${index}`)), "Last, a short one."];
+    await driven.emitView([user(1, "Plan dinners")], waitingInbox(texts));
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+
+    const queuedFrames = stream.frames.filter((frame) => frame.type === "queued");
+    const queued = queuedFrames[queuedFrames.length - 1]!.payload.queued as Array<{ submissionId: string; text: string }>;
+    assert.ok(queued.length >= 1 && queued.length < texts.length, "some of the messages fit, and the rest are left out");
+    const sentIds = texts.map((_, index) => String(30 + index));
+    assert.deepEqual(queued.map((item) => item.submissionId), sentIds.slice(0, queued.length), "the oldest that fit, in order");
+    assert.deepEqual(queued.map((item) => item.text), texts.slice(0, queued.length), "no kept text is cut");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a transcript near its own budget with a long partial and a full queue still fits the frame limit, and the transcript gives way", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = runningOn(driven, fake);
+  const stream = await openAudienceStream(service, { activity: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    // Four replies of 64,000 code points (about 768 KB) fill the transcript's own cap on their own.
+    const transcript = [
+      user(1, "Plan dinners"),
+      assistant(2, cjkMessage("a", 64_000)),
+      assistant(3, cjkMessage("b", 64_000)),
+      assistant(4, cjkMessage("c", 64_000)),
+      assistant(5, cjkMessage("d", 64_000)),
+    ];
+    await driven.emitView(transcript, {
+      "pi.live": { generation: { message: { content: [{ type: "text", text: cjkMessage("p", 32_000) }] } } },
+      ...waitingInbox(Array.from({ length: 20 }, (_, index) => cjkMessage(`m${index}`))),
+    });
+    await stream.until(() => stream.frames.some((frame) => frame.type === "queued"), "the queued frame");
+    assertEveryFrameFits(stream.blocks);
+
+    const session = await service.session(BOT_ID, { activity: true });
+    assert.ok(Buffer.byteLength(JSON.stringify(session), "utf8") <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES, "the snapshot fits");
+    assert.ok(session.partial, "the partial is in the snapshot");
+    assert.ok((session.queued?.length ?? 0) >= 1, "the queued list is in the snapshot");
+    assert.equal(session.hasOlder, true, "the transcript gave way to the partial and the queue");
+    assert.equal(session.entries[session.entries.length - 1]!.id, "entry_5", "the newest replies stay");
   } finally {
     await stream.close();
     await service.close();

@@ -66,6 +66,7 @@ import {
   AIDEN_REMOTE_BOT_PRESETS_MAX,
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteBotConnectionRequest,
   parseAidenRemoteBotMessageRequest,
@@ -123,7 +124,21 @@ import {
 /** Kind of the typed connect card entry `suggest_connection` appends. */
 export { BOT_CONNECT_CARD_ENTRY_KIND } from "./bot-runtime/live-projection.js";
 const ctx = BACKGROUND_CONTEXT;
+/** The transcript window's own cap, applied on top of what the snapshot budget leaves it. */
 const MAX_SESSION_JSON_BYTES = 768 * 1_024;
+/**
+ * Serialized bytes one session snapshot may take: the transport's SSE frame
+ * limit less a margin for the SSE id and event lines and the frame envelope
+ * (`protocolVersion`, `botId`, `epoch`, `seq`, `type`). The transcript window,
+ * the partial, the question, the approval and the queued list all share it.
+ */
+const SNAPSHOT_BUDGET_BYTES = AIDEN_REMOTE_MAX_SSE_FRAME_BYTES - 64 * 1_024;
+/**
+ * Serialized bytes the queued list may take. Oldest items first; the first one
+ * that would overflow ends the list, so the rest are left out of the projection
+ * (phones keep their own outbox copies). Text is never truncated.
+ */
+const MAX_QUEUED_JSON_BYTES = 256 * 1_024;
 const MAX_PENDING_FRAMES = 256;
 const PROJECTOR_IDLE_MS = 60_000;
 /** Pause before a failed queued-input classification is tried again (the desktop's throttle). */
@@ -440,6 +455,8 @@ export function projectBotSessionActivity(
  * The person's waiting messages, oldest first: only inputs in `personal`
  * (classified as the person's own) show, so an input not yet classified stays
  * off the wire. A photo with no words has no text to show and is left out.
+ * The list keeps the oldest items whose serialized bytes fit
+ * `MAX_QUEUED_JSON_BYTES`, in order, and omits the rest.
  */
 export function projectBotSessionQueued(
   docs: Readonly<Record<string, unknown>>,
@@ -447,11 +464,21 @@ export function projectBotSessionQueued(
 ): AidenRemoteBotQueuedMessage[] {
   const seen = new Set<string>();
   const queued: AidenRemoteBotQueuedMessage[] = [];
+  // Serialized size of the list so far: the brackets, plus a comma before each item after the first.
+  let bytes = 2;
   for (const message of liveQueuedMessages(docs, personal)) {
     const text = wireText(message.text, AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
     if (!text.trim() || !WIRE_SUBMISSION_ID.test(message.submissionId) || seen.has(message.submissionId)) continue;
+    const item: AidenRemoteBotQueuedMessage = {
+      submissionId: message.submissionId,
+      mode: message.mode === "steer" ? "steer" : "queue",
+      text,
+    };
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8") + (queued.length > 0 ? 1 : 0);
+    if (bytes + itemBytes > MAX_QUEUED_JSON_BYTES) break;
     seen.add(message.submissionId);
-    queued.push({ submissionId: message.submissionId, mode: message.mode === "steer" ? "steer" : "queue", text });
+    queued.push(item);
+    bytes += itemBytes;
     if (queued.length === AIDEN_REMOTE_BOT_QUEUED_MAX) break;
   }
   return queued;
@@ -467,11 +494,21 @@ export function projectBotSessionState(state: BotSessionState): AidenRemoteBotSe
   return { state: state.kind as AidenRemoteBotSessionStateKind, interrupted: false };
 }
 
-function windowed(entries: AidenRemoteBotSessionEntry[]): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
+/**
+ * The newest entries that fit the transcript's share of the snapshot: at most
+ * `budgetBytes` of serialized entries and `MAX_SESSION_JSON_BYTES`. An entry
+ * that cannot fit is left out (`hasOlder`), never cut, so the snapshot stays
+ * inside the frame limit whatever else it carries.
+ */
+function windowed(
+  entries: AidenRemoteBotSessionEntry[],
+  budgetBytes: number,
+): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
+  const limit = Math.min(MAX_SESSION_JSON_BYTES, budgetBytes);
   let start = Math.max(0, entries.length - AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
   let window = entries.slice(start);
-  while (window.length > 1 && Buffer.byteLength(JSON.stringify(window), "utf8") > MAX_SESSION_JSON_BYTES) {
-    start += Math.max(1, Math.floor(window.length / 4));
+  while (window.length > 0 && Buffer.byteLength(JSON.stringify(window), "utf8") > limit) {
+    start = Math.min(entries.length, start + Math.max(1, Math.floor(window.length / 4)));
     window = entries.slice(start);
   }
   return { entries: window, hasOlder: start > 0 };
@@ -609,19 +646,26 @@ class BotLiveProjector {
     this.armIdle();
   }
 
-  /** The session as one device sees it. */
+  /**
+   * The session as one device sees it. Everything but the transcript is
+   * measured first; the transcript window takes what the snapshot budget
+   * leaves, so the whole snapshot stays inside the SSE frame limit.
+   */
   snapshot(audience: Audience): AidenRemoteBotSession {
-    return parseAidenRemoteBotSession({
+    const head = {
       botId: this.botId,
       epoch: this.epoch,
       seq: this.seq,
       ...this.state,
       ...(this.partial !== undefined ? { partial: this.partial } : {}),
-      ...windowed(entriesFor(this.entries, audience)),
+      entries: [] as AidenRemoteBotSessionEntry[],
+      hasOlder: false,
       question: this.question,
       approval: this.approval,
       ...(audience.activity && this.activityDeps ? { activity: this.activity, queued: this.queued } : {}),
-    });
+    };
+    const room = SNAPSHOT_BUDGET_BYTES - Buffer.byteLength(JSON.stringify(head), "utf8");
+    return parseAidenRemoteBotSession({ ...head, ...windowed(entriesFor(this.entries, audience), room) });
   }
 
   /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
