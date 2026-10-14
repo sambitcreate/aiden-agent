@@ -2460,6 +2460,33 @@ test("Bot activity frames carry only the §11 allow-list, and every privacy samp
   }
 });
 
+test("an optional Bot activity key sent as the literal null is refused, never read as absent", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const { activities, sessions, events, entries } = raw.botActivityPrivacy.rejectedNullLiterals;
+  assert.deepEqual(activities.map((sample: Record<string, unknown>) => sample.app), [null]);
+  assert.deepEqual(sessions.map((sample: Record<string, unknown>) => sample.queued), [null]);
+  assert.deepEqual(events.map((sample: Record<string, any>) => sample.payload.queued), [null]);
+  assert.deepEqual(entries.map((sample: Record<string, unknown>) => [sample.label, sample.submissionId]), [[null, "17"]]);
+  for (const sample of activities) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), /app must be/u, JSON.stringify(sample));
+    const { app: _app, ...withoutApp } = sample;
+    assert.deepEqual(parseAidenRemoteBotSessionActivity(withoutApp), withoutApp, "the same activity without the key is fine");
+  }
+  for (const sample of sessions) {
+    assert.throws(() => parseAidenRemoteBotSession(sample), /queued messages must be an array/u);
+    const { queued: _queued, ...withoutQueued } = sample;
+    assert.equal("queued" in parseAidenRemoteBotSession(withoutQueued), false, "an absent list stays absent");
+  }
+  for (const sample of events) {
+    assert.throws(() => parseAidenRemoteBotSessionEvent(sample), /queued messages must be an array/u);
+  }
+  for (const sample of entries) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(sample), /Only the person's message can carry a submissionId/u);
+    const { label: _label, ...withoutLabel } = sample;
+    assert.equal(parseAidenRemoteBotSessionEntry(withoutLabel).type === "message" && parseAidenRemoteBotSessionEntry(withoutLabel).submissionId, "17");
+  }
+});
+
 test("the person's own message carries its submissionId for bot:activity devices only, and every misuse is refused", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const fixture = parseAidenRemoteContractFixture(raw);

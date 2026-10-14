@@ -2299,6 +2299,35 @@
       { "level": "verbose", "wording": "follows" },
       { "level": "quiet" },
       { "level": "quiet", "wording": "follows", "extra": true }
-    ]
+    ],
+    "rejectedNullLiterals": {
+      "note": "An optional key sent as the literal null is refused, never read as absent. Every decoder must refuse each sample.",
+      "activities": [
+        { "phase": "app", "app": null, "startedAt": 1760450000000 }
+      ],
+      "sessions": [
+        {
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_02",
+          "seq": 7,
+          "state": "running",
+          "interrupted": false,
+          "entries": [
+            { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
+          ],
+          "hasOlder": false,
+          "question": null,
+          "approval": null,
+          "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+          "queued": null
+        }
+      ],
+      "events": [
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": null } }
+      ],
+      "entries": [
+        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "label": null, "submissionId": "17" }
+      ]
+    }
   }
 }
