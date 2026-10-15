@@ -203,7 +203,11 @@ import {
   summarizeEditAutomationToolCall,
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
-import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
+import {
+  ToolApprovalCoordinator,
+  toolApprovalBlockReason,
+  type ToolApprovalDecisionPayload,
+} from "./tool-approval.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
@@ -278,7 +282,7 @@ import {
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
 import {
-  assertScheduledProviderFingerprint,
+  assertScheduledGenerationProvider,
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
 import {
@@ -1072,9 +1076,7 @@ async function prepareGeneration(
     runtime.provider.modelMetadata?.[model.id]?.overrides,
     runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1),
   );
-  if (assistantAutomationMode || params.mode === "assistant-unattended") {
-    assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
-  }
+  assertScheduledGenerationProvider(params.mode, runtime.provider, options.providerFingerprint);
   const assistantModelSelection = {
     providerId: runtime.provider.id,
     providerName: runtime.provider.label,
@@ -3824,16 +3826,7 @@ export const llmClient = {
             ? undefined
             : {
                 block: true,
-                reason:
-                  attendedScheduleApproval && approvalOutcome === "denied"
-                    ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
-                    : approvalOutcome === "denied"
-                      ? "The user denied this action."
-                      : approvalOutcome === "detached"
-                        ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
-                        : approvalOutcome === "unavailable"
-                          ? "Aiden could not present the approval request. Return to the chat and retry the action."
-                          : "The action was cancelled before approval.",
+                reason: toolApprovalBlockReason(approvalOutcome, attendedScheduleApproval),
               };
         },
       });

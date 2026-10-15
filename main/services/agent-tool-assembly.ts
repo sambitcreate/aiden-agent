@@ -1,0 +1,222 @@
+// Pure assembly of the pi agent tool set for a generation. Settings-, MCP-,
+// web-search- and skill-registry-backed sources are injected so the mode
+// allowlists (attended Assistant, unattended project automation, subagent,
+// ordinary chat) can be exercised without Electron. `tools.ts` wires the real
+// main-process sources.
+
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
+import type { McpLateDiscovery } from "./mcp-tool-discovery-core.js";
+import { buildCodingTools } from "./coding-tools.js";
+import type { Attachment, ScheduledMcpServerBinding, WorkspacePermission } from "./types.js";
+import type { SkillRegistrySnapshot } from "./skill-registry.js";
+import { buildSkillTools } from "./skill-tools.js";
+import type { ComputerUseController } from "./computer-use/controller.js";
+import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import type { FormFillService } from "./form-fill/service.js";
+import { createFormFillAgentTool } from "./form-fill/tool.js";
+import {
+  scheduleTaskToolsForContext,
+  type AssistantScheduleModelSelection,
+} from "./schedule-tool.js";
+import { registerSubagentTool } from "./subagents/feature-flag.js";
+import { buildSubagentCapabilityTools } from "./subagents/capability-tools.js";
+import type { SubagentCapabilityRequest } from "./subagents/capability-profile.js";
+import { createAssistantProjectTool } from "./assistant/project-tool.js";
+import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
+import { buildTelegramAgentTools } from "./telegram/telegram-agent-tools.js";
+import { createShareImageTool } from "./share-image-tool.js";
+
+/** Context describing where and how much the agent may act. */
+export interface ToolContext {
+  /** Workspace identity used as the default target for agent-created schedules. */
+  workspaceId?: string;
+  /** Absolute path to the workspace folder, if one is bound. */
+  workspaceRoot?: string;
+  /** Generation-scoped skill snapshot shared with prompt disclosure. */
+  skillSnapshot?: SkillRegistrySnapshot;
+  /** Workspace permission level; "none" withholds all folder-scoped tools. */
+  permission: WorkspacePermission;
+  /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
+  computerUse?: ComputerUseController;
+  /** Optional generation-scoped Form Fill Specialist. Present only when enabled and ready. */
+  formFill?: FormFillService;
+  /** Main-created tools bound to this generation's workspace and browser host. */
+  browserTools?: readonly AgentTool[];
+  /** Main-created simulator tools, present only when the device gate held at generation start. */
+  deviceTools?: readonly AgentTool[];
+  /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. A getter is read per command. */
+  shellPathPrefix?: string | (() => string | null | undefined);
+  /** Background scheduled runs disable this to prevent recursive task creation. */
+  allowScheduling?: boolean;
+  /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
+  allowMcpTools?: boolean;
+  /** Explicit host admission for attended desktop workspace provider credentials. */
+  allowMcpProviderAuth?: boolean;
+  mcpProviderScope?: McpProviderExecutionScope;
+  /** Exact configured server identities approved for this unattended generation. */
+  mcpServerIds?: readonly string[];
+  /** Exact connection fingerprints approved for this unattended generation. */
+  mcpServerBindings?: readonly ScheduledMcpServerBinding[];
+  /**
+   * Set only when MCP tools are deferred behind codemode / tool_search: the
+   * turn starts with servers ready within a short window and receives slower
+   * servers through `onLate`. Ignored for strict (approved-server) runs.
+   */
+  mcpDeferral?: { windowMs?: number; onLate(late: McpLateDiscovery): void };
+  /** Only a foreground, persisted-workspace generation may register the delegation tool. */
+  allowSubagents?: boolean;
+  /**
+   * Assistant modes use positive allowlists rather than the workspace set minus
+   * exclusions, so ambient tools cannot appear there by default.
+   */
+  mode?: "assistant" | "assistant-automation" | "subagent";
+  /** Main-resolved generation identity pinned on new or edited Assistant schedules. */
+  assistantModelSelection?: AssistantScheduleModelSelection;
+  /** Lazily constructed so the disabled feature flag prevents registration entirely. */
+  createSubagentTool?: () => AgentTool;
+  /**
+   * When present, bypasses normal workspace/ambient assembly and positively
+   * constructs only the resolved child capability intersection.
+   */
+  capabilityProfile?: SubagentCapabilityRequest | unknown;
+  interactionSurface?: "telegram";
+  /** Explicitly expose cross-target Telegram delivery to attended local agents. */
+  allowTelegramDirect?: boolean;
+  /** Generation-scoped sink for assistant images that become durable with the final response. */
+  shareImage?: (attachment: Attachment) => void;
+  /** Main-owned Bot assembly supplies its own exact multi-root file tools. */
+  includeCodingTools?: boolean;
+  /** Main-owned Bot assembly may withhold skills until exact grants are joined. */
+  includeSkillTools?: boolean;
+  /** Host-constructed, current-generation image tool. Never accepts paths or URLs. */
+  imageInspectionTool?: AgentTool;
+}
+
+/** Main-process sources the assembly reads; injected so it stays testable. */
+export interface AgentToolSources {
+  /** Configured (and, for strict runs, exactly approved) MCP server tools. */
+  configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]>;
+  /** The current-generation web search tool, or undefined when unavailable. */
+  webSearchToolForGeneration(): Promise<AgentTool | undefined>;
+  /** Live Agent Skills switch, re-read by skill tools at call time. */
+  skillsEnabled(): Promise<boolean>;
+  /** Workspace skill snapshot used when the generation did not supply one. */
+  skillSnapshot(workspaceId: string): Promise<SkillRegistrySnapshot | undefined>;
+}
+
+export function buildSchedulingTools(
+  context: Pick<
+    ToolContext,
+    "workspaceId" | "allowScheduling" | "mode" | "assistantModelSelection"
+  >,
+): AgentTool[] {
+  return scheduleTaskToolsForContext({
+    workspaceId: context.workspaceId,
+    allowScheduling: context.allowScheduling,
+    mode: context.mode === "assistant" ? "assistant-attended" : "standard",
+    assistantModelSelection: context.assistantModelSelection,
+  });
+}
+
+export async function assembleAgentTools(
+  ctx: ToolContext,
+  sources: AgentToolSources,
+): Promise<AgentTool[]> {
+  const hasCapabilityProfile = Object.prototype.hasOwnProperty.call(ctx, "capabilityProfile");
+  if (ctx.mode === "subagent" || hasCapabilityProfile) {
+    if (ctx.mode !== "subagent") {
+      throw new Error("Subagent capabilities require the explicit subagent tool mode.");
+    }
+    return buildSubagentCapabilityTools({
+      workspaceRoot: ctx.workspaceRoot,
+      permission: ctx.permission,
+      capabilityProfile: ctx.capabilityProfile,
+    }).tools;
+  }
+  if (ctx.mode !== undefined && ctx.mode !== "assistant" && ctx.mode !== "assistant-automation") {
+    throw new Error(`Unknown agent tool mode: ${JSON.stringify(ctx.mode)}.`);
+  }
+
+  // Aiden receives a positive allowlist. The attended dock may inspect MCP
+  // server identities and propose a narrowly constrained scheduled task. An
+  // unattended global automation receives only the exact MCP servers approved
+  // on that task.
+  if (ctx.mode === "assistant") {
+    const tools =
+      ctx.allowScheduling === false
+        ? []
+        : [
+            createAssistantProjectTool(),
+            createAssistantMcpServerTool(),
+            ...buildSchedulingTools(ctx),
+          ];
+    if (ctx.allowMcpTools === true) tools.push(...(await sources.configuredMcpTools(ctx)));
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
+    return tools;
+  }
+
+  // An approved project automation receives folder-scoped coding tools only.
+  // Project and connector scopes are intentionally separate so untrusted data
+  // from an external service cannot flow into project mutation tools.
+  if (ctx.mode === "assistant-automation") {
+    if (ctx.allowMcpTools === true || (ctx.mcpServerIds?.length ?? 0) > 0) {
+      throw new Error("Assistant project automations cannot use MCP connectors.");
+    }
+    const tools =
+      ctx.workspaceRoot && ctx.permission !== "none" ? buildCodingTools(ctx.workspaceRoot) : [];
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
+    return tools;
+  }
+
+  const tools: AgentTool[] = [];
+  if (ctx.imageInspectionTool) tools.push(ctx.imageInspectionTool);
+  if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
+  if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  if (ctx.computerUse && ctx.formFill) tools.push(createFormFillAgentTool(ctx.formFill));
+  if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
+  if (ctx.permission !== "none" && ctx.deviceTools) tools.push(...ctx.deviceTools);
+  if (ctx.allowScheduling !== false) {
+    tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
+  }
+  tools.push(...buildSchedulingTools(ctx));
+  if (ctx.allowSubagents === true) {
+    registerSubagentTool(tools, ctx.createSubagentTool);
+  }
+
+  // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
+  // Withheld entirely when permission is "none" or no folder is bound.
+  if (ctx.includeCodingTools !== false && ctx.workspaceRoot && ctx.permission !== "none") {
+    tools.push(
+      ...buildCodingTools(ctx.workspaceRoot, undefined, ctx.shellPathPrefix ? { pathPrefix: ctx.shellPathPrefix } : {}),
+    );
+    if (ctx.shareImage) {
+      tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));
+    }
+  }
+
+  const webSearchTool = await sources.webSearchToolForGeneration();
+  if (webSearchTool) tools.push(webSearchTool);
+
+  // Every skill consumer uses this exact authoritative snapshot.
+  const skillsEnabled = () => sources.skillsEnabled();
+  const skillSnapshot =
+    ctx.includeSkillTools !== false && (await skillsEnabled())
+      ? (ctx.skillSnapshot ??
+        (ctx.workspaceId ? await sources.skillSnapshot(ctx.workspaceId) : undefined))
+      : undefined;
+  if (ctx.includeSkillTools !== false && skillSnapshot) {
+    tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none", skillsEnabled));
+  }
+
+  // MCP server tools.
+  if (ctx.allowMcpTools !== false) {
+    tools.push(...(await sources.configuredMcpTools(ctx)));
+  }
+
+  return tools;
+}
