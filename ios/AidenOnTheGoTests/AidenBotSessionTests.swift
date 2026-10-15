@@ -2510,6 +2510,39 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
 
+    func testASendBeforeTheRestoreKeepsTheLastLaunchesUnsentMessagesOnDiskAndInMemory() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        // The last launch left one unsent message on disk.
+        store.submit(.save([AidenBotOutgoingMessage(
+            key: UUID(), text: "Left last launch", mode: nil, enqueuedWhileRunning: false,
+            retryOf: nil, createdAt: Date(), status: .failed
+        )]), for: key)
+        try await stored(store, key, count: 1)
+
+        // A new launch: the composer takes a message before the restore has read the file.
+        let transport = FakeBotSessionTransport()
+        let relaunched = model(transport, key: key, cache: AidenBotSessionCache(), store: store)
+        _ = await relaunched.send("Plan my week.")
+        try await Task.sleep(for: .milliseconds(100))
+        // The send's write has had time to land; it must not have replaced the previous launch's file.
+        let beforeLoad = await store.load(key)
+        XCTAssertTrue(
+            beforeLoad.map(\.text).contains("Left last launch"),
+            "a write before the restore would replace the previous launch's file"
+        )
+
+        transport.queueSession(.success(try session(.idle)))
+        await relaunched.load()
+        XCTAssertEqual(
+            relaunched.outbox.map(\.text), ["Left last launch", "Plan my week."],
+            "both messages are in memory, oldest first"
+        )
+        try await stored(store, key, count: 2)
+        let onDisk = await store.load(key)
+        XCTAssertEqual(onDisk.map(\.text), ["Left last launch", "Plan my week."], "both survive a relaunch")
+    }
+
     func testAMessageStillUnsentAfterADaySaysCouldntSendInsteadOfGoingOutLate() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, root) = temporaryStore()
@@ -2612,10 +2645,11 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         _ = await oldSend.value
         old.release()
 
-        XCTAssertEqual(cache.adoptOutbox(for: key, owner: ObjectIdentifier(self)).map(\.text), ["First", "Second"])
+        // The new chat writes once it has read the file; adopting its outbox below takes the chat from it.
         try await stored(store, key, count: 2)
         let onDisk = await store.load(key)
         XCTAssertEqual(onDisk.map(\.text), ["First", "Second"])
+        XCTAssertEqual(cache.adoptOutbox(for: key, owner: ObjectIdentifier(self)).map(\.text), ["First", "Second"])
     }
 
     func testLosingAccessPurgesTheOutboxFromMemoryAndDisk() async throws {

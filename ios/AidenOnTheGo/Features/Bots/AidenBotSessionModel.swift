@@ -893,6 +893,8 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var backoffTask: Task<Void, Never>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
+    /// The previous launch's file has been read and merged; disk writes wait for it.
+    @ObservationIgnored private var outboxRestored = false
     @ObservationIgnored private var released = false
     @ObservationIgnored private let requestLimit: Duration
     @ObservationIgnored private let now: () -> Date
@@ -1321,27 +1323,45 @@ final class AidenBotSessionModel {
     private func outboxDidChange() {
         guard let cacheKey, !released,
               cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
+        // A write before the restore would replace the previous launch's file. The first change starts the
+        // restore, which writes the merged outbox once.
+        guard outboxRestored else { startRestore(); return }
         outboxStore?.submit(.save(outbox), for: cacheKey)
+    }
+
+    /// The one write the restore owes: the merged outbox, even if the chat closed while the file was read,
+    /// since messages sent before the restore exist nowhere else.
+    private func writeRestoredOutbox(_ cacheKey: AidenBotSessionKey) {
+        guard let outboxStore, !outbox.isEmpty,
+              cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
+        outboxStore.submit(.save(outbox), for: cacheKey)
     }
 
     /// Adds what a previous launch left on disk, once, before the first snapshot sends it.
     private func restoreOutbox() async {
-        guard let cacheKey, let outboxStore else { return }
-        if restoreTask == nil {
-            restoreTask = Task { [weak self] in
-                let (stored, unreadable) = await outboxStore.restore(cacheKey)
-                guard let self else { return }
-                if unreadable { self.restoreNotice = AidenBotSessionCopy.outboxUnrestorable }
-                guard !stored.isEmpty else { return }
-                let known = Set(self.outbox.map(\.key))
-                let now = self.now()
-                let added = stored.filter { !known.contains($0.key) }.map { Self.adopted($0, now: now) }
-                if !added.isEmpty {
-                    self.outbox = (added + self.outbox).sorted { $0.createdAt < $1.createdAt }
-                }
-            }
-        }
+        guard outboxStore != nil else { return }
+        startRestore()
         await restoreTask?.value
+    }
+
+    /// Starts the one restore of this chat's file, unless it has started. Until it has merged the file,
+    /// nothing is written to disk.
+    private func startRestore() {
+        guard restoreTask == nil, let cacheKey, let outboxStore else { return }
+        restoreTask = Task { [weak self] in
+            let (stored, unreadable) = await outboxStore.restore(cacheKey)
+            guard let self else { return }
+            if unreadable { self.restoreNotice = AidenBotSessionCopy.outboxUnrestorable }
+            let known = Set(self.outbox.map(\.key))
+            let now = self.now()
+            let added = stored.filter { !known.contains($0.key) }.map { Self.adopted($0, now: now) }
+            if !added.isEmpty {
+                // Silent until the restore is marked done below, so this merge is written once.
+                self.outbox = (added + self.outbox).sorted { $0.createdAt < $1.createdAt }
+            }
+            self.outboxRestored = true
+            self.writeRestoredOutbox(cacheKey)
+        }
     }
 
     /// The Mac is reachable again: deferred messages get another try.
