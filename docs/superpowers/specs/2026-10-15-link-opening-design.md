@@ -1,6 +1,6 @@
 # Link opening: ask once, then remember
 
-Status: approved direction (2026-10-15, Option B). Plan: [implementation plan](../plans/2026-10-15-link-opening.md).
+Status: implemented (2026-10-15, Option B). Plan: [implementation plan](../plans/2026-10-15-link-opening.md).
 
 ## Problem
 
