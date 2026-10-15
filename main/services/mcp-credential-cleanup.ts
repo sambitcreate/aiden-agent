@@ -18,6 +18,7 @@ import { clearOAuth, invalidateMcpOAuthOperation, suspendMcpOAuthOperations } fr
 import { presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import { mcpStdioApprovals, pruneStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { reconcileLaunchApprovals } from "./mcp-stdio-approvals.js";
 import { mcpFieldSecretReferencesChanged } from "./mcp-field-secrets-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
@@ -135,9 +136,8 @@ async function reconcileNow(
     // Env/header values the configured record no longer references (all of
     // them once the server is gone) leave the secrets store.
     await pruneStoredMcpFieldSecrets(pending.serverId, current, isCurrent);
-    // Launch approvals follow the same config: only the configured launch
-    // keeps its approval, and only if it already had one.
-    await mcpStdioApprovals.retainOnly(pending.serverId, current);
+    // A server that is gone (or no longer local) forgets its launch approvals.
+    await reconcileLaunchApprovals(mcpStdioApprovals, pending.serverId, current);
     assertCurrent(isCurrent);
     await clearPending();
   } finally {
@@ -257,10 +257,9 @@ export function reconcileExternalMcpCredentialChanges(
       const after = current.find((server) => server.id === before.id);
       const previousRuntime = mcpRuntimeConnectionSnapshot(before);
       const targetRuntime = after ? mcpRuntimeConnectionSnapshot(after) : null;
-      // Approvals follow this authoritative config: a hand-edited command
-      // loses its approval, a removed server forgets it, and approvals of
-      // unpublished editor saves go. Nothing new is approved here.
-      await mcpStdioApprovals.retainOnly(before.id, after);
+      // A removed server forgets its launch approvals. Nothing is approved or
+      // pruned to another launch here: this config may be a stale cache.
+      await reconcileLaunchApprovals(mcpStdioApprovals, before.id, after);
       if (sameMcpRuntimeConnection(previousRuntime, targetRuntime)) continue;
       const previousSnapshot = mcpCredentialCleanupSnapshot(before);
       const targetSnapshot = after ? mcpCredentialCleanupSnapshot(after) : null;
