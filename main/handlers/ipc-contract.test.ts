@@ -51,7 +51,16 @@ function literalValue(
   if (!expression) return undefined;
   if (ts.isStringLiteralLike(expression)) return expression.text;
   if (ts.isIdentifier(expression)) return channelConstants.get(expression.text);
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    return channelConstants.get(`${expression.expression.text}.${expression.name.text}`);
+  }
   return undefined;
+}
+
+function unwrapConstAssertion(expression: ts.Expression): ts.Expression {
+  return ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression)
+    ? unwrapConstAssertion(expression.expression)
+    : expression;
 }
 
 function collectChannelConstants(sourceFiles: readonly ts.SourceFile[]): Map<string, string> {
@@ -67,6 +76,25 @@ function collectChannelConstants(sourceFiles: readonly ts.SourceFile[]): Map<str
       ) {
         constants.set(node.name.text, node.initializer.text);
       }
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text.endsWith("_CHANNELS") &&
+        node.initializer
+      ) {
+        const table = unwrapConstAssertion(node.initializer);
+        if (ts.isObjectLiteralExpression(table)) {
+          for (const property of table.properties) {
+            if (
+              ts.isPropertyAssignment(property) &&
+              (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) &&
+              ts.isStringLiteralLike(property.initializer)
+            ) {
+              constants.set(`${node.name.text}.${property.name.text}`, property.initializer.text);
+            }
+          }
+        }
+      }
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
@@ -74,12 +102,15 @@ function collectChannelConstants(sourceFiles: readonly ts.SourceFile[]): Map<str
   return constants;
 }
 
-function collectInventory(sourceFiles: readonly ts.SourceFile[]): IpcInventory {
+function collectInventory(
+  sourceFiles: readonly ts.SourceFile[],
+  constantSources: readonly ts.SourceFile[] = [],
+): IpcInventory {
   const inventory: IpcInventory = {
     handlers: new Set(),
     notifications: new Set(),
   };
-  const channelConstants = collectChannelConstants(sourceFiles);
+  const channelConstants = collectChannelConstants([...sourceFiles, ...constantSources]);
 
   for (const sourceFile of sourceFiles) {
     const visit = (node: ts.Node): void => {
@@ -101,6 +132,26 @@ function collectInventory(sourceFiles: readonly ts.SourceFile[]): IpcInventory {
     visit(sourceFile);
   }
   return inventory;
+}
+
+/** Channels the renderer IPC client invokes: `invoke("channel", ...)` call sites. */
+function collectRendererInvokes(
+  sourceFiles: readonly ts.SourceFile[],
+  constantSources: readonly ts.SourceFile[] = [],
+): Set<string> {
+  const channelConstants = collectChannelConstants([...sourceFiles, ...constantSources]);
+  const invokes = new Set<string>();
+  for (const sourceFile of sourceFiles) {
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && calleeName(node.expression) === "invoke") {
+        const channel = literalValue(node.arguments[0], channelConstants);
+        if (channel) invokes.add(channel);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+  return invokes;
 }
 
 async function productionSourceFiles(directory: string): Promise<ts.SourceFile[]> {
@@ -127,7 +178,20 @@ function sorted(values: Iterable<string>): string[] {
   return [...values].sort();
 }
 
-const inventory = collectInventory(await productionSourceFiles(MAIN_ROOT));
+const sharedSources = await productionSourceFiles(path.join(REPO_ROOT, "renderer", "shared"));
+const inventory = collectInventory(await productionSourceFiles(MAIN_ROOT), sharedSources);
+const rendererInvokes = collectRendererInvokes(
+  [
+    ts.createSourceFile(
+      RENDERER_IPC_PATH,
+      await fs.readFile(RENDERER_IPC_PATH, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    ),
+  ],
+  sharedSources,
+);
 const nativeChannels: ReadonlySet<string> = new Set(Object.values(NATIVE_INVOKE_CHANNELS));
 const rendererHandlers = [...inventory.handlers].filter((channel) => !nativeChannels.has(channel));
 
@@ -145,6 +209,52 @@ test("source inventory detects literal handler and notification additions", () =
   const mutation = collectInventory([source]);
   assert.deepEqual(sorted(mutation.handlers), ["new-surface:read"]);
   assert.deepEqual(sorted(mutation.notifications), ["new-surface:changed"]);
+});
+
+test("source inventory resolves channel tables and renderer invoke call sites", () => {
+  const shared = ts.createSourceFile(
+    "shared.ts",
+    `export const SURFACE_CHANNELS = { read: "surface:read", changed: "surface:changed" } as const;`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const handlers = ts.createSourceFile(
+    "handlers.ts",
+    `
+      deps.handle(SURFACE_CHANNELS.read, () => {});
+      ipcMain.broadcast(SURFACE_CHANNELS.changed, {});
+    `,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const client = ts.createSourceFile(
+    "ipc.ts",
+    `
+      export const surface = {
+        read: () => invoke<string>(SURFACE_CHANNELS.read),
+        write: (value: string) => invoke<void>("surface:write", value),
+      };
+    `,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const mutation = collectInventory([handlers], [shared]);
+  assert.deepEqual(sorted(mutation.handlers), ["surface:read"]);
+  assert.deepEqual(sorted(mutation.notifications), ["surface:changed"]);
+  assert.deepEqual(sorted(collectRendererInvokes([client], [shared])), ["surface:read", "surface:write"]);
+});
+
+test("Bot IPC handlers and renderer Bot invokes match exactly", () => {
+  // Every Bot surface (access notices, editor access, photos, Telegram binding,
+  // live, memory, files, routines) is registered by main and reachable from the
+  // renderer client; neither side can carry a channel the other lacks.
+  const botHandlers = rendererHandlers.filter((channel) => channel.startsWith("bots:"));
+  const botInvokes = [...rendererInvokes].filter((channel) => channel.startsWith("bots:"));
+  assert.ok(botHandlers.length > 20, "IPC source scan found too few Bot handlers");
+  assert.deepEqual(sorted(botInvokes), sorted(botHandlers), "Bot handlers and renderer/lib/ipc.ts drifted");
 });
 
 test("every live renderer-facing handler is covered by an INVOKE_PREFIX", () => {
