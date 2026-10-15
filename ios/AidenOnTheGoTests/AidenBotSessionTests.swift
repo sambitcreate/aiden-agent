@@ -4049,6 +4049,28 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertEqual(reported, ["rev_9"], "the screens behind hear the Mac's version")
     }
 
+    func testAPickMadeWhileASaveTimedOutGoesOutOnceTheRefreshShowsThatSaveLanded() async throws {
+        var calls: [(AidenBotChatActivity, String)] = []
+        let first = AidenBotChatActivity(level: .summary, wording: .follows)
+        let second = AidenBotChatActivity(level: .detailed, wording: .thinking)
+        let model = try model(save: { next, revision in
+            calls.append((next, revision))
+            if calls.count == 1 { try await Task.sleep(for: .seconds(60)) }
+            return try self.detail(revision: "rev_3", next)
+        }, refresh: { try self.detail(revision: "rev_2", first) }, requestLimit: .milliseconds(400))
+
+        let pick = Task { await model.pick(first) }
+        try await untilSaving { calls.count == 1 }
+        await model.pick(second)
+        await pick.value
+
+        XCTAssertEqual(calls.map(\.0), [first, second], "the second pick is not lost when the first one landed")
+        XCTAssertEqual(calls.map(\.1), ["rev_1", "rev_2"], "it goes out on the revision the refresh read")
+        XCTAssertEqual(model.value, second)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isSaving)
+    }
+
     func testASaveThatTimedOutAndDidNotLandRollsBackAndSaysTheMacWasUnreachable() async throws {
         let model = try model(AidenBotChatActivity(level: .quiet, wording: .follows), save: { _, _ in
             try await Task.sleep(for: .seconds(60))

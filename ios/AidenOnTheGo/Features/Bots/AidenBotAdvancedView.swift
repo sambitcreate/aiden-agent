@@ -1095,8 +1095,8 @@ final class AidenBotChatActivityModel {
             return true
         } catch {
             guard isCurrent() else { return giveUp() }
-            pending = nil
             if error is CancellationError {
+                pending = nil
                 value = saved
                 return false
             }
@@ -1104,8 +1104,12 @@ final class AidenBotChatActivityModel {
             if conflict || aidenBotChatActivityTransportFailure(error),
                let fresh = await adoptTheMacsChoice(),
                (fresh.chatActivity ?? .standard) == target {
+                // The Mac holds this pick after all: one made meanwhile goes out next, on the fresh revision.
                 return true
             }
+            // The pairing changed during the refresh: nothing more is said about that Mac's Bot.
+            guard isCurrent() else { return giveUp() }
+            pending = nil
             let failure: AidenBotChatActivityFailure
             if conflict {
                 failure = .conflict
