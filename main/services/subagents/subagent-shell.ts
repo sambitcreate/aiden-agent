@@ -563,18 +563,18 @@ export function createSubagentShellBrokerV2(
         });
         if (result.outcome === "cleanup_unconfirmed" || !result.cleanupConfirmed) {
           await finishUnknown();
-          return textResult(modelResult(result));
+          return { ...textResult(modelResult(result)), isError: true };
         }
         const rendered = modelResult(result);
+        const succeeded = result.outcome === "exited" && result.exitCode === 0;
         await input.journal.finishEffect({
           ...prepared.owner,
-          state:
-            result.outcome === "exited" && result.exitCode === 0 ? "completed" : "remote_error",
+          state: succeeded ? "completed" : "remote_error",
           terminalDigest: terminalDigest(result.outcome, rendered),
         });
         terminal = true;
         if (signal.aborted) throw signal.reason;
-        return textResult(rendered);
+        return { ...textResult(rendered), ...(!succeeded ? { isError: true } : {}) };
       } catch (error) {
         if (dispatchStarted) await finishUnknown();
         else await cancel(prepared);

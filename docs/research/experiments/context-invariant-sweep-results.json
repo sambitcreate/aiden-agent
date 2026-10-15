@@ -1,0 +1,27 @@
+{
+  "evidenceKind": "synthetic-invariant-sweep",
+  "seed": 260920804,
+  "windows": [
+    2048,
+    4096,
+    8192,
+    16000,
+    32000,
+    64000,
+    128000,
+    272000
+  ],
+  "requestedCases": 1000,
+  "totals": {
+    "cases": 875,
+    "capacityRejected": 125,
+    "reduced": 472,
+    "fallback": 2,
+    "historyRemoved": 364,
+    "toolResultsElided": 1596,
+    "inputMessages": 26229
+  },
+  "failures": [],
+  "elapsedMs": 1760.518917,
+  "limitations": "Synthetic valid tool transcripts; no real tokenizer, provider, model quality, live billing, or durable checkpoint execution. No claim that omitted evidence remains useful."
+}

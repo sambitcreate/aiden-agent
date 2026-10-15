@@ -1,0 +1,1840 @@
+{
+  "evidenceKind": "real-managed-harness-paired-synthetic-performance",
+  "generatedAt": "2026-10-11T20:02:29.148115+00:00",
+  "modules": {
+    "baseline": {
+      "path": "tmp/research/generation-context-before-scaling.ts",
+      "sha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5"
+    },
+    "candidate": {
+      "path": "main/services/generation-context.ts",
+      "sha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b"
+    }
+  },
+  "coordinatorSha256": "8b5abd2b7de551619e595a1af4af1ded55d1afbbb4a6c632b584360535e8fe5d",
+  "harnessSha256": "96ce402e2f62ada87026c69ce8d5dea633f06f3703eaccfea625caf0326680ca",
+  "processTimeoutMs": 30000,
+  "v8OldSpaceLimitMiB": 512,
+  "cells": 4,
+  "repetitions": 2,
+  "errors": [],
+  "limitations": [
+    "Faux providers and one in-memory echo tool; no inference, network, filesystem tool effects, or task-quality measurement.",
+    "Only injected GenerationContextTransform module differs between paired arms; both use current production runtime/coordinator/session code.",
+    "Default summary lifecycle remains enabled unless automaticSummary=false explicitly selects the supported setting in both arms.",
+    "Provider/summary/outcome/journal hashes omit timestamp fields; tool IDs, content, order, usage and counts remain checked.",
+    "runManaged timing includes seeding/preflight/clone/conversion/transforms/fake-provider/tool/flush, excludes fixture/harness construction and post-run validation.",
+    "transform timing covers only awaited injected transforms; unrelated CPU load not controlled, two reversed pairs not a statistical study.",
+    "Process RSS includes V8 young space, native memory, fixtures and validation;512MiB is only the V8 old-space limit."
+  ],
+  "rows": [
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 523.5562090000001,
+      "transformMs": 0.8641249999999445,
+      "transformDurations": [
+        0.5934169999999312,
+        0.27070800000001327
+      ],
+      "peakRssKiB": 209968,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "567bc6f8892acfa3564d560b0f1377e03c4927388e35743fd32dbcf105333cda",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6071,
+          "historyMessages": 354,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7426,
+          "historyMessages": 356,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
+        "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
+      ],
+      "summaryRequests": [
+        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 1298,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5",
+          "output": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5"
+        },
+        {
+          "input": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c",
+          "output": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c"
+        }
+      ],
+      "outcomeHash": "76040a4459a87d3f0948d3e98963926c80350484093df2c7ab455c15680f8734",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7388,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7392,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 0,
+      "processWallMs": 941.1656660959125
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 537.685167,
+      "transformMs": 0.6388749999999845,
+      "transformDurations": [
+        0.4959999999999809,
+        0.14287500000000364
+      ],
+      "peakRssKiB": 209392,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "567bc6f8892acfa3564d560b0f1377e03c4927388e35743fd32dbcf105333cda",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6071,
+          "historyMessages": 354,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7426,
+          "historyMessages": 356,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
+        "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
+      ],
+      "summaryRequests": [
+        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 1298,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5",
+          "output": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5"
+        },
+        {
+          "input": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c",
+          "output": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c"
+        }
+      ],
+      "outcomeHash": "76040a4459a87d3f0948d3e98963926c80350484093df2c7ab455c15680f8734",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7388,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7392,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 0,
+      "processWallMs": 952.2045000921935
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 515.6397919999999,
+      "transformMs": 0.5500409999999647,
+      "transformDurations": [
+        0.41041599999994105,
+        0.13962500000002365
+      ],
+      "peakRssKiB": 208608,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "567bc6f8892acfa3564d560b0f1377e03c4927388e35743fd32dbcf105333cda",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6071,
+          "historyMessages": 354,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7426,
+          "historyMessages": 356,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
+        "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
+      ],
+      "summaryRequests": [
+        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 1298,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5",
+          "output": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5"
+        },
+        {
+          "input": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c",
+          "output": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c"
+        }
+      ],
+      "outcomeHash": "76040a4459a87d3f0948d3e98963926c80350484093df2c7ab455c15680f8734",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7388,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7392,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 1,
+      "processWallMs": 928.0542498454452
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 540.582834,
+      "transformMs": 0.8289999999999509,
+      "transformDurations": [
+        0.649332999999956,
+        0.17966699999999491
+      ],
+      "peakRssKiB": 209456,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "567bc6f8892acfa3564d560b0f1377e03c4927388e35743fd32dbcf105333cda",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6071,
+          "historyMessages": 354,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7426,
+          "historyMessages": 356,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "04a5c6f76cc6b4cd8c0400a0380bac591ae2b74b8af11ef9efb5a2549e451851",
+        "04960b5643d174b7d6ce9671d88c6d7509986fcd7561e9316e71c6b026f5db5f"
+      ],
+      "summaryRequests": [
+        "929302ae7dc35333af4cc44058687320288ef092234857ceeb49561503de4292"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 1298,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5",
+          "output": "0ee01c58360012cbf4668e512eca96e733b135bea5836c6f3c0de7a0c6ebb7f5"
+        },
+        {
+          "input": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c",
+          "output": "e23e4dfaa1433877563a23b10118ac275f7e6d15963c9d079495dbda27dbe44c"
+        }
+      ],
+      "outcomeHash": "76040a4459a87d3f0948d3e98963926c80350484093df2c7ab455c15680f8734",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7388,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7392,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 1,
+      "processWallMs": 955.6205840781331
+    },
+    {
+      "kind": "historical",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 546.7373749999999,
+      "transformMs": 0.8646250000000464,
+      "transformDurations": [
+        0.5873750000000655,
+        0.2772499999999809
+      ],
+      "peakRssKiB": 215040,
+      "seedMessages": 3001,
+      "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalMessages": 3004,
+      "preservedSeedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalPayloadHash": "2b1cb6062e4a9a9d6daa29c32baaa40c471f7d0d906a555ce04460bc9a33eb33",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 39060,
+          "historyMessages": 3001,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6054,
+          "historyMessages": 461,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7473,
+          "historyMessages": 461,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
+        "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
+      ],
+      "summaryRequests": [
+        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 3186,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa",
+          "output": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa"
+        },
+        {
+          "input": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746",
+          "output": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746"
+        }
+      ],
+      "outcomeHash": "43a6127d1993a17770c24e7b91f1d74b78c8a8d3c43b7edf85dcd5c972e308c5",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7435,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7439,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 0,
+      "processWallMs": 962.9206659737974
+    },
+    {
+      "kind": "historical",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 547.528958,
+      "transformMs": 0.6749579999999469,
+      "transformDurations": [
+        0.49049999999999727,
+        0.1844579999999496
+      ],
+      "peakRssKiB": 215328,
+      "seedMessages": 3001,
+      "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalMessages": 3004,
+      "preservedSeedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalPayloadHash": "2b1cb6062e4a9a9d6daa29c32baaa40c471f7d0d906a555ce04460bc9a33eb33",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 39060,
+          "historyMessages": 3001,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6054,
+          "historyMessages": 461,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7473,
+          "historyMessages": 461,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
+        "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
+      ],
+      "summaryRequests": [
+        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 3186,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa",
+          "output": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa"
+        },
+        {
+          "input": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746",
+          "output": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746"
+        }
+      ],
+      "outcomeHash": "43a6127d1993a17770c24e7b91f1d74b78c8a8d3c43b7edf85dcd5c972e308c5",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7435,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7439,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 0,
+      "processWallMs": 959.8865420557559
+    },
+    {
+      "kind": "historical",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 546.548375,
+      "transformMs": 0.7290419999999358,
+      "transformDurations": [
+        0.5319170000000213,
+        0.1971249999999145
+      ],
+      "peakRssKiB": 214736,
+      "seedMessages": 3001,
+      "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalMessages": 3004,
+      "preservedSeedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalPayloadHash": "2b1cb6062e4a9a9d6daa29c32baaa40c471f7d0d906a555ce04460bc9a33eb33",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 39060,
+          "historyMessages": 3001,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6054,
+          "historyMessages": 461,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7473,
+          "historyMessages": 461,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
+        "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
+      ],
+      "summaryRequests": [
+        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 3186,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa",
+          "output": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa"
+        },
+        {
+          "input": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746",
+          "output": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746"
+        }
+      ],
+      "outcomeHash": "43a6127d1993a17770c24e7b91f1d74b78c8a8d3c43b7edf85dcd5c972e308c5",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7435,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7439,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 1,
+      "processWallMs": 965.1870829984546
+    },
+    {
+      "kind": "historical",
+      "batches": 1000,
+      "resultChars": 128,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 591.3025829999999,
+      "transformMs": 0.9844999999999118,
+      "transformDurations": [
+        0.73012499999993,
+        0.2543749999999818
+      ],
+      "peakRssKiB": 213456,
+      "seedMessages": 3001,
+      "seedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalMessages": 3004,
+      "preservedSeedHash": "11dabae581684834c703bd4cd8f29f0ca46881cc29de22d0bd3d384f224cfac7",
+      "journalPayloadHash": "2b1cb6062e4a9a9d6daa29c32baaa40c471f7d0d906a555ce04460bc9a33eb33",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "summary-request",
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 39060,
+          "historyMessages": 3001,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 6054,
+          "historyMessages": 461,
+          "shouldCompact": false
+        },
+        {
+          "tokens": 7473,
+          "historyMessages": 461,
+          "shouldCompact": false
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 1,
+      "requestHashes": [
+        "01643574d850bf101bb438f3439b264edcb3593b5e65482af93a1343c8e52bc7",
+        "535b2350e57b8ad2087f574b9600ffe5b92f17861b9ec647c0809f8036153d9d"
+      ],
+      "summaryRequests": [
+        "0528e4b0fb13ded4ffd9eb89dc1e2a4da7c7278827a932d6d3cdd1e9119d6cd2"
+      ],
+      "summaryEvidence": [
+        {
+          "roles": [
+            "system",
+            "user"
+          ],
+          "textChars": 3186,
+          "containsUser": true,
+          "containsToolEvidence": false,
+          "emptyConversation": false
+        }
+      ],
+      "transformHashes": [
+        {
+          "input": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa",
+          "output": "0b21ae6940a30b1678b9d35ff022aab545ae3188bdc24913eabb0898892df3aa"
+        },
+        {
+          "input": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746",
+          "output": "ef6b0f375d8dc01cc281e21ab97b439befc1e6377e8b88533038f5c03a200746"
+        }
+      ],
+      "outcomeHash": "43a6127d1993a17770c24e7b91f1d74b78c8a8d3c43b7edf85dcd5c972e308c5",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 7435,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7439,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 1,
+      "processWallMs": 1011.298666941002
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 601.36625,
+      "transformMs": 522.396583,
+      "transformDurations": [
+        183.09862500000003,
+        339.297958
+      ],
+      "peakRssKiB": 138736,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "42d1142ab8a945b7104dfe1bcddc714628eba3f072a0be0b0eb11dbd1b11b3a9",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 34057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "b8ff56f5f62f66a101ce7936e54b821be05bd12b4ad4fdf4a73ae8109a20963c",
+        "231a662f1311a615f8ff06e95518cdf3844db1e006dff83931613fd30ec9431a"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "7225e2770099f35779a6cbbecdf33552d0fb3caa9291de7955d79f9e09b3bdb7",
+          "output": "7cca9650f67b9c010892a72ecdb20bbb272a67472f0986897f1f7eb0a1fde787"
+        },
+        {
+          "input": "ade04a827ff0c9abae7647f2f6125f82523e6940842849485202266d08342bcf",
+          "output": "b8a8a1a4f7a83e8c0f1dd8aee54031e52cc8c3ad4d2423366fdf9f3372745a1c"
+        }
+      ],
+      "outcomeHash": "4abcafe014c66c4b661dfa11c3dcb57babb1b90b6da726401ba9ec53feb5dee4",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 0,
+      "processWallMs": 1016.3911250419915
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 91.10125,
+      "transformMs": 11.71962400000001,
+      "transformDurations": [
+        6.614208000000019,
+        5.105415999999991
+      ],
+      "peakRssKiB": 139760,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "42d1142ab8a945b7104dfe1bcddc714628eba3f072a0be0b0eb11dbd1b11b3a9",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 34057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "b8ff56f5f62f66a101ce7936e54b821be05bd12b4ad4fdf4a73ae8109a20963c",
+        "231a662f1311a615f8ff06e95518cdf3844db1e006dff83931613fd30ec9431a"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "7225e2770099f35779a6cbbecdf33552d0fb3caa9291de7955d79f9e09b3bdb7",
+          "output": "7cca9650f67b9c010892a72ecdb20bbb272a67472f0986897f1f7eb0a1fde787"
+        },
+        {
+          "input": "ade04a827ff0c9abae7647f2f6125f82523e6940842849485202266d08342bcf",
+          "output": "b8a8a1a4f7a83e8c0f1dd8aee54031e52cc8c3ad4d2423366fdf9f3372745a1c"
+        }
+      ],
+      "outcomeHash": "4abcafe014c66c4b661dfa11c3dcb57babb1b90b6da726401ba9ec53feb5dee4",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 0,
+      "processWallMs": 506.0018338263035
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 92.840958,
+      "transformMs": 11.485708999999986,
+      "transformDurations": [
+        6.405499999999961,
+        5.080209000000025
+      ],
+      "peakRssKiB": 140320,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "42d1142ab8a945b7104dfe1bcddc714628eba3f072a0be0b0eb11dbd1b11b3a9",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 34057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "b8ff56f5f62f66a101ce7936e54b821be05bd12b4ad4fdf4a73ae8109a20963c",
+        "231a662f1311a615f8ff06e95518cdf3844db1e006dff83931613fd30ec9431a"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "7225e2770099f35779a6cbbecdf33552d0fb3caa9291de7955d79f9e09b3bdb7",
+          "output": "7cca9650f67b9c010892a72ecdb20bbb272a67472f0986897f1f7eb0a1fde787"
+        },
+        {
+          "input": "ade04a827ff0c9abae7647f2f6125f82523e6940842849485202266d08342bcf",
+          "output": "b8a8a1a4f7a83e8c0f1dd8aee54031e52cc8c3ad4d2423366fdf9f3372745a1c"
+        }
+      ],
+      "outcomeHash": "4abcafe014c66c4b661dfa11c3dcb57babb1b90b6da726401ba9ec53feb5dee4",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 1,
+      "processWallMs": 515.2205831836909
+    },
+    {
+      "kind": "active",
+      "batches": 1000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 594.854583,
+      "transformMs": 517.058875,
+      "transformDurations": [
+        179.92337500000002,
+        337.1355
+      ],
+      "peakRssKiB": 139872,
+      "seedMessages": 2001,
+      "seedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalMessages": 2004,
+      "preservedSeedHash": "3107857dc1ccfd94c73e7b1f77185b4a3e0effd4d09737b2ce834827c45db72f",
+      "journalPayloadHash": "42d1142ab8a945b7104dfe1bcddc714628eba3f072a0be0b0eb11dbd1b11b3a9",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 34051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 34057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "b8ff56f5f62f66a101ce7936e54b821be05bd12b4ad4fdf4a73ae8109a20963c",
+        "231a662f1311a615f8ff06e95518cdf3844db1e006dff83931613fd30ec9431a"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "7225e2770099f35779a6cbbecdf33552d0fb3caa9291de7955d79f9e09b3bdb7",
+          "output": "7cca9650f67b9c010892a72ecdb20bbb272a67472f0986897f1f7eb0a1fde787"
+        },
+        {
+          "input": "ade04a827ff0c9abae7647f2f6125f82523e6940842849485202266d08342bcf",
+          "output": "b8a8a1a4f7a83e8c0f1dd8aee54031e52cc8c3ad4d2423366fdf9f3372745a1c"
+        }
+      ],
+      "outcomeHash": "4abcafe014c66c4b661dfa11c3dcb57babb1b90b6da726401ba9ec53feb5dee4",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 1,
+      "processWallMs": 1008.4073329344392
+    },
+    {
+      "kind": "active",
+      "batches": 5000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 11867.70125,
+      "transformMs": 11590.157833000001,
+      "transformDurations": [
+        3832.4371250000004,
+        7757.720708000001
+      ],
+      "peakRssKiB": 195488,
+      "seedMessages": 10001,
+      "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalMessages": 10004,
+      "preservedSeedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalPayloadHash": "d53fa63f5c1818713c87a920e6fa36f435cd3e560e6420370615ff57da445907",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 170051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 170057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "91a1cc3ace27f7915e265fda5378f4a35a3aa3df749e64c3ccbe990104d9e6ac",
+        "20422ca2fb81e392396a2b02651902fb441ce03b75adcf32918ffab91c015f9c"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "9dc9604a9f2827bee357814e86e8c465a2150f2104cc4284193a7288ffc4f5f7",
+          "output": "12d254a0a433e028a082140a0ab3c133331c14e97d7c8812da6db618b997cde1"
+        },
+        {
+          "input": "fcbb9f616c891816407e720f8ddf3776c609e6f8f6ce385e95cefa845631c694",
+          "output": "e8a386eb1dee09f85027f2dedd65deeeda2d5b6730f9a6ffc0f64fe7ee1cce28"
+        }
+      ],
+      "outcomeHash": "7f9fcba676e08397a551c044150d4be64fbf8ac5f769608bcdbc0441a86f9880",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 4999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 0,
+      "processWallMs": 12433.11041709967
+    },
+    {
+      "kind": "active",
+      "batches": 5000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 314.09762499999994,
+      "transformMs": 32.82208299999991,
+      "transformDurations": [
+        17.90037499999994,
+        14.921707999999967
+      ],
+      "peakRssKiB": 196288,
+      "seedMessages": 10001,
+      "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalMessages": 10004,
+      "preservedSeedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalPayloadHash": "d53fa63f5c1818713c87a920e6fa36f435cd3e560e6420370615ff57da445907",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 170051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 170057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "91a1cc3ace27f7915e265fda5378f4a35a3aa3df749e64c3ccbe990104d9e6ac",
+        "20422ca2fb81e392396a2b02651902fb441ce03b75adcf32918ffab91c015f9c"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "9dc9604a9f2827bee357814e86e8c465a2150f2104cc4284193a7288ffc4f5f7",
+          "output": "12d254a0a433e028a082140a0ab3c133331c14e97d7c8812da6db618b997cde1"
+        },
+        {
+          "input": "fcbb9f616c891816407e720f8ddf3776c609e6f8f6ce385e95cefa845631c694",
+          "output": "e8a386eb1dee09f85027f2dedd65deeeda2d5b6730f9a6ffc0f64fe7ee1cce28"
+        }
+      ],
+      "outcomeHash": "7f9fcba676e08397a551c044150d4be64fbf8ac5f769608bcdbc0441a86f9880",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 4999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 0,
+      "processWallMs": 876.9378748256713
+    },
+    {
+      "kind": "active",
+      "batches": 5000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
+      "harnessMs": 311.55220799999995,
+      "transformMs": 33.77491699999996,
+      "transformDurations": [
+        18.120916999999963,
+        15.653999999999996
+      ],
+      "peakRssKiB": 193776,
+      "seedMessages": 10001,
+      "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalMessages": 10004,
+      "preservedSeedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalPayloadHash": "d53fa63f5c1818713c87a920e6fa36f435cd3e560e6420370615ff57da445907",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 170051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 170057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "91a1cc3ace27f7915e265fda5378f4a35a3aa3df749e64c3ccbe990104d9e6ac",
+        "20422ca2fb81e392396a2b02651902fb441ce03b75adcf32918ffab91c015f9c"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "9dc9604a9f2827bee357814e86e8c465a2150f2104cc4284193a7288ffc4f5f7",
+          "output": "12d254a0a433e028a082140a0ab3c133331c14e97d7c8812da6db618b997cde1"
+        },
+        {
+          "input": "fcbb9f616c891816407e720f8ddf3776c609e6f8f6ce385e95cefa845631c694",
+          "output": "e8a386eb1dee09f85027f2dedd65deeeda2d5b6730f9a6ffc0f64fe7ee1cce28"
+        }
+      ],
+      "outcomeHash": "7f9fcba676e08397a551c044150d4be64fbf8ac5f769608bcdbc0441a86f9880",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 4999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "candidate",
+      "repetition": 1,
+      "processWallMs": 873.9310000091791
+    },
+    {
+      "kind": "active",
+      "batches": 5000,
+      "resultChars": 128,
+      "automaticSummary": false,
+      "status": "completed",
+      "node": "v22.22.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "capacityChecked": true,
+      "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "harnessMs": 11850.962042,
+      "transformMs": 11573.690249,
+      "transformDurations": [
+        3844.391708,
+        7729.298541
+      ],
+      "peakRssKiB": 194016,
+      "seedMessages": 10001,
+      "seedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalMessages": 10004,
+      "preservedSeedHash": "1ec578c29d5bde2a82ccfdb733ddd76538b4c9534496d5016df924d630da4f53",
+      "journalPayloadHash": "d53fa63f5c1818713c87a920e6fa36f435cd3e560e6420370615ff57da445907",
+      "providerCalls": 2,
+      "toolCalls": 1,
+      "lifecycle": [
+        "context-transform",
+        "foreground-request",
+        "context-transform",
+        "foreground-request"
+      ],
+      "projections": [
+        {
+          "tokens": 170051,
+          "historyMessages": 1,
+          "shouldCompact": true
+        },
+        {
+          "tokens": 170057,
+          "historyMessages": 1,
+          "shouldCompact": true
+        }
+      ],
+      "faults": [],
+      "summaryCalls": 0,
+      "requestHashes": [
+        "91a1cc3ace27f7915e265fda5378f4a35a3aa3df749e64c3ccbe990104d9e6ac",
+        "20422ca2fb81e392396a2b02651902fb441ce03b75adcf32918ffab91c015f9c"
+      ],
+      "summaryRequests": [],
+      "summaryEvidence": [],
+      "transformHashes": [
+        {
+          "input": "9dc9604a9f2827bee357814e86e8c465a2150f2104cc4284193a7288ffc4f5f7",
+          "output": "12d254a0a433e028a082140a0ab3c133331c14e97d7c8812da6db618b997cde1"
+        },
+        {
+          "input": "fcbb9f616c891816407e720f8ddf3776c609e6f8f6ce385e95cefa845631c694",
+          "output": "e8a386eb1dee09f85027f2dedd65deeeda2d5b6730f9a6ffc0f64fe7ee1cce28"
+        }
+      ],
+      "outcomeHash": "7f9fcba676e08397a551c044150d4be64fbf8ac5f769608bcdbc0441a86f9880",
+      "outcomeKind": "completed",
+      "outcome": {
+        "kind": "completed",
+        "finalMessage": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "FINAL-RESULT-73"
+            }
+          ],
+          "api": "aiden-context-research-faux",
+          "provider": "aiden-context-research",
+          "model": "fixture",
+          "usage": {
+            "input": 13445,
+            "output": 4,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 13449,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "thinkingLevel": "off"
+        },
+        "attempts": 1,
+        "emergencyProjection": {
+          "kind": "active_payload_reduced",
+          "truncatedToolResults": 0,
+          "compactedToolResults": 4999,
+          "requiresDurableCheckpoint": false
+        }
+      },
+      "normalization": "Only timestamp object fields omitted from evidence hashes; tool-call IDs/content/order/usage retained. Journal random entry IDs are excluded by hashing message payloads.",
+      "measurement": "runManaged includes initial journal seeding, preflight, transforms, fake provider steps, tool dispatch and journal flush; excludes fixture/session/harness construction and post-run assertions. Fake summary compaction uses normal lifecycle, enabled by default; automaticSummary=false explicitly selects the supported disabled setting in both arms. No real model/network/effects.",
+      "phase": "baseline",
+      "repetition": 1,
+      "processWallMs": 12412.914500106126
+    }
+  ]
+}

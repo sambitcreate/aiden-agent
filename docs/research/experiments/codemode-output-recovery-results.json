@@ -1,0 +1,21 @@
+{
+  "evidenceKind": "offline-local-effect-output-recovery",
+  "generatedAt": "2026-10-11T20:18:26.086Z",
+  "node": "v22.22.3",
+  "sourceSha256": {
+    "package-lock.json": "8f6a1f2461929b956fa07763319d41d306b2efc618ddd19c3100545931ab7c48",
+    "main/services/coding-tools.ts": "64ded69305aed4d62694cbda65e17f85655e670b655b51e400f977bcb4c7f2be",
+    "main/services/pi-codemode.ts": "1d3381a1e667f5391883d7877f5356318a5677a7e21e907d7cf23bae8fabc724",
+    "main/services/tool-output-context.ts": "a669e80961c4109ad4416b900ce36dd737032e6285dcd9590b3f9584f0eff9ac",
+    "main/services/tool-output-store.ts": "33b855d9836863cc3508c52fa604c3084d15761ad7f0c54765cd4715bdce7538",
+    "docs/research/experiments/codemode-output-recovery.ts": "6075e494c73e5b621eeef664e3d03e9b9df674bfb17ed13c2d6716eb05dd4289"
+  },
+  "realCommandExit": 7,
+  "topLevelCodemodeIsError": false,
+  "nestedIsError": true,
+  "omissionDisclosed": true,
+  "storedStatusPrefix": "Command exited with error (code 7).\nprogress\nprogress\nprogress\nprogress\nprogress",
+  "tailRecovered": true,
+  "revokedReadDenied": true,
+  "commandDispatches": 1
+}

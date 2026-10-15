@@ -2532,7 +2532,8 @@ class AidenChatTest {
             Case("agent_subagents", "Run subagents", AidenAgentStepStatus.COMPLETED, null, null, "Ran subagents"),
             Case("agent_tool", "Use agent tool", AidenAgentStepStatus.RUNNING, null, null, "Using an agent tool"),
             Case("agent_context_rebuilt", "Started a fresh agent session from this chat", AidenAgentStepStatus.COMPLETED, null, null, "Started a fresh agent session"),
-            Case("run_command", "Run command", AidenAgentStepStatus.COMPLETED, null, "a command", "Ran a command")
+            Case("run_command", "Run command", AidenAgentStepStatus.COMPLETED, null, "a command", "Ran a command"),
+            Case("run_command", "Run command", AidenAgentStepStatus.FAILED, null, "a command", "Run command failed a command")
         )
         expected.forEachIndexed { index, case ->
             val step = AidenAgentStep(

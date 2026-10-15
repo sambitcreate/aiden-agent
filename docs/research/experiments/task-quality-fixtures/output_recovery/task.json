@@ -1,0 +1,44 @@
+{
+  "id": "output_recovery",
+  "api_contract": "release_id(channel) returns the active release ID for production or staging; unknown channels raise KeyError.",
+  "latest_user_request": "Use the retained catalog output to implement release_id for production and staging. Select active releases only; do not deploy anything.",
+  "earlier_messages": [
+    {
+      "role": "user",
+      "content": "Catalog order is not recency. Archived rows must never win over active rows."
+    }
+  ],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_archived": {
+      "expected": "fail",
+      "required_failure": "active_release"
+    },
+    "wrong_unknown_fallback": {
+      "expected": "fail",
+      "required_failure": "unknown_rejected"
+    }
+  },
+  "oracle_establishes": [
+    "Correct active-channel mapping and unknown-channel refusal; archived plausible values are rejected."
+  ],
+  "oracle_does_not_establish": [
+    "Actual tool-output authorization/expiry, arbitrary catalogs, live deployment safety, or causal proof that recovery supplied the answer."
+  ],
+  "retained_output_recipe": {
+    "prefix_line": "catalog padding: non-target component status=ok\n",
+    "prefix_repetitions": 900,
+    "decisive_text": "channel=production release=prod-r09 status=archived\nchannel=staging release=stage-r11 status=archived\nchannel=production release=prod-r17 status=active\nchannel=staging release=stage-r23 status=active\n",
+    "suffix_line": "catalog padding: non-target component status=ok\n",
+    "suffix_repetitions": 900
+  },
+  "fixture_delivery": "Host stores full expanded bytes outside workspace in a fresh scoped ToolOutputStore; model receives only normal bounded head/tail preview and real read_tool_output handle. No fake handle is sent. Host verifies decisive rows are absent from preview and retrievable before admitting future pilot."
+}

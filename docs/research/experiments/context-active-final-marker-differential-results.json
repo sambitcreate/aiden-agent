@@ -1,0 +1,12 @@
+{
+  "evidenceKind": "intentional-semantic-difference-after-marker-fix",
+  "status": "stopped-at-first-difference",
+  "case": "mixed-11",
+  "baselineModule": "tmp/research/generation-context-before-active.ts",
+  "candidateModule": "main/services/generation-context.ts",
+  "baselineEstimatedAfter": 42058,
+  "candidateEstimatedAfter": 42316,
+  "compactedToolResultsBoth": 20,
+  "difference": "Candidate preserves two complete recovery notices previously lost after text-only image projection and truncation. This is an intended recovery behavior change, so exact old-policy equivalence is no longer the appropriate whole-output oracle.",
+  "limitations": "This receipt records the first diagnostic only; no full466case pass or timing refresh is claimed."
+}
