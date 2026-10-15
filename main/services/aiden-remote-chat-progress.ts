@@ -447,9 +447,12 @@ export class AidenRemoteChatProgressService {
     let scheduled: ReturnType<typeof setTimeout> | undefined;
     const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
     const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
+    // Native clients drop live control snapshots when a stream disconnects, so
+    // every successful subscription re-announces the controls revision even
+    // when a warm resume suppresses unchanged task/agent snapshots.
     const sent = new Map<string, number>(
       isResumed
-        ? resumed.sent
+        ? [...resumed.sent].filter(([type]) => type !== "app_controls_changed")
         : [],
     );
     const close = () => {

@@ -708,6 +708,26 @@ test("foreground control invalidations reach every subscribed client without exp
   service.close();
 });
 
+test("a warm reconnect re-announces controls so native cards cleared on disconnect reload", async (t) => {
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  const { service } = fixture({ appControlsEnabled: async () => true });
+  t.after(() => service.close());
+  const grants = new Set(["tasks:read", "app-controls:read"] as const);
+  const first = new Response();
+  await service.openEvents("device-1", "chat-1", grants, 0, first.wire);
+  const ids = [...first.chunks.join("").matchAll(/^id: (\d+)$/gmu)];
+  const cursor = Number(ids[ids.length - 1]![1]);
+  first.emit("close");
+
+  const resumed = new Response();
+  await service.openEvents("device-1", "chat-1", grants, cursor, resumed.wire);
+  const replay = resumed.chunks.join("");
+  assert.doesNotMatch(replay, /event: task_update/u, "unchanged task snapshots stay deduplicated");
+  assert.match(replay, /event: app_controls_changed/u, "an unchanged controls revision is re-announced");
+  service.close();
+});
+
 test("Bot progress remains live with an unrelated controls grant", { timeout: 4000 }, async (t) => {
   const keepAlive = setInterval(() => {}, 1000);
   t.after(() => clearInterval(keepAlive));
