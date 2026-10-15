@@ -6,7 +6,7 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
 
 ## Active and partial
 
-- [Quick View cards](../superpowers/plans/2026-10-15-quick-view-cards.md) — Planned (2026-10-15). Quick View becomes Claude-Code-style stacked cards (Environment, Changes, Context, Subagents) at `SidebarListItem` density.
+- [Quick View cards](../superpowers/plans/2026-10-15-quick-view-cards.md) — Implemented on branch feature/env-panel-redesign-9cc415 (PR pending) (2026-10-15). Quick View becomes Claude-Code-style stacked cards (Environment, Changes, Context, Subagents) at `SidebarListItem` density.
   - **Behaviour:** cards start collapsed and reorder by a right-edge grip. Each has three tiers: a summary, inline detail, and an open-in-sidebar or open-external button.
   - **Visibility:** cards and rows appear only once relevant. Changes needs work or a PR, the PR row needs a created PR, Context needs the first message, and Subagents needs a run started.
   - **Context:** shows a per-category breakdown (messages, system prompt, built-in and MCP tools, skills, memory, project and MCP instructions, deferred MCP tools). This needs a desktop-only `breakdown` field on the context projection; no CLI, Remote or phone changes.
