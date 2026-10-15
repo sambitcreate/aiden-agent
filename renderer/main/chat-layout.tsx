@@ -3,7 +3,7 @@ import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
 // Selection is route-driven (chatId param); the unified sidebar can open chats
 // across registered workspaces while WorkspaceProvider tracks execution context.
 
-import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { SplitView, Text, toast } from "../components/ui";
@@ -23,10 +23,21 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
 import { isStudioPath } from "../shared/studio-routes";
+import { isBotsPath, rememberRoute } from "../lib/bot-routes";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string; hostId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  // ‹ in the Bots sidebar returns to the last page outside Bots (spec §9). The
+  // href is read from the router, not selected, so search-only changes don't re-render the layout.
+  const router = useRouter();
+  React.useEffect(() => {
+    rememberRoute(router.state.location.href);
+    return router.subscribe("onResolved", ({ toLocation }) => rememberRoute(toLocation.href));
+  }, [router]);
+  // The workspace Environment, Quick View and device mini player are hidden, not
+  // closed, on Bots pages: the Bot has its own panel, and leaving restores them.
+  const botsSurface = isBotsPath(pathname);
   // A paired host's chat is selected separately so its ID never matches a local chat.
   const activeRemoteChat = React.useMemo(
     () =>
@@ -103,7 +114,7 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface}>
+      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface || botsSurface}>
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />

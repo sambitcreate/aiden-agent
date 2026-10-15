@@ -166,6 +166,38 @@ test("Resume called twice at once makes one fresh provider request", async () =>
   }
 });
 
+test("Resume reports it resumed only for the call that did: not for a replay, a second request, or a blocked one", async () => {
+  const profile = tempProfile();
+  await killMidStream(profile);
+  const resumed: string[] = [];
+  const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer")]);
+  const service = await serviceFor(profile, fauxModels, { onResumed: (botId) => resumed.push(botId) });
+  try {
+    await service.initialize();
+    await Promise.all([service.resume("bot:killed", "phone-1"), service.resume("bot:killed", "desk-1")]);
+    await service.resume("bot:killed", "phone-1");
+    await waitFor(async () => (await service.state("bot:killed")).kind === "idle", { what: "resumed turn to finish" });
+    await service.resume("bot:killed", "desk-2");
+    assert.deepEqual(resumed, ["bot:killed"]);
+  } finally {
+    await service.shutdown();
+  }
+  const blockedProfile = tempProfile();
+  await killMidStream(blockedProfile);
+  const blocked: string[] = [];
+  const refused = await serviceFor(blockedProfile, createFauxModels([fauxAssistantMessage("must not run")]), {
+    extension: recordingDeps({ readmit: () => ({ ok: false, reason: "access_changed" }) }),
+    onResumed: (botId) => blocked.push(botId),
+  });
+  try {
+    await refused.initialize();
+    await refused.resume("bot:killed", "r");
+    assert.deepEqual(blocked, []);
+  } finally {
+    await refused.shutdown();
+  }
+});
+
 test("Dismiss after a restart makes no provider request and keeps the partial as interrupted", async () => {
   const profile = tempProfile();
   const submissionId = await killMidStream(profile);

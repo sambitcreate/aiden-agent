@@ -260,6 +260,8 @@ fun AidenBotSessionScreen(
                 onBack = onNavigateBack,
                 onOpenProfile = { onNavigateToBotProfile(botId) },
                 onOpenFiles = ::openFiles,
+                onOpenMemory = if (canOpenMemory) ({ onNavigateToBotMemory(botId) }) else null,
+                onOpenAdvanced = ::openAdvanced,
                 canDelete = canDelete,
                 onDelete = { confirmingDelete = true }
             )

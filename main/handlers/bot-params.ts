@@ -1,6 +1,7 @@
 import {
   BOT_LIMITS,
   isBotAvatar,
+  parseBotChatActivity,
   type BotCreateInput,
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
@@ -28,7 +29,7 @@ const CREATE_KEYS = new Set([
   "name",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -102,10 +103,13 @@ export function parseConnectionPluginId(value: unknown): string {
 
 export function parseBotUpdate(value: unknown): BotUpdateInput {
   const record = exact(value, UPDATE_KEYS, "bot update fields");
+  const chatActivity = record.chatActivity === undefined ? undefined : parseBotChatActivity(record.chatActivity);
+  if (record.chatActivity !== undefined && !chatActivity) throw new Error("Invalid bot chat activity.");
   return {
     id: parseBotId(record.id),
     expectedRevision: parseBotRevision(record.expectedRevision),
     ...createFields(record),
+    ...(chatActivity ? { chatActivity } : {}),
   };
 }
 
@@ -201,6 +205,22 @@ export function parseBotSessionAction(
     throw new Error(`Invalid bot ${action} request id.`);
   }
   return { botId: parseBotId(fields.botId), requestId: fields.requestId };
+}
+
+/** At most 15 digits, so `Number()` stays exact (below 2^53). */
+const BOT_SUBMISSION_ID = /^\d{1,15}$/u;
+
+/** Remove on a queued message: the Bot and one durable submission id. */
+export function parseBotWithdraw(input: unknown): { botId: string; submissionId: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot withdraw fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "submissionId")) {
+    throw new Error("Invalid bot withdraw fields.");
+  }
+  if (typeof fields.submissionId !== "string" || !BOT_SUBMISSION_ID.test(fields.submissionId)) {
+    throw new Error("Invalid bot submission id.");
+  }
+  return { botId: parseBotId(fields.botId), submissionId: fields.submissionId };
 }
 
 const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;

@@ -97,7 +97,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: hostname(), tailscale, bonjour: options.discovery ?? bonjourPublisher(),
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: [hostname()], opensslPath: "openssl" }),
     workspaceApi: async (instanceId) => {
-      const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state });
+      const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
       chatApi ??= await createCliRemoteChats(agentDir, chats, workspaces, state, idempotency, persistIdempotency, bots);
       return {
         ...createCliRemoteBots(agentDir, instanceId, bots, chats, chatApi, idempotency, persistIdempotency),

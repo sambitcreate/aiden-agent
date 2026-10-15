@@ -159,37 +159,32 @@ struct AidenBotAdvancedView: View {
 
     private func modelSection(_ catalog: AidenBotCapabilityCatalog) -> some View {
         Section {
-            Picker("AI", selection: providerBinding(catalog)) {
-                ForEach(catalog.providers) { provider in
-                    Text(optionTitle(provider.label, available: provider.available))
-                        .tag(provider.id)
-                        .disabled(!provider.available)
+            AidenBotModelRow(
+                title: "Model",
+                catalog: catalog,
+                providerID: draft?.customAccess.providerID,
+                modelID: draft?.customAccess.modelID,
+                recommended: recommendedDraft(catalog).map {
+                    AidenBotModelSelection(providerId: $0.customAccess.providerID, modelId: $0.customAccess.modelID)
                 }
+            ) { providerID, modelID in
+                draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
             }
-            Picker("Model", selection: modelBinding(catalog)) {
-                ForEach(selectedProvider(in: catalog)?.models ?? []) { model in
-                    Text(optionTitle(model.label, available: model.available))
-                        .tag(model.id)
-                        .disabled(!model.available)
-                }
-            }
-            if selectedPrimaryModel(in: catalog)?.supportsImages == false {
-                if visionProviders(in: catalog).isEmpty {
-                    Text("To look at photos, add an AI that can see images on your Mac.")
-                        .foregroundStyle(palette.secondary)
-                } else {
-                    Picker("Photos", selection: visionProviderBinding(catalog)) {
-                        ForEach(visionProviders(in: catalog)) { provider in
-                            Text(provider.label).tag(provider.id)
-                        }
-                    }
-                    Picker("Photo model", selection: visionModelBinding(catalog)) {
-                        ForEach(selectedVisionProvider(in: catalog)?.models.filter {
-                            $0.available && $0.supportsImages
-                        } ?? []) { model in
-                            Text(model.label).tag(model.id)
-                        }
-                    }
+            switch draft?.photoModelNeed(catalog: catalog) ?? .none {
+            case .none:
+                EmptyView()
+            case .unavailable:
+                Text("To look at photos, add an AI that can see images on your Mac.")
+                    .foregroundStyle(palette.secondary)
+            case .choose:
+                AidenBotModelRow(
+                    title: "Photos",
+                    catalog: catalog,
+                    providerID: draft?.visionProviderID,
+                    modelID: draft?.visionModelID,
+                    imagesOnly: true
+                ) { providerID, modelID in
+                    draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
                 }
             }
             Button("Use recommended") { useRecommendedModels(catalog) }
@@ -272,24 +267,6 @@ struct AidenBotAdvancedView: View {
         )
     }
 
-    private func selectedProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
-        catalog.providers.first { $0.id == draft?.customAccess.providerID }
-    }
-
-    private func selectedPrimaryModel(in catalog: AidenBotCapabilityCatalog) -> AidenBotModelOption? {
-        selectedProvider(in: catalog)?.models.first { $0.id == draft?.customAccess.modelID }
-    }
-
-    private func visionProviders(in catalog: AidenBotCapabilityCatalog) -> [AidenBotProviderOption] {
-        catalog.providers.filter { provider in
-            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
-        }
-    }
-
-    private func selectedVisionProvider(in catalog: AidenBotCapabilityCatalog) -> AidenBotProviderOption? {
-        catalog.providers.first { $0.id == draft?.visionProviderID }
-    }
-
     private func recommendedDraft(_ catalog: AidenBotCapabilityCatalog) -> AidenBotEditorDraft? {
         guard var next = draft,
               let recommended = AidenBotCustomAccessDraft(catalog: catalog) else { return nil }
@@ -311,60 +288,6 @@ struct AidenBotAdvancedView: View {
 
     private func useRecommendedModels(_ catalog: AidenBotCapabilityCatalog) {
         if let next = recommendedDraft(catalog) { draft = next }
-    }
-
-    private func visionProviderBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.visionProviderID ?? "" },
-            set: { providerID in
-                guard let provider = visionProviders(in: catalog).first(where: { $0.id == providerID }),
-                      let model = provider.models.first(where: { $0.available && $0.supportsImages }),
-                      var next = draft else { return }
-                next.visionProviderID = provider.id
-                next.visionModelID = model.id
-                draft = next
-            }
-        )
-    }
-
-    private func visionModelBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.visionModelID ?? "" },
-            set: { modelID in
-                guard let provider = selectedVisionProvider(in: catalog),
-                      provider.models.contains(where: {
-                          $0.id == modelID && $0.available && $0.supportsImages
-                      }), var next = draft else { return }
-                next.visionModelID = modelID
-                draft = next
-            }
-        )
-    }
-
-    private func providerBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.customAccess.providerID ?? "" },
-            set: { providerID in
-                guard var next = draft else { return }
-                next.customAccess.selectProvider(providerID, catalog: catalog)
-                next.reconcileVisionSelection(catalog: catalog)
-                draft = next
-            }
-        )
-    }
-
-    private func modelBinding(_ catalog: AidenBotCapabilityCatalog) -> Binding<String> {
-        Binding(
-            get: { draft?.customAccess.modelID ?? "" },
-            set: { modelID in
-                guard let provider = selectedProvider(in: catalog), provider.available,
-                      provider.models.contains(where: { $0.id == modelID && $0.available }),
-                      var next = draft else { return }
-                next.customAccess.modelID = modelID
-                next.reconcileVisionSelection(catalog: catalog)
-                draft = next
-            }
-        )
     }
 
     private func optionBinding(
@@ -584,4 +507,136 @@ func aidenBotFriendlyLoadError(_ error: Error) -> String {
         return "Needs an AI model. Set one up on your Mac, then try again."
     }
     return error.localizedDescription
+}
+
+// MARK: - Model choice (New Bot and Advanced)
+
+struct AidenBotModelListSection: Identifiable {
+    let provider: AidenBotProviderOption
+    let models: [AidenBotModelOption]
+    var id: String { provider.id }
+}
+
+/// The Mac's models grouped by service, optionally only those that read images,
+/// filtered by a search that matches the model or service name.
+func aidenBotModelListSections(
+    catalog: AidenBotCapabilityCatalog,
+    imagesOnly: Bool,
+    query: String
+) -> [AidenBotModelListSection] {
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    return catalog.providers.compactMap { provider in
+        let models = provider.models.filter { model in
+            (!imagesOnly || model.supportsImages)
+                && (needle.isEmpty
+                    || model.label.localizedCaseInsensitiveContains(needle)
+                    || provider.label.localizedCaseInsensitiveContains(needle))
+        }
+        return models.isEmpty ? nil : AidenBotModelListSection(provider: provider, models: models)
+    }
+}
+
+/// A row naming the chosen model; it pushes the model list.
+struct AidenBotModelRow: View {
+    let title: String
+    let catalog: AidenBotCapabilityCatalog
+    let providerID: String?
+    let modelID: String?
+    var imagesOnly = false
+    var recommended: AidenBotModelSelection? = nil
+    let onSelect: (String, String) -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var current: (provider: AidenBotProviderOption, model: AidenBotModelOption)? {
+        guard let provider = catalog.providers.first(where: { $0.id == providerID }),
+              let model = provider.models.first(where: { $0.id == modelID }) else { return nil }
+        return (provider, model)
+    }
+
+    var body: some View {
+        NavigationLink {
+            AidenBotModelListView(
+                title: title, catalog: catalog, providerID: providerID, modelID: modelID,
+                imagesOnly: imagesOnly, recommended: recommended, onSelect: onSelect
+            )
+        } label: {
+            HStack(spacing: 8) {
+                Text(title).foregroundStyle(palette.foreground)
+                Spacer(minLength: 8)
+                if let current {
+                    AidenProviderIcon(providerID: current.provider.id, providerLabel: current.provider.label, size: 18)
+                    Text(current.model.label).foregroundStyle(palette.secondary).lineLimit(1)
+                } else {
+                    Text("Choose").foregroundStyle(palette.secondary)
+                }
+            }
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(current?.model.label ?? "None")
+    }
+}
+
+/// The Mac's models: Recommended first, then one section per service.
+struct AidenBotModelListView: View {
+    let title: String
+    let catalog: AidenBotCapabilityCatalog
+    let providerID: String?
+    let modelID: String?
+    let imagesOnly: Bool
+    let recommended: AidenBotModelSelection?
+    let onSelect: (String, String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
+    @State private var query = ""
+
+    var body: some View {
+        List {
+            if query.isEmpty, let recommended,
+               let provider = catalog.providers.first(where: { $0.id == recommended.providerId }),
+               let model = provider.models.first(where: { $0.id == recommended.modelId }),
+               !imagesOnly || model.supportsImages {
+                Section("Recommended") { row(provider, model) }
+            }
+            ForEach(aidenBotModelListSections(catalog: catalog, imagesOnly: imagesOnly, query: query)) { section in
+                Section {
+                    ForEach(section.models) { model in row(section.provider, model) }
+                } header: {
+                    HStack(spacing: 6) {
+                        AidenProviderIcon(providerID: section.provider.id, providerLabel: section.provider.label, size: 14)
+                        Text(section.provider.available ? section.provider.label : "\(section.provider.label) · Not set up")
+                    }
+                }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas)
+        .searchable(text: $query, prompt: "Search models")
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func row(_ provider: AidenBotProviderOption, _ model: AidenBotModelOption) -> some View {
+        let usable = provider.available && model.available
+        let isSelected = provider.id == providerID && model.id == modelID
+        return Button {
+            onSelect(provider.id, model.id)
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.label).foregroundStyle(palette.foreground)
+                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your Mac")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityLabel("Selected")
+                }
+            }
+        }
+        .disabled(!usable)
+    }
 }
