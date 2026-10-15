@@ -22,6 +22,7 @@ import {
   stageStoredMcpFieldSecrets,
   storedMcpFieldSecretValues,
 } from "./mcp-field-secrets.js";
+import { publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
 
 export interface SaveConfiguredMcpServerOptions {
@@ -89,14 +90,24 @@ async function saveWithFieldSecrets(
       // Additive only: nothing the configured record resolves changes until
       // the new record is published.
       const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true || options.fromEditor === true, current });
-      // Approve before publishing, so the first connection after the save is already allowed.
+      // Approve before publishing, so the first connection after the save is
+      // already allowed. Like the field secrets, the approval is additive until
+      // the record is published, so a failed save keeps the configured launch
+      // runnable; afterwards only the published launch stays approved.
       const baseline = mcpFieldSecretCleanupBaseline(current, plan);
       const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
         mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
         (await mcpStdioApprovals.isApproved(current));
-      if (options.approveLaunch || launchUnchanged) await mcpStdioApprovals.approve(staged);
-      await mcpManager.disconnect(serverId);
-      const saved = await withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(staged, isCurrent));
+      const saved = await publishWithLaunchApproval(
+        mcpStdioApprovals,
+        staged,
+        options.approveLaunch === true || launchUnchanged,
+        async () => {
+          await mcpManager.disconnect(serverId);
+          return withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(staged, isCurrent));
+        },
+        async () => (await configStore.listMcpServers()).find(({ id }) => id === serverId),
+      );
       // Committed: values the published record no longer resolves can go.
       await pruneStoredMcpFieldSecrets(serverId, saved).catch(() => undefined);
       return saved;
