@@ -663,6 +663,7 @@
         "renderer/components/chat-row-status.test.tsx",
         "renderer/components/chat-sidebar.test.tsx",
         "renderer/components/composer-attachments-mounted.test.tsx",
+        "renderer/components/composer-slash-palette.test.tsx",
         "renderer/components/composer.test.tsx",
         "renderer/components/context-meter.test.tsx",
         "renderer/components/device-host-diagnostics.test.tsx",
