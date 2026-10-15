@@ -5,6 +5,8 @@ import {
   finishChatDraftSend,
   getChatDraft,
   retainChatDraft,
+  setChatDraftHasContent,
+  subscribeChatDraftComposerFocus,
   subscribeChatDrafts,
   updateChatDraft,
 } from "../lib/chat-draft";
@@ -425,8 +427,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
+      // New-chat entry points reuse only a draft whose composer is empty.
+      setChatDraftHasContent(chatId, Boolean(draftText || attachments));
     },
-    [contextFeed],
+    [chatId, contextFeed],
   );
   const googleThinkingSupported =
     providerId === GOOGLE_PROVIDER_ID &&
@@ -579,6 +583,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
+  // the draft's composer for focus; it may mount a few frames after navigation.
+  React.useEffect(() => {
+    let frame = 0;
+    const unsubscribe = subscribeChatDraftComposerFocus(chatId, () => {
+      let attempts = 0;
+      const attempt = () => {
+        const composer = composerRef.current;
+        if (composer && !composer.disabled) {
+          composer.focus({ preventScroll: true });
+          return;
+        }
+        if (++attempts < 30) frame = requestAnimationFrame(attempt);
+      };
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(attempt);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      unsubscribe();
+    };
+  }, [chatId]);
   useComposerTypeFocus(composerRef, questionnaire === null);
   const terminalShortcut = useShortcutLabel("terminal.toggle");
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");

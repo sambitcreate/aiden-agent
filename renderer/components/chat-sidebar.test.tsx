@@ -14,20 +14,6 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("newAgent opens a transient draft in the active workspace", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /const newAgentInWorkspace = React\.useCallback/u);
-  assert.match(sidebar, /createChatDraft\(workspaceId\)/u);
-  assert.doesNotMatch(sidebar, /chatsApi\.create\(/u);
-  assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
-  assert.match(sidebar, /if \(!activeId\) return;/u);
-  assert.match(sidebar, /await newAgentInWorkspace\(activeId\)/u);
-  assert.match(
-    sidebar,
-    /navigate\(\{ to: "\/chat\/\$chatId", params: \{ chatId: created\.id \} \}\)/u,
-  );
-});
-
 test("downloaded updates appear immediately above Profile in the sidebar footer", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const footer = between(sidebar, "footer={", "\n        }");

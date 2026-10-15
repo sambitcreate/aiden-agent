@@ -1023,6 +1023,7 @@
         "renderer/lib/codex-auth-view-state.test.ts",
         "renderer/lib/command-palette-contract.test.ts",
         "renderer/lib/command-palette-recent.test.ts",
+        "renderer/lib/new-chat-workspaces.test.ts",
         "renderer/lib/pill-appearance.test.ts",
         "renderer/lib/reasoning-disclosure.test.ts",
         "renderer/lib/scheduled-task-view.test.ts",

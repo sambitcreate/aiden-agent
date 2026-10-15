@@ -1,4 +1,11 @@
-import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import {
+  createChatDraft,
+  discardChatDraft,
+  getChatDraft,
+  requestChatDraftComposerFocus,
+  subscribeChatDrafts,
+} from "../lib/chat-draft";
+import { useNewChatActions } from "../lib/new-chat-actions";
 import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
 // Unified workspace/chat sidebar with workspace-grouped, recent, and
@@ -44,6 +51,7 @@ import {
   GitFork,
   Loader2,
   MoreHorizontal,
+  Plus,
   Settings,
   SquarePen,
   UserRound,
@@ -479,6 +487,13 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const readMarkers = useChatReadMarkers();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useAllRegularChats(workspaces.length > 0);
+  const newChat = useNewChatActions();
+  // The open, unsent draft shows as an italic "New chat" row under its
+  // workspace, and follows the draft if its workspace changes.
+  const openDraft = React.useSyncExternalStore(subscribeChatDrafts, () =>
+    activeChatId ? getChatDraft(activeChatId) : undefined,
+  );
+  const draftWorkspaceId = openDraft?.chat.workspaceId;
   const chatTitlesById = React.useMemo(
     () => new Map((chats.data ?? []).map((chat) => [chat.id, chat.title])),
     [chats.data],
@@ -649,7 +664,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     () => sidebarChatNavigationTargets(orderedChats, activeChatId),
     [activeChatId, orderedChats],
   );
-  const { binding: commandBinding, register: registerCommand } = useCommandSystem();
+  const {
+    binding: commandBinding,
+    execute,
+    register: registerCommand,
+  } = useCommandSystem();
   const chatJumpBindings = Array.from({ length: 9 }, (_, index) =>
     commandBinding(`chat.jump.${index + 1}` as CommandId),
   );
@@ -751,6 +770,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       toast.error(error instanceof Error ? error.message : "Aiden could not reconnect to that Mac.");
     }
   }, []);
+
+  // A draft opened from anywhere (⌘N, the palette) shows its row expanded.
+  React.useEffect(() => {
+    if (!draftWorkspaceId) return;
+    setExpandedWorkspaceIds((current) =>
+      current.has(draftWorkspaceId) ? current : new Set(current).add(draftWorkspaceId),
+    );
+  }, [draftWorkspaceId]);
 
   React.useEffect(() => {
     if (!activeId || initializedExpansionRef.current) return;
@@ -1011,33 +1038,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         if (settingsBlockedReason) toast.info(settingsBlockedReason);
         return;
       }
+      setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
       try {
-        if (workspaceId !== activeId && environmentPanel.agentBusy) {
-          environmentPanel.cancelAgent?.();
-        }
-        const created = createChatDraft(workspaceId).chat;
-        select(workspaceId);
-        setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
-        try {
-          await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
-        } catch (error) {
-          discardChatDraft(created.id);
-          throw error;
-        }
+        await newChat.openNewChatIn(workspaceId);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
       }
     },
-    [
-      activeId,
-      appendReconciliationRequired,
-      environmentPanel.agentBusy,
-      environmentPanel.cancelAgent,
-      navigate,
-      qc,
-      select,
-      settingsBlockedReason,
-    ],
+    [appendReconciliationRequired, newChat, settingsBlockedReason],
   );
 
   const newAgent = React.useCallback(async () => {
@@ -1093,6 +1101,23 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       );
     }
   }, []);
+
+  // Hidden while searching, and once the first send lists the real chat.
+  const draftRowShown =
+    Boolean(openDraft) &&
+    !searching &&
+    !(chats.data ?? []).some((chat) => chat.id === openDraft?.chat.id);
+  const renderDraftRow = (draftId: string) => (
+    <SidebarListItem
+      key={`draft:${draftId}`}
+      className="pl-8"
+      data-draft-chat={draftId}
+      aria-description="Unsent draft"
+      title={<span className="italic">New chat</span>}
+      selected={draftId === activeChatId}
+      onClick={() => requestChatDraftComposerFocus(draftId)}
+    />
+  );
 
   const renderChatRow = (chat: ChatMeta, indented = false, liveContext = false) => {
     const shortcutNumber = shortcutNumberByChatId.get(chat.id);
@@ -1462,6 +1487,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           capabilities={capabilities}
           newAgentDisabled={!activeId || appendReconciliationRequired}
           onNewAgent={() => void newAgent()}
+          onNewChatIn={() => execute("chat.newIn")}
+          newChatInKeyShortcut={ariaKeyShortcut(commandBinding("chat.newIn"))}
           onNavigate={(to) => void navigate({ to })}
         />
 
@@ -1654,6 +1681,17 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                           aria-expanded={expanded}
                           onClick={() => toggleWorkspace(workspace.id)}
                         />
+                        <Button
+                          variant="transparent"
+                          size="small"
+                          iconOnly
+                          aria-label={`New chat in ${workspaceDisplayName(workspace, workspaces)}`}
+                          disabled={Boolean(settingsBlockedReason) || appendReconciliationRequired}
+                          className="size-7 shrink-0 text-tertiary opacity-0 group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100 focus-visible:opacity-100"
+                          onClick={() => void newAgentInWorkspace(workspace.id)}
+                        >
+                          <Plus />
+                        </Button>
                         <div className="group/workspace-actions relative size-7 shrink-0">
                           <SidebarOverflowMenu
                             ariaLabel={`Actions for ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
@@ -1713,8 +1751,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
+                          {draftRowShown && draftWorkspaceId === workspace.id && openDraft
+                            ? renderDraftRow(openDraft.chat.id)
+                            : null}
                           {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
-                          {group.chats.length === 0 ? (
+                          {group.chats.length === 0 &&
+                          !(draftRowShown && draftWorkspaceId === workspace.id) ? (
                             <SidebarListItem
                               className="pl-9 text-secondary"
                               icon={<SquarePen />}

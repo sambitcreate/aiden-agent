@@ -36,6 +36,7 @@ export function applicationMenuTemplate({
   });
   const fileItems: MenuItemConstructorOptions[] = [
     commandItem("New Chat", "chat.new"),
+    commandItem("New Chat in…", "chat.newIn"),
     commandItem(
       "Open Workspace in Preferred Editor",
       "workspace.openPreferredEditor",

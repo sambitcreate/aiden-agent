@@ -8,6 +8,8 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  Folder,
+  FolderPlus,
   Keyboard,
   MessageSquare,
   Moon,
@@ -33,8 +35,18 @@ import {
   useCommandSystem,
   type CommandPaletteMode,
 } from "../lib/command-system";
-import { useChats, useProviders, useSettings, queryKeys } from "../lib/queries";
+import {
+  useAllRegularChats,
+  useChats,
+  useProviders,
+  useSettings,
+  queryKeys,
+} from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { useNewChatActions } from "../lib/new-chat-actions";
+import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
+import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
+import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { providersApi, settingsApi } from "../lib/ipc";
 import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
@@ -69,6 +81,7 @@ import {
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
   chats: "Chats",
+  newChatIn: "New chat in",
   models: "Models",
   providers: "Providers",
   settings: "Settings",
@@ -122,8 +135,13 @@ export function AppCommandPalette({
   const capabilities = useAppCapabilities();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { activeId } = useActiveWorkspace();
+  const { activeId, workspaces } = useActiveWorkspace();
+  const { binding, canExecute, execute, palette } = useCommandSystem();
   const chats = useChats(activeId);
+  const newChat = useNewChatActions();
+  const pathPreferences = useWorkspacePathPreferences();
+  const choosingWorkspace = palette.open && palette.mode === "newChatIn";
+  const allChats = useAllRegularChats(choosingWorkspace && workspaces.length > 0);
   const providers = useProviders();
   const settings = useSettings();
   const selection = useModelSelection(
@@ -131,7 +149,6 @@ export function AppCommandPalette({
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
-  const { binding, canExecute, execute, palette } = useCommandSystem();
   const [query, setQuery] = React.useState("");
   const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -217,6 +234,19 @@ export function AppCommandPalette({
   const newChatResult = staticPaletteResult("New chat conversation", {
     disabled: !canExecute("chat.new"),
   });
+  const workspaceResults = React.useMemo(
+    () =>
+      newChatWorkspaceChoices(workspaces, allChats.data ?? [], activeId).map((choice) => ({
+        ...choice,
+        name: workspaceDisplayName(choice.workspace, workspaces),
+        result: paletteResult(`new-chat-in:${choice.workspace.id}`, [
+          choice.workspace.name,
+          choice.workspace.folderPath ?? "",
+        ]),
+      })),
+    [activeId, allChats.data, workspaces],
+  );
+  const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
   const chatRetryResult = staticPaletteResult("Retry loading chats", { forceMount: true });
   const modelRetryResult = staticPaletteResult("Retry loading models", { forceMount: true });
   const providerRetryResult = staticPaletteResult("Retry loading providers", { forceMount: true });
@@ -244,6 +274,7 @@ export function AppCommandPalette({
       ...(chats.isError ? [chatRetryResult] : []),
       ...chatResults.map(({ result }) => result),
     ],
+    newChatIn: [...workspaceResults.map(({ result }) => result), openFolderResult],
     models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
       : [...modelResults, ...unavailableResults].map(({ result }) => result),
     providers: [
@@ -299,6 +330,7 @@ export function AppCommandPalette({
     (commandId: CommandId) => {
       rememberCommand(commandId);
       if (commandId === "chat.search") return enterMode("chats");
+      if (commandId === "chat.newIn") return enterMode("newChatIn");
       if (commandId === "model.change") return enterMode("models");
       if (commandId === "provider.manage") return enterMode("providers");
       if (commandId === "settings.search") return enterMode("settings");
@@ -313,6 +345,24 @@ export function AppCommandPalette({
     rememberCommand("chat.search");
     close();
     await navigate({ to: "/chat/$chatId", params: { chatId } });
+  };
+
+  const startChatIn = (workspaceId: string) => {
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void newChat.openNewChatIn(workspaceId).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Aiden could not start a chat there.");
+    });
+  };
+
+  const openFolderForChat = () => {
+    if (!allowNavigation()) return;
+    rememberCommand("chat.newIn");
+    close();
+    void newChat.openFolderForNewChat().catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Aiden could not open that folder.");
+    });
   };
 
   const selectModel = async (providerId: string, model: string) => {
@@ -526,9 +576,15 @@ export function AppCommandPalette({
               placeholder={
                 palette.mode === "root"
                   ? "Search commands, chats, models, providers, or settings…"
-                  : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}…`
+                  : palette.mode === "newChatIn"
+                    ? "Search workspaces…"
+                    : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}…`
               }
-              aria-label={`Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}`}
+              aria-label={
+                palette.mode === "newChatIn"
+                  ? "Search workspaces"
+                  : `Search ${MODE_LABELS[palette.mode].toLocaleLowerCase()}`
+              }
               className="h-11"
               onKeyDown={(event) => {
                 if (
@@ -544,7 +600,11 @@ export function AppCommandPalette({
             <CommandList className="h-[320px] max-h-[min(320px,calc(100vh-12rem))] p-2">
               <CommandEmpty>
                 <Search className="mx-auto mb-2 size-5 text-tertiary" />
-                No {MODE_LABELS[palette.mode].toLocaleLowerCase()} match “{query.trim()}”.
+                No{" "}
+                {palette.mode === "newChatIn"
+                  ? "workspaces"
+                  : MODE_LABELS[palette.mode].toLocaleLowerCase()}{" "}
+                match “{query.trim()}”.
               </CommandEmpty>
 
               {palette.mode === "root"
@@ -552,6 +612,7 @@ export function AppCommandPalette({
                     const Icon = CATEGORY_ICON[definition.category];
                     const opensMode = [
                       "chat.search",
+                      "chat.newIn",
                       "model.change",
                       "provider.manage",
                       "settings.search",
@@ -626,6 +687,48 @@ export function AppCommandPalette({
                         <ItemDetail>{new Date(chat.updatedAt).toLocaleDateString()}</ItemDetail>
                       </PaletteResultItem>
                     ))}
+                </>
+              ) : null}
+
+              {palette.mode === "newChatIn" ? (
+                <>
+                  {workspaceResults.map(({ workspace, name, current, result }) => (
+                    <PaletteResultItem
+                      key={workspace.id}
+                      result={result}
+                      onSelect={() => startChatIn(workspace.id)}
+                      aria-current={current ? "true" : undefined}
+                      className="min-h-11 px-3"
+                    >
+                      <Folder className="size-4 shrink-0 text-secondary" />
+                      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span className="min-w-0 shrink truncate">{name}</span>
+                        {workspace.folderPath ? (
+                          <span
+                            className="min-w-0 flex-1 truncate text-small text-tertiary"
+                            title={workspace.folderPath}
+                          >
+                            {formatWorkspacePath(
+                              workspace.folderPath,
+                              pathPreferences.workspacePathFormat,
+                              48,
+                            )}
+                          </span>
+                        ) : null}
+                      </span>
+                      {current ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
+                    </PaletteResultItem>
+                  ))}
+                  <PaletteResultItem
+                    result={openFolderResult}
+                    onSelect={openFolderForChat}
+                    className="mt-1 min-h-11 px-3"
+                  >
+                    <FolderPlus className="size-4 shrink-0 text-secondary" />
+                    <span className="min-w-0 flex-1 truncate">Open folder…</span>
+                  </PaletteResultItem>
                 </>
               ) : null}
 

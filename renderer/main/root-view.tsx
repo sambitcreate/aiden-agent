@@ -1,9 +1,14 @@
-import { createChatDraft, discardChatDraft } from "../lib/chat-draft";
+import {
+  createChatDraft,
+  discardChatDraft,
+  findReusableChatDraft,
+  requestChatDraftComposerFocus,
+} from "../lib/chat-draft";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification } from "../lib/ipc";
+import { appApi, chatsApi, localRunsApi, onNotification, workspacesApi } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -18,7 +23,8 @@ import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
 } from "../lib/lifecycle-guard";
-import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
+import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
+import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
@@ -68,7 +74,8 @@ function RootContent() {
   const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
-  const { activeId } = useActiveWorkspace();
+  const { activeId, select: selectWorkspace } = useActiveWorkspace();
+  const { palette } = useCommandSystem();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
@@ -190,12 +197,10 @@ function RootContent() {
   );
   useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
-  const openNewChat = React.useCallback(
-    async (initialText?: string) => {
-      if (!activeId) {
-        toast.info("Choose a workspace before starting a chat.");
-        return;
-      }
+  // Every new-chat entry point lands here: an empty draft already open in the
+  // workspace is reused and focused; otherwise a fresh draft opens there.
+  const openNewChatIn = React.useCallback(
+    async (workspaceId: string, initialText?: string) => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
         return;
@@ -204,21 +209,64 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      const chat = createChatDraft(activeId, undefined, initialText).chat;
+      const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
+      if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
+      const chat = reusable?.chat ?? createChatDraft(workspaceId, undefined, initialText).chat;
+      const previousWorkspaceId = activeId;
+      selectWorkspace(workspaceId);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
       } catch (error) {
-        discardChatDraft(chat.id);
+        if (!reusable) discardChatDraft(chat.id);
+        if (previousWorkspaceId && previousWorkspaceId !== workspaceId) {
+          selectWorkspace(previousWorkspaceId);
+        }
         throw error;
       }
+      requestChatDraftComposerFocus(chat.id);
     },
-    [activeId, appendReconciliationRequired, navigate, navigationBlockedReason],
+    [
+      activeId,
+      appendReconciliationRequired,
+      environmentPanel.agentBusy,
+      environmentPanel.cancelAgent,
+      navigate,
+      navigationBlockedReason,
+      selectWorkspace,
+    ],
   );
-  useCommandHandler(
-    "chat.new",
-    () => openNewChat(),
-    Boolean(activeId) && !appendReconciliationRequired,
+  const openNewChat = React.useCallback(
+    async (initialText?: string) => {
+      if (!activeId) {
+        toast.info("Choose a workspace before starting a chat.");
+        return;
+      }
+      await openNewChatIn(activeId, initialText);
+    },
+    [activeId, openNewChatIn],
   );
+  const openFolderForNewChat = React.useCallback(async () => {
+    if (appendReconciliationRequired) {
+      toast.error("Reload Aiden before creating another chat.");
+      return;
+    }
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    const workspace = await workspacesApi.createFromFolder();
+    if (!workspace) return;
+    // The active-workspace provider only accepts ids it has already listed.
+    await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
+    await openNewChatIn(workspace.id);
+  }, [appendReconciliationRequired, navigationBlockedReason, openNewChatIn, queryClient]);
+  const newChatActions = React.useMemo<NewChatActions>(
+    () => ({ openNewChatIn: (workspaceId) => openNewChatIn(workspaceId), openFolderForNewChat }),
+    [openFolderForNewChat, openNewChatIn],
+  );
+  const newChatAvailable = Boolean(activeId) && !appendReconciliationRequired;
+  useCommandHandler("chat.new", () => openNewChat(), newChatAvailable);
+  useCommandHandler("chat.newIn", () => palette.openMode("newChatIn"), newChatAvailable);
   React.useEffect(
     () =>
       onAssistantAutomationComposerRequested((draft) => {
@@ -438,15 +486,17 @@ function RootContent() {
   }, []);
 
   return (
-    <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
-      <Outlet />
-      <OnboardingFlow
-        onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
-      />
-      <AssistantDock rightInset={environmentPanel.dockRightInset} />
-      <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
-      <PairingRequestSheet />
-      {capabilities.bots ? <BotConnectionSetupHost /> : null}
-    </div>
+    <NewChatActionsProvider value={newChatActions}>
+      <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
+        <Outlet />
+        <OnboardingFlow
+          onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
+        />
+        <AssistantDock rightInset={environmentPanel.dockRightInset} />
+        <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <PairingRequestSheet />
+        {capabilities.bots ? <BotConnectionSetupHost /> : null}
+      </div>
+    </NewChatActionsProvider>
   );
 }
