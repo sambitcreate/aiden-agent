@@ -762,20 +762,26 @@ export function useMcpPresets() {
  */
 export function useMcpLiveStatus() {
   const queryClient = useQueryClient();
-  useEffect(
-    () =>
-      mcpApi.onStatusChanged((status) => {
-        let signInChanged = false;
-        queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
-          const previous = current.find((entry) => entry.serverId === status.serverId);
-          signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
-          const others = current.filter((entry) => entry.serverId !== status.serverId);
-          return status.removed ? others : [...others, status];
-        });
-        if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
-      }),
-    [queryClient],
-  );
+  useEffect(() => {
+    const unsubscribe = mcpApi.onStatusChanged((status) => {
+      let signInChanged = false;
+      queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+        const previous = current.find((entry) => entry.serverId === status.serverId);
+        signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+        const others = current.filter((entry) => entry.serverId !== status.serverId);
+        return status.removed ? others : [...others, status];
+      });
+      if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+    });
+    return () => {
+      unsubscribe();
+      // Pushes sent while nothing listens are lost, so the cached snapshot is
+      // only trusted while subscribed: the next mount reads main's current one.
+      // Main answers that read after any push it sent earlier, so the snapshot
+      // is never older than the pushes that arrive before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+    };
+  }, [queryClient]);
   const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
   return useMemo(
     () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
