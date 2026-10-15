@@ -5,8 +5,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import sbtbiswas.AidenOnTheGo.models.AidenBotModelOption
-import sbtbiswas.AidenOnTheGo.models.AidenBotProviderOption
 import sbtbiswas.AidenOnTheGo.models.AidenModel
 import sbtbiswas.AidenOnTheGo.models.AidenProvider
 
@@ -195,28 +193,6 @@ class AidenModelPickerPresentationTest {
             models = listOf(AidenModel(id = "v", label = "V", supportsImages = true))
         ).toModelPickerProvider()
         assertEquals(listOf(AidenModelCapability.VISION), provider.models.single().capabilities)
-    }
-
-    @Test
-    fun botProvidersThatAreUnavailableListTheirModelsAsUnavailable() {
-        val offline = AidenBotProviderOption(
-            id = "offline",
-            label = "Offline",
-            available = false,
-            models = listOf(AidenBotModelOption(id = "m", label = "M", available = true))
-        ).toModelPickerProvider()
-        val mixed = AidenBotProviderOption(
-            id = "mixed",
-            label = "Mixed",
-            available = true,
-            models = listOf(
-                AidenBotModelOption(id = "up", label = "Up", available = true),
-                AidenBotModelOption(id = "down", label = "Down", available = false)
-            )
-        ).toModelPickerProvider()
-
-        assertEquals(listOf(false), offline.models.map { it.available })
-        assertEquals(listOf(true, false), mixed.models.map { it.available })
     }
 
     @Test

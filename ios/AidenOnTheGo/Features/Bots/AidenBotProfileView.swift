@@ -35,6 +35,8 @@ struct AidenBotProfileView: View {
     var showsDismissButton = true
     /// Opens Profile → Memory once it is ready (the chat's "Memory updated").
     var opensMemory = false
+    /// Opens Profile → Advanced once the Bot has loaded (a Bots row's menu).
+    var opensAdvanced = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -60,6 +62,7 @@ struct AidenBotProfileView: View {
     @State private var memoryModel: AidenBotMemoryModel?
     @State private var isShowingMemory = false
     @State private var hasOpenedMemory = false
+    @State private var hasOpenedAdvanced = false
     @FocusState private var focusedField: AidenBotProfileField?
 
     private var botID: String { initialSummary.id }
@@ -471,6 +474,10 @@ struct AidenBotProfileView: View {
             apply(loaded)
             capturedContext = context
             loadError = nil
+            if opensAdvanced, !hasOpenedAdvanced {
+                hasOpenedAdvanced = true
+                isShowingAdvanced = true
+            }
             if memoryModel == nil {
                 Task { await prepareMemory(context: context, botName: loaded.name) }
             } else {

@@ -21,10 +21,17 @@ import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
   distanceFromScrollBottom,
-  isAtScrollBottom,
+  followIgnoresWheel,
+  followNeedsSnap,
+  followReducer,
+  FOLLOW_REARM_DISTANCE_PX,
+  INITIAL_FOLLOW_STATE,
+  isAwayScrollKey,
   isUserScrollKey,
-  resolveProgrammaticFollowLatch,
-  SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
+  JUMP_BUTTON_SHOW_DELAY_MS,
+  shouldOfferJumpToBottom,
+  type FollowEvent,
+  type FollowState,
 } from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
 import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-enter";
@@ -867,6 +874,65 @@ export function SidebarListItem({
   );
 }
 
+/**
+ * Whether a vertical wheel over `target` would scroll some nested scroller
+ * inside `viewport` rather than the viewport itself.
+ */
+function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLElement, deltaY: number): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== viewport) {
+    if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        if (deltaY < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) {
+          return true;
+        }
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Whether a reading key is consumed by a nested scroller in the direction the key specifies.
+ * If a nested element can scroll in that direction, the transcript follow latch is not affected.
+ */
+const SPACE_ACTIVATED_CONTROLS =
+  'button, summary, [role="button"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"]';
+
+function nestedScrollerConsumesKey(
+  target: EventTarget | null,
+  viewport: HTMLElement,
+  key: string,
+  shiftKey: boolean,
+): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== viewport) {
+    if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        // Determine if the key scrolls up (negative direction) or down (positive direction).
+        // Shift+Space scrolls up; Space scrolls down. Other keys follow their semantic direction.
+        const scrollsUp =
+          key === "ArrowUp" || key === "PageUp" || key === "Home" || (key === " " && shiftKey);
+        const scrollsDown =
+          key === "ArrowDown" || key === "PageDown" || key === "End" || (key === " " && !shiftKey);
+        if (scrollsUp && node.scrollTop > 0) return true;
+        if (scrollsDown && node.scrollTop + node.clientHeight < node.scrollHeight - 1) return true;
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * The follow-enabled scrollport the reader last pressed in. Reading keys typed
+ * with focus on the page body scroll that pane, so only it may stop following.
+ */
+let lastPressedFollowViewport: HTMLElement | null = null;
+
 export function ScrollArea({
   title,
   titleAccessory,
@@ -879,6 +945,7 @@ export function ScrollArea({
   autoScrollDeps = [],
   autoScrollResetKey,
   showScrollToBottomButton,
+  streaming = false,
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
   scrollRestorationId,
@@ -905,6 +972,12 @@ export function ScrollArea({
   /** Changing this identity re-arms follow and pins to the latest content. */
   autoScrollResetKey?: unknown;
   showScrollToBottomButton?: boolean;
+  /**
+   * A reply is streaming in. The jump button then waits for a larger distance,
+   * and jumping snaps instead of animating, since the next tick would cut an
+   * animated scroll short.
+   */
+  streaming?: boolean;
   scrollToBottomButtonOffset?: number;
   scrollContentBottomOffset?: number;
   className?: string;
@@ -917,68 +990,215 @@ export function ScrollArea({
   const [footerHeight, setFooterHeight] = React.useState(0);
   const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   const footerHeightRef = React.useRef(0);
-  const [atBottom, setAtBottom] = React.useState(true);
+  const [following, setFollowing] = React.useState(true);
+  const [offerJump, setOfferJump] = React.useState(false);
   const [atScrollEnd, setAtScrollEnd] = React.useState(true);
   const [atTop, setAtTop] = React.useState(true);
-  const atBottomRef = React.useRef(true);
+  // The follow latch lives in a ref so scroll, wheel, and resize handlers read
+  // the latest decision synchronously; React state only mirrors it for paint.
+  const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
   const followFrameRef = React.useRef(0);
-  const programmaticPinPendingRef = React.useRef(false);
+  const offerJumpTimerRef = React.useRef(0);
+  const jumpSettleTimerRef = React.useRef(0);
   const autoScrollRef = React.useRef(autoScrollToBottom);
+  const streamingRef = React.useRef(streaming);
   const split = React.useContext(SplitContext);
 
   autoScrollRef.current = autoScrollToBottom;
+  streamingRef.current = streaming;
 
-  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
-    const element = viewport.current;
-    if (!element) return;
-    programmaticPinPendingRef.current = behavior === "smooth";
-    element.scrollTo({ top: element.scrollHeight, behavior });
-    atBottomRef.current = true;
-    setAtBottom(true);
-    setAtScrollEnd(true);
-    setAtTop(element.scrollHeight <= element.clientHeight);
+  const syncJumpOffer = React.useCallback(() => {
+    if (!shouldOfferJumpToBottom(followRef.current, streamingRef.current)) {
+      // Hiding is immediate; only showing waits.
+      window.clearTimeout(offerJumpTimerRef.current);
+      offerJumpTimerRef.current = 0;
+      setOfferJump(false);
+      return;
+    }
+    if (offerJumpTimerRef.current) return;
+    offerJumpTimerRef.current = window.setTimeout(() => {
+      offerJumpTimerRef.current = 0;
+      setOfferJump(shouldOfferJumpToBottom(followRef.current, streamingRef.current));
+    }, JUMP_BUTTON_SHOW_DELAY_MS);
   }, []);
 
-  const updateScrollEdges = React.useCallback((element = viewport.current, terminated = false) => {
-    if (!element) return;
+  const dispatchFollow = React.useCallback((event: FollowEvent) => {
+    const next = followReducer(followRef.current, event);
+    followRef.current = next;
+    setFollowing(next.following);
+    syncJumpOffer();
+    return next;
+  }, [syncJumpOffer]);
+
+  React.useEffect(() => syncJumpOffer(), [streaming, syncJumpOffer]);
+  React.useEffect(
+    () => () => {
+      window.clearTimeout(offerJumpTimerRef.current);
+      window.clearTimeout(jumpSettleTimerRef.current);
+    },
+    [],
+  );
+
+  const measureDistance = React.useCallback((element: HTMLElement) => {
     setAtTop(element.scrollTop < 2);
     const remaining = distanceFromScrollBottom(
       element.scrollHeight,
       element.clientHeight,
       element.scrollTop,
     );
-    const atBottom = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
-    const next = resolveProgrammaticFollowLatch(
-      programmaticPinPendingRef.current,
-      atBottom,
-      terminated,
-    );
-    programmaticPinPendingRef.current = next.pending;
-    atBottomRef.current = next.followLatest;
-    setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
+    return remaining;
   }, []);
 
-  // A smooth jump can be aborted by the reader or can end short of the live
-  // edge; either way the pending latch must yield to the real position.
-  const releaseProgrammaticPin = React.useCallback(() => {
-    if (!programmaticPinPendingRef.current) return;
-    updateScrollEdges(viewport.current, true);
-  }, [updateScrollEdges]);
+  /** Pins a following viewport to its true bottom and records where it landed. */
+  const snapIfFollowing = React.useCallback((element: HTMLElement) => {
+    const state = followRef.current;
+    if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
+      element.scrollTop = element.scrollHeight;
+    }
+    dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
+  }, [dispatchFollow, measureDistance]);
+
+  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
+    const element = viewport.current;
+    if (!element) return;
+    const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
+    // Streaming ticks cut animated scrolls short, and a smooth scroll that
+    // has nowhere to go never fires scrollend, so both snap instead, as does
+    // Reduce Motion (CSS scroll-behavior does not reach a scripted scroll).
+    const smooth =
+      behavior === "smooth" &&
+      !streamingRef.current &&
+      distance > 1 &&
+      document.documentElement.dataset.reduceMotion !== "true";
+    dispatchFollow({ type: "jump", smooth });
+    window.clearTimeout(jumpSettleTimerRef.current);
+    if (smooth) {
+      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+      // scrollend normally lands the jump; this only covers an animation the
+      // engine dropped without one.
+      jumpSettleTimerRef.current = window.setTimeout(() => {
+        if (!followRef.current.jumpPending || !viewport.current) return;
+        dispatchFollow({
+          type: "settle",
+          distance: measureDistance(viewport.current),
+          scrollTop: viewport.current.scrollTop,
+          ended: true,
+        });
+        snapIfFollowing(viewport.current);
+      }, 1000);
+    } else {
+      snapIfFollowing(element);
+    }
+    // Re-check once layout settles: late images, fonts, and the jump button's
+    // own removal can all move the bottom after this frame.
+    requestAnimationFrame(() => {
+      const current = viewport.current;
+      if (current && followNeedsSnap(followRef.current)) snapIfFollowing(current);
+    });
+  }, [dispatchFollow, measureDistance, snapIfFollowing]);
 
   React.useEffect(() => {
     const element = viewport.current;
-    if (!element) return;
-    element.addEventListener("scrollend", releaseProgrammaticPin);
-    return () => element.removeEventListener("scrollend", releaseProgrammaticPin);
-  }, [releaseProgrammaticPin]);
+    if (!element || !autoScrollToBottom) return;
+    const overflows = () => element.scrollHeight > element.clientHeight + 1;
+    const onScrollEnd = () => {
+      const wasPending = followRef.current.jumpPending;
+      const next = dispatchFollow({
+        type: "settle",
+        distance: measureDistance(element),
+        scrollTop: element.scrollTop,
+        ended: true,
+      });
+      if (wasPending && followNeedsSnap(next)) snapIfFollowing(element);
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.deltaY >= 0) return;
+      // A sideways trackpad pan over a wide code block or table is not reading back.
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (nestedScrollerConsumesWheel(event.target, element, event.deltaY)) return;
+      const at = event.timeStamp;
+      if (followIgnoresWheel(followRef.current, at)) {
+        // Momentum from a gesture that began before the jump: it must neither
+        // break follow nor drag the freshly pinned view away.
+        event.preventDefault();
+      }
+      dispatchFollow({ type: "userIntent", intent: "wheelUp", at, canScrollUp: overflows() });
+    };
+    const onTouchStart = () => {
+      // Touching the viewport ends a smooth jump without breaking follow.
+      dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: false });
+    };
+    const onTouchMove = () => {
+      // Touch direction is not observable here, so a drag breaks follow only
+      // once it has carried the viewport out of the re-arm band.
+      const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
+      if (distance > FOLLOW_REARM_DISTANCE_PX) {
+        dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      lastPressedFollowViewport = element;
+      // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
+      // The press itself keeps follow: only where the thumb settles counts.
+      if (event.target !== element) return;
+      dispatchFollow({ type: "scrollbarHold" });
+    };
+    const onPointerUp = () => {
+      if (!followRef.current.scrollbarHeld) return;
+      const next = dispatchFollow({ type: "scrollbarRelease", distance: measureDistance(element) });
+      // If still following after release (unmoved hold, or released near the end),
+      // snap to the new bottom to settle any growth that was deferred while held.
+      if (followNeedsSnap(next)) snapIfFollowing(element);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      // Clicking transcript text can leave focus on body; its scrolling keys
+      // still move the pane that was pressed last, and only that one.
+      if (!element.contains(target)) {
+        if (target !== document.body) return;
+        if (lastPressedFollowViewport && lastPressedFollowViewport !== element) return;
+      }
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+      if (!isUserScrollKey(event.key)) return;
+      // Space on a focused control presses it rather than scrolling.
+      if (event.key === " " && target.closest(SPACE_ACTIVATED_CONTROLS)) return;
+      // A nested scrollable element in the direction this key moves leaves follow alone.
+      if (nestedScrollerConsumesKey(event.target, element, event.key, event.shiftKey)) return;
+      dispatchFollow({
+        type: "userIntent",
+        intent: "key",
+        at: performance.now(),
+        canScrollUp: isAwayScrollKey(event.key, event.shiftKey) && overflows(),
+      });
+    };
+    element.addEventListener("scrollend", onScrollEnd);
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("touchstart", onTouchStart, { passive: true });
+    element.addEventListener("touchmove", onTouchMove, { passive: true });
+    element.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      element.removeEventListener("scrollend", onScrollEnd);
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("touchstart", onTouchStart);
+      element.removeEventListener("touchmove", onTouchMove);
+      element.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      document.removeEventListener("keydown", onKeyDown);
+      if (lastPressedFollowViewport === element) lastPressedFollowViewport = null;
+    };
+  }, [autoScrollToBottom, dispatchFollow, measureDistance, snapIfFollowing]);
 
   const followBottomNow = React.useCallback(() => {
     const element = viewport.current;
-    if (!element) return;
-    if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
-    else updateScrollEdges(element);
-  }, [scrollToBottom, updateScrollEdges]);
+    if (element) snapIfFollowing(element);
+  }, [snapIfFollowing]);
 
   const scheduleFollowBottom = React.useCallback(() => {
     followBottomNow();
@@ -1025,11 +1245,9 @@ export function ScrollArea({
 
   React.useLayoutEffect(() => {
     if (autoScrollResetKey === undefined) return;
-    atBottomRef.current = true;
-    setAtBottom(true);
-    setAtScrollEnd(true);
-    if (autoScrollToBottom) scrollToBottom("auto");
-  }, [autoScrollResetKey, autoScrollToBottom, scrollToBottom]);
+    dispatchFollow({ type: "reset" });
+    if (autoScrollToBottom) scheduleFollowBottom();
+  }, [autoScrollResetKey, autoScrollToBottom, dispatchFollow, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     const element = viewport.current;
@@ -1038,8 +1256,7 @@ export function ScrollArea({
     const update = scheduleFollowBottom;
     // Settle synchronously first so the viewport never paints at scrollTop 0 and
     // then jumps; the frame after still catches late layout (fonts, images).
-    if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
-    else updateScrollEdges(element);
+    snapIfFollowing(element);
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
@@ -1050,7 +1267,7 @@ export function ScrollArea({
       followFrameRef.current = 0;
       resizeObserver.disconnect();
     };
-  }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges]);
+  }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, snapIfFollowing]);
 
   const resolvedToolbar =
     toolbar ??
@@ -1089,31 +1306,30 @@ export function ScrollArea({
         data-scroll-restoration-id={scrollRestorationId}
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
+        data-follow={autoScrollToBottom ? following : undefined}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
         style={{
           paddingTop: toolbarHeight,
           paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+          // While following, the latch owns the bottom edge; browser scroll
+          // anchoring would fight it by holding a mid-transcript node still.
+          // A reader who has scrolled away keeps anchoring, so content changing
+          // above their place does not shift what they are reading.
+          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
-          updateScrollEdges(event.currentTarget);
-        }}
-        onWheel={releaseProgrammaticPin}
-        onTouchStart={releaseProgrammaticPin}
-        onPointerDown={(event) => {
-          // Only the viewport's own box (its scrollbar) starts a user scroll.
-          if (event.target === event.currentTarget) releaseProgrammaticPin();
-        }}
-        onKeyDown={(event) => {
-          const target = event.target as HTMLElement;
-          if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
-          if (isUserScrollKey(event.key)) releaseProgrammaticPin();
+          dispatchFollow({
+            type: "settle",
+            distance: measureDistance(event.currentTarget),
+            scrollTop: event.currentTarget.scrollTop,
+          });
         }}
       >
         <div ref={content} data-scroll-content className="min-h-full">
           {children}
         </div>
       </div>
-      {showScrollToBottomButton && !atBottom ? (
+      {showScrollToBottomButton && offerJump ? (
         <Button
           iconOnly
           size="medium"

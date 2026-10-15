@@ -119,7 +119,8 @@ test.describe("Android emulator", () => {
 
     await page.locator("textarea").fill("Open an emulator for this chat.");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+    // The reply can fork once it has settled into its saved message.
+    await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
     await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
 
     const tools = page.getByRole("complementary", { name: "Environment work surface" });
@@ -229,7 +230,8 @@ test.describe("Android emulator", () => {
 
     await page.locator("textarea").fill("Open an emulator for this chat.");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+    // The reply can fork once it has settled into its saved message.
+    await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
     await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
     const tools = page.getByRole("complementary", { name: "Environment work surface" });
     if (!(await tools.isVisible())) await page.locator("[data-environment-toggle]").click();

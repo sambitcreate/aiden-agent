@@ -21,7 +21,8 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
+import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
@@ -282,27 +283,19 @@ fun AidenBotAdvancedSheet(
                     cat == null || current == null -> Unit
                     else -> {
                         AidenBotAdvancedSection(title = stringResource(R.string.bot_advanced_model)) {
-                            AidenConnectedColumn {
-                                val models = cat.providers.flatMap { provider ->
-                                    provider.models.filter { it.available }.map { provider to it }
+                            AidenModelPickerField(
+                                title = stringResource(R.string.bot_advanced_model),
+                                providers = remember(cat) { aidenBotModelPickerProviders(cat) },
+                                selection = AidenModelRoute(current.customAccess.providerID, current.customAccess.modelID),
+                                onSelect = { entry ->
+                                    draft = current.copy(
+                                        customAccess = current.customAccess.copy(
+                                            providerID = entry.route.providerId,
+                                            modelID = entry.route.modelId
+                                        )
+                                    )
                                 }
-                                models.forEachIndexed { index, (provider, model) ->
-                                    val selected = current.customAccess.providerID == provider.id && current.customAccess.modelID == model.id
-                                    AidenGroupCard(
-                                        index = index,
-                                        count = models.size,
-                                        selected = selected,
-                                        role = Role.RadioButton,
-                                        onClick = {
-                                            draft = current.copy(customAccess = current.customAccess.copy(providerID = provider.id, modelID = model.id))
-                                        }
-                                    ) {
-                                        RadioButton(selected = selected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = palette.accent))
-                                        AidenProviderIcon(providerId = provider.id, providerLabel = provider.label, size = 20.dp)
-                                        Text(model.label, color = palette.foreground, modifier = Modifier.weight(1f))
-                                    }
-                                }
-                            }
+                            )
                             TextButton(onClick = { draft = current.withRecommendedModel(cat) }) {
                                 Text(stringResource(R.string.bot_advanced_use_recommended), color = palette.accent)
                             }

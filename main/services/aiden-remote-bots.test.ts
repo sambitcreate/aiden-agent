@@ -634,6 +634,16 @@ test("an omitted first-chat pair inherits Bot authority without resolving a new 
   assert.equal(app.resolvedSelections.length, 0);
 });
 
+test("a phone cannot set a Bot's chat activity through the identity patch, and the Bot's detail does not carry it", async () => {
+  const app = fixture();
+  const detail = await app.service.get("bot_1");
+  await assert.rejects(
+    app.service.updateIdentity("bot_1", detail.revision, { chatActivity: { level: "summary", wording: "follows" } }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  assert.equal("chatActivity" in detail, false);
+});
+
 test("stale identity and policy revisions return authoritative conflicts", async () => {
   const app = fixture();
   const detail = await app.service.get("bot_1");

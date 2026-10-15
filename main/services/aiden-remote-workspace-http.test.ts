@@ -80,6 +80,7 @@ test("HTTP client completes approved-folder selection and revision-checked works
   const browser = new AidenRemoteWorkspaceBrowserService({
     instanceId: "instance-1",
     state,
+    approvalStore: approvedPath,
   });
   const workspaceService = new AidenRemoteWorkspaceService({
     application,

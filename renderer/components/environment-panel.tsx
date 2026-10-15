@@ -2,11 +2,9 @@ import * as React from "react";
 import {
   Files,
   GitCompareArrows,
-  List,
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  X,
 } from "lucide-react";
 import {
   Button,
@@ -36,11 +34,7 @@ import { ReviewPanel } from "./review-panel";
 import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
-  DEFAULT_PANEL_WIDTH,
-  MAX_PANEL_WIDTH,
-  MIN_PANEL_WIDTH,
   resolveEnvironmentPanelLayout,
-  resolveEnvironmentPanelResizeBounds,
   resolveChatCardInset,
   resolveQuickViewLayout,
 } from "../lib/environment-panel-layout";
@@ -76,6 +70,7 @@ import {
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   availableEnvironmentPanelTabs,
+  environmentPanelViewOrder,
   parseEnvironmentOpenTabs,
   normalizeEnvironmentPanelTab,
   parseEnvironmentPanelTab,
@@ -107,6 +102,7 @@ import {
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
+import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -238,15 +234,6 @@ const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   handoffSnapshots: [],
   loadedSnapshots: [],
 };
-
-function storedPanelWidth(): number {
-  const stored = localStorage.getItem(WIDTH_STORAGE_KEY);
-  if (stored === null) return DEFAULT_PANEL_WIDTH;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= MAX_PANEL_WIDTH
-    ? parsed
-    : DEFAULT_PANEL_WIDTH;
-}
 
 interface EnvironmentTabCapabilities {
   subagentsEnabled: boolean;
@@ -1239,6 +1226,7 @@ function EnvironmentPanelSurface({
   resizing,
   setResizing,
   setWidth,
+  persistWidth,
 }: {
   width: number;
   containerWidth: number;
@@ -1247,10 +1235,10 @@ function EnvironmentPanelSurface({
   resizing: boolean;
   setResizing: (value: boolean) => void;
   setWidth: (value: number) => void;
+  /** Stores an already-clamped width under the workbench width key. */
+  persistWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
-  const toggleShortcut = useShortcutLabel("environment.toggle");
-  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.toolsOpen;
   const terminal = useWorkspaceTerminal();
@@ -1279,9 +1267,7 @@ function EnvironmentPanelSurface({
     navigationIntentRef.current++;
     setBrowserFocusRequest(null);
   }, [active?.id, fullOpen, panel.tab, panel.frontSurface, presented]);
-  const tabMenuSelectionRef = React.useRef(false);
   const handledSubagentFocusRef = React.useRef(0);
-  const widthRef = React.useRef(width);
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
   const availableTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled, panel.devicesEnabled);
@@ -1311,12 +1297,14 @@ function EnvironmentPanelSurface({
       panel.setTab(tool);
     }
   };
-  type StripTab = { id: string; kind: EnvironmentPanelTab; label: string; selected: boolean; deviceKey?: string | null };
+  type StripTab = WorkbenchTab & { kind: EnvironmentPanelTab; deviceKey?: string | null };
+  const toolIcon = (kind: EnvironmentPanelTab) =>
+    WORKSPACE_TOOLS.find((tool) => tool.id === kind)?.icon ?? Plus;
   const stripTabs = panelTabs.flatMap<StripTab>((kind) => kind === "browser" && browser?.tabs.length
-    ? browser.tabs.map((page) => ({ id: page.id, kind, label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
+    ? browser.tabs.map((page) => ({ id: page.id, viewId: kind, kind, icon: toolIcon(kind), label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
     : kind === "devices"
-      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", kind, label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
-      : [{ id: kind, kind, label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
+      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", viewId: kind, kind, icon: toolIcon(kind), label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
+      : [{ id: kind, viewId: kind, kind, icon: toolIcon(kind), label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
   const selectStripTab = (entry: StripTab) => {
     if (entry.deviceKey !== undefined) {
       navigationIntentRef.current++;
@@ -1345,6 +1333,21 @@ function EnvironmentPanelSurface({
       }).catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
+  const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
+  const decoratedTabs = stripTabs.map<StripTab>((entry) => {
+    const deviceKey = entry.deviceKey;
+    if (!deviceKey) return entry;
+    return {
+      ...entry,
+      title: `${entry.label} — double-click to rename`,
+      onRename: () => setRenamingDevice(deviceKey),
+      dataAttributes: { "data-device-tab": deviceKey },
+      editor: renamingDevice === deviceKey
+        ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
+        : undefined,
+      wrap: (tabButton) => <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>,
+    };
+  });
   const openBrowserUrl = async (url: string) => {
     const intent = ++navigationIntentRef.current;
     const result = await runBrowser({ action: "create", url, show: false });
@@ -1355,7 +1358,6 @@ function EnvironmentPanelSurface({
     if (!selected || intent !== navigationIntentRef.current || selected.state.activeTabId !== result.tabId || !selected.state.tabs.some((page) => page.id === result.tabId)) return;
     panel.setTab("browser");
   };
-  widthRef.current = width;
 
   React.useLayoutEffect(() => {
     if (!fullOpen || !presented || panel.frontSurface !== "tools") return;
@@ -1387,264 +1389,132 @@ function EnvironmentPanelSurface({
     }
   }, [browserFocusRequest, browser, panel.tab, presented]);
 
-  const resizeBounds = resolveEnvironmentPanelResizeBounds(containerWidth, inline);
-  const clampToResizeBounds = React.useCallback(
-    (nextWidth: number) => Math.min(resizeBounds.max, Math.max(resizeBounds.min, nextWidth)),
-    [resizeBounds.max, resizeBounds.min],
-  );
-
-  const commitWidth = React.useCallback(
-    (nextWidth: number) => {
-      const clamped = clampToResizeBounds(nextWidth);
-      setWidth(clamped);
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(clamped)));
-    },
-    [clampToResizeBounds, setWidth],
-  );
-
-  const beginResize = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !fullOpen) return;
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startWidth = widthRef.current;
-      setResizing(true);
-      const move = (moveEvent: PointerEvent) => {
-        setWidth(clampToResizeBounds(startWidth + startX - moveEvent.clientX));
-      };
-      const finish = (endEvent: PointerEvent) => {
-        commitWidth(
-          endEvent.type === "pointerup" ? startWidth + startX - endEvent.clientX : widthRef.current,
-        );
-        setResizing(false);
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-        window.removeEventListener("pointercancel", finish);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
-      window.addEventListener("pointercancel", finish);
-    },
-    [clampToResizeBounds, commitWidth, fullOpen, setResizing, setWidth],
-  );
-
-  const resizeWithKeyboard = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const increment = event.shiftKey ? 40 : 16;
-      let next = width;
-      if (event.key === "ArrowLeft") next += increment;
-      else if (event.key === "ArrowRight") next -= increment;
-      else if (event.key === "Home") next = resizeBounds.min;
-      else if (event.key === "End") next = resizeBounds.max;
-      else return;
-      event.preventDefault();
-      commitWidth(next);
-    },
-    [commitWidth, resizeBounds.max, resizeBounds.min, width],
-  );
+  const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
+    "new-tab": () => (
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+    ),
+    context: () => <ChatContextPanel details={panel.contextDetails} />,
+    terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
+    review: () => (
+      <ReviewPanel
+        workspace={active}
+        chatId={panel.activeChat.chatId ?? undefined}
+        active={presented && panel.tab === "review"}
+        mode={panel.reviewMode}
+        onModeChange={panel.openReview}
+        onOpenFile={panel.openFile}
+      />
+    ),
+    subagents: () => (
+      <SubagentsPanel
+        chatId={panel.subagents.chatId}
+        workspaceId={panel.subagents.workspaceId}
+        runs={panel.subagentViews}
+        handoffSnapshots={panel.subagents.handoffSnapshots}
+        selectedRunId={panel.selectedSubagentRunId}
+        selectedRunSnapshot={
+          panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
+            ?.snapshot
+        }
+        detailLoading={panel.subagentDetailLoading}
+        detailError={panel.subagentDetailError}
+        effectActivity={panel.subagentDetailEffects}
+        onSelectedRunChange={panel.selectSubagent}
+        onRetryDetail={panel.retrySubagentDetail}
+        onStopRun={panel.stopSubagent}
+        stopPendingRunIds={panel.subagentStopPendingRunIds}
+        stopErrorsByRunId={panel.subagentStopErrorsByRunId}
+        onDetailAnnouncement={panel.announceSubagentDetail}
+        detailRequestVersion={panel.subagentFocusDetailVersion}
+        compact={width < 620}
+        active={presented && panel.tab === "subagents"}
+        ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
+      />
+    ),
+    files: () => (
+      <FilesPanel
+        workspace={active}
+        active={presented && panel.tab === "files"}
+        requestedPath={activeFileRequest?.path ?? null}
+        requestedPathKey={activeFileRequest?.id ?? 0}
+        compact={width < 540}
+        interactionBlockedReason={
+          panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
+        }
+        onEditorStateChange={panel.reportEditorState}
+      />
+    ),
+    browser: () =>
+      active && (
+        <React.Suspense fallback={null}>
+          <BrowserPanel
+            workspaceId={active.id}
+            integratedTabs
+            onStateChange={commitBrowserState}
+            active={presented && panel.tab === "browser"}
+            onDock={() => panel.showTools("browser")}
+          />
+        </React.Suspense>
+      ),
+    devices: () =>
+      active && (
+        <React.Suspense fallback={null}>
+          <DevicesPanel
+            workspaceId={active.id}
+            chatId={panel.activeChat.chatId ?? undefined}
+            active={presented && panel.tab === "devices"}
+            compact={width < 540}
+            selected={devices.selected}
+            floating={devices.floating}
+            onOpened={(session) => devices.opened(session)}
+            onClosed={(session) => devices.dismiss(deviceTabKey(session))}
+            onFloat={(session) => {
+              devices.float(deviceTabKey(session));
+              panel.closeTools();
+            }}
+            onDock={(session) => {
+              if (chatId) deviceWorkspace.setFloating(chatId, null);
+              devices.select(deviceTabKey(session));
+            }}
+          />
+        </React.Suspense>
+      ),
+  };
+  const views: WorkbenchView[] = environmentPanelViewOrder(
+    panel.subagentsEnabled,
+    panel.devicesEnabled,
+  ).map((id) => ({ id, render: viewBodies[id] }));
 
   return (
-    <aside
-      ref={surfaceRef}
+    <WorkbenchPanel
       id="environment-panel"
-      data-environment-surface="tools"
-      data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
-      data-state={fullOpen ? (presented ? "open" : "covered") : "closed"}
-      inert={!presented ? true : undefined}
-      aria-hidden={!presented ? true : undefined}
-      aria-label="Environment work surface"
-      onFocusCapture={() => panel.activateSurface("tools")}
-      onPointerDownCapture={() => panel.activateSurface("tools")}
-      className={cn(
-        "environment-panel absolute z-30 flex min-h-0 flex-col overflow-hidden bg-popover text-primary",
-        inline
-          ? "inset-y-0 right-0 border-l border-separator"
-          : "bottom-3 right-3 rounded-sheet shadow-dialog",
-        // Float below the top bar so its tool buttons stay reachable, like Quick View.
-        !inline && "top-14",
-        resizing
-          ? "transition-none"
-          : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-        (!fullOpen || !presented) && !inline && "translate-x-[calc(100%+0.75rem)]",
-      )}
-      style={{
-        width: fullOpen ? width : inline ? 0 : width,
-        opacity: fullOpen && presented ? 1 : 0,
-        pointerEvents: fullOpen && presented ? "auto" : "none",
-      }}
-    >
-      <div
-        role="separator"
-        aria-label="Resize environment panel"
-        aria-orientation="vertical"
-        aria-valuemin={resizeBounds.min}
-        aria-valuemax={resizeBounds.max}
-        aria-valuenow={Math.round(width)}
-        tabIndex={fullOpen ? 0 : -1}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
-      />
-
-      <header className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2">
-        <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label="Environment views">
-          {stripTabs.map((entry, index) => {
-            const Icon = WORKSPACE_TOOLS.find((tool) => tool.id === entry.kind)?.icon ?? Plus;
-            const deviceKey = entry.deviceKey;
-            const tabButton = <Button ref={entry.selected ? activeTabRef : undefined} id={entry.selected ? `environment-${entry.kind}-tab` : undefined} variant="transparent" size="small" role="tab" tabIndex={entry.selected ? 0 : -1} aria-selected={entry.selected} aria-controls={`environment-${entry.kind}-panel`} title={deviceKey ? `${entry.label} — double-click to rename` : entry.label} disabled={panel.gitOperationBusy} onClick={() => selectStripTab(entry)} onDoubleClick={deviceKey ? () => setRenamingDevice(deviceKey) : undefined} onKeyDown={(event) => {
-                if (event.key === "Delete") { event.preventDefault(); closeStripTab(entry); return; }
-                if (event.key === "F2" && deviceKey) { event.preventDefault(); setRenamingDevice(deviceKey); return; }
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? 0 : event.key === "End" ? stripTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + stripTabs.length) % stripTabs.length;
-                selectStripTab(stripTabs[next]);
-              }}><Icon className="size-4 shrink-0" /><span className="max-w-32 truncate">{entry.label}</span></Button>;
-            const renaming = deviceKey && renamingDevice === deviceKey;
-            const finishRename = () => { setRenamingDevice(null); requestAnimationFrame(() => activeTabRef.current?.focus()); };
-            return <div key={entry.id} data-device-tab={deviceKey ?? undefined} className={cn("flex min-w-0 shrink-0 items-center rounded-control", entry.selected && "bg-list-selection")}>
-              {renaming
-                ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
-                : deviceKey
-                  ? <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>
-                  : tabButton}
-              <Button variant="transparent" size="small" iconOnly disabled={panel.gitOperationBusy} aria-label={`Close ${entry.label} tab`} onClick={() => closeStripTab(entry)}><X className="size-3" /></Button>
-            </div>;
-          })}
-        </div>
-        <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={panel.gitOperationBusy} aria-label="New workspace tab" onClick={() => openTool("new-tab")}><Plus /></Button>
-        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{stripTabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={panel.gitOperationBusy} onSelect={() => { tabMenuSelectionRef.current = true; selectStripTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
-        <Button variant="transparent" size="small" iconOnly onClick={panel.closeTools} aria-label="Close environment panel" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Close workspace panel (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
-      </header>
-
-      <div className="min-h-0 flex-1 @container">
-        <div id="environment-new-tab-panel" role="tabpanel" aria-labelledby="environment-new-tab-tab" hidden={panel.tab !== "new-tab"} className="h-full min-h-0">
-          <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
-        </div>
-        <div id="environment-context-panel" role="tabpanel" aria-labelledby="environment-context-tab" hidden={panel.tab !== "context"} className="h-full min-h-0"><ChatContextPanel details={panel.contextDetails} /></div>
-        <div id="environment-terminal-panel" role="tabpanel" aria-labelledby="environment-terminal-tab" hidden={panel.tab !== "terminal"} className="h-full min-h-0"><TerminalSideTarget presented={presented && panel.tab === "terminal"} /></div>
-        <div
-          id="environment-review-panel"
-          role="tabpanel"
-          aria-labelledby="environment-review-tab"
-          hidden={panel.tab !== "review"}
-          className="h-full min-h-0"
-        >
-          <ReviewPanel
-            workspace={active}
-            chatId={panel.activeChat.chatId ?? undefined}
-            active={presented && panel.tab === "review"}
-            mode={panel.reviewMode}
-            onModeChange={panel.openReview}
-            onOpenFile={panel.openFile}
-          />
-        </div>
-        {panel.subagentsEnabled ? (
-          <div
-            id="environment-subagents-panel"
-            role="tabpanel"
-            aria-labelledby="environment-subagents-tab"
-            hidden={panel.tab !== "subagents"}
-            className="h-full min-h-0"
-          >
-            <SubagentsPanel
-              chatId={panel.subagents.chatId}
-              workspaceId={panel.subagents.workspaceId}
-              runs={panel.subagentViews}
-              handoffSnapshots={panel.subagents.handoffSnapshots}
-              selectedRunId={panel.selectedSubagentRunId}
-              selectedRunSnapshot={
-                panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
-                  ?.snapshot
-              }
-              detailLoading={panel.subagentDetailLoading}
-              detailError={panel.subagentDetailError}
-              effectActivity={panel.subagentDetailEffects}
-              onSelectedRunChange={panel.selectSubagent}
-              onRetryDetail={panel.retrySubagentDetail}
-              onStopRun={panel.stopSubagent}
-              stopPendingRunIds={panel.subagentStopPendingRunIds}
-              stopErrorsByRunId={panel.subagentStopErrorsByRunId}
-              onDetailAnnouncement={panel.announceSubagentDetail}
-              detailRequestVersion={panel.subagentFocusDetailVersion}
-              compact={width < 620}
-              active={presented && panel.tab === "subagents"}
-              ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
-            />
-          </div>
-        ) : null}
-        <div
-          id="environment-files-panel"
-          role="tabpanel"
-          aria-labelledby="environment-files-tab"
-          hidden={panel.tab !== "files"}
-          className="h-full min-h-0"
-        >
-          <FilesPanel
-            workspace={active}
-            active={presented && panel.tab === "files"}
-            requestedPath={activeFileRequest?.path ?? null}
-            requestedPathKey={activeFileRequest?.id ?? 0}
-            compact={width < 540}
-            interactionBlockedReason={
-              panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
-            }
-            onEditorStateChange={panel.reportEditorState}
-          />
-        </div>
-        <div
-          id="environment-browser-panel"
-          role="tabpanel"
-          aria-labelledby="environment-browser-tab"
-          hidden={panel.tab !== "browser"}
-          className="h-full min-h-0"
-        >
-          {active && (
-            <React.Suspense fallback={null}>
-              <BrowserPanel
-                workspaceId={active.id}
-                integratedTabs
-                onStateChange={commitBrowserState}
-                active={presented && panel.tab === "browser"}
-                onDock={() => panel.showTools("browser")}
-              />
-            </React.Suspense>
-          )}
-        </div>
-        {panel.devicesEnabled ? (
-          <div
-            id="environment-devices-panel"
-            role="tabpanel"
-            aria-labelledby="environment-devices-tab"
-            hidden={panel.tab !== "devices"}
-            className="h-full min-h-0"
-          >
-            {active && (
-              <React.Suspense fallback={null}>
-                <DevicesPanel
-                  workspaceId={active.id}
-                  chatId={panel.activeChat.chatId ?? undefined}
-                  active={presented && panel.tab === "devices"}
-                  compact={width < 540}
-                  selected={devices.selected}
-                  floating={devices.floating}
-                  onOpened={(session) => devices.opened(session)}
-                  onClosed={(session) => devices.dismiss(deviceTabKey(session))}
-                  onFloat={(session) => {
-                    devices.float(deviceTabKey(session));
-                    panel.closeTools();
-                  }}
-                  onDock={(session) => {
-                    if (chatId) deviceWorkspace.setFloating(chatId, null);
-                    devices.select(deviceTabKey(session));
-                  }}
-                />
-              </React.Suspense>
-            )}
-          </div>
-        ) : null}
-      </div>
-    </aside>
+      label="Environment work surface"
+      resizeLabel="Resize environment panel"
+      open={fullOpen}
+      presented={presented}
+      inline={inline}
+      width={width}
+      containerWidth={containerWidth}
+      resizing={resizing}
+      onResizingChange={setResizing}
+      onWidthChange={setWidth}
+      onWidthCommit={persistWidth}
+      onActivate={() => panel.activateSurface("tools")}
+      surfaceRef={surfaceRef}
+      activeTabRef={activeTabRef}
+      views={views}
+      selectedViewId={panel.tab}
+      tabs={decoratedTabs}
+      idPrefix="environment"
+      tabListLabel="Environment views"
+      busy={panel.gitOperationBusy}
+      onSelectTab={selectStripTab}
+      onCloseTab={closeStripTab}
+      newTab={{ label: "New workspace tab", onOpen: () => openTool("new-tab") }}
+      closeLabel="Close environment panel"
+      closeTitle="Close workspace panel"
+      onClose={panel.closeTools}
+    />
   );
 }
 
@@ -1883,7 +1753,8 @@ export function EnvironmentWorkbench({
 }: React.PropsWithChildren<{
   /**
    * Hides the Environment and Quick View surfaces without changing whether
-   * they are open, for content that is not on this Mac (a paired host's chat).
+   * they are open, for content that is not on this Mac (a paired host's chat)
+   * and for Bots pages, which have their own panel.
    */
   suppressed?: boolean;
 }>) {
@@ -1892,11 +1763,11 @@ export function EnvironmentWorkbench({
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
-  const [resizing, setResizing] = React.useState(false);
-  const [preferredWidth, setPreferredWidth] = React.useState(storedPanelWidth);
+  const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
+  const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
   const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
-    preferredWidth,
+    panelWidth.preferredWidth,
     containerWidth,
   );
   const quickViewLayout = resolveQuickViewLayout(
@@ -2031,8 +1902,9 @@ export function EnvironmentWorkbench({
         inline={inline}
         presented={toolsPresented}
         resizing={resizing}
-        setResizing={setResizing}
-        setWidth={setPreferredWidth}
+        setResizing={panelWidth.setResizing}
+        setWidth={panelWidth.setPreferredWidth}
+        persistWidth={panelWidth.commitPreferredWidth}
       />
     </div>
   );

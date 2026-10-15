@@ -65,6 +65,8 @@ interface RichLinkBudgetState {
   decisions: Map<string, boolean>;
   used: number;
   limit: number;
+  // Denied links waiting for a slot that a replaced link gives back.
+  waiting: Set<() => void>;
 }
 
 const RichLinkBudgetContext = React.createContext<RichLinkBudgetState | null>(null);
@@ -77,7 +79,7 @@ export function RichLinkBudget({
   limit: number;
 }) {
   const budget = React.useMemo<RichLinkBudgetState>(
-    () => ({ decisions: new Map(), used: 0, limit }),
+    () => ({ decisions: new Map(), used: 0, limit, waiting: new Set() }),
     [limit],
   );
   return (
@@ -115,6 +117,33 @@ function BudgetedRichLink({
       withinBudget = existingDecision;
     }
   }
+
+  // A reparsed document replaces anchors (a tight list turning loose), and
+  // the replacements decide before the old ones unmount. Each link returns its
+  // slot when it goes, and a denied link takes a freed slot, so the budget
+  // counts only the links on screen.
+  const [, retry] = React.useReducer((attempt: number) => attempt + 1, 0);
+  React.useEffect(() => {
+    if (!budget) return;
+    // StrictMode remounts after the cleanup below gave the slot back.
+    if (!budget.decisions.has(budgetId)) budget.decisions.set(budgetId, false);
+    const takeFreedSlot = () => {
+      if (budget.decisions.get(budgetId) !== false || budget.used >= budget.limit) return;
+      budget.decisions.delete(budgetId);
+      retry();
+    };
+    budget.waiting.add(takeFreedSlot);
+    takeFreedSlot();
+    return () => {
+      budget.waiting.delete(takeFreedSlot);
+      const approved = budget.decisions.get(budgetId);
+      budget.decisions.delete(budgetId);
+      if (!approved) return;
+      budget.used -= 1;
+      for (const waiter of budget.waiting) waiter();
+    };
+  }, [budget, budgetId]);
+
   if (!withinBudget) return <a href={href} {...props} />;
   return <RichLinkPreview href={href} descriptor={descriptor} {...props} />;
 }

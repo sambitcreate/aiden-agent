@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Chat States</title>
+<style>
+:root{
+  --canvas:#f6f6f4; --page:#ecebe7; --raised:#ffffff; --sidebar:#f0efeb; --control:#ecebe7; --control-hover:#e3e2dd;
+  --popover:#ffffff; --fg:#1d1d1b; --secondary:#6b6a66; --tertiary:#9c9b96; --sep:rgba(0,0,0,.08);
+  --accent:#1d1d1b; --accent-fg:#fff; --me:#1d6ff2; --me-fg:#fff;
+  --ok-bg:#e7f3ea; --ok-fg:#1e6b35; --warn-bg:#fdf1dc; --warn-fg:#8a5a00; --err-bg:#fbe6e4; --err-fg:#a3352a; --info-bg:#e6eefb; --info-fg:#2457a6;
+  --shadow:0 1px 2px rgba(0,0,0,.06),0 10px 28px rgba(0,0,0,.08); --pop-shadow:0 18px 48px rgba(0,0,0,.18);
+  --focus:#7a7a76; --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif; --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --canvas:#171817; --page:#1e201f; --raised:#262826; --sidebar:#1b1c1b; --control:#2d2f2d; --control-hover:#363836;
+  --popover:#2b2d2b; --fg:#ecebe6; --secondary:#a4a39d; --tertiary:#74736e; --sep:rgba(255,255,255,.08);
+  --accent:#ecebe6; --accent-fg:#171817;
+  --ok-bg:#1d3324; --ok-fg:#8fd6a3; --warn-bg:#3a2e14; --warn-fg:#f0c66d; --err-bg:#3b1f1c; --err-fg:#f2a49a; --info-bg:#1c2a40; --info-fg:#9cc2ff;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px rgba(0,0,0,.4); --pop-shadow:0 18px 48px rgba(0,0,0,.6);
+}}
+:root[data-theme="dark"]{
+  --canvas:#171817; --page:#1e201f; --raised:#262826; --sidebar:#1b1c1b; --control:#2d2f2d; --control-hover:#363836;
+  --popover:#2b2d2b; --fg:#ecebe6; --secondary:#a4a39d; --tertiary:#74736e; --sep:rgba(255,255,255,.08);
+  --accent:#ecebe6; --accent-fg:#171817;
+  --ok-bg:#1d3324; --ok-fg:#8fd6a3; --warn-bg:#3a2e14; --warn-fg:#f0c66d; --err-bg:#3b1f1c; --err-fg:#f2a49a; --info-bg:#1c2a40; --info-fg:#9cc2ff;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px rgba(0,0,0,.4); --pop-shadow:0 18px 48px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--canvas);color:var(--fg);font:14px/1.45 var(--font);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+code{font:12px var(--mono);background:var(--control);padding:1px 5px;border-radius:5px}
+
+.top{position:sticky;top:0;z-index:30;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 20px;background:color-mix(in srgb,var(--canvas) 88%,transparent);backdrop-filter:blur(14px);border-bottom:1px solid var(--sep)}
+.top h1{font-size:15px;margin:0 6px 0 0;font-weight:650}
+.seg{display:inline-flex;background:var(--control);border-radius:999px;padding:3px}
+.seg button{border:0;background:transparent;padding:6px 13px;border-radius:999px;font-weight:550;color:var(--secondary);transition:background .2s,color .2s}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.seglabel{font-size:12px;color:var(--tertiary);margin-right:-4px}
+.btn{border:0;background:var(--control);padding:7px 14px;border-radius:9px;font-weight:550;transition:background .15s,transform .1s}
+.btn:hover{background:var(--control-hover)} .btn:active{transform:scale(.97)} .btn.primary{background:var(--accent);color:var(--accent-fg)}
+.spacer{flex:1}
+.toc{display:flex;gap:6px;flex-wrap:wrap}
+.toc a{color:var(--secondary);text-decoration:none;font-size:12.5px;padding:4px 10px;border-radius:999px;background:var(--control)}
+.toc a:hover{color:var(--fg)}
+
+main{max-width:1320px;margin:0 auto;padding:24px 20px 80px}
+section{margin-bottom:56px;scroll-margin-top:80px}
+h2{font-size:22px;letter-spacing:-.02em;margin:0 0 4px}
+.sub{color:var(--secondary);margin:0 0 18px;max-width:780px}
+h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--tertiary);margin:28px 0 10px;font-weight:650}
+
+/* ---------- activity marks (ported from renderer/styles.css) ---------- */
+.aiden-mark{display:block;flex:none;overflow:visible}
+.aiden-mark *{transform-box:view-box}
+@media (prefers-reduced-motion:reduce){.aiden-mark *{animation-play-state:paused!important}}
+.aiden-mark[data-paused] *{animation-play-state:paused!important}
+.aiden-mark[data-aiden-mark="tri-step"] .turn{transform-origin:12px 12px;animation:mtri 2.7s infinite}
+@keyframes mtri{0%{transform:rotate(0);animation-timing-function:cubic-bezier(.5,-.45,.25,1.45)}22%,33.33%{transform:rotate(120deg);animation-timing-function:cubic-bezier(.5,-.45,.25,1.45)}55.33%,66.66%{transform:rotate(240deg);animation-timing-function:cubic-bezier(.5,-.45,.25,1.45)}88.66%,100%{transform:rotate(360deg)}}
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle{animation:2.6s cubic-bezier(.65,0,.35,1) infinite}
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(1){animation-name:sTL}.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(2){animation-name:sTR}
+.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(3){animation-name:sBL}.aiden-mark[data-aiden-mark="quad-shuffle"] circle:nth-child(4){animation-name:sBR}
+@keyframes sTL{0%,36%,90%,100%{transform:translate(0,0)}18%{transform:translate(-2.2px,-2.2px)}56%,72%{transform:translate(10px,0)}}
+@keyframes sTR{0%,36%,90%,100%{transform:translate(0,0)}18%{transform:translate(-7.4px,2.6px)}56%,72%{transform:translate(0,10px)}}
+@keyframes sBL{0%,36%,90%,100%{transform:translate(0,0)}18%{transform:translate(7.4px,-2.6px)}56%,72%{transform:translate(0,-10px)}}
+@keyframes sBR{0%,36%,90%,100%{transform:translate(0,0)}18%{transform:translate(2.2px,2.2px)}56%,72%{transform:translate(-10px,0)}}
+.aiden-mark[data-aiden-mark="compose"] rect{transform-box:fill-box;transform-origin:left center;animation:mcomp 2.2s cubic-bezier(.4,0,.2,1) infinite both}
+@keyframes mcomp{0%{transform:scaleX(.16);opacity:.35}35%,70%{transform:scaleX(1);opacity:1}100%{transform:scaleX(.16);opacity:.35}}
+.aiden-mark[data-aiden-mark="scan-grid"] circle{transform-box:fill-box;transform-origin:center;animation:mscan 1.5s ease-in-out infinite}
+@keyframes mscan{0%,70%,100%{opacity:.2;transform:scale(1)}30%{opacity:1;transform:scale(1.18)}}
+.aiden-mark[data-aiden-mark="glance"] .look{animation:mlook 4s cubic-bezier(.5,0,.3,1) infinite}
+.aiden-mark[data-aiden-mark="glance"] .eye{transform-box:fill-box;transform-origin:center;animation:mblink 4s ease-in-out infinite}
+@keyframes mlook{0%,14%{transform:translateX(0)}24%,40%{transform:translateX(-2.6px)}52%,68%{transform:translateX(2.6px)}80%,100%{transform:translateX(0)}}
+@keyframes mblink{0%,86%,94%,100%{transform:scaleY(1)}90%{transform:scaleY(.1)}}
+.aiden-mark[data-aiden-mark="bounce"] circle{animation:mbounce 1.2s cubic-bezier(.45,0,.55,1) infinite both}
+@keyframes mbounce{0%,55%,100%{transform:translateY(0)}27%{transform:translateY(-5px)}}
+
+/* Bot face (avatar). Eyes glance while the Bot works. */
+.face{position:relative;display:inline-block;flex:0 0 auto}
+.face svg{display:block}
+.face.working .eyes{animation:mlook 3s cubic-bezier(.5,0,.3,1) infinite}
+.face.working .eyes rect{transform-box:fill-box;transform-origin:center;animation:mblink 3s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.face .eyes,.face .eyes rect{animation:none!important}}
+.badge-dot{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;box-shadow:0 0 0 2px var(--sidebar)}
+
+/* shimmer text */
+.shimmer{color:var(--secondary)}
+@media (prefers-reduced-motion:no-preference){
+  .shimmer{background:linear-gradient(90deg,var(--tertiary) 0%,var(--tertiary) 35%,var(--fg) 50%,var(--tertiary) 65%,var(--tertiary) 100%);background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shim 1.8s linear infinite}
+}
+@keyframes shim{from{background-position:100% 0}to{background-position:-50% 0}}
+
+/* ---------- chat primitives ---------- */
+.chatframe{background:var(--canvas);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:9px;min-height:120px;position:relative}
+.phone .chatframe{font-size:15px}
+.bubble{max-width:82%;padding:9px 13px;border-radius:18px;background:var(--raised);line-height:1.45}
+.bubble.me{align-self:flex-end;background:var(--me);color:var(--me-fg)}
+.bubble.queued{opacity:.55}
+.qmeta{align-self:flex-end;font-size:11.5px;color:var(--tertiary);margin-top:-5px}
+.status{display:inline-flex;align-items:center;gap:8px;color:var(--secondary);font-size:13px;padding:4px 2px;min-height:26px;position:relative}
+.status .peek{color:var(--tertiary);max-width:0;overflow:hidden;white-space:nowrap;transition:max-width .35s ease,opacity .25s;opacity:0}
+.status:hover .peek,.status:focus-visible .peek{max-width:360px;opacity:1}
+.status .elapsed{color:var(--tertiary);font-variant-numeric:tabular-nums}
+.status .label{transition:opacity .2s}
+.stopchip{font-size:12px;background:var(--control);border-radius:999px;padding:2px 9px;color:var(--secondary)}
+.steps{display:flex;flex-direction:column;gap:3px;padding-left:28px;font-size:13px;color:var(--secondary)}
+.step{display:flex;gap:7px;align-items:baseline;animation:stepIn .3s cubic-bezier(.2,.8,.2,1) both}
+.step .ic{width:14px;text-align:center;color:var(--tertiary);flex:0 0 auto}
+.step .d{color:var(--tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step.fail{color:var(--err-fg)} .step.fail .ic{color:var(--err-fg)}
+.step.blocked{color:var(--warn-fg)} .step.blocked .ic{color:var(--warn-fg)}
+.step .add{color:#2f9e55}.step .del{color:#d9493a}
+@keyframes stepIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+details.fold{font-size:13px;color:var(--secondary)}
+details.fold summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:3px 2px;border-radius:6px}
+details.fold summary::-webkit-details-marker{display:none}
+details.fold summary .chev{transition:transform .2s;display:inline-block;color:var(--tertiary)}
+details.fold[open] summary .chev{transform:rotate(90deg)}
+details.fold summary:hover{color:var(--fg)}
+details.fold .steps{margin-top:4px}
+.issue{color:var(--err-fg);font-size:12px;background:var(--err-bg);border-radius:999px;padding:0 7px}
+.reasoning{font-size:13px;color:var(--secondary);border-left:2px solid var(--sep);padding-left:10px;margin:4px 0 0 28px;font-style:italic}
+.chip{display:inline-flex;gap:8px;align-items:center;background:var(--raised);border-radius:12px;padding:7px 11px;font-size:13px;width:max-content;max-width:100%}
+.chip .fi{width:26px;height:26px;border-radius:7px;background:var(--control);display:grid;place-items:center}
+.chip .m{color:var(--tertiary);font-size:12px}
+.caption{align-self:center;font-size:12px;color:var(--tertiary);display:inline-flex;gap:6px;align-items:center}
+.card{background:var(--raised);border-radius:14px;padding:12px;display:flex;gap:10px;align-items:flex-start;max-width:92%}
+.card .tile{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}
+.tile.warn{background:var(--warn-bg);color:var(--warn-fg)}.tile.err{background:var(--err-bg);color:var(--err-fg)}.tile.ok{background:var(--ok-bg);color:var(--ok-fg)}.tile.info{background:var(--info-bg);color:var(--info-fg)}.tile.neutral{background:var(--control);color:var(--secondary)}
+.card .t{font-weight:600}.card .x{color:var(--secondary);font-size:13px}
+.card .acts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.mini{border:0;background:var(--control);padding:5px 11px;border-radius:8px;font-size:12.5px;font-weight:550}
+.mini.primary{background:var(--accent);color:var(--accent-fg)}
+.qr{display:flex;flex-direction:column;gap:6px;width:100%}
+.qr span{background:var(--raised);border-radius:10px;padding:8px 11px;font-size:13px}
+.label-pill{align-self:flex-start;font-size:11.5px;color:var(--secondary);background:var(--control);border-radius:999px;padding:1px 8px;display:inline-flex;gap:5px;align-items:center}
+.imgph{width:220px;height:150px;border-radius:14px;background:linear-gradient(135deg,#a7c7a0,#6f9fb8 60%,#d7b98a)}
+.imgph.loading{background:var(--control);position:relative;overflow:hidden}
+@media (prefers-reduced-motion:no-preference){.imgph.loading::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,color-mix(in srgb,var(--raised) 60%,transparent) 50%,transparent 70%);animation:sweep 1.6s infinite}}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+.helper{display:inline-flex;align-items:center;gap:7px;background:var(--raised);border-radius:999px;padding:4px 11px 4px 6px;font-size:12.5px;color:var(--secondary);width:max-content}
+.centernote{align-self:center;font-size:12.5px;color:var(--tertiary)}
+.cursor::after{content:"▍";color:var(--tertiary);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- gallery ---------- */
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
+.phone .gallery{grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.state{background:var(--page);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.state header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.state header b{font-size:14px}
+.tag{font-size:11px;font-weight:650;padding:2px 8px;border-radius:999px;background:var(--control);color:var(--secondary)}
+.tag.always{background:var(--info-bg);color:var(--info-fg)}
+.tag.new{background:var(--ok-bg);color:var(--ok-fg)}
+.tag.today{background:var(--control);color:var(--secondary)}
+.why{font-size:12.5px;color:var(--secondary);margin:0}
+.state textarea{width:100%;min-height:40px;resize:vertical;border:0;background:var(--raised);border-radius:10px;padding:8px 10px;font:12.5px var(--font);color:var(--fg)}
+.state textarea:focus{outline:none;background:var(--control-hover)}
+.phone .chatframe{max-width:360px;margin:0 auto;width:100%;border-radius:26px}
+
+/* ---------- hero simulation ---------- */
+.hero{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px}
+@media (max-width:1000px){.hero{grid-template-columns:1fr}}
+.window{background:var(--canvas);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:520px}
+.phone .window{max-width:390px;width:100%;margin:0 auto;border-radius:44px;height:640px;border:10px solid #0b0b0b}
+.chathead{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;position:relative}
+.namepill{display:inline-flex;align-items:center;gap:8px;background:var(--raised);border-radius:999px;padding:4px 14px 4px 5px;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.chatbody{flex:1;overflow:auto;padding:6px 18px 12px;display:flex;flex-direction:column;gap:9px}
+.composer{margin:0 14px 14px;background:var(--raised);border-radius:22px;padding:10px 14px;color:var(--tertiary);display:flex;justify-content:space-between;align-items:center}
+.sendbtn{width:30px;height:30px;border-radius:50%;background:var(--control);display:grid;place-items:center;color:var(--secondary);font-size:12px}
+.sendbtn.stop{background:var(--accent);color:var(--accent-fg)}
+.side{background:var(--page);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.side p{margin:0;color:var(--secondary);font-size:13px}
+.radio-row{display:flex;gap:10px;align-items:flex-start;padding:9px 10px;border-radius:10px;cursor:pointer}
+.radio-row:hover{background:var(--control)}
+.radio-row[aria-checked="true"]{background:var(--raised)}
+.radio{width:16px;height:16px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--tertiary);flex:0 0 auto;margin-top:2px;transition:box-shadow .15s}
+[aria-checked="true"] > .radio{box-shadow:inset 0 0 0 5px var(--accent)}
+.radio-row small{display:block;color:var(--secondary);font-size:12px}
+.marks-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.mk{display:flex;gap:8px;align-items:center;background:var(--raised);border-radius:10px;padding:8px 10px;font-size:12.5px}
+.mk small{display:block;color:var(--tertiary);font-size:11px}
+
+/* ---------- surfaces ---------- */
+.surfaces{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:18px}
+.surf{background:var(--page);border-radius:18px;padding:16px}
+.surf h4{margin:0 0 4px;font-size:15px}
+.surf p.d{margin:0 0 12px;color:var(--secondary);font-size:13px}
+.sbar{width:280px;background:var(--sidebar);border-radius:14px;padding:12px 10px;display:flex;flex-direction:column;gap:2px;margin:0 auto;box-shadow:var(--shadow)}
+.sbar .tools{display:flex;justify-content:space-between;align-items:center;padding:2px 4px 8px}
+.circ{width:32px;height:32px;border-radius:50%;background:var(--control);display:grid;place-items:center;color:var(--secondary)}
+.hero-bot{display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 0 12px}
+.srow{display:flex;gap:10px;align-items:center;padding:7px 8px;border-radius:12px}
+.srow:hover{background:var(--control)} .srow.on{background:var(--control)}
+.srow .nm{font-weight:600;font-size:13.5px;display:flex;gap:6px;align-items:center}
+.srow .pv{font-size:12.5px;color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.srow .rt{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.unread{width:8px;height:8px;border-radius:50%;background:var(--me)}
+.needs{white-space:nowrap;font-size:10.5px;font-weight:650;color:var(--warn-fg);background:var(--warn-bg);border-radius:999px;padding:0 6px}
+.sfoot{display:flex;gap:8px;align-items:center;padding-top:10px;margin-top:6px;border-top:1px solid var(--sep)}
+.pfp{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#999,#555)}
+.connect{flex:1;background:var(--control);border-radius:999px;padding:7px 12px;text-align:center;font-weight:550;font-size:13px}
+.menu{background:var(--popover);border-radius:12px;box-shadow:var(--pop-shadow);padding:5px;width:210px;margin:0 0 0 auto;font-size:13px}
+.menu div{padding:7px 10px;border-radius:7px;display:flex;gap:9px;align-items:center}
+.menu div:hover{background:var(--control)} .menu hr{border:0;border-top:1px solid var(--sep);margin:4px 6px}
+.menu .danger{color:#d9493a} .menu kbd{margin-left:auto;color:var(--tertiary);font:11px var(--font)}
+.panel{background:var(--raised);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;width:100%;max-width:380px;margin:0 auto}
+.ptabs{display:flex;gap:2px;padding:6px;border-bottom:1px solid var(--sep)}
+.ptabs button{border:0;background:transparent;padding:5px 10px;border-radius:8px;font-size:12.5px;color:var(--secondary)}
+.ptabs button[aria-selected="true"]{background:var(--control);color:var(--fg);font-weight:600}
+.pbody{padding:10px 12px;min-height:220px;font-size:13px}
+.prow{display:flex;gap:10px;align-items:center;padding:7px 4px}
+.prow+.prow{border-top:1px solid var(--sep)}
+.prow .m{color:var(--tertiary);font-size:12px;margin-left:auto}
+.group{background:var(--raised);border-radius:14px;overflow:hidden}
+.grow{display:flex;gap:12px;align-items:center;padding:11px 14px;position:relative}
+.grow+.grow::before{content:"";position:absolute;top:0;left:14px;right:0;border-top:1px solid var(--sep)}
+.grow .lb{flex:1}.grow small{display:block;color:var(--secondary);font-size:12px}
+.selt{display:flex;align-items:center;gap:8px;background:var(--control);border-radius:9px;padding:6px 10px;min-width:0;max-width:230px;white-space:nowrap}
+.selt span{overflow:hidden;text-overflow:ellipsis}
+.switch{width:34px;height:20px;border-radius:999px;background:var(--control-hover);position:relative;flex:0 0 auto}
+.switch::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.gtitle{font-size:12px;font-weight:650;color:var(--secondary);margin:14px 0 6px 4px}
+.before{opacity:.75}
+.bad{background:var(--control);border-radius:9px;padding:6px 10px;width:230px;font-size:13px;line-height:1.3}
+
+/* settings sub-page */
+.opt{display:grid;grid-template-columns:auto 1fr 300px;gap:14px;align-items:center;padding:12px 14px;cursor:pointer;position:relative}
+.opt+.opt::before{content:"";position:absolute;top:0;left:14px;right:0;border-top:1px solid var(--sep)}
+.opt:hover{background:var(--control)}
+.opt[aria-checked="true"]{background:color-mix(in srgb,var(--control) 60%,transparent)}
+.opt .lb small{display:block;color:var(--secondary);font-size:12px}
+@media (max-width:760px){.opt{grid-template-columns:auto 1fr}.opt .pv{grid-column:1 / -1}}
+.pv{background:var(--canvas);border-radius:12px;padding:10px;height:118px;overflow:hidden;display:flex;flex-direction:column;gap:6px;font-size:12px;justify-content:flex-end}
+.pv .bubble{font-size:12px;padding:6px 10px;border-radius:14px}
+.pv .status{font-size:12px;min-height:20px}
+.pv .steps{font-size:11.5px;padding-left:24px}
+.pv details.fold{font-size:12px}
+.pagehead h4{font-size:20px;margin:0 0 2px;letter-spacing:-.01em}
+.pagehead p{margin:0 0 6px;color:var(--secondary);font-size:13px}
+.phonepv{display:flex;gap:14px;align-items:center;padding:12px 14px}
+.phase-card{background:var(--page);border-radius:14px;padding:12px 14px;display:flex;gap:12px;align-items:center}
+.phase-card .w{font-weight:600}
+.phase-card small{display:block;color:var(--secondary);font-size:12px}
+.phase-card .on{margin-left:auto;display:flex;gap:4px;flex:0 0 auto}
+.seg button[disabled]{opacity:.4;cursor:default}
+/* plan */
+.plan{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.phase{background:var(--page);border-radius:16px;padding:16px}
+.phase h4{margin:0 0 2px}.phase .w{font-size:12px;color:var(--tertiary);margin-bottom:8px}
+.phase ul{margin:0;padding-left:18px;font-size:13px}.phase li{margin:3px 0}
+.ideas{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.idea{background:var(--page);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:6px}
+.idea b{font-size:14px}.idea p{margin:0;font-size:13px;color:var(--secondary)}
+.vote{display:flex;gap:6px;margin-top:4px}
+.vote button{border:0;background:var(--raised);border-radius:8px;padding:4px 10px;font-size:12px;color:var(--secondary)}
+.vote button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.qlist{background:var(--page);border-radius:16px;padding:16px 16px 16px 34px;margin:0}
+.qlist li{margin:6px 0}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--accent);color:var(--accent-fg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:50}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Bot chat states</h1>
+  <span class="seglabel">Activity</span>
+  <div class="seg" role="group" aria-label="Activity level">
+    <button data-level="quiet" aria-pressed="true">Quiet</button>
+    <button data-level="summary" aria-pressed="false">Summary</button>
+    <button data-level="detailed" aria-pressed="false">Detailed</button>
+  </div>
+  <span class="seglabel">Device</span>
+  <div class="seg" role="group" aria-label="Device">
+    <button data-device="desktop" aria-pressed="true">Mac</button>
+    <button data-device="phone" aria-pressed="false">iPhone</button>
+  </div>
+  <div class="spacer"></div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#live">Live</a><a href="#phases">Words</a><a href="#settings">Settings</a><a href="#states">States</a><a href="#surfaces">Sidebar &amp; panel</a><a href="#ideas">Ideas</a><a href="#plan">Plan</a>
+  </nav>
+  <button class="btn primary" id="copy">Copy my notes</button>
+</header>
+
+<main id="root">
+  <section id="live">
+    <h2>A live turn</h2>
+    <p class="sub">A simulated reply from Meal Planner. Switch <b>Activity</b> at the top to compare Quiet, Summary and Detailed, or <b>Device</b> to see the minimal phone version. On the Mac, hover the status line to peek at the current step. The Bot’s face in the header looks around while it works.</p>
+    <div class="hero">
+      <div class="window" id="sim-window">
+        <div class="chathead"><span class="namepill"><span id="sim-face"></span>Meal Planner</span></div>
+        <div class="chatbody" id="sim-body" aria-live="polite"></div>
+        <div class="composer"><span>Message Meal Planner</span><span class="sendbtn" id="sim-send">↑</span></div>
+      </div>
+      <div class="side">
+        <b>Playback</b>
+        <div style="display:flex;gap:8px"><button class="btn primary" id="replay">Replay</button><button class="btn" id="pause">Pause</button></div>
+        <b style="margin-top:6px">What the line says</b>
+        <p>People pick this themselves in Advanced → Chat activity (below). Try both here.</p>
+        <div role="radiogroup" aria-label="Quiet wording" id="wording">
+          <div class="radio-row" role="radio" tabindex="0" aria-checked="true" data-wording="phase"><span class="radio"></span><span>Follows the work<small>Thinking → Reading → Searching → Working → Writing, each with its mark</small></span></div>
+          <div class="radio-row" role="radio" tabindex="-1" aria-checked="false" data-wording="single"><span class="radio"></span><span>Always “Thinking”<small>One mark and one word until the reply starts</small></span></div>
+        </div>
+        <b style="margin-top:6px">The marks</b>
+        <div class="marks-legend" id="legend"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="phases">
+    <h2>Every status word</h2>
+    <p class="sub">One word and one mark at a time. The Mac and phones use the same words. Phones get only the word (and a connected app’s name); file names, commands and search terms stay on the Mac.</p>
+    <div class="gallery" id="phase-list" style="grid-template-columns:repeat(auto-fill,minmax(290px,1fr))"></div>
+  </section>
+
+  <section id="settings">
+    <h2>Advanced → Chat activity</h2>
+    <p class="sub">A sub-page per Bot, opened from a row in Advanced. Every choice plays a live preview of what it will look like, so people choose by seeing. Picking a row here also switches the rest of this page. The iPhone and Android Advanced screens get the same page.</p>
+    <div class="surf" id="settings-page" style="max-width:860px"></div>
+  </section>
+
+  <section id="states">
+    <h2>Every state a Bot chat can show</h2>
+    <p class="sub">Each card renders for the Activity level and device picked at the top. <span class="tag always">Always shown</span> means it appears at every level because it needs you or changes the outcome. Leave a note on any card. <b>Copy my notes</b> collects them.</p>
+    <h3>While it works</h3><div class="gallery" id="g-live"></div>
+    <h3>Needs you</h3><div class="gallery" id="g-needs"></div>
+    <h3>After it’s done</h3><div class="gallery" id="g-after"></div>
+    <h3>Problems</h3><div class="gallery" id="g-problems"></div>
+  </section>
+
+  <section id="surfaces">
+    <h2>Sidebar, menu, side panel and Advanced</h2>
+    <p class="sub">Your three requests, plus where the Activity setting lives.</p>
+    <div class="surfaces" id="surf"></div>
+  </section>
+
+  <section id="ideas">
+    <h2>Ideas</h2>
+    <p class="sub">Vote on each. “Yes” ideas go into the spec. Votes are included in Copy my notes.</p>
+    <div class="ideas" id="idea-list"></div>
+  </section>
+
+  <section id="plan">
+    <h2>Plan</h2>
+    <p class="sub">Four slices, each shippable on its own. Nothing gets built until you’ve approved the spec.</p>
+    <div class="plan" id="plan-list"></div>
+    <h3>Open questions</h3>
+    <ol class="qlist" id="qs"></ol>
+    <textarea id="qnote" style="width:100%;min-height:80px;margin-top:10px;border:0;border-radius:12px;background:var(--page);padding:12px;font:13px var(--font);color:var(--fg)" placeholder="Answers, by number"></textarea>
+  </section>
+</main>
+
+<script>
+/* ---------------- helpers ---------------- */
+const $ = s => document.querySelector(s);
+const store = {
+  get(k, d=""){ try { return localStorage.getItem("botstates:"+k) ?? d; } catch { return d; } },
+  set(k, v){ try { localStorage.setItem("botstates:"+k, v); } catch {} },
+};
+const S = { level: store.get("level","quiet"), device: store.get("device","desktop"), wording: store.get("wording","phase") };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function mark(name, size=18, paused=false) {
+  const p = paused ? " data-paused" : "";
+  const svg = inner => `<svg class="aiden-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" data-aiden-mark="${name}"${p} style="width:${size}px;height:${size}px">${inner}</svg>`;
+  switch (name) {
+    case "tri-step": return svg(`<g class="turn"><circle cx="12" cy="5.5" r="2.6"/><circle cx="17.63" cy="15.25" r="2.6"/><circle cx="6.37" cy="15.25" r="2.6"/></g>`);
+    case "quad-shuffle": return svg(`<circle cx="7" cy="7" r="2.4"/><circle cx="17" cy="7" r="2.4"/><circle cx="7" cy="17" r="2.4"/><circle cx="17" cy="17" r="2.4"/>`);
+    case "compose": return svg([[5.5,16],[10.7,12],[15.9,14]].map(([y,w],i)=>`<rect x="4" y="${y}" width="${w}" height="2.6" rx="1.3" style="animation-delay:${(i*0.16-1.1).toFixed(2)}s"/>`).join(""));
+    case "scan-grid": return svg([6,12,18].flatMap(cy=>[6,12,18].map((cx,c)=>`<circle cx="${cx}" cy="${cy}" r="1.9" opacity=".2" style="animation-delay:${(c*0.18-0.45).toFixed(2)}s"/>`)).join(""));
+    case "glance": return svg(`<g class="look"><rect class="eye" x="7" y="8.5" width="3.4" height="7" rx="1.7"/><rect class="eye" x="13.6" y="8.5" width="3.4" height="7" rx="1.7"/></g>`);
+    case "bounce": return svg([5.5,12,18.5].map((cx,i)=>`<circle cx="${cx}" cy="13" r="2.4" style="animation-delay:${(i*0.13).toFixed(2)}s"/>`).join(""));
+  }
+}
+// The Bot's face: a soft shape with two eyes, like Aiden's Bot avatars.
+function face(color="#5fb36b", size=28, working=false, shape="blob", badge="") {
+  const body = shape === "blob"
+    ? `<path d="M12 1.5c6 0 10.5 3.6 10.5 10s-4.6 11-10.5 11S1.5 18 1.5 11.5 6 1.5 12 1.5z" fill="${color}"/>`
+    : shape === "drop"
+    ? `<path d="M3 3.5 21 9c1.2.4 1.2 2 0 2.4L5 21.5c-1 .5-2-.3-2-1.3V4.7c0-.9.9-1.5 1.7-1.2z" fill="${color}"/>`
+    : `<rect x="1.5" y="1.5" width="21" height="21" rx="8" fill="${color}"/>`;
+  return `<span class="face ${working?"working":""}" style="width:${size}px;height:${size}px">
+    <svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${body}
+      <g class="eyes"><rect x="8" y="7.5" width="2.6" height="5.5" rx="1.3" fill="#fff"/><rect x="13.4" y="7.5" width="2.6" height="5.5" rx="1.3" fill="#fff"/></g></svg>${badge}</span>`;
+}
+// Every phase a Bot can be in. Mac and phone share the words; the phone gets
+// only the phase (and an app name), never file names, commands or queries.
+const PHASE = {
+  preparing:{ mark:"bounce", word:"Getting ready", when:"You just sent, before the model starts", phone:true },
+  thinking:{ mark:"tri-step", word:"Thinking", when:"The model is reasoning, no tool yet", phone:true },
+  reading:{ mark:"scan-grid", word:"Reading", when:"Reading or listing files", phone:true },
+  photo:{ mark:"scan-grid", word:"Looking at your photo", when:"An image you sent goes to the image model", phone:true },
+  searching:{ mark:"scan-grid", word:"Searching the web", when:"Web search", phone:true },
+  command:{ mark:"quad-shuffle", word:"Running a command", when:"Shell commands and scripts", phone:true },
+  editing:{ mark:"quad-shuffle", word:"Editing files", when:"Writing or changing files", phone:true },
+  app:{ mark:"quad-shuffle", word:"Using Notion", when:"A connected app (its name is shown)", phone:true },
+  helper:{ mark:"quad-shuffle", word:"Asking a helper", when:"Hands part of the job to a subagent", phone:true },
+  computer:{ mark:"quad-shuffle", word:"Using your Mac", when:"Computer Use or Form Fill", phone:true },
+  working:{ mark:"quad-shuffle", word:"Working", when:"Any other tool", phone:true },
+  remembering:{ mark:"compose", word:"Remembering", when:"Saving something to its memory", phone:true },
+  routine:{ mark:"tri-step", word:"Setting up a routine", when:"Creating or changing a routine", phone:true },
+  writing:{ mark:"compose", word:"Writing", when:"Composing the reply, until the words show", phone:true },
+  waiting:{ mark:"glance", word:"Waiting for you", when:"An approval or a question is open", phone:true },
+  tidying:{ mark:"bounce", word:"Tidying up its notes", when:"Compacting a long conversation", phone:true },
+  stopping:{ mark:"bounce", word:"Stopping", when:"After you press Stop", phone:true },
+  resuming:{ mark:"bounce", word:"Picking up where it left off", when:"Resuming after an interruption", phone:true },
+  reconnect:{ mark:"bounce", word:"Reconnecting to your Mac", when:"The phone lost its connection", phone:true, phoneOnly:true },
+};
+// Phones are always minimal: one line, no peek, no steps, no recap.
+const phoneMode = () => S.device === "phone";
+function statusLine(phase, { peek="", elapsed="", stop=false, forceWord=false } = {}) {
+  const single = S.wording === "single" && !forceWord && !["waiting","reconnect","stopping"].includes(phase);
+  const p = single ? PHASE.thinking : PHASE[phase];
+  const peekHtml = peek && S.level !== "detailed" && !phoneMode() ? `<span class="peek">· ${esc(peek)}</span>` : "";
+  const showStop = stop && !phoneMode();
+  return `<div class="status" tabindex="0" role="status" aria-label="${p.word}${peek&&!phoneMode()?": "+esc(peek):""}">${mark(p.mark,18)}<span class="label shimmer">${p.word}</span>${peekHtml}${elapsed?`<span class="elapsed">· ${elapsed}</span>`:""}${showStop?`<span class="stopchip">Stop</span>`:""}</div>`;
+}
+const ICON = { read:"▤", run:"›_", search:"⌕", edit:"✎", app:"◇", web:"◎", helper:"◈", image:"▧", think:"◌", mem:"▣" };
+function step(kind, verb, detail="", state="done", extra="") {
+  const cls = state === "fail" ? "fail" : state === "blocked" ? "blocked" : "";
+  const v = state === "active" ? `<span class="shimmer">${verb}</span>` : verb;
+  return `<div class="step ${cls}"><span class="ic">${state==="fail"?"!":state==="blocked"?"⊘":ICON[kind]}</span><span>${v}</span>${detail?`<span class="d">${esc(detail)}</span>`:""}${extra}</div>`;
+}
+function fold(summary, stepsHtml, { open=false, issues=0 } = {}) {
+  return `<details class="fold" ${open?"open":""}><summary><span class="chev">›</span>${summary}${issues?` <span class="issue">${issues} issue${issues>1?"s":""}</span>`:""}</summary><div class="steps">${stepsHtml}</div></details>`;
+}
+const me = t => `<div class="bubble me">${t}</div>`;
+const bot = t => `<div class="bubble">${t}</div>`;
+const fileChip = (name, verb, size) => `<div class="chip"><span class="fi">▤</span><span>${name}<br><span class="m">${verb} · ${size}</span></span></div>`;
+const card = (tone, icon, title, text, acts=[]) => `<div class="card"><span class="tile ${tone}">${icon}</span><div><div class="t">${title}</div>${text?`<div class="x">${text}</div>`:""}${acts.length?`<div class="acts">${acts.map((a,i)=>`<button class="mini ${i===0?"primary":""}">${a}</button>`).join("")}</div>`:""}</div></div>`;
+const L = () => phoneMode() ? "quiet" : S.level;
+
+/* ---------------- states ---------------- */
+// Shared step trail for "after" states.
+const TRAIL = () => [
+  step("read","Read","grocery-list.md"),
+  step("search","Searched the web","dairy-free weeknight dinners"),
+  step("edit","Edited","meal-plan.md",'done',' <span class="add">+14</span> <span class="del">−3</span>'),
+  step("app","Updated a page in Notion","Meal plan · Week 42"),
+].join("");
+const SUMMARY_TEXT = "Worked for 18s · read 1 file, searched the web, edited 1 file, used Notion";
+
+const STATES = [
+  /* ---- live ---- */
+  { g:"live", id:"sent", title:"Just sent", status:"new",
+    why:"Shows at once, before the model answers, so a send never looks ignored. Today nothing shows on phones until text arrives.",
+    r:()=> me("Plan dinners for this week, no dairy") + statusLine("thinking") },
+  { g:"live", id:"thinking", title:"Thinking (model reasoning)", status:"new",
+    why:"Quiet and Summary never show reasoning text. Detailed shows a folded “Thought for 6s” you can open.",
+    r:()=> me("Plan dinners for this week, no dairy") + (L()==="detailed"
+      ? statusLine("thinking",{forceWord:true}) + `<div class="steps">${step("think","Thinking","",'active')}</div><div class="reasoning">Five dinners, no dairy, uses what’s in the grocery list first…</div>`
+      : statusLine("thinking",{peek:"Planning the week"})) },
+  { g:"live", id:"reading", title:"Reading files", status:"new",
+    why:"Quiet: just the mark. Detailed: one line per file, the newest shimmering.",
+    r:()=> statusLine("reading",{peek:"grocery-list.md"}) + (L()==="detailed" ? `<div class="steps">${step("read","Read","grocery-list.md")}${step("read","Reading","pantry.md","active")}</div>` : "") },
+  { g:"live", id:"command", title:"Running a command", status:"new",
+    why:"Commands are the noisiest thing a Bot does. Output only appears in Detailed, folded.",
+    r:()=> statusLine("command",{peek:"python3 scale_recipes.py"}) + (L()==="detailed" ? `<div class="steps">${step("run","Running","python3 scale_recipes.py --serves 2","active")}</div>` : "") },
+  { g:"live", id:"web", title:"Searching the web", status:"new",
+    why:"Searching gets its own word and the scan mark, because it’s the kind of step people like to know about.",
+    r:()=> statusLine("searching",{peek:"dairy-free weeknight dinners"}) + (L()==="detailed" ? `<div class="steps">${step("search","Searching the web","dairy-free weeknight dinners","active")}</div>` : "") },
+  { g:"live", id:"computer", title:"Using your Mac", status:"new",
+    why:"Computer Use and Form Fill. Detailed names the app it’s driving; Quiet just says “Using your Mac”.",
+    r:()=> statusLine("computer",{peek:"Safari"}) + (L()==="detailed" ? `<div class="steps">${step("app","Using","Safari · filling the order form","active")}</div>` : "") },
+  { g:"live", id:"app", title:"Using a connected app", status:"new",
+    why:"Apps read as plain actions (“Updated a page in Notion”), not tool names like notion.update_page.",
+    r:()=> statusLine("app",{peek:"Meal plan · Week 42"}) + (L()==="detailed" ? `<div class="steps">${step("app","Updating a page in Notion","Meal plan · Week 42","active")}</div>` : "") },
+  { g:"live", id:"edit", title:"Writing or editing a file", status:"new",
+    why:"Detailed shows +/− counts like workspace chats. The file chip appears when it’s done, at every level.",
+    r:()=> statusLine("editing",{peek:"meal-plan.md"}) + (L()==="detailed" ? `<div class="steps">${step("edit","Editing","meal-plan.md","active",' <span class="add">+14</span> <span class="del">−3</span>')}</div>` : "") },
+  { g:"live", id:"helper", title:"Handing work to a helper", status:"new",
+    why:"Subagents. Quiet stays one line. Detailed shows a helper chip with its own mark.",
+    r:()=> statusLine("helper",{peek:"Finding recipes"}) + (L()==="detailed" ? `<div class="steps"><div class="helper">${mark("quad-shuffle",14)} Helper · Find 5 dairy-free recipes</div></div>` : "") },
+  { g:"live", id:"streaming", title:"Reply streaming in", status:"changed",
+    why:"The status line hands over to the text as soon as words arrive. In Detailed the steps fold up above the reply.",
+    r:()=> (L()==="detailed" ? fold("Worked for 14s · 4 steps", TRAIL()) : "") + `<div class="bubble cursor">Here’s your week. Monday: chickpea curry with coconut milk. Tuesday: </div>` },
+  { g:"live", id:"long", title:"Taking a while", status:"new",
+    why:"After 20 seconds the line adds the time and a Stop. After 2 minutes it adds “I’ll message you when it’s done”, so you can leave.",
+    r:()=> statusLine("editing",{elapsed:"1m 12s", stop:true, peek:"meal-plan.md"}) + `<div class="centernote">Still going. I’ll message you when it’s done.</div>` },
+  { g:"live", id:"progress", title:"Progress message from the Bot", status:"changed",
+    why:"When the Bot says “I’ve started on it”, that’s the Bot talking to you, so it’s a normal bubble at every level. Today it gets hidden in the Updates fold.",
+    r:()=> me("add that to a page in Notion") + bot("On it. I’ll dig through your GitHub and add a Creative Technologist page to Notion.") + statusLine("working",{peek:"Reading repos"}) },
+  { g:"live", id:"queued", title:"You send while it’s working", status:"new",
+    why:"Steer joins the running reply at once. Queue waits as a faded bubble marked Queued and sends when the reply finishes (Remove only if the runtime can withdraw it).",
+    r:()=> statusLine("working") + `<div class="bubble me queued">Also skip mushrooms</div><div class="qmeta">Queued · Remove</div><div class="caption">Composer while working: Steer · Queue</div>` },
+  { g:"live", id:"reconnect", title:"Phone lost the Mac", status:"new",
+    why:"iPhone and Android only. The Bot keeps working on the Mac; the phone says it’s reconnecting rather than showing a frozen line.",
+    r:()=> statusLine("reconnect") },
+
+  /* ---- needs you ---- */
+  { g:"needs", id:"approval", title:"Needs your OK", status:"today", always:true,
+    why:"The status line switches to the glance mark and “Waiting for you”. The card stays in the footer, as today.",
+    r:()=> statusLine("waiting") + card("warn","!","Meal Planner wants to send an email","To: sam@… · Subject: This week’s grocery list",["Allow once","Always allow","Deny"]) },
+  { g:"needs", id:"question", title:"Asks you to choose", status:"today", always:true,
+    why:"A–E quick replies replace the composer. The status line pauses on “Waiting for you”.",
+    r:()=> bot("Which nights do you cook?") + `<div class="qr"><span>A · Weeknights only</span><span>B · Every night</span><span>C · Weekends</span></div>` },
+  { g:"needs", id:"connect", title:"Needs an app connected", status:"today", always:true,
+    why:"Connect card from today. On phones the button reads “Finish on your Mac”.",
+    r:()=> card("info","◇","Connect Notion","So I can keep your meal plan in your Notion workspace.", S.device==="phone"?["Finish on your Mac","Not now"]:["Connect","Not now"]) },
+  { g:"needs", id:"needsmodel", title:"Needs an AI model", status:"today", always:true,
+    why:"Shown instead of the composer when the Bot has no model.",
+    r:()=> card("neutral","◌","Meal Planner needs an AI model","Choose one so it can reply.", S.device==="phone"?["Choose on your Mac"]:["Choose a model","Open Providers"]) },
+
+  /* ---- after ---- */
+  { g:"after", id:"done", title:"Finished reply", status:"changed",
+    why:"Quiet: just the reply. Summary: one folded recap line. Detailed: the same fold, which auto-closes when the reply lands (from rakazo).",
+    r:()=> me("Plan dinners for this week, no dairy") + (L()==="quiet" ? "" : fold(SUMMARY_TEXT, TRAIL())) + bot("Here’s your week. Monday: chickpea curry. Tuesday: miso salmon. Wednesday: lentil bolognese…") },
+  { g:"after", id:"files", title:"Files it made or changed", status:"today", always:true,
+    why:"File chips stay at every level and open the Bot’s side panel on Files.",
+    r:()=> bot("Saved the plan and the list.") + fileChip("meal-plan.md","Edited","3 KB") + fileChip("grocery-list.md","Created","1 KB") },
+  { g:"after", id:"imagedone", title:"Image result", status:"today", always:true,
+    why:"Images are part of the reply, so they show at every level.",
+    r:()=> `<div class="imgph" role="img" aria-label="Generated image"></div>` + bot("Here’s a cover for this week’s plan.") },
+  { g:"after", id:"memory", title:"Memory updated", status:"today", always:true,
+    why:"Today’s centred caption, unchanged. It opens Memory, now in the side panel.",
+    r:()=> bot("Got it, no mushrooms from now on.") + `<div class="caption">▣ Memory updated</div>` },
+  { g:"after", id:"routine", title:"Suggests a routine", status:"today", always:true,
+    why:"Today’s routine proposal card.",
+    r:()=> card("neutral","◷","Add a routine?","Meal Planner · Every Sunday at 6:00 PM",["Add routine","Not now"]) },
+  { g:"after", id:"routinerun", title:"A routine ran on its own", status:"today",
+    why:"The routine’s name labels the turn. Activity follows the same level as any other turn.",
+    r:()=> `<span class="label-pill">◷ Sunday plan</span>` + (L()==="quiet" ? "" : fold("Worked for 9s · read 2 files", step("read","Read","pantry.md")+step("read","Read","last-week.md"))) + bot("Next week’s plan is ready. I swapped Tuesday for a quicker dish.") },
+
+  /* ---- problems ---- */
+  { g:"problems", id:"stepfail", title:"A step failed but it recovered", status:"new",
+    why:"Quiet hides it, since the reply was fine. Summary and Detailed show a red “1 issue” on the fold.",
+    r:()=> (L()==="quiet" ? "" : fold("Worked for 21s · read 2 files", step("read","Read","grocery-list.md")+step("read","Couldn’t open","recipes.pdf","fail"), {issues:1, open:L()==="detailed"})) + bot("I couldn’t open recipes.pdf, so I used your grocery list instead.") },
+  { g:"problems", id:"blocked", title:"Blocked by its access", status:"new",
+    why:"Blocked is amber, failed is red, and they never look alike (from openbot). If blocking changed the outcome the Bot says so itself.",
+    r:()=> (L()==="quiet" ? "" : fold("Worked for 6s · 1 step", step("app","Blocked: send an email","not allowed for this Bot","blocked"), {issues:1, open:L()==="detailed"})) + bot("I’m not allowed to send email, so here’s the list to forward yourself.") + `<div class="caption">Change what it can use in Advanced</div>` },
+  { g:"problems", id:"failed", title:"Reply failed", status:"today", always:true,
+    why:"Today’s failed-turn card. Error details stay on the Mac.",
+    r:()=> me("Plan dinners for this week") + card("err","!","I couldn’t finish that reply.","Try sending it again.",["Try again"]) },
+  { g:"problems", id:"stopped", title:"You stopped it", status:"new", always:true,
+    why:"A quiet centred line, never a red card, and never fed back to the model (from openbot).",
+    r:()=> me("Plan dinners for this week") + `<div class="centernote">You stopped this reply.</div>` },
+  { g:"problems", id:"interrupted", title:"Interrupted (Mac slept or quit)", status:"today", always:true,
+    why:"Today’s interrupted card with Resume.",
+    r:()=> card("warn","↻","I got interrupted while working on this.","",["Resume","Dismiss"]) },
+  { g:"problems", id:"modelerror", title:"Model error", status:"today", always:true,
+    why:"Today’s model error card.",
+    r:()=> card("err","!","The AI model didn’t answer.","Its service returned an error.", S.device==="phone"?["Open on your Mac"]:["Choose a model","Open Providers"]) },
+];
+
+function renderGallery() {
+  for (const g of ["live","needs","after","problems"]) {
+    $("#g-"+g).innerHTML = STATES.filter(s => s.g === g).map(s => `
+      <article class="state">
+        <header><b>${s.title}</b>
+          ${s.always?`<span class="tag always">Always shown</span>`:""}
+          <span class="tag ${s.status==="today"?"today":"new"}">${s.status==="today"?"Exists today":s.status==="changed"?"Changed":"New"}</span></header>
+        <div class="chatframe">${s.r()}</div>
+        <p class="why">${s.why}</p>
+        <textarea data-note="${s.id}" placeholder="Note">${esc(store.get("note:"+s.id))}</textarea>
+      </article>`).join("");
+  }
+}
+
+/* ---------------- live simulation ---------------- */
+const SIM = [
+  { t:0,    user:"Plan dinners for this week, no dairy", phase:"preparing" },
+  { t:400,  phase:"thinking", peek:"Planning the week", step:null },
+  { t:2300, phase:"reading", peek:"grocery-list.md", step:["read","Reading","grocery-list.md"] },
+  { t:3900, phase:"searching", peek:"dairy-free weeknight dinners", step:["search","Searching the web","dairy-free weeknight dinners"] },
+  { t:5800, phase:"editing", peek:"meal-plan.md", step:["edit","Editing","meal-plan.md"] },
+  { t:7300, phase:"app", peek:"Meal plan · Week 42", step:["app","Updating a page in Notion","Meal plan · Week 42"] },
+  { t:8900, phase:"writing" },
+  { t:11600, done:true },
+];
+const REPLY = "Here’s your week. Monday: chickpea curry with coconut milk. Tuesday: miso salmon and greens. Wednesday: lentil bolognese. Thursday: sheet-pan fajitas. Friday: Thai basil chicken. I updated meal-plan.md and the Notion page.";
+const PAST = { Reading:"Read", "Searching the web":"Searched the web", Editing:"Edited", "Updating a page in Notion":"Updated a page in Notion" };
+let sim = { timers:[], paused:false, state:null, start:0 };
+function simReset() {
+  sim.timers.forEach(clearTimeout); sim.timers = [];
+  sim.state = { user:null, phase:null, peek:"", steps:[], text:"", done:false };
+  sim.start = performance.now();
+  for (const ev of SIM) sim.timers.push(setTimeout(() => simApply(ev), ev.t));
+  simRender();
+}
+function simApply(ev) {
+  const st = sim.state;
+  if (ev.user) st.user = ev.user;
+  if (ev.phase) { st.phase = ev.phase; st.peek = ev.peek || ""; }
+  if (ev.step) { st.steps = st.steps.map(s => ({...s, active:false})); st.steps.push({ kind:ev.step[0], verb:ev.step[1], detail:ev.step[2], active:true }); }
+  if (ev.phase === "writing") {
+    st.steps = st.steps.map(s => ({...s, active:false}));
+    let i = 0;
+    const tick = () => { if (sim.paused) { sim.timers.push(setTimeout(tick, 120)); return; } i += 3; st.text = REPLY.slice(0, i); simRender(); if (i < REPLY.length) sim.timers.push(setTimeout(tick, 32)); };
+    tick();
+  }
+  if (ev.done) { st.done = true; st.phase = null; st.text = REPLY; }
+  simRender();
+}
+function simRender() {
+  const st = sim.state;
+  const working = !!st.user && !st.done;
+  $("#sim-face").innerHTML = face("#5fb36b", 24, working);
+  $("#sim-send").classList.toggle("stop", working); $("#sim-send").textContent = working ? "■" : "↑";
+  let h = st.user ? me(st.user) : "";
+  const stepsHtml = st.steps.map(s => step(s.kind, s.active ? s.verb : (PAST[s.verb] || s.verb), s.detail, s.active ? "active" : "done", s.kind==="edit" && !s.active ? ' <span class="add">+14</span> <span class="del">−3</span>' : "")).join("");
+  const showLiveSteps = L() === "detailed";
+  if (st.phase && st.phase !== "writing") {
+    h += statusLine(st.phase, { peek: st.peek });
+    if (showLiveSteps && st.steps.length) h += `<div class="steps">${stepsHtml.split('<div class="step').slice(-3).map((x,i,a)=>x? '<div class="step'+x : "").join("")}</div>`;
+  }
+  if (st.text) {
+    if (L() !== "quiet") h += fold(st.done ? SUMMARY_TEXT : "Worked for 9s · " + st.steps.length + " steps", stepsHtml.replace(/<span class="shimmer">([^<]*)<\/span>/g, "$1"));
+    h += `<div class="bubble ${st.done?"":"cursor"}">${esc(st.text)}</div>`;
+    if (st.done) h += fileChip("meal-plan.md","Edited","3 KB");
+  }
+  $("#sim-body").innerHTML = h;
+  $("#sim-body").scrollTop = $("#sim-body").scrollHeight;
+}
+$("#replay").onclick = () => { sim.paused = false; $("#pause").textContent = "Pause"; simReset(); };
+$("#pause").onclick = () => {
+  sim.paused = !sim.paused; $("#pause").textContent = sim.paused ? "Resume" : "Pause";
+  document.querySelectorAll("#sim-window .aiden-mark").forEach(m => m.toggleAttribute("data-paused", sim.paused));
+  if (sim.paused) { sim.timers.forEach(clearTimeout); sim.timers = []; sim.pausedAt = performance.now(); }
+  else { const elapsed = sim.pausedAt - sim.start; sim.start = performance.now() - elapsed;
+    for (const ev of SIM) if (ev.t > elapsed) sim.timers.push(setTimeout(() => simApply(ev), ev.t - elapsed)); }
+};
+$("#legend").innerHTML = [["tri-step","Thinking","the default"],["scan-grid","Reading, searching","files, web, images"],["quad-shuffle","Working","commands, apps, edits"],["compose","Writing","the reply"],["glance","Waiting for you","approvals, questions"],["bounce","Getting ready","sending, reconnecting"]]
+  .map(([m,a,b]) => `<div class="mk">${mark(m,20)}<span>${a}<small>${b}</small></span></div>`).join("");
+
+/* ---------------- surfaces ---------------- */
+function renderSurfaces() {
+  const rows = [
+    ["Aiden Scout","Aiden moved a lot today, thou…","#ff7a2f","blob",false,"",true],
+    ["Davinci","I added Neutomni (neutomni.c…","#9b6bff","blob",false,"",false],
+    ["Photo Manager","","#2f80ff","drop",true,"",false],
+    ["EEBEE","Photo Manager asked how yo…","#ff4fa3","blob",false,"needs",false],
+    ["Parsely","Mostly Google — 11 of 12. The…","#2bc46a","blob",false,"",false],
+    ["Studio Bot","Paste this into house rules. It i…","#7d7d7a","rect",false,"",false],
+  ];
+  const sidebar = `<div class="sbar" aria-label="Bots sidebar">
+    <div class="tools"><span class="circ" title="Back to Aiden">‹</span><span style="display:flex;gap:6px"><span class="circ">⌕</span><span class="circ">＋</span></span></div>
+    <div class="hero-bot">${face("#f4f3ee",64,false,"blob",`<span class="badge-dot" style="background:#f5a623;display:grid;place-items:center;font-size:8px;color:#fff;width:16px;height:16px">★</span>`)}<span style="font-weight:600;font-size:13px">Grok Bot</span></div>
+    ${rows.map(([n,p,c,sh,work,needs,unread]) => `<div class="srow ${n==="Photo Manager"?"on":""}">${face(c,36,work,sh)}
+      <div style="min-width:0"><div class="nm">${n}</div><div class="pv">${work?`<span class="shimmer">Thinking…</span>`:esc(p)}</div></div>
+      <div class="rt">${needs?`<span class="needs">Needs you</span>`:""}${unread?`<span class="unread" aria-label="Unread"></span>`:""}</div></div>`).join("")}
+    <div class="sfoot"><span class="pfp"></span><span class="connect">Connect apps</span></div></div>`;
+  const menu = `<div class="menu" role="menu">
+      <div>◉ Profile</div><div>▢ Files <kbd>⌘⇧F</kbd></div><div>▣ Memory</div><div>◷ Routines</div>
+      <div style="background:var(--ok-bg);color:var(--ok-fg)">⚙ Advanced <span class="tag new" style="margin-left:auto">NEW</span></div>
+      <hr><div class="danger">Delete Bot</div></div>`;
+  const panelTab = store.get("ptab","Files");
+  const tabs = ["Activity","Files","Memory","Routines"];
+  const pbody = {
+    Activity: `<div class="small" style="color:var(--tertiary);font-size:12px;margin-bottom:6px">Today, 6:41 PM · Plan dinners for this week</div><div class="steps" style="padding-left:0">${TRAIL()}</div>
+      <div style="color:var(--tertiary);font-size:12px;margin:12px 0 6px">Yesterday · Sunday plan (routine)</div><div class="steps" style="padding-left:0">${step("read","Read","pantry.md")}${step("read","Couldn’t open","recipes.pdf","fail")}</div>`,
+    Files: [["meal-plan.md","Today · 3 KB"],["grocery-list.md","Today · 1 KB"],["fridge-photo.jpg","Yesterday · 2.1 MB"],["week-41-plan.md","Oct 6 · 3 KB"]].map(([n,m])=>`<div class="prow"><span class="chip" style="padding:0;background:none"><span class="fi">▤</span></span>${n}<span class="m">${m}</span></div>`).join(""),
+    Memory: `<div style="color:var(--tertiary);font-size:12px">About you</div><div class="prow">Doesn’t eat dairy</div><div class="prow">Cooks for two on weekdays</div><div style="color:var(--tertiary);font-size:12px;margin-top:10px">Meal Planner’s notes</div><div class="prow">Prefers 30-minute recipes</div>`,
+    Routines: `<div class="prow">◷ Every Sunday at 6:00 PM<span class="m">Plan next week</span></div><div class="prow" style="color:var(--secondary)">＋ Add routine</div>`,
+  };
+  const panel = `<div class="panel"><div class="ptabs" role="tablist">${tabs.map(t=>`<button role="tab" aria-selected="${t===panelTab}" data-ptab="${t}">${t}</button>`).join("")}<span style="margin-left:auto;color:var(--tertiary);padding:5px">⤢</span></div><div class="pbody">${pbody[panelTab]}</div></div>`;
+  const lv = L();
+  const lvName = {quiet:"Quiet",summary:"Summary",detailed:"Detailed"}[lv];
+  const advanced = `<div class="gtitle">In the chat <span class="tag new">NEW</span></div>
+    <div class="group"><a class="grow" href="#settings" style="color:inherit;text-decoration:none"><span class="lb">Chat activity<small>How much it shows while it works</small></span><span style="color:var(--secondary)">${lvName} · ${S.wording==="single"?"Always “Thinking”":"Follows the work"} ›</span></a></div>
+    <div class="gtitle">AI model · fixed select</div>
+    <div class="group">
+      <div class="grow"><span class="lb">Model<small>Reads images</small></span><span class="selt"><span>DeepSeek V4 Flash Vision Exp</span><span style="color:var(--tertiary)">⌄</span></span></div>
+      <div class="grow before"><span class="lb">Today <small>Metadata inside the trigger wraps and pushes the arrow down</small></span><span class="bad">DeepSeek V4 Flash Vision Exp <span style="color:var(--tertiary);font-size:11px">· Reads images</span><br><span style="color:var(--tertiary)">⌄</span></span></div>
+    </div>`;
+  $("#surf").innerHTML = `
+    <div class="surf"><h4>1 · Bots in the sidebar</h4><p class="d">On the Bots page the sidebar shows only your Bots, like your screenshot: a pinned Bot up top, faces that look around while working, “Needs you” and unread markers. The ‹ button (or any other nav) returns to Aiden’s normal sidebar.</p>${sidebar}</div>
+    <div class="surf"><h4>2 · Side panel for the Bot</h4><p class="d">Reuses the environment panel’s shell and tab strip, with Bot tabs instead of workspace ones. <b>Activity</b> holds the full step log, so the chat can stay quiet. Click the tabs.</p>${panel}</div>
+    <div class="surf"><h4>3 · ••• menu</h4><p class="d">Same items in the chat header, row hover and right-click. Advanced is now one click away. Files, Memory and Routines open the side panel on that tab.</p>${menu}</div>
+    <div class="surf"><h4>4 · Advanced</h4><p class="d">A Chat activity row opens the sub-page above. The model select gets its one-line fix.</p>${advanced}</div>`;
+}
+
+/* ---------------- status words ---------------- */
+function renderPhases() {
+  $("#phase-list").innerHTML = Object.entries(PHASE).map(([id,p]) => `<div class="phase-card">${mark(p.mark,22)}
+    <span><span class="w">${p.word}</span><small>${p.when}</small></span>
+    <span class="on">${p.phoneOnly?"":`<span class="tag">Mac</span>`}<span class="tag">Phone</span></span></div>`).join("");
+}
+
+/* ---------------- Chat activity settings sub-page ---------------- */
+const PV_FRAMES = [
+  { ph:"thinking" },
+  { ph:"reading", step:["read","Read","grocery-list.md"] },
+  { ph:"searching", step:["search","Searched the web","dairy-free dinners"] },
+  { ph:"editing", step:["edit","Edited","meal-plan.md"] },
+  { ph:"writing" },
+  { done:true }, { done:true },
+];
+let pvTick = 0;
+function pvLine(ph, wording) {
+  const p = wording === "single" ? PHASE.thinking : PHASE[ph];
+  return `<div class="status">${mark(p.mark,15)}<span class="label shimmer">${p.word}</span></div>`;
+}
+function preview(level, wording) {
+  const f = PV_FRAMES[pvTick % PV_FRAMES.length];
+  const upto = PV_FRAMES.slice(0, (pvTick % PV_FRAMES.length) + 1).filter(x => x.step);
+  let h = `<div class="bubble me" style="align-self:flex-end">Plan this week’s dinners</div>`;
+  if (!f.done) {
+    h += pvLine(f.ph, wording);
+    if (level === "detailed" && upto.length) h += `<div class="steps">${upto.slice(-2).map((x,i,a)=>step(x.step[0], x.step[1], x.step[2], i===a.length-1 && f.step ? "active":"done")).join("")}</div>`;
+  } else {
+    if (level !== "quiet") h += `<details class="fold"><summary><span class="chev">›</span>Worked for 12s · 3 steps</summary></details>`;
+    h += `<div class="bubble">Here’s your week. Monday: chickpea curry…</div>`;
+  }
+  return h;
+}
+function renderSettings() {
+  const levels = [["quiet","Quiet","Just the status line while it works. The reply stands alone.","Recommended"],["summary","Summary","The status line, then a one-line recap you can open."],["detailed","Detailed","Every step as it happens, folded away when it’s done."]];
+  const wordings = [["phase","Follows the work","Thinking, Reading, Searching, Editing, Writing… each with its own mark."],["single","Always “Thinking”","One word and one mark until the reply starts."]];
+  $("#settings-page").innerHTML = `
+    <div class="pagehead"><div style="color:var(--tertiary);font-size:12px;margin-bottom:6px">‹ Advanced</div><h4>Chat activity</h4><p>How much Meal Planner shows while it works. Approvals, questions, files and problems always show, and the full log is always in the side panel.</p></div>
+    <div class="gtitle">How much to show</div>
+    <div class="group" role="radiogroup" aria-label="How much to show">${levels.map(([v,t,d,r]) => `
+      <div class="opt" role="radio" tabindex="${S.level===v?0:-1}" aria-checked="${S.level===v}" data-level-pick="${v}">
+        <span class="radio"></span><span class="lb">${t} ${r?`<span class="tag">${r}</span>`:""}<small>${d}</small></span>
+        <div class="pv" data-pv="level:${v}">${preview(v, S.wording)}</div></div>`).join("")}</div>
+    <div class="gtitle">What the status line says</div>
+    <div class="group" role="radiogroup" aria-label="What the status line says">${wordings.map(([v,t,d]) => `
+      <div class="opt" role="radio" tabindex="${S.wording===v?0:-1}" aria-checked="${S.wording===v}" data-wording="${v}">
+        <span class="radio"></span><span class="lb">${t}<small>${d}</small></span>
+        <div class="pv" data-pv="wording:${v}">${preview("quiet", v)}</div></div>`).join("")}</div>
+    <div class="gtitle">On iPhone and Android</div>
+    <div class="group"><div class="phonepv"><span class="lb" style="flex:1">Always just the line<small style="display:block;color:var(--secondary);font-size:12px">Phones show the status line with the same words, never steps or recaps.</small></span>
+      <div class="pv" data-pv="phone" style="width:300px;border-radius:20px">${preview("quiet", S.wording)}</div></div></div>`;
+}
+function tickPreviews() {
+  pvTick++;
+  document.querySelectorAll("[data-pv]").forEach(el => {
+    const [kind, v] = el.dataset.pv.split(":");
+    el.innerHTML = kind === "level" ? preview(v, S.wording) : kind === "wording" ? preview("quiet", v) : preview("quiet", S.wording);
+  });
+}
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) setInterval(tickPreviews, 1700);
+
+/* ---------------- ideas, plan ---------------- */
+const IDEAS = [
+  ["face","The Bot’s face is the indicator","Its eyes look around in the sidebar, chat header and phone list while it works (from rakazo’s avatar glyph). The activity mark stays inline in the chat."],
+  ["peek","Peek without noise","In Quiet, hovering or long-pressing the status line shows the current step (“· grocery-list.md”) without adding rows."],
+  ["panel-activity","Detail lives in the side panel","The Activity tab keeps every step of every reply, so even Quiet Bots stay inspectable."],
+  ["autofold","Live-open, auto-fold","Detailed opens the step list while it works and folds it to “Worked for 18s · …” when the reply lands (from rakazo)."],
+  ["blocked","Blocked ≠ failed","Amber “Blocked: …” for access refusals, red “Couldn’t …” for failures. Server marks which is which (from openbot)."],
+  ["long","Leave it running","After 2 minutes: “I’ll message you when it’s done”, with a notification when it finishes, on Mac and phone."],
+  ["queue","Queued messages","Send while it works; your message waits as a faded bubble and goes next."],
+  ["merge","Merge repeats","“Read 6 files” instead of six lines; page visits merge into “Browsed 3 pages”."],
+  ["telegram","One setting, every surface","The same Quiet/Summary/Detailed applies on Mac, iPhone, Android and Telegram (Telegram already has a similar ‘Technical activity’ setting)."],
+];
+const PLAN = [
+  ["A · Quick fixes","Desktop, no contract change",["Advanced in every ••• menu (chat header, row hover, right-click)","Fix the Advanced model select: one line with an ellipsis, “Reads images” under the label","Model picker in New Bot (from the first walkthrough)"]],
+  ["B · Status line + Chat activity, desktop","Renderer + Bot live projection",["Bot projection emits a phase (the status words above) and, on the Mac only, a short safe step label","BotStatusLine: mark + word, peek on hover, elapsed after 20s, Stop","Advanced → Chat activity sub-page with live previews: level (Quiet default / Summary / Detailed) and wording (follows the work default / always “Thinking”)","Summary and Detailed folds reuse ActivityFeed and the agent-steps verbs; blocked vs failed","Progress messages become bubbles; queued messages"]],
+  ["C · Bots sidebar + side panel","Desktop layout",["On /bots the left sidebar becomes the Bot list: pinned Bot, face rows, working / needs-you / unread","Bot side panel on the EnvironmentWorkbench shell: Activity, Files, Memory, Routines (Files replaces the modal)","Panel toggle in the Bot chat header"]],
+  ["D · Phones, minimal","Remote contract rev 30 + iOS + Android",["Token bot-activity-v1: a phase field (word id + optional app name) in the session stream; no steps, paths or commands","Chat activity sub-page on iOS and Android, saved to the Mac so all devices agree","Status line with the native activity marks; Bot faces look around in the Bot list","Older Macs: phones keep today’s behaviour"]],
+];
+const QUESTIONS = [
+  "Default for new Bots: Quiet + “Follows the work”? (Recommended.)",
+  "The pinned Bot at the top of the sidebar: you pick it (pin from the ••• menu), or it’s the one you use most?",
+  "Progress messages (“On it, I’ll dig into…”): always bubbles, or fold away in Quiet?",
+  "Should normal workspace chats get the same Chat activity setting later, or Bots only?",
+];
+function renderIdeas() {
+  $("#idea-list").innerHTML = IDEAS.map(([id,t,p]) => { const v = store.get("vote:"+id); return `<div class="idea"><b>${t}</b><p>${p}</p>
+    <div class="vote" role="group" aria-label="Vote">${["Yes","Maybe","No"].map(x=>`<button data-vote="${id}" data-v="${x}" aria-pressed="${v===x}">${x}</button>`).join("")}</div></div>`; }).join("");
+  $("#plan-list").innerHTML = PLAN.map(([t,w,items]) => `<div class="phase"><h4>${t}</h4><div class="w">${w}</div><ul>${items.map(i=>`<li>${i}</li>`).join("")}</ul></div>`).join("");
+  $("#qs").innerHTML = QUESTIONS.map(q => `<li>${q}</li>`).join("");
+  $("#qnote").value = store.get("questions");
+}
+
+/* ---------------- wiring ---------------- */
+function applyChrome() {
+  document.querySelectorAll("[data-level]").forEach(b => b.setAttribute("aria-pressed", b.dataset.level === S.level));
+  document.querySelectorAll("[data-device]").forEach(b => b.setAttribute("aria-pressed", b.dataset.device === S.device));
+  document.querySelectorAll("[data-wording]").forEach(b => { const on = b.dataset.wording === S.wording; b.setAttribute("aria-checked", on); b.tabIndex = on ? 0 : -1; });
+  $("#root").classList.toggle("phone", S.device === "phone");
+  document.querySelectorAll(".top [data-level]").forEach(b => { b.disabled = S.device === "phone"; b.title = S.device === "phone" ? "Phones are always minimal" : ""; });
+}
+function rerender() { applyChrome(); renderGallery(); renderSurfaces(); renderSettings(); simRender(); }
+document.addEventListener("click", e => {
+  const lvl = e.target.closest("[data-level],[data-level-pick]");
+  if (lvl) { S.level = lvl.dataset.level || lvl.dataset.levelPick; store.set("level", S.level); rerender(); return; }
+  const dev = e.target.closest("[data-device]");
+  if (dev) { S.device = dev.dataset.device; store.set("device", S.device); rerender(); return; }
+  const w = e.target.closest("[data-wording]");
+  if (w) { S.wording = w.dataset.wording; store.set("wording", S.wording); rerender(); return; }
+  const tab = e.target.closest("[data-ptab]");
+  if (tab) { store.set("ptab", tab.dataset.ptab); renderSurfaces(); return; }
+  const vote = e.target.closest("[data-vote]");
+  if (vote) { const k = "vote:"+vote.dataset.vote; store.set(k, store.get(k) === vote.dataset.v ? "" : vote.dataset.v); renderIdeas(); return; }
+});
+document.addEventListener("keydown", e => {
+  const w = e.target.closest?.("[data-wording]");
+  if (w && (e.key === " " || e.key === "Enter")) { e.preventDefault(); w.click(); }
+  if (w && ["ArrowDown","ArrowUp"].includes(e.key)) { e.preventDefault(); S.wording = S.wording === "phase" ? "single" : "phase"; store.set("wording", S.wording); rerender(); document.querySelector(`[data-wording="${S.wording}"]`).focus(); }
+});
+document.addEventListener("input", e => {
+  if (e.target.dataset.note) store.set("note:"+e.target.dataset.note, e.target.value);
+  if (e.target.id === "qnote") store.set("questions", e.target.value);
+});
+$("#copy").onclick = async () => {
+  const out = ["# Bot chat states: notes", "", `Level viewed: ${S.level} · Quiet wording: ${S.wording}`, ""];
+  const notes = STATES.map(s => [s, store.get("note:"+s.id).trim()]).filter(([,v]) => v);
+  if (notes.length) { out.push("## States"); notes.forEach(([s,v]) => out.push(`- **${s.title}**: ${v}`)); out.push(""); }
+  const votes = IDEAS.map(([id,t]) => [t, store.get("vote:"+id)]).filter(([,v]) => v);
+  if (votes.length) { out.push("## Ideas"); votes.forEach(([t,v]) => out.push(`- ${t}: **${v}**`)); out.push(""); }
+  const q = store.get("questions").trim();
+  if (q) { out.push("## Open questions", ...QUESTIONS.map((x,i)=>`${i+1}. ${x}`), "", "Answers:", q); }
+  const text = out.join("\n");
+  try { await navigator.clipboard.writeText(text); toast("Notes copied. Paste them into Claude."); } catch { prompt("Copy your notes:", text); }
+};
+function toast(m){ const t=document.createElement("div"); t.className="toast"; t.textContent=m; document.body.appendChild(t); setTimeout(()=>t.remove(),2200); }
+
+renderIdeas();
+renderPhases();
+renderSettings();
+applyChrome();
+renderGallery();
+renderSurfaces();
+simReset();
+</script>
+</body>
+</html>

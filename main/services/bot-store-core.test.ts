@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createBotStore } from "./bot-store-core.js";
-import { DEFAULT_BOT_AVATAR } from "../../renderer/shared/bots.js";
+import { DEFAULT_BOT_AVATAR, resolveBotChatActivity } from "../../renderer/shared/bots.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bots-"));
@@ -298,6 +298,87 @@ test("bot store rejects unsupported document versions and enforces bounded requi
       } as never),
       /avatar/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Bot's chat activity is saved with a new revision, and identity edits that leave it out keep it", async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.create({
+      name: "Planner",
+      instructions: "Plan dinners.",
+      avatar: { version: 1, shape: "hex", color: "sun" },
+    });
+    assert.equal(created.chatActivity, undefined, "new Bots store nothing: absent means Quiet");
+    const chosen = await store.update({
+      id: created.id,
+      expectedRevision: created.revision,
+      name: created.name,
+      instructions: created.instructions,
+      avatar: created.avatar,
+      chatActivity: { level: "summary", wording: "thinking" },
+    });
+    assert.deepEqual(chosen.chatActivity, { level: "summary", wording: "thinking" });
+    assert.notEqual(chosen.revision, created.revision);
+    const reopened = await createBotStore({ root: () => root, now: () => 500 }).get(created.id);
+    assert.equal(reopened?.revision, chosen.revision, "a saved record and the reloaded one share a revision");
+    const renamed = await store.update({
+      id: created.id,
+      expectedRevision: chosen.revision,
+      name: "Meal planner",
+      instructions: created.instructions,
+      avatar: created.avatar,
+    });
+    assert.equal(renamed.name, "Meal planner");
+    assert.deepEqual(renamed.chatActivity, { level: "summary", wording: "thinking" });
+    await assert.rejects(
+      store.update({
+        id: created.id,
+        expectedRevision: renamed.revision,
+        name: renamed.name,
+        instructions: renamed.instructions,
+        avatar: renamed.avatar,
+        chatActivity: { level: "verbose", wording: "follows" } as never,
+      }),
+      /chat activity/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a stored chat activity that isn't a current choice reads as absent and keeps the Bot", async () => {
+  const { root } = await fixture();
+  try {
+    const bot = (id: string, chatActivity: unknown) => ({
+      id,
+      name: id,
+      instructions: "x",
+      avatar: { version: 1, shape: "orb", color: "sky" },
+      createdAt: 1,
+      updatedAt: 1,
+      chatActivity,
+    });
+    await writeFile(
+      join(root, "bots.json"),
+      JSON.stringify({
+        version: 1,
+        bots: [
+          bot("bot:newer", { level: "verbose", wording: "follows" }),
+          bot("bot:extra", { level: "summary", wording: "follows", sound: true }),
+          bot("bot:good", { level: "detailed", wording: "follows" }),
+        ],
+      }),
+    );
+    const store = createBotStore({ root: () => root, now: () => 50 });
+    const byId = new Map((await store.list()).map((entry) => [entry.id, entry.chatActivity]));
+    assert.equal(byId.size, 3, "no Bot is lost to a bad setting");
+    assert.equal(byId.get("bot:newer"), undefined);
+    assert.equal(byId.get("bot:extra"), undefined);
+    assert.deepEqual(byId.get("bot:good"), { level: "detailed", wording: "follows" });
+    assert.deepEqual(resolveBotChatActivity(byId.get("bot:newer")), { level: "quiet", wording: "follows" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

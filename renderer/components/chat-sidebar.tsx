@@ -82,6 +82,8 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { isBotsPath } from "../lib/bot-routes";
+import { BotSidebar } from "../main/bots/bot-sidebar";
 import {
   localSidebarChats,
   localSidebarProjects,
@@ -458,7 +460,14 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-export function ChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
+/** On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is the workspace outline. */
+export function ChatSidebar(props: ChatSidebarProps) {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const capabilities = useAppCapabilities();
+  return capabilities.bots && isBotsPath(pathname) ? <BotSidebar /> : <WorkspaceChatSidebar {...props} />;
+}
+
+function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();

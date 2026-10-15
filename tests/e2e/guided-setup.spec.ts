@@ -111,7 +111,7 @@ async function substituteBotIpc(app: ElectronApplication, options: { failFirstCr
       state.accessUpdates.push(input);
       return { ...fixture.access.access, revision: "access-2", accessMode: "custom", custom: { providerId: "custom:lmstudio", modelId: "aiden-e2e-vision", fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...fixture.idle, epoch: "e1", seq: 0, entries: [], partial: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => fixture.idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
@@ -129,7 +129,8 @@ test("Create a bot keeps the draft after a failed save, then creates it with Ful
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: true });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "New Bot", exact: true }).click();
+  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
+  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
   await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
   await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
@@ -150,7 +151,8 @@ test("Create a bot from a name and a help answer, then switch its Advanced acces
   await finishLmStudioOnboarding(page);
   await substituteBotIpc(aiden.app, { failFirstCreate: false });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: "New Bot", exact: true }).click();
+  // On Bots pages the sidebar lists only Bots, with New Bot at its top.
+  await page.locator("[data-sidebar]").getByRole("button", { name: "New Bot", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "New Bot", exact: true });
   await editor.getByRole("textbox", { name: "Name" }).fill("Meal Planner");
   await editor.getByRole("textbox", { name: "What should it help with?" }).fill("Plan my meals and grocery list every week");
@@ -169,11 +171,8 @@ test("Create a bot from a name and a help answer, then switch its Advanced acces
   });
   expect(created).not.toHaveProperty("access.custom");
 
-  // Advanced is reached from the Bot's Profile, which the Bots list opens from its row menu.
-  await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await page.getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Profile", exact: true }).click();
-  await page.getByRole("button", { name: "More for Meal Planner", exact: true }).click();
+  // Advanced is in the Bot's menu, which its row in the Bots sidebar opens on right-click.
+  await page.getByRole("navigation", { name: "Bots", exact: true }).getByRole("button", { name: /^Meal Planner/u }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
   const onlyChoose = page.getByRole("radio", { name: "Only what I choose", exact: true });
   await expect(page.getByRole("radio", { name: "Everything", exact: true })).toBeChecked();
