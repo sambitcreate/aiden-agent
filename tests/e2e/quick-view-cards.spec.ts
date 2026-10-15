@@ -101,16 +101,23 @@ test.describe("Quick View cards", () => {
     );
   });
 
-  test("Changes stays hidden on a clean repository without commits to push or a PR", async ({ aiden }) => {
+  test("Changes leaves once the repository is clean, with no commits to push or a PR", async ({ aiden }) => {
     const { page } = aiden;
-    initRepository(aiden.workspaceDir, { edits: false });
+    initRepository(aiden.workspaceDir, { edits: true });
+    // Stage the edit so reverting it touches the index, which main's Git watcher reports.
+    execFileSync("git", ["-C", aiden.workspaceDir, "add", "notes.md"]);
     await finishLmStudioOnboarding(page);
     await page.locator("[data-quick-view-toggle]").click();
     const quickView = page.getByRole("complementary", { name: "Quick View" });
     const environmentHeader = quickView.getByRole("button", { name: "Environment", exact: true });
+    const changesCard = quickView.locator('[data-quick-view-section="changes"]');
     // The collapsed Environment card names the branch once Git has answered.
     await expect(environmentHeader).toHaveAccessibleDescription("main");
-    await expect(quickView.locator('[data-quick-view-section="changes"]')).toHaveCount(0);
+    await expect(changesCard).toBeVisible();
+
+    execFileSync("git", ["-C", aiden.workspaceDir, "rm", "-q", "-f", "notes.md"]);
+    await expect(changesCard).toHaveCount(0);
+    await expect(environmentHeader).toBeVisible();
   });
 
   test("the grip sits at the right edge and appears on hover", async ({ aiden }) => {
