@@ -2513,12 +2513,11 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
     func testASendBeforeTheRestoreKeepsTheLastLaunchesUnsentMessagesOnDiskAndInMemory() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, _) = temporaryStore()
-        // The last launch left one unsent message on disk.
-        store.submit(.save([AidenBotOutgoingMessage(
-            key: UUID(), text: "Left last launch", mode: nil, enqueuedWhileRunning: false,
-            retryOf: nil, createdAt: Date(), status: .failed
-        )]), for: key)
+        // The last launch left one unsent message on disk (never connected, so never sent).
+        let lastLaunch = model(FakeBotSessionTransport(), key: key, cache: AidenBotSessionCache(), store: store)
+        _ = await lastLaunch.send("Left last launch")
         try await stored(store, key, count: 1)
+        lastLaunch.release()
 
         // A new launch: the composer takes a message before the restore has read the file.
         let transport = FakeBotSessionTransport()
