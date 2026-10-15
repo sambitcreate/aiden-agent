@@ -453,14 +453,19 @@ struct AidenBotsHomeView: View {
         ) { failure in
             Button("Try Again") {
                 guard let pairing = activePairing else { return }
-                switch createFlow.retry(failure, instanceId: pairing.instanceId, deviceId: pairing.deviceId) {
+                switch createFlow.retry(
+                    failure,
+                    instanceId: pairing.instanceId,
+                    deviceId: pairing.deviceId,
+                    bots: listedBots(for: failure)
+                ) {
                 case let .send(input):
                     // An earlier launch's create: the same request, on the same key.
                     startCreate(input, retrying: failure)
                 case let .reopen(reopened):
                     createPrefill = reopened
                     presentedSheet = .create
-                case .none:
+                case .settled, .none:
                     break
                 }
             }
@@ -735,6 +740,11 @@ struct AidenBotsHomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
+    }
+
+    /// The Bots the list shows for the failure's own pairing, to find one a lost create made.
+    private func listedBots(for failure: AidenBotCreateFlow.Failure) -> [AidenBotSummary] {
+        snapshotScope == AidenBotsHomeScope(instanceID: failure.instanceId, deviceID: failure.deviceId) ? allBots : []
     }
 
     /// Makes the Bot New Bot asked for, after the sheet closed (R15). `retrying` is the failure

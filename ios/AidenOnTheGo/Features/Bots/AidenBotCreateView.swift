@@ -26,8 +26,25 @@ struct AidenBotPendingCreate: Codable, Equatable, Sendable {
     let input: AidenBotCreateInput
     /// Nil until the request was built: nothing of it can have reached the Mac.
     var frozen: Frozen?
-    /// When this ask was made; the 24-hour clock starts here.
+    /// When this ask was made, or its request built: the replay window starts here.
     let createdAt: Date
+    /// A request that may have reached the Mac, kept past the replay window: its keys are gone, so
+    /// it never goes out again as it was, and Try Again first looks for the Bot it may have made.
+    var lapsed: AidenBotCreateRequest? = nil
+
+    /// The Mac forgets a Create's Idempotency-Key 24 hours after it answered, and then runs the
+    /// same key again. Within this window, an hour short of that for the two clocks, the same key
+    /// gets the Mac's one Bot back; past it, the same key could make a second.
+    static let replayWindow: TimeInterval = 23 * 60 * 60
+    /// How far apart the phone's and the Mac's clocks may be (as on Android).
+    static let clockSkew: TimeInterval = 2 * 60
+
+    /// True while a request first sent at `sentAt` may go out again on its key. A clock that went
+    /// back since can't tell how long it has been, so that is past the window too.
+    static func canReplay(sentAt: Date, now: Date) -> Bool {
+        let age = now.timeIntervalSince(sentAt)
+        return age > -clockSkew && age < replayWindow
+    }
 }
 
 /// The requests one Bot create makes; the remote client provides them, tests a fake.
@@ -87,6 +104,10 @@ final class AidenBotCreateFlow {
         /// The pairing it was for.
         var instanceId = ""
         var deviceId = ""
+        /// The request that may have reached the Mac without an answer, and when it first went
+        /// out: past the replay window, Try Again looks for its Bot instead of sending it again.
+        var sent: AidenBotCreateRequest?
+        var sentAt: Date?
     }
 
     static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
@@ -98,6 +119,8 @@ final class AidenBotCreateFlow {
         case send(AidenBotCreateInput)
         /// Reopen New Bot with these answers.
         case reopen(Failure)
+        /// Nothing goes out: the Mac's list shows the Bot it may have made, so it is let go quietly.
+        case settled
         /// Nothing: it is another Mac's, and waits for that Mac.
         case none
     }
@@ -175,13 +198,41 @@ final class AidenBotCreateFlow {
     }
 
     /// Try Again on `failure` while the pairing (`instanceId`, `deviceId`) is the active one.
-    /// Another Mac's failure does nothing here and stays for its own Mac.
-    func retry(_ failure: Failure, instanceId: String, deviceId: String) -> Retry {
+    /// Another Mac's failure does nothing here and stays for its own Mac. `bots` is that pairing's
+    /// list, for a request that may have reached the Mac past the replay window: if the list shows
+    /// its Bot it is let go quietly; otherwise New Bot reopens with its answers, and Create there
+    /// is a new request. It never goes out again on a key the Mac may have forgotten.
+    func retry(_ failure: Failure, instanceId: String, deviceId: String, bots: [AidenBotSummary] = []) -> Retry {
         guard failure.instanceId == instanceId, failure.deviceId == deviceId else { return .none }
         let scope = Self.scope(instanceId: instanceId, deviceId: deviceId)
         if failures[scope] == failure { failures[scope] = nil }
-        // An earlier launch's create: the same request, on the same key.
-        return failure.replays ? .send(failure.input) : .reopen(failure)
+        guard let sent = failure.sent, let sentAt = failure.sentAt,
+              !AidenBotPendingCreate.canReplay(sentAt: sentAt, now: now()) else {
+            // An earlier launch's create: the same request, on the same key.
+            return failure.replays ? .send(failure.input) : .reopen(failure)
+        }
+        // Its key is past the Mac's memory: it is never sent again.
+        if let held = retained[scope], held.frozen.created == nil, Self.isSameAsk(held, failure.input) {
+            retained[scope] = nil
+        }
+        if Self.listShows(sent, sentAt: sentAt, in: bots) {
+            // The Mac made it after all: nothing is left to try again.
+            if pending?.scope != scope, !Self.sending.contains(scope) {
+                persist(nil, instanceId: instanceId, deviceId: deviceId)
+            }
+            return .settled
+        }
+        // The person sees the answers in New Bot and decides.
+        var reopened = failure
+        reopened.replays = false
+        return .reopen(reopened)
+    }
+
+    /// True when the Mac's list shows the Bot `sent` may have made: the same name and subtitle,
+    /// made since it went out, allowing for the two clocks (as Android's `aidenBotCreateWasTaken`).
+    nonisolated static func listShows(_ sent: AidenBotCreateRequest, sentAt: Date, in bots: [AidenBotSummary]) -> Bool {
+        let since = sentAt.addingTimeInterval(-AidenBotPendingCreate.clockSkew)
+        return bots.contains { $0.name == sent.name && $0.purpose == sent.purpose && $0.createdAt >= since }
     }
 
     private func make(
@@ -203,8 +254,14 @@ final class AidenBotCreateFlow {
             pending = nil
             Self.sending.remove(scope)
         }
-        // The same ask as a failed try: its frozen request and key, whatever the catalog says now.
-        let replay = retained[scope].flatMap { Self.isSameAsk($0, input) ? $0 : nil }
+        // The same ask as a failed try: its frozen request and key, whatever the catalog says now,
+        // while the Mac still keeps that key. A Bot already made is never made again.
+        let held = retained[scope].flatMap { Self.isSameAsk($0, input) ? $0 : nil }
+        let replay = held.flatMap {
+            $0.frozen.created != nil || AidenBotPendingCreate.canReplay(sentAt: $0.createdAt, now: now()) ? $0 : nil
+        }
+        // Past it, the same key could make a second Bot: this Create is a new request.
+        if held != nil, replay == nil { retained[scope] = nil }
         // On disk before anything goes out, so a relaunch never loses it.
         await persist(
             AidenBotPendingCreate(input: input, frozen: replay?.frozen, createdAt: replay?.createdAt ?? now()),
@@ -303,12 +360,17 @@ final class AidenBotCreateFlow {
         if let frozen = saved.frozen {
             retained[scope] = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt, restored: true)
         }
+        // What may have reached the Mac without an answer: past the replay window (now, or while
+        // this prompt stays open) Try Again looks for its Bot rather than sending it again.
+        let unanswered = saved.frozen.flatMap { $0.created == nil ? $0.request : nil } ?? saved.lapsed
         failures[scope] = Failure(
             message: Self.interrupted,
             input: saved.input,
             replays: saved.frozen != nil,
             instanceId: instanceId,
-            deviceId: deviceId
+            deviceId: deviceId,
+            sent: unanswered,
+            sentAt: unanswered == nil ? nil : saved.createdAt
         )
     }
 
@@ -330,12 +392,15 @@ final class AidenBotCreateFlow {
     /// A restored create that fails again keeps replaying its frozen request on Try Again.
     private func makeFailure(_ message: String, _ input: AidenBotCreateInput, _ operations: AidenBotCreateOperations) -> Failure {
         let attempt = retained[operations.scope].flatMap { Self.isSameAsk($0, input) ? $0 : nil }
+        let unanswered = attempt.flatMap { $0.frozen.created == nil ? $0 : nil }
         return Failure(
             message: message,
             input: input,
             replays: attempt?.restored ?? false,
             instanceId: operations.instanceId,
-            deviceId: operations.deviceId
+            deviceId: operations.deviceId,
+            sent: unanswered?.frozen.request,
+            sentAt: unanswered?.createdAt
         )
     }
 

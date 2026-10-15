@@ -740,9 +740,11 @@ actor AidenBotOutboxStore {
         let create: AidenBotPendingCreate
     }
 
-    /// The New Bot an earlier launch left on its way for this pairing, if any. One whose Bot
-    /// the Mac already made is the Mac's after 24 hours and is dropped; one not made stays,
-    /// so its answers are never silently gone. A file this build can't read is set aside.
+    /// The New Bot an earlier launch left on its way for this pairing, if any. Past
+    /// `AidenBotPendingCreate.replayWindow` its keys are no longer safe to send: one whose Bot the
+    /// Mac made is the Mac's and is dropped; one that may have reached the Mac comes back (and stays
+    /// on disk) with its answers and what it sent, but without its keys; one never sent stays as it
+    /// is. Its answers are never silently gone. A file this build can't read is set aside.
     func pendingCreate(instanceId: String, deviceId: String) -> AidenBotPendingCreate? {
         knownDevices[instanceId, default: []].insert(deviceId)
         let url = pendingCreateURL(instanceId: instanceId, deviceId: deviceId)
@@ -762,11 +764,17 @@ actor AidenBotOutboxStore {
             }
             return nil
         }
-        if envelope.create.frozen?.created != nil, envelope.create.createdAt <= now().addingTimeInterval(-Self.lifetime) {
+        let create = envelope.create
+        guard let frozen = create.frozen, !AidenBotPendingCreate.canReplay(sentAt: create.createdAt, now: now()) else {
+            return create
+        }
+        guard frozen.created == nil else {
             try? fileManager.removeItem(at: url)
             return nil
         }
-        return envelope.create
+        let lapsed = AidenBotPendingCreate(input: create.input, frozen: nil, createdAt: create.createdAt, lapsed: frozen.request)
+        savePendingCreate(lapsed, instanceId: instanceId, deviceId: deviceId)
+        return lapsed
     }
 
     /// Keeps the pairing's New Bot on its way; never for a pairing an unpair purged.

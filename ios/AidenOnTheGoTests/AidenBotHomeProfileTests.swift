@@ -518,11 +518,24 @@ final class AidenBotInstantEditTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
-    private func detail(id: String = "bot_fixture_01", revision: String = "bot_revision_7", name: String = "Scout") throws -> AidenBotDetail {
+    private func detail(
+        id: String = "bot_fixture_01",
+        revision: String = "bot_revision_7",
+        name: String = "Scout",
+        purpose: String? = nil,
+        createdAt: Date? = nil
+    ) throws -> AidenBotDetail {
         var object = try XCTUnwrap(try shared()["botDetail"] as? [String: Any])
         object["id"] = id
         object["revision"] = revision
         object["name"] = name
+        if let purpose { object["purpose"] = purpose }
+        if let createdAt {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            object["createdAt"] = formatter.string(from: createdAt)
+            object["updatedAt"] = formatter.string(from: createdAt)
+        }
         var access = try XCTUnwrap(object["access"] as? [String: Any])
         access["botId"] = id
         object["access"] = access
@@ -1063,6 +1076,95 @@ final class AidenBotInstantEditTests: XCTestCase {
         let unmade = createFlow(unmadeRoot, now: dayLater)
         await unmade.restore(instanceId: "mac_a", deviceId: "device_1")
         XCTAssertEqual(unmade.failure?.input, input)
+    }
+
+    /// A clock a test moves on while a flow and its store read it.
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(_ start: Date) { current = start }
+        var now: Date { lock.withLock { current } }
+        func advance(_ seconds: TimeInterval) { lock.withLock { current = current.addingTimeInterval(seconds) } }
+    }
+
+    @MainActor
+    func testACreateTheMacMadeWhoseAnswerWasLostIsNeverSentAgainOnItsKeyADayLater() async throws {
+        let root = createRoot()
+        let start = Date()
+        let mac = CreateMac()
+        // The Mac makes the Bot, but its answer is lost on the way back; then the app closes.
+        mac.createErrors = [URLError(.networkConnectionLost)]
+        await createFlow(root, now: { start }).submit(input, operations: try createOperations(mac)) { _ in }
+        let first = try XCTUnwrap(mac.creates.first)
+
+        // Relaunched 25 hours later: the Mac no longer keeps that key, and would run it again.
+        let dayLater: @Sendable () -> Date = { start.addingTimeInterval(25 * 60 * 60) }
+        let relaunched = createFlow(root, now: dayLater)
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        let failure = try XCTUnwrap(relaunched.failure, "its answers are never silently gone")
+        XCTAssertEqual(failure.input, input)
+        XCTAssertFalse(failure.replays, "Try Again no longer sends it again as it was")
+
+        // The same answers going out again never reuse the forgotten key.
+        await relaunched.submit(failure.input, operations: try createOperations(mac)) { _ in }
+        XCTAssertEqual(mac.creates.count, 2)
+        XCTAssertNotEqual(mac.creates[1].key, first.key)
+    }
+
+    @MainActor
+    func testTryAgainPastTheMacsKeyWindowLooksForTheBotAndOtherwiseReopensNewBot() async throws {
+        let start = Date()
+        let olderTwin = AidenBotSummary(detail: try detail(
+            id: "bot_older_01", name: "Planner", purpose: "Plans my week", createdAt: start.addingTimeInterval(-3_600)
+        ))
+
+        for listShowsIt in [true, false] {
+            let root = createRoot()
+            let clock = TestClock(start)
+            let mac = CreateMac()
+            mac.createErrors = [URLError(.networkConnectionLost)]
+            await createFlow(root, now: { clock.now }).submit(input, operations: try createOperations(mac)) { _ in }
+            let first = try XCTUnwrap(mac.creates.first)
+
+            // Relaunched within the window, the prompt offers to send it again as it was...
+            clock.advance(22 * 60 * 60)
+            let relaunched = createFlow(root, now: { clock.now })
+            await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+            let failure = try XCTUnwrap(relaunched.failure)
+            XCTAssertTrue(failure.replays)
+
+            // ...but it stays open past the window before Try Again.
+            clock.advance(2 * 60 * 60)
+            // The Mac's clock may run a little behind the phone's.
+            let made = AidenBotSummary(detail: try detail(
+                id: "bot_new_01", name: "Planner", purpose: "Plans my week", createdAt: start.addingTimeInterval(-60)
+            ))
+            let bots = listShowsIt ? [olderTwin, made] : [olderTwin]
+            let retry = relaunched.retry(failure, instanceId: "mac_a", deviceId: "device_1", bots: bots)
+            XCTAssertNil(relaunched.failure)
+            XCTAssertEqual(mac.creates.count, 1, "nothing goes out on Try Again")
+
+            if listShowsIt {
+                XCTAssertEqual(retry, .settled, "the Mac made it: the failure goes quietly")
+                let deadline = Date().addingTimeInterval(5)
+                while await AidenBotOutboxStore(root: root).pendingCreate(instanceId: "mac_a", deviceId: "device_1") != nil {
+                    guard Date() < deadline else { return XCTFail("the settled create still waits on disk") }
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                let after = createFlow(root, now: { clock.now })
+                await after.restore(instanceId: "mac_a", deviceId: "device_1")
+                XCTAssertNil(after.failure, "and nothing waits for a later launch")
+            } else {
+                // A Bot of the same name made before it went out is not it: New Bot reopens with the answers.
+                guard case let .reopen(reopened) = retry else { return XCTFail("expected New Bot to reopen, got \(retry)") }
+                XCTAssertEqual(reopened.input, input)
+                XCTAssertFalse(reopened.replays)
+                // Create there is the person's new request, on a new key.
+                await relaunched.submit(reopened.input, operations: try createOperations(mac), retrying: reopened) { _ in }
+                XCTAssertEqual(mac.creates.count, 2)
+                XCTAssertNotEqual(mac.creates[1].key, first.key)
+            }
+        }
     }
 
     func testACreateThatNeverReachesTheMacSaysSoAndSendsNothing() async throws {
