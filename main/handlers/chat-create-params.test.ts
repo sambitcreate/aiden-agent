@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
-import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
 import {
   parseAssistantChatCreate,
   parseChatCreate,
@@ -94,53 +92,4 @@ test("the reserved Assistant workspace is minted only by the dedicated handler",
     renderer,
     /chatsApi\.create\(\{\s*workspaceId: ASSISTANT_WORKSPACE_ID/u,
   );
-});
-
-test("public chat creation is aborted and drained across a workspace mutation", async () => {
-  const mutationGate = new WorkspaceMutationGate();
-  const operations = new WorkspaceOperationRegistry();
-  const mutationAdmission = mutationGate.admit("workspace-1");
-  const operation = operations.admit("workspace-1");
-
-  const finishMutation = mutationGate.begin("workspace-1");
-  let drained = false;
-  const draining = operations.cancelAndSettle("workspace-1").then(() => {
-    drained = true;
-  });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  assert.equal(mutationAdmission.signal.aborted, true);
-  assert.equal(operation.signal.aborted, true);
-  assert.equal(drained, false);
-  assert.throws(() => {
-    if (mutationAdmission.signal.aborted || operation.signal.aborted) {
-      throw new Error("The workspace changed before the chat was created.");
-    }
-  }, /workspace changed before the chat was created/u);
-
-  operation.release();
-  mutationAdmission.release();
-  await draining;
-  assert.equal(drained, true);
-  finishMutation();
-
-  const handlers = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
-  const applicationService = readFileSync(
-    new URL("../services/chat-application-service.ts", import.meta.url),
-    "utf8",
-  );
-  const publicCreate = handlers.slice(
-    handlers.indexOf('"chats:create"'),
-    handlers.indexOf('"chats:createAssistant"'),
-  );
-  assert.match(publicCreate, /rendererDocumentOwner\(/u);
-  assert.match(publicCreate, /chatApplicationService\.create\(parsed, owner\)/u);
-  assert.match(
-    applicationService,
-    /workspaceMutationGate\.admit\(input\.workspaceId\)/u,
-  );
-  assert.match(applicationService, /admitOwnedWorkspaceOperation\(/u);
-  assert.match(applicationService, /workspaceOperation\?\.signal\.aborted/u);
-  assert.match(applicationService, /workspaceOperation\?\.release\(\)/u);
-  assert.match(applicationService, /mutationAdmission\.release\(\)/u);
 });

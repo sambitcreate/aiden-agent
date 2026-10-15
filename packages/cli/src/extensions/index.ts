@@ -16,6 +16,7 @@ import { createWebSearchInlineExtension } from "./web-search.ts";
 import { createDisplayImageInlineExtension } from "./display-image.ts";
 import { createAdvisorInlineExtension } from "./advisor.ts";
 import { createBtwInlineExtension } from "./btw.ts";
+import { createSlashArgumentEditorExtension } from "./slash-argument-editor.ts";
 import { createUsageInlineExtension } from "./usage.ts";
 import { createVoiceInlineExtension } from "./voice.ts";
 
@@ -291,6 +292,7 @@ export async function createAidenInlineExtensions(): Promise<InlineExtension[]> 
 		{ name: "aiden-ask-user-question", build: () => createAskUserQuestionInlineExtension({ latestContext: capture.latest }) },
 		{ name: "aiden-advisor", build: () => createAdvisorInlineExtension({ latestContext: capture.latest, agentDir }) },
 		{ name: "aiden-btw", build: () => createBtwInlineExtension({ latestContext: capture.latest }) },
+		{ name: "aiden-slash-arguments", build: () => createSlashArgumentEditorExtension() },
 		{ name: "aiden-startup", build: () => createStartupInlineExtension() },
 		{ name: "aiden-todo", build: () => createTodoInlineExtension({ latestContext: capture.latest }) },
 		{ name: "aiden-display-image", build: () => createDisplayImageInlineExtension({ agentDir, workspaceRoot }) },
