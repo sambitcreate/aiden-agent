@@ -42,6 +42,27 @@ test("moving within visible sections keeps a hidden section's place", () => {
   assert.equal(next.order.length, 4);
 });
 
+test("a hidden section at the front stays at the front when visible cards reorder", () => {
+  const start: QuickViewLayout = { order: ["subagents", "environment", "changes", "context"], expanded: {} };
+  const visible: readonly QuickViewSectionId[] = ["environment", "changes", "context"];
+  const next = moveSection(start, "context", 0, visible);
+  assert.deepEqual(next.order, ["subagents", "context", "environment", "changes"]);
+});
+
+test("a hidden section in the middle stays after the visible card it followed", () => {
+  // Subagents follows Changes; moving Environment to the bottom keeps it right behind Changes.
+  const start: QuickViewLayout = { order: ["environment", "changes", "subagents", "context"], expanded: {} };
+  const visible: readonly QuickViewSectionId[] = ["environment", "changes", "context"];
+  const next = moveSection(start, "environment", 2, visible);
+  assert.deepEqual(next.order, ["changes", "subagents", "context", "environment"]);
+});
+
+test("dropping a card at its own visible index leaves the order unchanged", () => {
+  const start: QuickViewLayout = { order: ["environment", "subagents", "changes", "context"], expanded: {} };
+  const visible: readonly QuickViewSectionId[] = ["environment", "changes", "context"];
+  assert.deepEqual(moveSection(start, "changes", 1, visible).order, start.order);
+});
+
 test("every section starts collapsed and opening one leaves the rest closed", () => {
   assert.deepEqual(DEFAULT_QUICK_VIEW_LAYOUT.expanded, {});
   const once = toggleSectionExpanded(DEFAULT_QUICK_VIEW_LAYOUT, "changes");

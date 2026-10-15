@@ -41,18 +41,35 @@ export function serializeQuickViewLayout(layout: QuickViewLayout): string {
   return JSON.stringify(layout);
 }
 
-/** Moves `id` to `toVisibleIndex` among `visible`; hidden sections follow, keeping their relative order. */
+/**
+ * Moves `id` to `toVisibleIndex` among `visible`. Each hidden section stays directly after the
+ * visible section it followed in the saved order (or at the front if none preceded it).
+ */
 export function moveSection(
   layout: QuickViewLayout,
   id: QuickViewSectionId,
   toVisibleIndex: number,
   visible: readonly QuickViewSectionId[],
 ): QuickViewLayout {
-  const shown = layout.order.filter((entry) => visible.includes(entry) && entry !== id);
+  const isVisibleSlot = (entry: QuickViewSectionId) => entry === id || visible.includes(entry);
+  const leading: QuickViewSectionId[] = [];
+  const followers = new Map<QuickViewSectionId, QuickViewSectionId[]>();
+  let anchor: QuickViewSectionId | null = null;
+  for (const entry of layout.order) {
+    if (isVisibleSlot(entry)) {
+      anchor = entry;
+      followers.set(entry, []);
+    } else if (anchor) {
+      followers.get(anchor)!.push(entry);
+    } else {
+      leading.push(entry);
+    }
+  }
+  const shown = layout.order.filter((entry) => isVisibleSlot(entry) && entry !== id);
   const index = Math.max(0, Math.min(shown.length, toVisibleIndex));
   shown.splice(index, 0, id);
-  const hidden = layout.order.filter((entry) => !shown.includes(entry));
-  return { ...layout, order: [...shown, ...hidden] };
+  const order = [...leading, ...shown.flatMap((entry) => [entry, ...(followers.get(entry) ?? [])])];
+  return { ...layout, order };
 }
 
 export function toggleSectionExpanded(layout: QuickViewLayout, id: QuickViewSectionId): QuickViewLayout {
