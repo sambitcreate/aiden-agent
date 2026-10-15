@@ -281,6 +281,55 @@ test("separate AGENTS refreshers reuse a warm ACP session for the same guidance 
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
 });
 
+test("an AGENTS edit beyond the delivered instruction limit keeps the native ACP session", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const globalRoot = path.join(h.dir, "global");
+  await fs.mkdir(globalRoot);
+  const file = path.join(h.dir, "AGENTS.md");
+  const body = "x".repeat(4_000);
+  await fs.writeFile(file, body);
+  h.hosts.register(new RecordingHost("chat-1", h.dir));
+  const refresher = await createAgentsInstructionRefresher({
+    globalRoot,
+    workspaceRoot: h.dir,
+    revalidate: async () => {},
+    read: (root) => fs.readFile(path.join(root.canonicalPath, "AGENTS.md"), "utf8"),
+  });
+  const base = { messages: [{ role: "system" as const, content: "H".repeat(63_000), timestamp: 0 }], tools: [] };
+  const firstPrompt = getCurrentSystemPrompt((await refresher.apply(base)).messages);
+  const first = await turn(h, [userMessage("echo:one")], { systemPrompt: firstPrompt });
+
+  const target = 64_010;
+  const bodyStart = firstPrompt.indexOf('"instructions":"') + '"instructions":"'.length;
+  assert.ok(bodyStart >= 63_000 && target >= bodyStart && target < bodyStart + body.length);
+  await fs.writeFile(file, `${body.slice(0, target - bodyStart)}y${body.slice(target - bodyStart + 1)}`);
+  const secondPrompt = getCurrentSystemPrompt((await refresher.apply(base)).messages);
+  assert.equal(firstPrompt.slice(0, 64_000), secondPrompt.slice(0, 64_000));
+  assert.equal(firstPrompt[target], "x");
+  assert.equal(secondPrompt[target], "y");
+
+  const next = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: secondPrompt });
+  assert.deepEqual(JSON.parse(text(next)), [{ type: "text", text: "prompt-dump" }]);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
+
+  await h.runtime.close();
+  await h.store.flush();
+  const editedBody = `${body.slice(0, target - bodyStart)}yz${body.slice(target - bodyStart + 2)}`;
+  await fs.writeFile(file, editedBody);
+  const thirdPrompt = getCurrentSystemPrompt((await refresher.apply(base)).messages);
+  assert.equal(secondPrompt.slice(0, 64_000), thirdPrompt.slice(0, 64_000));
+  const resumed = harness(h.dir, h.env);
+  t.after(() => resumed.runtime.close());
+  resumed.hosts.register(new RecordingHost("chat-1", h.dir));
+  const afterRestart = await turn(resumed, [userMessage("echo:one"), first, userMessage("prompt-dump"), next, userMessage("prompt-dump")], {
+    systemPrompt: thirdPrompt,
+  });
+  assert.deepEqual(JSON.parse(text(afterRestart)), [{ type: "text", text: "prompt-dump" }]);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "resumeSession" && entry.known === true).length, 1);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
+});
+
 test("a saved ACP session resumes across fresh AGENTS markers when file guidance is unchanged", async (t) => {
   const dir = tempDir();
   const globalRoot = path.join(dir, "global");
