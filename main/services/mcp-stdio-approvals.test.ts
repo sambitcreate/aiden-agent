@@ -66,17 +66,37 @@ test("an editor save keeps the configured launch approved until its new command 
     publishWithLaunchApproval(approvals, edited, true, async () => {
       assert.equal(await approvals.isApproved(old), true, "the configured launch stays approved during the save");
       throw new Error("disk full");
-    }, async () => configured),
+    }),
     /disk full/u,
   );
   assert.equal(await approvals.isApproved(old), true);
+  // Reconciling against config.json on disk then drops the unpublished launch.
+  await approvals.retainOnly(old.id, configured);
+  assert.equal(await approvals.isApproved(old), true);
   assert.equal(await approvals.isApproved(edited), false);
+
+  // The write reached disk but publication still failed (the in-memory config
+  // may be stale): no approval is pruned, so the launch now on disk can run,
+  // and reconciling against disk keeps exactly that one.
+  await assert.rejects(
+    publishWithLaunchApproval(approvals, edited, true, async () => {
+      configured = edited;
+      throw new Error("directory sync failed");
+    }),
+    /directory sync failed/u,
+  );
+  assert.equal(await approvals.isApproved(edited), true);
+  await approvals.retainOnly(edited.id, configured);
+  assert.equal(await approvals.isApproved(edited), true);
+  assert.equal(await approvals.isApproved(old), false);
+  configured = old;
+  await approvals.approve(old);
 
   // The save goes through: only the published command may run.
   const saved = await publishWithLaunchApproval(approvals, edited, true, async () => {
     configured = edited;
     return edited;
-  }, async () => configured);
+  });
   assert.deepEqual(saved, edited);
   assert.equal(await approvals.isApproved(edited), true);
   assert.equal(await approvals.isApproved(old), false);

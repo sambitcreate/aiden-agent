@@ -148,25 +148,19 @@ export function createMcpStdioApprovalStore(file: () => Promise<string>): McpStd
  * Publish a saved record together with its launch approval. Before
  * publication the approval is only added, so the configured launch stays
  * approved; once the record is published, approvals are pruned to its launch.
- * A failed publication prunes them to whatever the config now holds, so a
- * cancelled edit does not leave its launch approved (credential
- * reconciliation prunes against the authoritative config again).
+ * A failed publication prunes nothing: the write may have reached disk
+ * before failing, and the in-memory config can still be the old one, so
+ * pruning here could drop the approval of the launch that is now configured.
+ * Credential reconciliation, which reloads config from disk, prunes later.
  */
 export async function publishWithLaunchApproval(
   approvals: McpStdioApprovalStore,
   staged: McpServer,
   approve: boolean,
   publish: () => Promise<McpServer>,
-  configured: () => Promise<McpServer | undefined>,
 ): Promise<McpServer> {
   if (approve) await approvals.approveAlongside(staged);
-  let saved: McpServer;
-  try {
-    saved = await publish();
-  } catch (error) {
-    await configured().then((current) => approvals.retainOnly(staged.id, current)).catch(() => undefined);
-    throw error;
-  }
+  const saved = await publish();
   await approvals.retainOnly(staged.id, saved);
   return saved;
 }

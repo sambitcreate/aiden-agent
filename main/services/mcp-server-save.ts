@@ -106,7 +106,6 @@ async function saveWithFieldSecrets(
           await mcpManager.disconnect(serverId);
           return withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(staged, isCurrent));
         },
-        async () => (await configStore.listMcpServers()).find(({ id }) => id === serverId),
       );
       // Committed: values the published record no longer resolves can go.
       await pruneStoredMcpFieldSecrets(serverId, saved).catch(() => undefined);
