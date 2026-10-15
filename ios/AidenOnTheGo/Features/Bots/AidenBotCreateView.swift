@@ -92,6 +92,8 @@ final class AidenBotCreateFlow {
         let input: AidenBotCreateInput
         var frozen: AidenBotPendingCreate.Frozen
         let createdAt: Date
+        /// Left by an earlier launch: New Bot can't be trusted to rebuild the same ask, so Try Again replays it.
+        var restored = false
     }
 
     @ObservationIgnored private var retained: Attempt?
@@ -236,7 +238,7 @@ final class AidenBotCreateFlow {
         guard let saved = await store.pendingCreate(instanceId: instanceId, deviceId: deviceId),
               isFree(for: scope) else { return }
         if let frozen = saved.frozen {
-            retained = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt)
+            retained = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt, restored: true)
         }
         failure = Failure(
             message: Self.interrupted,
@@ -261,8 +263,15 @@ final class AidenBotCreateFlow {
         pending == nil && failure == nil && retained?.scope != scope && !Self.sending.contains(scope)
     }
 
+    /// A restored create that fails again keeps replaying its frozen request on Try Again.
     private func makeFailure(_ message: String, _ input: AidenBotCreateInput, _ operations: AidenBotCreateOperations) -> Failure {
-        Failure(message: message, input: input, instanceId: operations.instanceId, deviceId: operations.deviceId)
+        Failure(
+            message: message,
+            input: input,
+            replays: retained.map { $0.scope == operations.scope && $0.restored } ?? false,
+            instanceId: operations.instanceId,
+            deviceId: operations.deviceId
+        )
     }
 
     private func record(_ attempt: Attempt) -> AidenBotPendingCreate {

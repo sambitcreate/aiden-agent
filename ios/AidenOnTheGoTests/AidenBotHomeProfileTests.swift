@@ -857,6 +857,11 @@ final class AidenBotInstantEditTests: XCTestCase {
         XCTAssertTrue(failure.replays, "it may have reached the Mac: Try Again sends it again as it was")
         XCTAssertEqual(failure.message, AidenBotCreateFlow.interrupted)
 
+        // A Try Again that can't reach the Mac still offers to send it again as it was.
+        await relaunched.submit(failure.input, operations: try createOperations(mac, connected: false)) { _ in }
+        XCTAssertEqual(relaunched.failure?.replays, true)
+        XCTAssertEqual(mac.creates.count, 1)
+
         // Try Again: the same request on the same key, so the Mac makes one Bot.
         mac.holds = false
         var created: [String] = []
