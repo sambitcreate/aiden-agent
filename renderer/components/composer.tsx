@@ -96,6 +96,7 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeRestoredUnsentMessage,
   subscribeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
@@ -478,6 +479,19 @@ export function Composer({
     const seed = takeComposerAttachmentSeed(chatId);
     if (seed) updateAttachments(seed);
   }, [chatId, updateAttachments]);
+  // An unsent message handed back after this composer opened (a cancelled
+  // worktree send the user came back to): its text and its attachments.
+  React.useEffect(
+    () =>
+      subscribeRestoredUnsentMessage(chatId, (restored) => {
+        setText((current) => failedSendDraft(restored.text, current));
+        if (restored.attachments.length > 0) {
+          attachmentRevisionRef.current += 1;
+          updateAttachments((current) => failedSendAttachments(restored.attachments, current));
+        }
+      }),
+    [chatId, setText, updateAttachments],
+  );
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {

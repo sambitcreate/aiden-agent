@@ -778,6 +778,7 @@
         "renderer/lib/draft-git-menu.test.ts",
         "renderer/lib/draft-worktree-send.test.ts",
         "renderer/components/git-branch-picker-draft.test.tsx",
+        "renderer/components/composer-restore-unsent.test.tsx",
         "renderer/lib/chat-message-queue.test.ts",
         "renderer/lib/chat-pull-request-chip.test.ts",
         "renderer/lib/composer-context-chips.test.ts",
