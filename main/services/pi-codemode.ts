@@ -8,6 +8,28 @@ import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 export interface PiCodemodeHost {
   tools(): readonly AgentTool[];
   executeTool(parentToolCallId: string, name: string, args: unknown, signal: AbortSignal): Promise<AgentToolCallOutcome>;
+  /**
+   * Resolve once tools still being discovered (MCP servers that missed the
+   * turn's start) have arrived or given up. Bounded by the host; rejects when
+   * `signal` aborts. Omitted when the inventory is complete from the start.
+   */
+  settled?(signal?: AbortSignal): Promise<void>;
+}
+
+const DISCOVERY_GLOBALS = /\b(?:searchTools|describeTool|describeNamespace|ALL_TOOLS)\b/u;
+const TOOL_REFERENCE = /\btools\b(\s*\.\s*([A-Za-z_$][\w$]*))?/gu;
+
+/**
+ * Whether a script might reach a tool that is not callable yet: it searches or
+ * lists tools, or names `tools` in any way other than `tools.<known name>`.
+ * Scripts that only call tools already available start without waiting.
+ */
+export function codemodeScriptMayNeedPendingTools(code: string, available: ReadonlySet<string>): boolean {
+  if (DISCOVERY_GLOBALS.test(code)) return true;
+  for (const match of code.matchAll(TOOL_REFERENCE)) {
+    if (match[2] === undefined || !available.has(match[2])) return true;
+  }
+  return false;
 }
 
 const MAX_SCRIPT_CHARS = 64_000;
@@ -38,6 +60,7 @@ function addUsage(current: Usage | undefined, next: Usage): Usage {
 export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
   const store: Record<string, unknown> = Object.create(null);
   const discovery = createPiToolDiscovery({ tools: host.tools, isCallable: isPiCodemodeCallable });
+  const callableTools = () => host.tools().filter(isPiCodemodeCallable);
   return {
     name: "codemode",
     label: "Codemode",
@@ -48,7 +71,13 @@ export function createPiCodemodeTool(host: PiCodemodeHost): AgentTool {
       signal?.throwIfAborted();
       const { code } = args as { code: string };
       if (typeof code !== "string" || !code.trim() || code.length > MAX_SCRIPT_CHARS) throw new Error("Codemode requires a script of at most 64,000 characters.");
-      const callable = host.tools().filter(isPiCodemodeCallable);
+      let callable = callableTools();
+      if (host.settled && codemodeScriptMayNeedPendingTools(code, new Set(callable.map(({ name }) => name)))) {
+        // searchTools, describeTool and the `tools` namespace must see servers
+        // that finished discovery after the turn started.
+        await host.settled(signal);
+        callable = callableTools();
+      }
       if (callable.length > 512) throw new Error("Codemode tool inventory exceeds 512 tools.");
       let calls = 0;
       let usage: Usage | undefined;

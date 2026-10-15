@@ -748,7 +748,11 @@ export function useMcpServers() {
 }
 
 export function useMcpPresets() {
-  return useQuery({ queryKey: queryKeys.mcpPresets, queryFn: mcpApi.presets });
+  return useQuery({
+    queryKey: queryKeys.mcpPresets,
+    queryFn: mcpApi.presets,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useExaConfig() {

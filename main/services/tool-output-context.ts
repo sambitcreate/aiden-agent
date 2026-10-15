@@ -30,17 +30,28 @@ export async function boundedToolOutput(text: string, limit: number): Promise<st
   return text.slice(0, Math.max(0, limit - marker.length)) + marker;
 }
 
-export function withDurableToolOutputs(options: {
+export interface DurableToolOutputs {
+  /** The generation's tools with retention attached, plus `read_tool_output`. */
+  tools: AgentTool[];
+  /**
+   * Attach the same retention to tools admitted after the generation started
+   * (late MCP discovery) and let `read_tool_output` read their handles. The
+   * same input tool always maps to the same wrapper.
+   */
+  adopt(tools: readonly AgentTool[]): AgentTool[];
+}
+
+export function createDurableToolOutputs(options: {
   tools: AgentTool[];
   store: ToolOutputStore;
   chatId: string;
   scope: string;
   assertCurrent: () => Promise<void>;
   isCurrent: () => boolean;
-}): AgentTool[] {
+}): DurableToolOutputs {
   const { store, chatId, scope } = options;
   const toolNames = new Set(options.tools.map((tool) => tool.name));
-  const wrapped = options.tools.map((tool): AgentTool => ({
+  const wrap = (tool: AgentTool): AgentTool => ({
     ...tool,
     execute: (...args) => context.run(tool.name === "run_command" || (tool as AgentTool & { [OUTPUT_SOURCE]?: boolean })[OUTPUT_SOURCE] ? {
       save: async (text) => {
@@ -48,7 +59,8 @@ export function withDurableToolOutputs(options: {
         return store.put(chatId, scope, tool.name, text, options.isCurrent);
       },
     } : undefined, () => tool.execute(...args)),
-  }));
+  });
+  const wrapped = options.tools.map(wrap);
   wrapped.push(declarePiRuntimeReplay({
     name: "read_tool_output",
     label: "Read retained output",
@@ -69,5 +81,25 @@ export function withDurableToolOutputs(options: {
       return { content: [{ type: "text", text }], details: null };
     },
   }, "safe"));
-  return wrapped;
+  const adopted = new WeakMap<AgentTool, AgentTool>();
+  return {
+    tools: wrapped,
+    adopt: (late) => late.flatMap((tool) => {
+      // A late tool can never shadow the reader itself.
+      if (tool.name === "read_tool_output") return [];
+      let wrapper = adopted.get(tool);
+      if (!wrapper) {
+        wrapper = wrap(tool);
+        adopted.set(tool, wrapper);
+        toolNames.add(tool.name);
+      }
+      return [wrapper];
+    }),
+  };
+}
+
+export function withDurableToolOutputs(
+  options: Parameters<typeof createDurableToolOutputs>[0],
+): AgentTool[] {
+  return createDurableToolOutputs(options).tools;
 }

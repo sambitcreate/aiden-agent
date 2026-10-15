@@ -1,5 +1,6 @@
 import type { McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import type { McpServerInstructionSnapshot } from "./mcp-server-instructions.js";
+import type { McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 // Assembles the pi agent tool set for a generation: Web Search + Agent Skills +
 // MCP server tools, based on current settings. Empty when nothing is enabled.
 //
@@ -69,6 +70,12 @@ export interface ToolContext {
   mcpServerIds?: readonly string[];
   /** Exact connection fingerprints approved for this unattended generation. */
   mcpServerBindings?: readonly ScheduledMcpServerBinding[];
+  /**
+   * Set only when MCP tools are deferred behind codemode / tool_search: the
+   * turn starts with servers ready within a short window and receives slower
+   * servers through `onLate`. Ignored for strict (approved-server) runs.
+   */
+  mcpDeferral?: { windowMs?: number; onLate(late: McpLateDiscovery): void };
   /** Only a foreground, persisted-workspace generation may register the delegation tool. */
   allowSubagents?: boolean;
   /**
@@ -120,6 +127,7 @@ async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
     allowProviderAuth: ctx.allowMcpProviderAuth === true,
     providerScope: ctx.mcpProviderScope,
     onServerInstructions: ctx.onMcpServerInstructions,
+    deferral: ctx.mcpDeferral,
   });
 }
 

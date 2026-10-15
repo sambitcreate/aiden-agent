@@ -147,3 +147,25 @@ test("saved multibyte descriptions remain discoverable alongside independent too
   localized.discovery!.description += "雪";
   assert.throws(() => discovery.searchTools(""), /1,024 characters/);
 });
+
+test("tool_search waits for servers still discovering and stops waiting when cancelled", async () => {
+  const inventory = [tool("read_file")];
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = () => { inventory.push(tool("docs_search", "mcp:docs")); resolve(); }; });
+  const discovery = createPiToolDiscovery({
+    tools: () => inventory,
+    isCallable: () => true,
+    settled: (signal) => new Promise<void>((resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      void arrived.then(resolve);
+    }),
+  });
+  const cancelled = new AbortController();
+  const abandoned = discovery.toolSearch.execute("first", { query: "docs" }, cancelled.signal);
+  cancelled.abort(new Error("turn stopped"));
+  await assert.rejects(abandoned, /turn stopped/u);
+
+  const searching = discovery.toolSearch.execute("second", { query: "docs" });
+  setTimeout(arrive, 10);
+  assert.deepEqual(names((await searching).structuredContent as JsonObject), ["docs_search"]);
+});

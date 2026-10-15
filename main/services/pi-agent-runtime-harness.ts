@@ -140,6 +140,13 @@ export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolEx
   contributions?: PiRuntimeContributionSnapshot;
   /** Host-admitted tools callable through codemode, omitted from provider declarations. */
   deferredTools?: readonly AgentTool[];
+  /**
+   * Host-admitted deferred tools that became available after the run started
+   * (MCP servers that finished discovery late). Read on every inventory
+   * lookup; a tool whose name is already taken or that is not codemode
+   * callable is ignored. Never part of provider declarations.
+   */
+  lateDeferredTools?: () => readonly AgentTool[];
   /** Owning Pi collection retained for native Harness-compatible operations. */
   models?: Models;
   resources?: AgentHarnessResources;
@@ -798,6 +805,9 @@ export class PiAgentRuntimeHarness {
   private static readonly MAX_ACCEPTED_QUEUE_MESSAGES = 32;
   private readonly agent: Agent;
   private readonly deferredTools: readonly AgentTool[];
+  private readonly lateDeferredTools: (() => readonly AgentTool[]) | undefined;
+  /** One frozen snapshot per late tool object, so its identity is stable across lookups. */
+  private readonly lateSnapshots = new WeakMap<AgentTool, AgentTool>();
   private readonly agentListeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
   private readonly activeTools = new Map<string, string>();
   private readonly nestedCalls = new Map<string, NestedToolCalls>();
@@ -875,6 +885,7 @@ export class PiAgentRuntimeHarness {
       extensions: requestedExtensions = [],
       contributions,
       deferredTools = [],
+      lateDeferredTools,
       onFault,
       durability,
       models,
@@ -926,6 +937,7 @@ export class PiAgentRuntimeHarness {
       names.add(tool.name);
       return snapshotAgentTool(tool, snapshots);
     }));
+    this.lateDeferredTools = lateDeferredTools;
     if (initialState.model) {
       this.contextProjectionOptions = {
         compactionReserveTokens: this.durability?.compactionReserveTokens,
@@ -1609,6 +1621,16 @@ export class PiAgentRuntimeHarness {
       if (names.has(tool.name)) throw new Error("A deferred tool conflicts with a declared tool.");
       names.add(tool.name);
       tools.push(tool);
+    }
+    for (const tool of this.lateDeferredTools?.() ?? []) {
+      if (!tool.name || names.has(tool.name) || !isPiCodemodeCallable(tool)) continue;
+      names.add(tool.name);
+      let snapshot = this.lateSnapshots.get(tool);
+      if (!snapshot) {
+        snapshot = snapshotAgentTool(tool, new Map());
+        this.lateSnapshots.set(tool, snapshot);
+      }
+      tools.push(snapshot);
     }
     return tools;
   }

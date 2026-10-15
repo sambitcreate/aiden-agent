@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
 import type { Provider } from "../lib/types.js";
-import { ScheduledTaskProviderWarning } from "./scheduled-task-editor.js";
+import { ScheduledTaskProviderWarning, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
 import { ChatApprovalCard } from "./chat-approval-card";
 import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
 
@@ -106,5 +106,26 @@ test("the Model select stays bound to the helper's pinned model and never re-fil
     editor,
     /current\.providerId === provider\.id \? current\.model : undefined/u,
     "a stale pinned model from another provider never leaks into the new provider",
+  );
+});
+
+test("a selected MCP server that no longer exists is listed by its id, not a generic label", () => {
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    [
+      { id: "gmail", name: "Gmail", enabled: true },
+      { id: "notion", name: "Notion", enabled: false },
+      { id: "linear", name: "Linear", enabled: false },
+    ],
+    ["notion", "github-work"],
+  );
+  assert.deepEqual(unavailableMcpIds, ["notion", "github-work"]);
+  assert.deepEqual(
+    visibleMcpServers.map(({ id, name, enabled }) => [id, name, enabled]),
+    [
+      ["gmail", "Gmail", true],
+      // A disabled but still configured selection keeps its own name.
+      ["notion", "Notion", false],
+      ["github-work", "Unavailable MCP server (github-work)", false],
+    ],
   );
 });

@@ -1,15 +1,11 @@
-// Pure MCP tool-discovery policy shared by the desktop MCP manager: per-client
-// tool-list caching, request deadlines, and parallel per-server collection.
+// Pure MCP tool-discovery policy shared by the desktop MCP manager: request
+// deadlines, parallel per-server collection, deferred admission and the
+// recent-failure cache.
 // Kept free of Electron, config and credential imports so it can be exercised
 // against real in-memory MCP SDK servers.
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import {
-  ErrorCode,
-  McpError,
-  ToolListChangedNotificationSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { assertUniqueMcpAgentToolNames } from "./mcp-tool-identity.js";
 
 export interface McpDiscoveryDeadlines {
@@ -107,65 +103,6 @@ export function raceDeadline<T>(
   });
 }
 
-export interface McpToolDescriptor {
-  readonly name: string;
-  readonly description?: string;
-  readonly inputSchema?: unknown;
-}
-
-type ToolListingClient = Pick<
-  Client,
-  "getServerCapabilities" | "listTools" | "setNotificationHandler"
->;
-
-/**
- * Caches `tools/list` per connected client. A reconnect creates a new client,
- * so the cache is naturally scoped to one connection generation; a
- * `notifications/tools/list_changed` from the server drops that client's entry.
- */
-export class McpToolListCache {
-  private readonly lists = new WeakMap<object, Promise<readonly McpToolDescriptor[]>>();
-
-  /** Register before `connect` so a change announced during setup is not missed. */
-  attach(client: ToolListingClient): void {
-    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
-      this.invalidate(client);
-    });
-  }
-
-  invalidate(client: object): void {
-    this.lists.delete(client);
-  }
-
-  /** Concurrent callers share one in-flight request; failures are not cached. */
-  list(
-    client: ToolListingClient,
-    timeoutMs: number,
-  ): Promise<readonly McpToolDescriptor[]> {
-    if (!client.getServerCapabilities()?.tools) return Promise.resolve([]);
-    const cached = this.lists.get(client);
-    if (cached) return cached;
-    const request = client
-      .listTools(undefined, mcpRequestDeadline(timeoutMs))
-      .then(({ tools }) =>
-        Object.freeze(
-          tools.map(({ name, description, inputSchema }) =>
-            Object.freeze({
-              name,
-              ...(description === undefined ? {} : { description }),
-              ...(inputSchema === undefined ? {} : { inputSchema }),
-            }),
-          ),
-        ),
-      );
-    this.lists.set(client, request);
-    request.catch(() => {
-      if (this.lists.get(client) === request) this.lists.delete(client);
-    });
-    return request;
-  }
-}
-
 /**
  * Run each server's discovery concurrently, each under its own budget, and
  * return results in input order. A slow or hung server only loses its own
@@ -232,6 +169,239 @@ export function mergeMcpServerDiscovery<S extends { readonly name: string }, I>(
     throw new Error("The approved MCP servers did not provide any tools.");
   }
   return all;
+}
+
+/**
+ * How long a turn with deferred discovery (codemode / tool_search) waits for
+ * servers before starting. Warm and cached servers answer well inside it.
+ */
+export const MCP_DEFERRED_ADMISSION_WINDOW_MS = 1_500;
+
+/** Tools from servers that finished discovery after their turn started. */
+export interface McpLateDiscovery {
+  /** Accepted late tools, in completion order. Never shrinks during a turn. */
+  tools(): readonly AgentTool[];
+  /** Number of servers still discovering. */
+  pending(): number;
+  /**
+   * Resolve once no server is still discovering. Each server is bounded by its
+   * own discovery budget; `signal` stops only this caller's wait.
+   */
+  settled(signal?: AbortSignal): Promise<void>;
+}
+
+/** A late inventory that never changes: nothing was deferred. */
+export const NO_LATE_MCP_DISCOVERY: McpLateDiscovery = Object.freeze({
+  tools: () => [],
+  pending: () => 0,
+  settled: async (signal?: AbortSignal) => { signal?.throwIfAborted(); },
+});
+
+function waitFor(pending: Promise<unknown>, signal: AbortSignal | undefined): Promise<void> {
+  const settled = pending.then(() => undefined, () => undefined);
+  if (!signal) return settled;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void settled.then(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Deferred admission for turns whose MCP tools are reached through codemode or
+ * tool_search rather than declared to the provider. Servers that finish within
+ * `windowMs` are merged exactly like {@link mergeMcpServerDiscovery}; the rest
+ * keep discovering under their own budget and, once done, join `late` if their
+ * tool names stay unique. Late servers never contribute prompt instructions,
+ * so the turn's prompt and declarations stay stable while they arrive.
+ */
+export async function admitMcpServerDiscovery<S extends { readonly name: string }, I>(
+  servers: readonly S[],
+  discover: (server: S) => Promise<McpServerDiscoveryResult<I>>,
+  options: {
+    budgetMs: number;
+    windowMs: number;
+    signal?: AbortSignal;
+    onServerInstructions?: (instructions: I) => void;
+    onUnavailable?: (server: S, error: unknown) => void;
+  },
+): Promise<{ tools: AgentTool[]; late: McpLateDiscovery }> {
+  const results: (PromiseSettledResult<McpServerDiscoveryResult<I>> | undefined)[] = servers.map(() => undefined);
+  let admitted = false;
+  const accepted: AgentTool[] = [];
+  const late: AgentTool[] = [];
+  let pending = 0;
+  const acceptLate = (server: S, result: PromiseSettledResult<McpServerDiscoveryResult<I>>) => {
+    try {
+      if (result.status === "rejected") throw result.reason;
+      assertUniqueMcpAgentToolNames([...accepted, ...late, ...result.value.tools]);
+      late.push(...result.value.tools);
+    } catch (error) {
+      options.onUnavailable?.(server, asMcpDeadlineError(error));
+    }
+  };
+  const racing = servers.map((server, index) =>
+    raceDeadline(
+      Promise.resolve().then(() => discover(server)),
+      options.budgetMs,
+      `MCP server "${server.name}"`,
+      options.signal,
+    ).then(
+      (value) => ({ status: "fulfilled", value }) as const,
+      (reason: unknown) => ({ status: "rejected", reason }) as const,
+    ).then((result) => {
+      results[index] = result;
+      if (admitted) {
+        pending -= 1;
+        acceptLate(server, result);
+      }
+    }),
+  );
+  const all = Promise.all(racing);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([all, new Promise<void>((resolve) => { timer = setTimeout(resolve, options.windowMs); })]);
+  clearTimeout(timer);
+  admitted = true;
+  const readyIndexes = results.flatMap((result, index) => (result ? [index] : []));
+  pending = servers.length - readyIndexes.length;
+  accepted.push(...mergeMcpServerDiscovery(
+    readyIndexes.map((index) => servers[index]!),
+    readyIndexes.map((index) => results[index]!),
+    { onServerInstructions: options.onServerInstructions, onUnavailable: options.onUnavailable },
+  ));
+  return {
+    tools: accepted,
+    late: pending === 0 ? NO_LATE_MCP_DISCOVERY : {
+      tools: () => [...late],
+      pending: () => pending,
+      settled: (signal) => waitFor(all, signal),
+    },
+  };
+}
+
+/** How long a server that just failed discovery is skipped. */
+export const MCP_RECENT_FAILURE_MS = 45_000;
+
+/**
+ * Negative cache for discovery. A failure is remembered for one connection
+ * generation only, so a reconnect, save or reset (which supersede it) retries
+ * at once; explicit `clear` covers servers that never connected.
+ */
+export class McpRecentFailures {
+  private readonly failures = new Map<string, { generation: number; until: number; error: unknown }>();
+
+  constructor(
+    private readonly ttlMs: number = MCP_RECENT_FAILURE_MS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  record(id: string, generation: number, error: unknown): void {
+    this.failures.set(id, { generation, until: this.now() + this.ttlMs, error });
+  }
+
+  /** The failure to report instead of retrying, while it is still fresh. */
+  recent(id: string, generation: number): { error: unknown; retryInMs: number } | undefined {
+    const failure = this.failures.get(id);
+    if (!failure) return undefined;
+    const retryInMs = failure.until - this.now();
+    if (failure.generation !== generation || retryInMs <= 0) {
+      this.failures.delete(id);
+      return undefined;
+    }
+    return { error: failure.error, retryInMs };
+  }
+
+  clear(id: string): void {
+    this.failures.delete(id);
+  }
+
+  clearAll(): void {
+    this.failures.clear();
+  }
+}
+
+/**
+ * Per-server memo for built agent tools: the stored value is returned while
+ * every dependency is the identical object (client, inventory) or equal
+ * primitive (server identity), and the value's own `isCurrent` still holds
+ * (its configuration lease). Anything else rebuilds.
+ */
+export class McpBuiltToolsMemo<T> {
+  private readonly entries = new Map<string, { dependencies: readonly unknown[]; isCurrent: () => boolean; value: T }>();
+
+  get(id: string, dependencies: readonly unknown[]): T | undefined {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+    const same = entry.dependencies.length === dependencies.length &&
+      entry.dependencies.every((dependency, index) => Object.is(dependency, dependencies[index]));
+    if (same && entry.isCurrent()) return entry.value;
+    this.entries.delete(id);
+    return undefined;
+  }
+
+  set(id: string, dependencies: readonly unknown[], isCurrent: () => boolean, value: T): void {
+    this.entries.set(id, { dependencies: [...dependencies], isCurrent, value });
+  }
+
+  delete(id: string): void {
+    this.entries.delete(id);
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+/**
+ * Background discovery bookkeeping: at most one prewarm per server at a time,
+ * none after shutdown, and failures handed to `onFailure` (diagnostics)
+ * instead of escaping.
+ */
+export class McpPrewarmer {
+  private readonly running = new Map<string, Promise<void>>();
+
+  constructor(private readonly isShutDown: () => boolean) {}
+
+  /** Start `discover` unless one is already running; resolves when it settles. */
+  start(id: string, discover: () => Promise<unknown>, onFailure: (error: unknown) => void): Promise<void> {
+    const existing = this.running.get(id);
+    if (existing) return existing;
+    if (this.isShutDown()) return Promise.resolve();
+    const run = Promise.resolve()
+      .then(discover)
+      .then(() => undefined, (error: unknown) => {
+        try { onFailure(error); } catch { /* diagnostics never fail a prewarm */ }
+      })
+      .finally(() => { if (this.running.get(id) === run) this.running.delete(id); });
+    this.running.set(id, run);
+    return run;
+  }
+}
+
+/**
+ * Bound a whole connection attempt (transport start, OAuth refresh and
+ * `initialize`) by `ms`, which the SDK's initialize timeout alone does not
+ * cover. On timeout or abort the client is closed, and closed again once the
+ * raw attempt settles so a transport still starting cannot linger.
+ */
+export async function connectMcpWithinDeadline(
+  connecting: Promise<unknown>,
+  close: () => Promise<void>,
+  options: { ms?: number; signal?: AbortSignal; label?: string } = {},
+): Promise<void> {
+  const ms = options.ms ?? MCP_DISCOVERY_DEADLINES.connectMs;
+  try {
+    await raceDeadline(connecting, ms, options.label ?? "The MCP connection", options.signal);
+  } catch (error) {
+    const closeQuietly = () => close().catch(() => undefined);
+    void closeQuietly();
+    void connecting.then(closeQuietly, closeQuietly);
+    throw error;
+  }
 }
 
 /**

@@ -31,7 +31,7 @@ import {
   disposeShortcut,
   initShortcutBindingsChanged,
 } from "./services/shortcut.js";
-import { mcpManager } from "./services/mcp.js";
+import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
@@ -2159,6 +2159,9 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Connect enabled MCP servers in the background so the first turn finds
+      // warm connections and cached inventories. Never blocks startup.
+      prewarmMcpServers();
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
       await restoreDockIconPreference(appearance.dockIcon);

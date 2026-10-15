@@ -9,9 +9,10 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { homedir } from "node:os";
 import { open } from "node:fs/promises";
-import { resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
+import { createBotMcpScopeCache, resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
 import { resolveBotCapabilitySkills } from "../../../main/services/bot-skill-inventory.js";
-import { exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
+import { botMcpLiveToolMatchesGrant, exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
+import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { createCliMcpPool, mcpCredentialSignature } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
@@ -107,6 +108,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       },
     });
   }
+  const mcpScopeCache = createBotMcpScopeCache({ generation: () => inventoryLeases.revision() });
   const catalog = createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => keyStore.load(), loadNoticeStatus: (id) => capabilities.noticeStatus(id),
     listProviders: () => listCliProviders(agentDir),
@@ -116,7 +118,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     })).digest("hex"),
     listMcpServers: mcp.listServers,
     inspectMcpScopes: (signal) => resolveBotMcpInventory(signal, { listServers: mcp.listServers, inspectTools: mcp.inspectTools,
-      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations }),
+      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations, scopeCache: mcpScopeCache }),
     listSkills: (target) => skills(target?.botId),
     listApprovedLocations: async () => approvedRoots().map((item) => ({ sourceId: item.id, label: item.label, available: true,
       scopeFingerprint: botCapabilityFactsFingerprint({ device: item.device, inode: item.inode, policyRevision: item.policyRevision }) })),
@@ -170,7 +172,11 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       return mcpAgentToolName(server, name);
     });
     for (const server of servers.filter((item) => authority.connections.some((grant) => grant.sourceId === item.id))) {
-      selected.push(...(await mcp.agentTools(server, admission.signal)).filter((tool) => names.has(tool.name)));
+      // A same-named tool is not enough: the live tool must carry the grant's exact schema and effect.
+      selected.push(...(await mcp.agentTools(server, admission.signal)).filter((tool) => {
+        const grant = names.get(tool.name);
+        return grant !== undefined && botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool));
+      }));
     }
     const currentSkills = await skills(authority.botId);
     for (const grant of authority.skills) {
