@@ -1,4 +1,17 @@
+// Must stay the first import: it selects TanStack Router's client behaviour.
+import "./test-env";
+import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
+import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
+
+// With the router's server build, routed pages never follow a navigation and
+// tests that navigate pass while showing the wrong page. Fail loudly instead.
+// (Its types describe the browser build; under Node it is the server one.)
+if ((isServer as boolean | undefined) === true) {
+  throw new Error(
+    "Bot UI tests loaded TanStack Router's server build. Import ./test-dom (which loads ./test-env) before anything that imports the router.",
+  );
+}
 
 const GLOBAL_KEYS = [
   "window",
@@ -31,6 +44,7 @@ const GLOBAL_KEYS = [
   "ResizeObserver",
   "DOMRect",
   "getComputedStyle",
+  "scrollTo",
   "requestAnimationFrame",
   "cancelAnimationFrame",
   "matchMedia",
@@ -108,6 +122,8 @@ export function installBotTestIpc(
 ): BotTestIpcCall[] {
   const calls: BotTestIpcCall[] = [];
   notificationListeners.clear();
+  // The photo cache is process-wide; a photo cached by an earlier test must not answer this one.
+  invalidateBotCanonicalPhotos();
   (window as unknown as { aidenAPI: unknown }).aidenAPI = {
     ipc: {
       invoke: async (channel: string, ...args: unknown[]) => {

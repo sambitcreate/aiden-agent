@@ -39,8 +39,11 @@ export function PresetSetupDialog({
     ]);
     await onSaved?.();
   };
+  // A saved record that failed validation (e.g. a tampered origin) is repaired
+  // by starting from the official address; valid custom paths are kept.
+  const initialUrl = state.invalidRecord ? preset.url : (server?.url ?? preset.url);
   const [name, setName] = React.useState(server?.name ?? preset.name);
-  const [url, setUrl] = React.useState(server?.url ?? preset.url);
+  const [url, setUrl] = React.useState(initialUrl);
   const [key, setKey] = React.useState("");
   const [hasKey, setHasKey] = React.useState(state.ready);
   const [authorized, setAuthorized] = React.useState(state.ready);
@@ -65,7 +68,7 @@ export function PresetSetupDialog({
     if (open) {
       setConnectionError(null);
       setName(server?.name ?? preset.name);
-      setUrl(server?.url ?? preset.url);
+      setUrl(initialUrl);
       setKey("");
       setHasKey(state.ready);
       setAuthorized(state.ready);
@@ -75,7 +78,7 @@ export function PresetSetupDialog({
       confirmed.current = false;
       closed.current = false;
     }
-  }, [open, server, preset, state.enabled, state.ready, state.needsSignIn]);
+  }, [open, server, preset, initialUrl, state.enabled, state.ready, state.needsSignIn]);
 
   const build = (): McpServer => ({
     id: state.serverId,
@@ -284,7 +287,10 @@ export function PresetSetupDialog({
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong">This saved connection needs repair</Text>
           <Text variant="small">
-            {state.error} Saving here restores {preset.name}’s official settings.
+            {state.error}{" "}
+            {state.invalidRecord
+              ? `Saving here restores ${preset.name}’s official settings.`
+              : "Try again, or re-enter your credentials below."}
           </Text>
         </Callout>
       ) : null}

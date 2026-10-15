@@ -124,10 +124,18 @@ function visibilityObserver(): IntersectionObserver | null {
   if (typeof IntersectionObserver === "undefined") return null;
   sharedObserver ??= new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      (entry.target as SVGElement).toggleAttribute("data-offscreen", !entry.isIntersecting);
+      (entry.target as Element).toggleAttribute("data-offscreen", !entry.isIntersecting);
     }
   });
   return sharedObserver;
+}
+
+/** Pause an element's animations while it is scrolled out of view (`data-offscreen`), on the shared observer. */
+export function observeOffscreen(node: Element): () => void {
+  const observer = visibilityObserver();
+  if (!observer) return () => undefined;
+  observer.observe(node);
+  return () => observer.unobserve(node);
 }
 
 function reduceMotionActive(): boolean {
@@ -175,10 +183,7 @@ export function AidenActivityMark({
 
   React.useEffect(() => {
     const node = ref.current;
-    const observer = visibilityObserver();
-    if (!node || !observer) return;
-    observer.observe(node);
-    return () => observer.unobserve(node);
+    return node ? observeOffscreen(node) : undefined;
   }, []);
 
   React.useEffect(() => {

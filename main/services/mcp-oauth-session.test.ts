@@ -11,6 +11,7 @@ import {
   sameMcpOAuthGrant,
   sessionForFreshMcpAuthorization,
   sessionForMcpAuthorizationAttempt,
+  sessionWithRefreshedMcpTokens,
   sessionWithSavedMcpTokens,
   type McpOAuthSession,
 } from "./mcp-oauth-session.js";
@@ -703,4 +704,34 @@ test("a background 403 insufficient_scope challenge is requested by the next int
   assert.deepEqual(url.searchParams.get("scope")?.split(" ").sort(), ["files.read", "files.write", "offline_access"]);
   clearMcpStepUpScope(serviceUrl);
   assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "files.read"), "files.read");
+});
+
+test("a late refresh response neither overwrites newer tokens nor restores a signed-out session", () => {
+  const binding = mcpAuthorizationBinding("https://mcp.example.test/mcp");
+  const presented = { access_token: "access-1", refresh_token: "refresh-1" };
+  const late = { access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2" };
+  const current = { authorizationBinding: binding, tokens: { ...presented, token_type: "Bearer" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(current, binding, presented, late)?.tokens?.refresh_token, "refresh-2");
+  const rotated = { authorizationBinding: binding, tokens: { access_token: "access-3", token_type: "Bearer", refresh_token: "refresh-3" } } as McpOAuthSession;
+  assert.equal(sessionWithRefreshedMcpTokens(rotated, binding, presented, late), undefined);
+  assert.equal(sessionWithRefreshedMcpTokens({ authorizationBinding: binding }, binding, presented, late), undefined);
+});
+
+test("a 403 insufficient_scope on a legacy SSE message endpoint is remembered for the server", async () => {
+  const { createMcpFetchPolicy } = await import("./mcp-fetch-policy.js");
+  const { mcpInteractiveAuthorizationScope, clearMcpStepUpScope } = await import("./mcp-oauth-session.js");
+  const serviceUrl = "https://sse-step-up.example.test/sse";
+  const fetch = createMcpFetchPolicy({ serviceUrl, fetch: async () =>
+    new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="mail.send"' } }) });
+  const response = await fetch("https://sse-step-up.example.test/messages?sessionId=abc", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "send", arguments: {} } }),
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read")?.split(" ").sort(), ["mail.read", "mail.send"]);
+  clearMcpStepUpScope(serviceUrl);
+  // A non-MCP request on the same origin (an OAuth form POST) records nothing.
+  await fetch("https://sse-step-up.example.test/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=refresh_token" });
+  assert.equal(mcpInteractiveAuthorizationScope(serviceUrl, "mail.read"), "mail.read");
 });

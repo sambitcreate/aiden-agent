@@ -12,9 +12,11 @@ import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
+import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
+import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "./test-support/faux.js";
@@ -277,6 +279,11 @@ test("(f) after SIGKILL mid-tool an unsafe tool becomes an interrupted error and
     assert.equal(unsafeResult.isError, true);
     assert.match(unsafeResult.content.map((part) => part.text ?? "").join(""), /interrupted/u);
     assert.equal(safeResult.isError, false);
+    // The resumed reply finished: the chat must not say the person stopped it.
+    const transcript = projectBotTranscript((await conversation.context(ctx)).entries);
+    const rows = botTranscriptRows(transcript, null, { running: false, level: "summary" });
+    assert.equal(rows[rows.length - 1]?.kind, "assistant", rows.map((row) => row.kind).join(", "));
+    assert.equal(rows.some((row) => row.kind === "stopped"), false, rows.map((row) => row.kind).join(", "));
   } finally {
     await host.shutdown();
   }

@@ -33,7 +33,7 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       state.created = true;
       return { bot: fixture, created: true };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
@@ -160,7 +160,7 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
       state.created += 1;
       return { bot: fixture, created: true };
     });
-    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ ...idle, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }));
     ipcMain.handle("bots:live:summary", () => idle);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
@@ -192,4 +192,64 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   expect(
     await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),
   ).toBe(1);
+});
+
+// Under Reduce Motion the working face cannot glance, so it holds the glance's
+// look-aside pose: still, and still different from an idle face.
+test("under Reduce Motion a working Bot's face looks aside without moving, and an idle face looks ahead", async ({ aiden }) => {
+  const { page } = aiden;
+  const working = botFixture({ id: "bot-chief", name: "Chief of Staff" });
+  const idle = botFixture({ id: "bot-owl", name: "Night Owl" });
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ ipcMain }, fixtures) => {
+    for (const channel of [
+      "bots:list",
+      "bots:get",
+      "bots:live:summary",
+      "bots:live:subscribe",
+      "bots:getCanonicalPhoto",
+      "bots:pendingApprovals",
+    ]) {
+      ipcMain.removeHandler(channel);
+    }
+    ipcMain.handle("bots:list", () => fixtures);
+    // /bots opens one Bot's chat, so that Bot's own reads are answered too.
+    ipcMain.handle("bots:get", (_event, botId: string) => fixtures.find((bot) => bot.id === botId) ?? null);
+    ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
+      botId,
+      epoch: "e1",
+      seq: 0,
+      entries: [],
+      partial: null,
+      state: { kind: "idle" },
+      question: null,
+      activity: null,
+      queued: [],
+    }));
+    ipcMain.handle("bots:pendingApprovals", () => []);
+    ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
+      botId,
+      preview: null,
+      updatedAt: null,
+      state: botId === "bot-chief" ? { kind: "running", submissionId: "s-1" } : { kind: "idle" },
+      needsYou: false,
+      lastReplyAt: null,
+    }));
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+  }, [working, idle]);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  const face = (name: string) =>
+    page.getByRole("listitem").filter({ hasText: name }).locator(".bot-avatar-eyes").first();
+  const pose = (name: string) =>
+    face(name).evaluate((eyes) => ({
+      transform: getComputedStyle(eyes).transform,
+      moving: eyes.getAnimations({ subtree: true }).length > 0,
+    }));
+  await expect(page.getByRole("listitem").filter({ hasText: "Chief of Staff" }).getByText("Thinking…")).toBeAttached();
+
+  await expect.poll(async () => (await pose("Chief of Staff")).transform).not.toBe("none");
+  expect(await pose("Chief of Staff")).toMatchObject({ moving: false });
+  expect(await pose("Night Owl")).toEqual({ transform: "none", moving: false });
 });

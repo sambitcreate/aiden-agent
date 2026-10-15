@@ -85,6 +85,8 @@ export async function buildProductionSubagentChildTools(
     const mutationTools = scope.tools.filter((tool) => tool.effect === "mutating");
     return mutationTools.length > 0 ? [{ ...scope, tools: mutationTools }] : [];
   });
+  // Reads and mutations share one naming space, disambiguated across every scoped server.
+  const mcpServerIds = authority.capabilities.mcp.map(({ serverId }) => serverId);
   const hasOutboundCapability =
     authority.capabilities.web || readScopes.length > 0 || mutationScopes.length > 0;
   if (hasOutboundCapability && !input.consumeNetworkOperation) {
@@ -104,6 +106,7 @@ export async function buildProductionSubagentChildTools(
   if (readScopes.length > 0) {
     const mcpTools = await createReadOnlySubagentMcpTools({
       scopes: readScopes,
+      peerServerIds: mcpServerIds,
       host: dependencies.mcpHost,
       signal: input.signal,
       consumeNetworkOperation: () => {
@@ -124,7 +127,7 @@ export async function buildProductionSubagentChildTools(
     });
     tools.push(...mcpTools);
     outboundApprovalBindings.push(
-      ...subagentMcpApprovalBindings(readScopes).map(
+      ...subagentMcpApprovalBindings(readScopes, mcpServerIds).map(
         (binding): SubagentOutboundToolBindingV2 => ({
           toolName: binding.childAgentToolName,
           kind: "mcp",
@@ -142,7 +145,7 @@ export async function buildProductionSubagentChildTools(
       throw new Error("Subagent MCP mutation tool assembly is unavailable.");
     }
     const bindings = subagentMcpMutationBindingsV2(mutationScopes, (serverId, toolName) =>
-      subagentMcpAgentToolNameForBinding({ serverId }, { toolName }),
+      subagentMcpAgentToolNameForBinding({ serverId }, { toolName }, mcpServerIds),
     );
     const mutationTools = await createSubagentMcpMutationToolsV2({
       bindings,

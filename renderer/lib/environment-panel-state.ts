@@ -171,3 +171,25 @@ export function reduceEnvironmentSurfaceState(
       return { ...state, quickViewOpen: false, toolsOpen: false, frontSurface: null };
   }
 }
+
+/** Workspace views in the order the tools surface mounts them. */
+const ENVIRONMENT_PANEL_VIEW_ORDER = [
+  "new-tab",
+  "context",
+  "terminal",
+  "review",
+  "subagents",
+  "files",
+  "browser",
+  "devices",
+] as const satisfies readonly EnvironmentPanelTab[];
+
+/** Views the tools surface mounts, in DOM order; a disabled capability's view is not mounted at all. */
+export function environmentPanelViewOrder(
+  subagentsEnabled: boolean,
+  devicesEnabled = false,
+): EnvironmentPanelTab[] {
+  return ENVIRONMENT_PANEL_VIEW_ORDER.filter((tab) =>
+    environmentPanelTabEnabled(tab, subagentsEnabled, devicesEnabled),
+  );
+}
