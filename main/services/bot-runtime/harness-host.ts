@@ -184,8 +184,9 @@ export async function createBotHarnessHost(
   const ctx: Context = BACKGROUND_CONTEXT;
   const idleCloseMs = opts.idleCloseMs ?? DEFAULT_BOT_IDLE_CLOSE_MS;
   const now = opts.now ?? Date.now;
-  const opening = new Map<string, Promise<OpenEntry>>();
   const open = new Map<string, OpenEntry>();
+  /** Keep failed teardowns out of the reusable-entry path. */
+  const closing = new Set<string>();
   const deleted = new Set<string>();
   /** Per-Bot serialization of open/close/destroy. */
   const lifecycle = new Map<string, Promise<unknown>>();
@@ -275,25 +276,26 @@ export async function createBotHarnessHost(
     } catch {
       // A harness that cannot be inspected is closed below.
     }
-    if (!shutDown) await serialize(botId, () => closeEntry(botId)).catch(() => undefined);
+    if (!shutDown) {
+      await serialize(botId, () => open.get(botId) === entry ? closeEntry(botId) : Promise.resolve()).catch(() => undefined);
+    }
   }
 
   async function ensureOpen(botId: string): Promise<OpenEntry> {
     assertBotId(botId);
     if (shutDown) throw new BotHarnessHostClosedError();
     if (deleted.has(botId)) throw new BotDeletedError(botId);
-    const existing = open.get(botId);
-    if (existing !== undefined) {
-      scheduleIdle(botId, existing);
-      return existing;
-    }
-    const pending = opening.get(botId);
-    if (pending !== undefined) return pending;
-    const promise = serialize(botId, async () => {
+    return serialize(botId, async () => {
       if (shutDown) throw new BotHarnessHostClosedError();
       if (deleted.has(botId)) throw new BotDeletedError(botId);
       const already = open.get(botId);
-      if (already !== undefined) return already;
+      if (already !== undefined) {
+        if (closing.has(botId)) await closeEntry(botId);
+        else {
+          scheduleIdle(botId, already);
+          return already;
+        }
+      }
       await fs.mkdir(botDir(botId), { recursive: true, mode: 0o700 });
       let opened: { harness: Harness; conversation: Conversation };
       let notice: string | undefined;
@@ -306,6 +308,7 @@ export async function createBotHarnessHost(
       }
       const entry: OpenEntry = { ...opened, idleTimer: null, ...(notice === undefined ? {} : { pendingNotice: notice }) };
       open.set(botId, entry);
+      closing.delete(botId);
       scheduleIdle(botId, entry);
       // pi-durable 1.2 closes a Session for good when any Storage call fails;
       // drop it so the next open reopens and recovers from what was committed.
@@ -317,20 +320,19 @@ export async function createBotHarnessHost(
       });
       return entry;
     });
-    opening.set(botId, promise);
-    try {
-      return await promise;
-    } finally {
-      if (opening.get(botId) === promise) opening.delete(botId);
-    }
   }
 
   async function closeEntry(botId: string): Promise<void> {
     const entry = open.get(botId);
-    if (entry === undefined) return;
+    if (entry === undefined) {
+      closing.delete(botId);
+      return;
+    }
+    closing.add(botId);
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     await entry.harness.close(ctx);
     if (open.get(botId) === entry) open.delete(botId);
+    closing.delete(botId);
   }
 
   async function listBotDirectories(): Promise<string[]> {
@@ -403,8 +405,6 @@ export async function createBotHarnessHost(
     destroy(botId) { return admit(async () => {
       assertBotId(botId);
       deleted.add(botId);
-      const pending = opening.get(botId);
-      if (pending !== undefined) await pending.catch(() => undefined);
       await serialize(botId, async () => {
         const entry = open.get(botId);
         if (entry !== undefined) {
@@ -447,7 +447,6 @@ export async function createBotHarnessHost(
       if (shutdownPromise === null) {
         shutDown = true;
         shutdownPromise = (async () => {
-          await Promise.allSettled([...opening.values()]);
           await Promise.allSettled([...admittedOperations]);
           const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
           const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");

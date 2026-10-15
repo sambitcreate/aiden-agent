@@ -634,7 +634,8 @@
       "name": "renderer-other",
       "description": "Renderer, Telegram, scripts, onboarding, and UI-adjacent tests.",
       "prerequisites": [
-        "worktree-remover-build"
+        "worktree-remover-build",
+        "lease-flock-build"
       ],
       "files": [
         "renderer/components/settings/harness-runtime-section.test.tsx",

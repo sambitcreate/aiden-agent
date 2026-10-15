@@ -89,6 +89,65 @@ test("(a2) an idle harness closes by itself and reopens mid-conversation", async
   }
 });
 
+test("open waits for an overlapping close and returns a usable new session", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const first = await host.open("bot-overlap");
+  const originalClose = first.harness.close.bind(first.harness);
+  let closeStarted!: () => void;
+  let finishClose!: () => void;
+  const entered = new Promise<void>((resolve) => { closeStarted = resolve; });
+  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  first.harness.close = async (context) => {
+    closeStarted();
+    await gate;
+    return originalClose(context);
+  };
+  const closing = host.close("bot-overlap");
+  try {
+    await entered;
+    let reopened = false;
+    const reopening = host.open("bot-overlap").then((result) => {
+      reopened = true;
+      return result;
+    });
+    await Promise.resolve();
+    assert.equal(reopened, false, "open must wait for the old session to close");
+    finishClose();
+    await closing;
+    const second = await reopening;
+    assert.notEqual(second.harness, first.harness);
+    assert.equal(second.conversation.id, first.conversation.id);
+    await second.conversation.context(ctx);
+  } finally {
+    finishClose();
+    await closing.catch(() => undefined);
+    await host.shutdown();
+  }
+});
+
+test("failed close retains the profile guard and open retries teardown", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const first = await host.open("bot-close-retry");
+  const originalClose = first.harness.close.bind(first.harness);
+  let attempts = 0;
+  first.harness.close = async (context) => {
+    if (++attempts === 1) throw new Error("teardown failed");
+    return originalClose(context);
+  };
+  try {
+    await assert.rejects(host.close("bot-close-retry"), /teardown failed/);
+    const contender = spawnHarnessChild("lock", [path.join(profile, "bots")]);
+    try {
+      assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
+    } finally { await contender.kill(); }
+    const reopened = await host.open("bot-close-retry");
+    assert.notEqual(reopened.harness, first.harness);
+    await reopened.conversation.context(ctx);
+  } finally { await host.shutdown(); }
+});
+
 test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the provider", async () => {
   const profile = tempProfile();
   const child = spawnHarnessChild("stream", [profile, "bot:killed", "req-1"]);

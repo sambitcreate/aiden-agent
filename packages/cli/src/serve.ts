@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { acquireLease } from "./state.ts";
+import { recoverStaleServeLease } from "./serve-lifecycle.ts";
 import { createCliScheduler, daemonSocket } from "./schedules.ts";
 import { createDaemonChats } from "./daemon-chats.ts";
 import { createCliTelegram } from "./telegram.ts";
@@ -12,6 +13,7 @@ import { createCliRemote } from "./remote.ts";
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean } = {}) {
+  recoverStaleServeLease(agentDir);
   const release = acquireLease(join(agentDir, "serve"));
   try { await serveOwned(agentDir, signal, options); } finally { release(); }
 }

@@ -27,11 +27,13 @@ export function atomicJson(file: string, value: unknown): void {
 
 /** Legacy owner metadata is consulted only after the permanent guard is held. */
 function lockOwnerIsLive(lock: string): boolean {
-  let owner: { pid?: unknown; protocol?: unknown };
-  try { owner = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { pid?: unknown; protocol?: unknown }; }
+  let owner: unknown;
+  try { owner = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as unknown; }
   catch { return false; }
-  if (owner.protocol === "flock-v1") return false;
-  const pid = owner.pid;
+  if (owner === null || typeof owner !== "object" || Array.isArray(owner)) return false;
+  const record = owner as { pid?: unknown; protocol?: unknown };
+  if (record.protocol === "flock-v1") return false;
+  const pid = record.pid;
   if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) {
     try { process.kill(pid, 0); return true; }
     catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }

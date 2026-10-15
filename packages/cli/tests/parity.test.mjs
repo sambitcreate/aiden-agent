@@ -111,6 +111,16 @@ test("CLI new-protocol metadata with a recycled live pid is reclaimable", (t) =>
   release();
 });
 
+test("CLI lease reclaims null owner metadata under a free guard", (t) => {
+  const dir = temporary(t), file = join(dir, "writer.json"), lock = `${file}.lock`;
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner.json"), "null");
+  const release = api.acquireLease(file);
+  try {
+    assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).protocol, "flock-v1");
+  } finally { release(); }
+});
+
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
   const dir = temporary(t), workspace = await api.workspaceCommand(dir, ["add", dir]);
   assert.equal(api.accessFor(dir, dir), "ask");
@@ -238,6 +248,35 @@ test("serve routes concurrent CLI commands and releases its lease on shutdown", 
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
   controller.abort(); await promise;
   const release = api.acquireLease(join(dir, "serve")); release();
+});
+
+test("foreground serve recovers a legacy stale lease naming a recycled foreign pid", async (t) => {
+  const dir = temporary(t), lock = join(dir, "serve.lock");
+  const foreign = spawn("sleep", ["30"]);
+  t.after(() => { try { foreign.kill("SIGKILL"); } catch { /* already gone */ } });
+  await once(foreign, "spawn");
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { pid: foreign.pid, startedAt: 1 });
+  writeFileSync(api.daemonSocket(dir), "stale socket");
+  const controller = new AbortController();
+  const serving = api.serve(dir, controller.signal);
+  let failure;
+  void serving.catch((error) => { failure = error; });
+  try {
+    let listening = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (failure) throw failure;
+      try { listening = statSync(api.daemonSocket(dir)).isSocket(); } catch { /* starting */ }
+      if (listening) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(listening, true, "foreground serve should replace the stale socket");
+    assert.equal(api.pidAlive(foreign.pid), true, "recovery must not signal the foreign process");
+    assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid, process.pid);
+  } finally {
+    controller.abort();
+    await serving.catch(() => undefined);
+  }
 });
 
 test("serve lifecycle recovers stale leases and never signals a recycled PID", async (t) => {
