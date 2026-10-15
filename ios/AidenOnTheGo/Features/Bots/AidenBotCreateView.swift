@@ -76,7 +76,8 @@ struct AidenBotCreateOperations {
 ///
 /// The ask is on disk before anything goes out and until the Bot is made or the
 /// person lets it go, so a relaunch mid-create brings it back to Bots home as not
-/// made, and its Try Again sends the same request on the same key.
+/// made, and its Try Again sends the same request on the same key. When it can't be
+/// written nothing goes out, and the failure says so.
 ///
 /// Everything a create leaves behind is its pairing's alone: Bots home shows only the
 /// active pairing's, and Try Again sends only to the Mac it was for, so one Mac's
@@ -112,6 +113,7 @@ final class AidenBotCreateFlow {
 
     static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
     static let interrupted = "Aiden closed before the Bot was ready. Try again to finish making it."
+    static let notKept = "Aiden couldn’t store this Bot on your iPhone, so it wasn’t sent to your Mac. Try again."
 
     /// What Try Again on Bots home does with a failure.
     enum Retry: Equatable {
@@ -145,8 +147,8 @@ final class AidenBotCreateFlow {
     @ObservationIgnored private let requestLimit: Duration
     @ObservationIgnored private let store: AidenBotOutboxStore?
     @ObservationIgnored private let now: () -> Date
-    /// The disk writes, made one after another in the order they were asked for.
-    @ObservationIgnored private var writes: Task<Void, Never>?
+    /// The disk writes, made one after another in the order they were asked for; each says whether it was kept.
+    @ObservationIgnored private var writes: Task<Bool, Never>?
     /// Pairings this flow already looked on disk for; an earlier launch's create comes back once.
     @ObservationIgnored private var restoredScopes: Set<String> = []
     /// The look on disk under way for each pairing; a newer one supersedes it.
@@ -194,7 +196,7 @@ final class AidenBotCreateFlow {
             return
         }
         await make(input, operations: operations, onCreated: onCreated)
-        await writes?.value
+        _ = await writes?.value
     }
 
     /// Try Again on `failure` while the pairing (`instanceId`, `deviceId`) is the active one.
@@ -262,11 +264,14 @@ final class AidenBotCreateFlow {
         }
         // Past it, the same key could make a second Bot: this Create is a new request.
         if held != nil, replay == nil { retained[scope] = nil }
-        // On disk before anything goes out, so a relaunch never loses it.
-        await persist(
+        // On disk before anything goes out, so a relaunch never loses it; nothing goes out when it can't be.
+        guard await persist(
             AidenBotPendingCreate(input: input, frozen: replay?.frozen, createdAt: replay?.createdAt ?? now()),
             operations
-        ).value
+        ).value else {
+            failures[scope] = makeFailure(Self.notKept, input, operations)
+            return
+        }
         var sent = false
         do {
             // Another Mac became the active one meanwhile: nothing goes out, and the ask waits for its own Mac.
@@ -285,7 +290,11 @@ final class AidenBotCreateFlow {
                     frozen: AidenBotPendingCreate.Frozen(request: request, draft: draft, key: UUID(), chatKey: UUID()),
                     createdAt: now()
                 )
-                await persist(record(attempt), operations).value
+                // Its keys reach the disk before the request reaches the Mac.
+                guard await persist(record(attempt), operations).value else {
+                    failures[scope] = makeFailure(Self.notKept, input, operations)
+                    return
+                }
             }
             retained[scope] = attempt
             sent = true
@@ -349,7 +358,7 @@ final class AidenBotCreateFlow {
         guard let store, isFree(for: scope), !restoredScopes.contains(scope) else { return }
         let look = UUID()
         restoring[scope] = look
-        await writes?.value
+        _ = await writes?.value
         let saved = await store.pendingCreate(instanceId: instanceId, deviceId: deviceId)
         // A newer look for this pairing is under way: it decides.
         guard restoring[scope] == look else { return }
@@ -378,7 +387,7 @@ final class AidenBotCreateFlow {
     /// longer waits on disk. In memory its key stays for the same ask, so asking again
     /// can't make a second Bot. Returns the write, for tests.
     @discardableResult
-    func discard(_ failure: Failure) -> Task<Void, Never>? {
+    func discard(_ failure: Failure) -> Task<Bool, Never>? {
         let scope = Self.scope(instanceId: failure.instanceId, deviceId: failure.deviceId)
         if failures[scope] == failure { failures[scope] = nil }
         guard pending?.scope != scope, !Self.sending.contains(scope) else { return nil }
@@ -409,23 +418,24 @@ final class AidenBotCreateFlow {
     }
 
     @discardableResult
-    private func persist(_ create: AidenBotPendingCreate?, _ operations: AidenBotCreateOperations) -> Task<Void, Never> {
+    private func persist(_ create: AidenBotPendingCreate?, _ operations: AidenBotCreateOperations) -> Task<Bool, Never> {
         persist(create, instanceId: operations.instanceId, deviceId: operations.deviceId)
     }
 
-    /// Queues a write behind the ones before it; nil removes what waits.
+    /// Queues a write behind the ones before it; nil removes what waits. Its value is false when
+    /// `create` could not be kept on disk (without a store there is nothing to keep).
     @discardableResult
-    private func persist(_ create: AidenBotPendingCreate?, instanceId: String, deviceId: String) -> Task<Void, Never> {
+    private func persist(_ create: AidenBotPendingCreate?, instanceId: String, deviceId: String) -> Task<Bool, Never> {
         let previous = writes
         let store = store
-        let task = Task {
-            await previous?.value
-            guard let store else { return }
-            if let create {
-                await store.savePendingCreate(create, instanceId: instanceId, deviceId: deviceId)
-            } else {
+        let task = Task { () -> Bool in
+            _ = await previous?.value
+            guard let store else { return true }
+            guard let create else {
                 await store.removePendingCreate(instanceId: instanceId, deviceId: deviceId)
+                return true
             }
+            return await store.savePendingCreate(create, instanceId: instanceId, deviceId: deviceId)
         }
         writes = task
         return task

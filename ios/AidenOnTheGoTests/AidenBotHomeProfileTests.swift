@@ -705,6 +705,8 @@ final class AidenBotInstantEditTests: XCTestCase {
         var chatErrors: [Error] = []
         var hold: CheckedContinuation<Void, Never>?
         var holds = false
+        /// Runs as each create reaches the Mac.
+        var onCreate: (@MainActor () async -> Void)?
     }
 
     private func createOperations(
@@ -724,6 +726,7 @@ final class AidenBotInstantEditTests: XCTestCase {
             catalog: { catalog },
             create: { request, key in
                 mac.creates.append((request, key))
+                await mac.onCreate?()
                 if mac.holds { await withCheckedContinuation { mac.hold = $0 } }
                 if !mac.createErrors.isEmpty { throw mac.createErrors.removeFirst() }
                 return try self.detail(id: "bot_new_01", revision: "bot_revision_1", name: request.name)
@@ -916,35 +919,39 @@ final class AidenBotInstantEditTests: XCTestCase {
         XCTAssertFalse(failure.replays, "nothing reached the Mac: Try Again reopens New Bot as it was")
 
         // OK lets it go: the launch after has nothing.
-        await relaunched.discard(failure)?.value
+        _ = await relaunched.discard(failure)?.value
         XCTAssertNil(relaunched.failure)
         let later = createFlow(root)
         await later.restore(instanceId: "mac_a", deviceId: "device_1")
         XCTAssertNil(later.failure)
     }
 
-    /// Holds the store's next directory write, and with it every later call on that store.
+    /// Holds the store's next directory write, and with it every later call on that store,
+    /// or refuses every write, as a full disk does.
     private final class HoldingFileManager: FileManager, @unchecked Sendable {
         private let lock = NSLock()
         private var armed = false
         private var holding = false
+        private var refusing = false
         private let gate = DispatchSemaphore(value: 0)
 
         func arm() { lock.withLock { armed = true } }
         var isHolding: Bool { lock.withLock { holding } }
         func letGo() { gate.signal() }
+        func refuseWrites() { lock.withLock { refusing = true } }
 
         override func createDirectory(
             at url: URL,
             withIntermediateDirectories createIntermediates: Bool,
             attributes: [FileAttributeKey: Any]? = nil
         ) throws {
-            let holds = lock.withLock { () -> Bool in
-                guard armed else { return false }
+            let (holds, refuses) = lock.withLock { () -> (Bool, Bool) in
+                guard armed else { return (false, refusing) }
                 armed = false
                 holding = true
-                return true
+                return (true, refusing)
             }
+            if refuses { throw CocoaError(.fileWriteOutOfSpace) }
             if holds { gate.wait() }
             try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
         }
@@ -1025,6 +1032,60 @@ final class AidenBotInstantEditTests: XCTestCase {
         XCTAssertEqual(macA.creates.count, 2)
         XCTAssertEqual(macA.creates[1].key, macA.creates[0].key)
         XCTAssertEqual(macB.creates.count, 0)
+    }
+
+    @MainActor
+    func testACreateIsOnDiskBeforeItGoesOutAndNothingGoesOutWhenItCannotBe() async throws {
+        let root = createRoot()
+        let mac = CreateMac()
+        var onDisk: [AidenBotPendingCreate.Frozen?] = []
+        // What a launch after the phone died right then would find, read as each request leaves.
+        mac.onCreate = {
+            onDisk.append(await AidenBotOutboxStore(root: root).pendingCreate(instanceId: "mac_a", deviceId: "device_1")?.frozen)
+        }
+
+        // Create, Try Again after its answer was lost, and a relaunch's Try Again.
+        mac.createErrors = [URLError(.networkConnectionLost), URLError(.networkConnectionLost)]
+        let flow = createFlow(root)
+        await flow.submit(input, operations: try createOperations(mac)) { _ in }
+        let failed = try XCTUnwrap(flow.failure)
+        await flow.submit(failed.input, operations: try createOperations(mac), retrying: failed) { _ in }
+        let relaunched = createFlow(root)
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        let restored = try XCTUnwrap(relaunched.failure)
+        await relaunched.submit(restored.input, operations: try createOperations(mac), retrying: restored) { _ in }
+
+        XCTAssertEqual(mac.creates.count, 3)
+        XCTAssertEqual(onDisk.count, 3)
+        for (sent, kept) in zip(mac.creates, onDisk) {
+            XCTAssertEqual(kept?.request, sent.request, "the request on disk is the one going out")
+            XCTAssertEqual(kept?.key, sent.key, "with its key")
+        }
+
+        // A phone that can't write it sends nothing, and says so.
+        let blocked = createRoot()
+        try Data().write(to: blocked) // a file where the store's folder belongs
+        let refused = CreateMac()
+        let cannotKeep = createFlow(blocked)
+        await cannotKeep.submit(input, operations: try createOperations(refused)) { _ in }
+        XCTAssertEqual(refused.creates.count, 0, "a create that couldn't be kept never reaches the Mac")
+        XCTAssertEqual(cannotKeep.failure?.message, AidenBotCreateFlow.notKept)
+
+        // Nor does a relaunch's Try Again whose request can't be written again.
+        let lostRoot = createRoot()
+        let lost = CreateMac()
+        lost.createErrors = [URLError(.networkConnectionLost)]
+        await createFlow(lostRoot).submit(input, operations: try createOperations(lost)) { _ in }
+        let files = HoldingFileManager()
+        files.refuseWrites()
+        let full = AidenBotCreateFlow(store: AidenBotOutboxStore(root: lostRoot, fileManager: files))
+        await full.restore(instanceId: "mac_a", deviceId: "device_1")
+        let again = try XCTUnwrap(full.failure)
+        XCTAssertTrue(again.replays)
+        await full.submit(again.input, operations: try createOperations(lost), retrying: again) { _ in }
+        XCTAssertEqual(lost.creates.count, 1, "the replay waits until its request is on disk again")
+        XCTAssertEqual(full.failure?.message, AidenBotCreateFlow.notKept)
+        XCTAssertEqual(full.failure?.replays, true, "and Try Again still sends it as it was")
     }
 
     @MainActor

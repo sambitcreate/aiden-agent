@@ -777,19 +777,23 @@ actor AidenBotOutboxStore {
         return lapsed
     }
 
-    /// Keeps the pairing's New Bot on its way; never for a pairing an unpair purged.
-    func savePendingCreate(_ create: AidenBotPendingCreate, instanceId: String, deviceId: String) {
+    /// Keeps the pairing's New Bot on its way; never for a pairing an unpair purged. Returns
+    /// whether it is on disk: a create that isn't must not go out.
+    @discardableResult
+    func savePendingCreate(_ create: AidenBotPendingCreate, instanceId: String, deviceId: String) -> Bool {
         knownDevices[instanceId, default: []].insert(deviceId)
         guard !revokedDevices.contains(Self.pairing(AidenBotSessionKey(instanceId: instanceId, deviceId: deviceId, botID: ""))) else {
-            return
+            return false
         }
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(CreateEnvelope(version: 1, instanceId: instanceId, deviceId: deviceId, create: create))
             try writeProtected(data, to: pendingCreateURL(instanceId: instanceId, deviceId: deviceId))
+            return true
         } catch {
             AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
+            return false
         }
     }
 
