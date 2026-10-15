@@ -52,7 +52,11 @@ final class AidenBotCreateFlow {
 
     private struct Attempt {
         let scope: String
+        /// What the person asked for; a retry is the same attempt while this is unchanged.
+        let input: AidenBotCreateInput
         let request: AidenBotCreateRequest
+        /// The model the request was built from, for the chat step.
+        let draft: AidenBotEditorDraft?
         let key: UUID
         let chatKey: UUID
         var created: AidenBotDetail?
@@ -88,12 +92,20 @@ final class AidenBotCreateFlow {
                 return
             }
             guard operations.isCurrent() else { return }
-            let (request, draft) = try await resolve(input, operations: operations)
             var attempt: Attempt
-            if let retained, retained.scope == operations.scope, retained.request == request {
+            if let retained, retained.scope == operations.scope, Self.isSameAsk(retained, input) {
+                // The same ask as a failed try: its frozen request and key, whatever the catalog says now.
                 attempt = retained
             } else {
-                attempt = Attempt(scope: operations.scope, request: request, key: UUID(), chatKey: UUID())
+                let (request, draft) = try await resolve(input, operations: operations)
+                attempt = Attempt(
+                    scope: operations.scope,
+                    input: input,
+                    request: request,
+                    draft: draft,
+                    key: UUID(),
+                    chatKey: UUID()
+                )
             }
             retained = attempt
             sent = true
@@ -106,7 +118,7 @@ final class AidenBotCreateFlow {
                 retained = attempt
             }
             guard operations.isCurrent() else { return }
-            if !operations.usesDurableSession, let draft {
+            if !operations.usesDurableSession, let draft = attempt.draft {
                 let chat = try AidenBotChatCreateRequest(
                     providerId: draft.customAccess.providerID,
                     modelId: draft.customAccess.modelID
@@ -163,6 +175,19 @@ final class AidenBotCreateFlow {
         draft.purpose = purpose
         draft.instructions = AidenBotEditorDraft.seededInstructions(helpWith: purpose)
         return (try draft.createRequest(catalog: catalog), draft)
+    }
+
+    /// The same ask as `attempt`, decided before any catalog is read: the same answers, or, when the
+    /// first try went out before the Mac's models arrived, the model it was made with. A catalog that
+    /// moved on since is not a change the person made.
+    private static func isSameAsk(_ attempt: Attempt, _ input: AidenBotCreateInput) -> Bool {
+        if attempt.input == input { return true }
+        guard attempt.input.name == input.name, attempt.input.purpose == input.purpose,
+              attempt.input.draft == nil, let made = attempt.draft, let draft = input.draft else { return false }
+        return made.customAccess.providerID == draft.customAccess.providerID
+            && made.customAccess.modelID == draft.customAccess.modelID
+            && made.visionProviderID == draft.visionProviderID
+            && made.visionModelID == draft.visionModelID
     }
 
     private func bounded<T: Sendable>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {

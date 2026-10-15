@@ -492,10 +492,13 @@ final class AidenBotInstantEditTests: XCTestCase {
         return try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
-    private func catalog() throws -> AidenBotCapabilityCatalog {
-        try AidenRemoteJSONDecoder.decode(
+    /// The fixture catalog, or the same catalog at another revision (the Mac changed something unrelated).
+    private func catalog(revision: String? = nil) throws -> AidenBotCapabilityCatalog {
+        var object = try XCTUnwrap(try shared()["botCapabilityCatalog"] as? [String: Any])
+        if let revision { object["revision"] = revision }
+        return try AidenRemoteJSONDecoder.decode(
             AidenBotCapabilityCatalog.self,
-            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(try shared()["botCapabilityCatalog"]))
+            from: JSONSerialization.data(withJSONObject: object)
         )
     }
 
@@ -657,9 +660,10 @@ final class AidenBotInstantEditTests: XCTestCase {
     private func createOperations(
         _ mac: CreateMac,
         connected: Bool = true,
-        durable: Bool = true
+        durable: Bool = true,
+        catalogRevision: String? = nil
     ) throws -> AidenBotCreateOperations {
-        let catalog = try catalog()
+        let catalog = try catalog(revision: catalogRevision)
         return AidenBotCreateOperations(
             scope: "mac_a|device_1",
             usesDurableSession: durable,
@@ -725,6 +729,33 @@ final class AidenBotInstantEditTests: XCTestCase {
         await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
         await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
         XCTAssertNotEqual(mac.creates[2].key, mac.creates[3].key)
+    }
+
+    func testTryAgainAfterALostCreateReplaysTheSameRequestThroughACatalogChange() async throws {
+        let mac = CreateMac()
+        mac.createErrors = [URLError(.networkConnectionLost)]
+        let flow = AidenBotCreateFlow()
+        var created = 0
+
+        // The Create answer is lost; while the person is away the Mac's catalog moves on.
+        await flow.submit(input, operations: try createOperations(mac, catalogRevision: "catalog_rev_4")) { _ in created += 1 }
+        let failure = try XCTUnwrap(flow.failure)
+        await flow.submit(failure.input, operations: try createOperations(mac, catalogRevision: "catalog_rev_5")) { _ in created += 1 }
+
+        XCTAssertEqual(mac.creates.count, 2)
+        XCTAssertEqual(mac.creates[1].request, mac.creates[0].request, "Try Again sends the frozen body, not one built from the new catalog")
+        XCTAssertEqual(mac.creates[1].key, mac.creates[0].key, "the Mac may have made the Bot: same Idempotency-Key")
+        XCTAssertEqual(created, 1, "one Bot")
+
+        // Lost again, then the person renames it: that is a new ask, on a new key.
+        mac.createErrors = [URLError(.networkConnectionLost)]
+        await flow.submit(input, operations: try createOperations(mac, catalogRevision: "catalog_rev_5")) { _ in created += 1 }
+        var renamed = try XCTUnwrap(flow.failure).input
+        renamed.name = "Weekly Planner"
+        await flow.submit(renamed, operations: try createOperations(mac, catalogRevision: "catalog_rev_5")) { _ in created += 1 }
+        XCTAssertEqual(mac.creates.count, 4)
+        XCTAssertNotEqual(mac.creates[3].key, mac.creates[2].key)
+        XCTAssertEqual(mac.creates[3].request.name, "Weekly Planner")
     }
 
     func testABotMadeBeforeItsChatFailedIsNotMadeAgain() async throws {
