@@ -1,12 +1,12 @@
 /**
- * Desktop-shared Agent Skills injection (parity with
+ * Desktop-shared Agent Skills discovery (parity with
  * main/services/skills-discovery.ts priority: ~/.aiden > ~/.claude >
  * ~/.agents, plus the workspace's .claude).
  *
  * pi natively discovers ~/.aiden/agent/skills, <cwd>/.aiden/skills, and walks
  * up `.agents/skills` from the cwd — so ~/.agents is treated as RESERVED
- * (claimed by pi, never injected) and the remaining folders are injected
- * per-skill-directory, skipping any skill name already claimed. Injection is
+ * (claimed by pi, never injected) and the remaining folders are discovered
+ * per-skill-directory, skipping any skill name already claimed. Discovery is
  * per skill directory (each containing SKILL.md) so a name collision only
  * drops that one skill instead of the whole folder.
  *
@@ -17,14 +17,16 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-export function desktopSkillInjectionPaths(home: string, cwd: string): string[] {
-	// Skills pi already discovers on its own; injecting these again would
+export type DesktopSkillPath = { path: string; scope: "user" | "project"; baseDir: string };
+
+export function desktopSkillDiscoveryPaths(home: string, cwd: string, projectTrusted: boolean): DesktopSkillPath[] {
+	// Skills pi already discovers on its own; adding these again would
 	// produce duplicate-name conflicts at startup.
 	const nativeRoots = [join(home, ".agents", "skills")];
-	const injectRoots = [
-		join(home, ".aiden", "skills"),
-		join(home, ".claude", "skills"),
-		join(cwd, ".claude", "skills"),
+	const discoveryRoots: Array<{ path: string; scope: "user" | "project" }> = [
+		{ path: join(home, ".aiden", "skills"), scope: "user" },
+		{ path: join(home, ".claude", "skills"), scope: "user" },
+		...(projectTrusted ? [{ path: join(cwd, ".claude", "skills"), scope: "project" as const }] : []),
 	];
 
 	const claimed = new Set<string>();
@@ -36,8 +38,8 @@ export function desktopSkillInjectionPaths(home: string, cwd: string): string[] 
 	};
 	for (const root of nativeRoots) claimNames(root);
 
-	const out: string[] = [];
-	for (const root of injectRoots) {
+	const out: DesktopSkillPath[] = [];
+	for (const { path: root, scope } of discoveryRoots) {
 		if (!existsSync(root)) continue;
 		for (const entry of readdirSync(root, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
@@ -45,7 +47,7 @@ export function desktopSkillInjectionPaths(home: string, cwd: string): string[] 
 			const skillDir = join(root, entry.name);
 			if (!existsSync(join(skillDir, "SKILL.md"))) continue;
 			claimed.add(entry.name);
-			out.push(skillDir);
+			out.push({ path: skillDir, scope, baseDir: root });
 		}
 	}
 	return out;

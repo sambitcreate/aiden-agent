@@ -13,7 +13,7 @@ function makeSkill(root, name) {
 }
 
 test("skill injection follows desktop priority, dedupes, and reserves native coverage", async () => {
-	const { desktopSkillInjectionPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
+	const { desktopSkillDiscoveryPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
 	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-skills-"));
 	const cwd = mkdtempSync(path.join(tmpdir(), "aiden-cli-cwd-"));
 	try {
@@ -29,12 +29,14 @@ test("skill injection follows desktop priority, dedupes, and reserves native cov
 		// Workspace .claude skill with a fresh name is injected.
 		makeSkill(path.join(cwd, ".claude", "skills"), "workspace-unique");
 
-		const injected = desktopSkillInjectionPaths(home, cwd);
-		const names = injected.map((dir) => path.basename(path.dirname(dir)) === "skills" ? path.basename(dir) : path.basename(dir));
+		const injected = desktopSkillDiscoveryPaths(home, cwd, true);
+		const names = injected.map((entry) => path.basename(entry.path));
 		assert.deepEqual(names.sort(), ["aiden-unique", "claude-unique", "workspace-unique"].sort());
 		assert.ok(!names.includes("native-only"), "pi-native skill must not be re-injected");
 		assert.ok(!names.includes("shared"), "colliding name must be injected exactly once (by priority)");
-		assert.ok(injected.every((dir) => dir.includes(home) || dir.includes(cwd)));
+		assert.equal(injected.find((entry) => path.basename(entry.path) === "workspace-unique")?.scope, "project");
+		assert.ok(injected.filter((entry) => entry.scope === "user").every((entry) => entry.path.startsWith(home)));
+		assert.deepEqual(desktopSkillDiscoveryPaths(home, cwd, false).map((entry) => path.basename(entry.path)).sort(), ["aiden-unique", "claude-unique"]);
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 		rmSync(cwd, { recursive: true, force: true });
@@ -42,13 +44,25 @@ test("skill injection follows desktop priority, dedupes, and reserves native cov
 });
 
 test("skill injection is empty when no desktop folders exist", async () => {
-	const { desktopSkillInjectionPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
+	const { desktopSkillDiscoveryPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
 	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-skills-"));
 	const cwd = mkdtempSync(path.join(tmpdir(), "aiden-cli-cwd-"));
 	try {
-		assert.deepEqual(desktopSkillInjectionPaths(home, cwd), []);
+		assert.deepEqual(desktopSkillDiscoveryPaths(home, cwd, true), []);
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("a home-directory launch keeps home skill roots in user scope", async () => {
+	const { desktopSkillDiscoveryPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
+	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-home-"));
+	try {
+		makeSkill(path.join(home, ".claude", "skills"), "home-probe");
+		assert.deepEqual(desktopSkillDiscoveryPaths(home, home, false).map(({ scope }) => scope), ["user"]);
+		assert.equal(desktopSkillDiscoveryPaths(home, home, true).length, 1);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
 	}
 });

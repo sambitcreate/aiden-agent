@@ -66,6 +66,8 @@ The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TE
 | `~/.aiden/agent/` | CLI state: `settings.json`, `auth.json`, `models-store.json`, `sessions/`, `extensions/`, `skills/`, `themes/` |
 | `~/.aiden/` | Shared Aiden home (desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop+CLI store; the CLI adds only the `agent/` subtree otherwise) |
 | `<project>/.aiden/` | Project-local settings, extensions, skills, themes, prompts (gated by project trust) |
+
+The CLI also discovers `~/.aiden/skills` and `~/.claude/skills` as user skills, plus `<session cwd>/.claude/skills` after Pi approves that project. Home skills remain user skills when launched from home. `--no-skills` (`-ns`) disables automatic discovery in every root; `--no-approve` (`-na`) refuses project skills while retaining user skills. A path supplied by the user with `--skill <path>` remains an explicit exception to both flags.
 | `AIDEN_CODING_AGENT_DIR` | Env override for the agent dir (mirrors pi's `PI_CODING_AGENT_DIR`; required for tests and multi-instance setups) |
 
 ## Theming

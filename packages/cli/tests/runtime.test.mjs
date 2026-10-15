@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +17,31 @@ function runCli(args, options = {}) {
 		timeout: 60_000,
 		...options,
 	});
+}
+
+function rpcCommandDetails(args, options) {
+	const result = runCli(["--mode", "rpc", "--no-session", ...args], {
+		...options,
+		input: '{"id":"skills-probe","type":"get_commands"}\n',
+	});
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	const response = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+		.find((message) => message.type === "response" && message.id === "skills-probe");
+	assert.ok(response, `missing correlated get_commands response: ${result.stdout}`);
+	assert.equal(response.command, "get_commands");
+	assert.equal(response.success, true, JSON.stringify(response));
+	return response.data.commands;
+}
+
+function rpcCommands(args, options) {
+	return rpcCommandDetails(args, options).map((command) => command.name);
+}
+
+function makeProbeSkill(root, name) {
+	const dir = path.join(root, name);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Skill discovery policy probe.\n---\nProbe body.\n`);
+	return dir;
 }
 
 test("--version reports the Aiden CLI version", () => {
@@ -173,6 +199,7 @@ test("desktop skills folders (~/.aiden/skills priority set) feed CLI commands", 
 			input: '{"id":"c1","type":"get_commands"}\n',
 			cwd: home,
 		});
+		assert.equal(result.status, 0, result.stderr);
 		const commands = result.stdout
 			.split("\n")
 			.filter((line) => line.trim().length > 0)
@@ -182,6 +209,100 @@ test("desktop skills folders (~/.aiden/skills priority set) feed CLI commands", 
 		assert.ok(commands.includes("skill:injection-probe"), `injected skill missing from: ${commands.join(", ")}`);
 	} finally {
 		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("built CLI applies skill disable and project trust before automatic discovery", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-policy-"));
+	const home = path.join(root, "home");
+	const project = path.join(root, "project");
+	const agentDir = path.join(root, "agent");
+	mkdirSync(home);
+	mkdirSync(project);
+	mkdirSync(agentDir);
+	const global = "global-probe";
+	const projectName = "untrusted-probe";
+	const explicit = "explicit-probe";
+	makeProbeSkill(path.join(home, ".aiden", "skills"), global);
+	makeProbeSkill(path.join(home, ".claude", "skills"), "global-claude-probe");
+	makeProbeSkill(path.join(project, ".claude", "skills"), projectName);
+	const explicitPath = makeProbeSkill(path.join(root, "explicit"), explicit);
+	const env = { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+	const commands = (flags = []) => rpcCommands(flags, { cwd: project, env });
+	const has = (list, name) => list.includes(`skill:${name}`);
+	const trustPath = path.join(agentDir, "trust.json");
+	try {
+		writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "never" }));
+		const initialDetails = rpcCommandDetails([], { cwd: project, env });
+		let found = initialDetails.map((command) => command.name);
+		assert.equal(has(found, global), true);
+		assert.equal(has(found, "global-claude-probe"), true);
+		assert.equal(has(found, projectName), false, "a .claude-only project must require trust");
+		assert.equal(initialDetails.find((command) => command.name === `skill:${global}`)?.sourceInfo?.scope, "user");
+
+		for (const flag of ["--no-approve", "-na"]) {
+			found = commands([flag]);
+			assert.equal(has(found, global), true, `${flag} must retain global skills`);
+			assert.equal(has(found, projectName), false, `${flag} must refuse project skills`);
+		}
+		for (const flag of ["--no-skills", "-ns"]) {
+			found = commands([flag]);
+			for (const name of [global, "global-claude-probe", projectName]) {
+				assert.equal(has(found, name), false, `${flag} must disable automatic ${name}`);
+			}
+		}
+		found = commands(["--no-skills", "--no-approve"]);
+		assert.equal(has(found, projectName), false);
+		assert.equal(has(found, global), false);
+
+		const approvedDetails = rpcCommandDetails(["--approve"], { cwd: project, env });
+		found = approvedDetails.map((command) => command.name);
+		assert.equal(has(found, projectName), true, "explicit project approval must admit discovery");
+		assert.equal(approvedDetails.find((command) => command.name === `skill:${projectName}`)?.sourceInfo?.scope, "project");
+		writeFileSync(trustPath, JSON.stringify({ [realpathSync(project)]: false }));
+		assert.equal(has(commands([]), projectName), false, "saved denial must win");
+		writeFileSync(trustPath, JSON.stringify({ [realpathSync(project)]: true }));
+		assert.equal(has(commands([]), projectName), true, "saved approval must admit discovery");
+		assert.equal(has(commands(["--no-approve"]), projectName), false, "explicit denial must override saved approval");
+
+		found = commands(["--no-skills", "--no-approve", "--skill", explicitPath]);
+		assert.equal(has(found, explicit), true, "only the user's explicit skill path survives refusal flags");
+		for (const name of [global, "global-claude-probe", projectName]) {
+			assert.equal(has(found, name), false, `${name} was discovered despite refusal flags`);
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("resumed session discovers skills from its cwd instead of the launch cwd", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-switch-"));
+	const home = path.join(root, "home");
+	const agentDir = path.join(root, "agent");
+	const first = path.join(root, "first");
+	const second = path.join(root, "second");
+	for (const dir of [home, agentDir, first, second]) mkdirSync(dir);
+	makeProbeSkill(path.join(first, ".claude", "skills"), "first-project-probe");
+	makeProbeSkill(path.join(second, ".claude", "skills"), "second-project-probe");
+	const sessionPath = path.join(root, "other-session.jsonl");
+	writeFileSync(sessionPath, JSON.stringify({ type: "session", version: 3, id: randomUUID(), timestamp: new Date().toISOString(), cwd: second }) + "\n");
+	try {
+		const result = runCli(["--mode", "rpc", "--session", sessionPath, "--approve"], {
+			cwd: first,
+			env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
+			input: '{"id":"resumed","type":"get_commands"}\n',
+		});
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		const response = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+			.find((message) => message.type === "response" && message.id === "resumed");
+		assert.ok(response, `missing correlated get_commands response: ${result.stdout}`);
+		assert.equal(response.command, "get_commands");
+		assert.equal(response.success, true, JSON.stringify(response));
+		const names = response.data.commands.map((command) => command.name);
+		assert.ok(names.includes("skill:second-project-probe"));
+		assert.ok(!names.includes("skill:first-project-probe"));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 
