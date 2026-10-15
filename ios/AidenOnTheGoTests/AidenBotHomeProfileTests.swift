@@ -502,6 +502,11 @@ final class AidenBotHomeProfileTests: XCTestCase {
     }
 }
 
+private extension AidenBotCreateFlow {
+    /// The failure Bots home shows while the tests' usual pairing (Mac A, this phone) is in use.
+    var failure: Failure? { self.failure(instanceId: "mac_a", deviceId: "device_1") }
+}
+
 /// R15: New Bot, Profile and Advanced apply at once, never wait on the
 /// connection, and roll back with an error when the Mac doesn't take a change.
 @MainActor
@@ -694,11 +699,12 @@ final class AidenBotInstantEditTests: XCTestCase {
         connected: Bool = true,
         durable: Bool = true,
         catalogRevision: String? = nil,
+        instanceId: String = "mac_a",
         deviceId: String = "device_1"
     ) throws -> AidenBotCreateOperations {
         let catalog = try catalog(revision: catalogRevision)
         return AidenBotCreateOperations(
-            instanceId: "mac_a",
+            instanceId: instanceId,
             deviceId: deviceId,
             usesDurableSession: durable,
             waitForConnection: { _ in connected },
@@ -888,7 +894,7 @@ final class AidenBotInstantEditTests: XCTestCase {
 
         let otherPhone = createFlow(root)
         await otherPhone.restore(instanceId: "mac_a", deviceId: "device_2")
-        XCTAssertNil(otherPhone.failure, "another pairing never sees it")
+        XCTAssertNil(otherPhone.failure(instanceId: "mac_a", deviceId: "device_2"), "another pairing never sees it")
 
         let relaunched = createFlow(root)
         await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
@@ -902,6 +908,110 @@ final class AidenBotInstantEditTests: XCTestCase {
         let later = createFlow(root)
         await later.restore(instanceId: "mac_a", deviceId: "device_1")
         XCTAssertNil(later.failure)
+    }
+
+    /// Holds the store's next directory write, and with it every later call on that store.
+    private final class HoldingFileManager: FileManager, @unchecked Sendable {
+        private let lock = NSLock()
+        private var armed = false
+        private var holding = false
+        private let gate = DispatchSemaphore(value: 0)
+
+        func arm() { lock.withLock { armed = true } }
+        var isHolding: Bool { lock.withLock { holding } }
+        func letGo() { gate.signal() }
+
+        override func createDirectory(
+            at url: URL,
+            withIntermediateDirectories createIntermediates: Bool,
+            attributes: [FileAttributeKey: Any]? = nil
+        ) throws {
+            let holds = lock.withLock { () -> Bool in
+                guard armed else { return false }
+                armed = false
+                holding = true
+                return true
+            }
+            if holds { gate.wait() }
+            try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+        }
+    }
+
+    @MainActor
+    func testMacAsRestoreLandingAfterASwitchToMacBShowsNothingOnBAndSendsNothingThere() async throws {
+        let root = createRoot()
+        let macA = CreateMac()
+        let macB = CreateMac()
+        // Mac A's create went out and the app closed before its answer.
+        macA.createErrors = [URLError(.networkConnectionLost)]
+        await createFlow(root).submit(input, operations: try createOperations(macA)) { _ in }
+
+        // The next launch looks for it while Mac A is in use; the look is held on the disk.
+        let files = HoldingFileManager()
+        let store = AidenBotOutboxStore(root: root, fileManager: files)
+        let relaunched = AidenBotCreateFlow(store: store)
+        let other = AidenBotPendingCreate(input: input, frozen: nil, createdAt: Date())
+        files.arm()
+        let holder = Task.detached { await store.savePendingCreate(other, instanceId: "mac_z", deviceId: "device_9") }
+        let deadline = Date().addingTimeInterval(5)
+        while !files.isHolding {
+            guard Date() < deadline else { return XCTFail("the store was never held") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        var macAInUse = true
+        let look = Task { await relaunched.restore(instanceId: "mac_a", deviceId: "device_1") { macAInUse } }
+        await Task.yield()
+        // A link switches the phone to Mac B while the look is on its way.
+        macAInUse = false
+        files.letGo()
+        await look.value
+        await holder.value
+
+        XCTAssertNil(relaunched.failure(instanceId: "mac_b", deviceId: "device_1"), "Mac B's Bots home never shows Mac A's create")
+        XCTAssertNil(relaunched.failure, "nor is it published for Mac A while Mac B is in use")
+        XCTAssertEqual(macB.creates.count, 0, "nothing of Mac A's reaches Mac B")
+
+        // A look whose Bots home task was cancelled shows nothing either.
+        let cancelled = Task { await relaunched.restore(instanceId: "mac_a", deviceId: "device_1") }
+        cancelled.cancel()
+        await cancelled.value
+        XCTAssertNil(relaunched.failure)
+
+        // Back on Mac A it comes back, and Try Again sends it there on the key Mac A may hold.
+        await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+        let failure = try XCTUnwrap(relaunched.failure, "it waited for Mac A")
+        XCTAssertEqual(relaunched.retry(failure, instanceId: "mac_a", deviceId: "device_1"), .send(input))
+        await relaunched.submit(failure.input, operations: try createOperations(macA), retrying: failure) { _ in }
+        XCTAssertEqual(macA.creates.count, 2)
+        XCTAssertEqual(macA.creates[1].key, macA.creates[0].key)
+        XCTAssertEqual(macB.creates.count, 0)
+    }
+
+    @MainActor
+    func testTryAgainOnMacAsFailedCreateWhileMacBIsInUseNeverSendsItToB() async throws {
+        let macA = CreateMac()
+        let macB = CreateMac()
+        let flow = createFlow()
+        // Mac A loses the answer; then a link switches the phone to Mac B with A's failure kept.
+        macA.createErrors = [URLError(.networkConnectionLost)]
+        await flow.submit(input, operations: try createOperations(macA)) { _ in }
+        let failure = try XCTUnwrap(flow.failure)
+        XCTAssertNil(flow.failure(instanceId: "mac_b", deviceId: "device_1"), "Mac B's Bots home never offers it")
+
+        // Try Again, or Create in the New Bot it reopened, while Mac B is in use: nothing reaches B.
+        XCTAssertEqual(flow.retry(failure, instanceId: "mac_b", deviceId: "device_1"), .none)
+        await flow.submit(failure.input, operations: try createOperations(macB, instanceId: "mac_b"), retrying: failure) { _ in }
+        XCTAssertEqual(macB.creates.count, 0, "Mac A's answers never become a Bot on Mac B")
+        XCTAssertNil(flow.pending)
+        XCTAssertEqual(flow.failure, failure, "they wait for Mac A")
+
+        // Back on Mac A, Try Again reopens New Bot and its Create goes to A on A's key.
+        XCTAssertEqual(flow.retry(failure, instanceId: "mac_a", deviceId: "device_1"), .reopen(failure))
+        XCTAssertNil(flow.failure)
+        await flow.submit(failure.input, operations: try createOperations(macA), retrying: failure) { _ in }
+        XCTAssertEqual(macA.creates.count, 2)
+        XCTAssertEqual(macA.creates[1].key, macA.creates[0].key)
+        XCTAssertEqual(macB.creates.count, 0)
     }
 
     @MainActor

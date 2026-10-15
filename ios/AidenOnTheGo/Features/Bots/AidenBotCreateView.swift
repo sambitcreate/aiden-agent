@@ -60,6 +60,10 @@ struct AidenBotCreateOperations {
 /// The ask is on disk before anything goes out and until the Bot is made or the
 /// person lets it go, so a relaunch mid-create brings it back to Bots home as not
 /// made, and its Try Again sends the same request on the same key.
+///
+/// Everything a create leaves behind is its pairing's alone: Bots home shows only the
+/// active pairing's, and Try Again sends only to the Mac it was for, so one Mac's
+/// answers never become a Bot on another.
 @MainActor
 @Observable
 final class AidenBotCreateFlow {
@@ -67,11 +71,16 @@ final class AidenBotCreateFlow {
         let id: UUID
         let name: String
         let purpose: String
+        /// The pairing it is on its way to; Bots home shows it there only.
+        let instanceId: String
+        let deviceId: String
+
+        var scope: String { AidenBotCreateFlow.scope(instanceId: instanceId, deviceId: deviceId) }
     }
 
     struct Failure: Equatable {
         let message: String
-        let input: AidenBotCreateInput
+        var input: AidenBotCreateInput
         /// An earlier launch's create that may have reached the Mac: Try Again sends
         /// its frozen request again rather than reopening New Bot.
         var replays = false
@@ -83,8 +92,19 @@ final class AidenBotCreateFlow {
     static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
     static let interrupted = "Aiden closed before the Bot was ready. Try again to finish making it."
 
+    /// What Try Again on Bots home does with a failure.
+    enum Retry: Equatable {
+        /// Send it again as it was: an earlier launch's, on its key. Hand its input to `submit`.
+        case send(AidenBotCreateInput)
+        /// Reopen New Bot with these answers.
+        case reopen(Failure)
+        /// Nothing: it is another Mac's, and waits for that Mac.
+        case none
+    }
+
     private(set) var pending: Pending?
-    var failure: Failure?
+    /// Each pairing's failed create, kept for that pairing alone.
+    private var failures: [String: Failure] = [:]
 
     private struct Attempt {
         let scope: String
@@ -96,7 +116,8 @@ final class AidenBotCreateFlow {
         var restored = false
     }
 
-    @ObservationIgnored private var retained: Attempt?
+    /// Each pairing's last attempt, kept for a retry of the same ask.
+    @ObservationIgnored private var retained: [String: Attempt] = [:]
     @ObservationIgnored private let connectionHold: Duration
     @ObservationIgnored private let requestLimit: Duration
     @ObservationIgnored private let store: AidenBotOutboxStore?
@@ -105,6 +126,8 @@ final class AidenBotCreateFlow {
     @ObservationIgnored private var writes: Task<Void, Never>?
     /// Pairings this flow already looked on disk for; an earlier launch's create comes back once.
     @ObservationIgnored private var restoredScopes: Set<String> = []
+    /// The look on disk under way for each pairing; a newer one supersedes it.
+    @ObservationIgnored private var restoring: [String: UUID] = [:]
     /// Pairings a create of this launch is sending for, in any flow: theirs is never shown as cut off.
     private static var sending: Set<String> = []
 
@@ -122,16 +145,43 @@ final class AidenBotCreateFlow {
 
     nonisolated static func scope(instanceId: String, deviceId: String) -> String { "\(instanceId)|\(deviceId)" }
 
+    /// The failed create Bots home shows for this pairing; another pairing's is never shown here.
+    func failure(instanceId: String, deviceId: String) -> Failure? {
+        failures[Self.scope(instanceId: instanceId, deviceId: deviceId)]
+    }
+
     /// Makes the Bot; returns once it exists on the Mac (and `onCreated` ran) or failed,
-    /// with what waits on disk written.
+    /// with what waits on disk written. `retrying` is the failure a Try Again (or the New Bot
+    /// it reopened) came from: it is sent only to its own Mac, and otherwise waits for it.
     func submit(
         _ input: AidenBotCreateInput,
         operations: AidenBotCreateOperations,
+        retrying: Failure? = nil,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
         guard pending == nil else { return }
+        if let retrying, retrying.instanceId != operations.instanceId || retrying.deviceId != operations.deviceId {
+            // Another Mac is the active one now: nothing goes to it. The answers wait for their own Mac.
+            let scope = Self.scope(instanceId: retrying.instanceId, deviceId: retrying.deviceId)
+            if failures[scope] == nil {
+                var kept = retrying
+                kept.input = input
+                failures[scope] = kept
+            }
+            return
+        }
         await make(input, operations: operations, onCreated: onCreated)
         await writes?.value
+    }
+
+    /// Try Again on `failure` while the pairing (`instanceId`, `deviceId`) is the active one.
+    /// Another Mac's failure does nothing here and stays for its own Mac.
+    func retry(_ failure: Failure, instanceId: String, deviceId: String) -> Retry {
+        guard failure.instanceId == instanceId, failure.deviceId == deviceId else { return .none }
+        let scope = Self.scope(instanceId: instanceId, deviceId: deviceId)
+        if failures[scope] == failure { failures[scope] = nil }
+        // An earlier launch's create: the same request, on the same key.
+        return failure.replays ? .send(failure.input) : .reopen(failure)
     }
 
     private func make(
@@ -140,11 +190,13 @@ final class AidenBotCreateFlow {
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
         let scope = operations.scope
-        failure = nil
+        failures[scope] = nil
         pending = Pending(
             id: UUID(),
             name: input.name.trimmingCharacters(in: .whitespacesAndNewlines),
-            purpose: input.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+            purpose: input.purpose.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: operations.instanceId,
+            deviceId: operations.deviceId
         )
         Self.sending.insert(scope)
         defer {
@@ -152,7 +204,7 @@ final class AidenBotCreateFlow {
             Self.sending.remove(scope)
         }
         // The same ask as a failed try: its frozen request and key, whatever the catalog says now.
-        let replay = retained.flatMap { $0.scope == scope && Self.isSameAsk($0, input) ? $0 : nil }
+        let replay = retained[scope].flatMap { Self.isSameAsk($0, input) ? $0 : nil }
         // On disk before anything goes out, so a relaunch never loses it.
         await persist(
             AidenBotPendingCreate(input: input, frozen: replay?.frozen, createdAt: replay?.createdAt ?? now()),
@@ -160,11 +212,11 @@ final class AidenBotCreateFlow {
         ).value
         var sent = false
         do {
-            guard await operations.waitForConnection(connectionHold) else {
-                failure = makeFailure(Self.unreachable, input, operations)
+            // Another Mac became the active one meanwhile: nothing goes out, and the ask waits for its own Mac.
+            guard await operations.waitForConnection(connectionHold), operations.isCurrent() else {
+                failures[scope] = makeFailure(Self.unreachable, input, operations)
                 return
             }
-            guard operations.isCurrent() else { return }
             var attempt: Attempt
             if let replay {
                 attempt = replay
@@ -178,7 +230,7 @@ final class AidenBotCreateFlow {
                 )
                 await persist(record(attempt), operations).value
             }
-            retained = attempt
+            retained[scope] = attempt
             sent = true
             let created: AidenBotDetail
             if let made = attempt.frozen.created {
@@ -187,7 +239,7 @@ final class AidenBotCreateFlow {
                 let frozen = attempt.frozen
                 created = try await bounded { try await operations.create(frozen.request, frozen.key) }
                 attempt.frozen.created = created
-                retained = attempt
+                retained[scope] = attempt
                 persist(record(attempt), operations)
             }
             guard operations.isCurrent() else { return }
@@ -202,45 +254,56 @@ final class AidenBotCreateFlow {
             }
             let authoritative = try await bounded { try await operations.readBot(created.id) }
             guard operations.isCurrent() else { return }
-            retained = nil
+            retained[scope] = nil
             persist(nil, operations)
             await onCreated(authoritative)
         } catch is CancellationError {
             return
         } catch {
             if await operations.handleRevocation(error) {
-                retained = nil
+                retained[scope] = nil
                 persist(nil, operations)
                 return
             }
             if Self.isAccessLoss(error) {
                 // Access ended: nothing of this ask is kept on disk.
-                retained = nil
+                retained[scope] = nil
                 persist(nil, operations)
-            } else if sent, retained?.frozen.created == nil, !aidenBotEditorCreateFailureIsAmbiguous(error) {
+            } else if sent, retained[scope]?.frozen.created == nil, !aidenBotEditorCreateFailureIsAmbiguous(error) {
                 // Refused before anything was made: a retry is a new request. The answers stay.
-                retained = nil
+                retained[scope] = nil
                 persist(AidenBotPendingCreate(input: input, frozen: nil, createdAt: now()), operations)
             }
-            guard operations.isCurrent() else { return }
-            // A Bot already made, or a request that may have arrived, is tried again as it was.
-            failure = makeFailure(aidenBotFriendlyLoadError(error), input, operations)
+            // A Bot already made, or a request that may have arrived, is tried again as it was,
+            // and only on its own Mac: Bots home shows it once that Mac is the active one.
+            failures[scope] = makeFailure(aidenBotFriendlyLoadError(error), input, operations)
         }
     }
 
     /// Brings back the New Bot an earlier launch left on its way for this pairing: Bots home
     /// shows it as not made, and Try Again sends the same request on the same key. It looks
     /// once per pairing, and never over a create or failure of this launch.
-    func restore(instanceId: String, deviceId: String) async {
+    ///
+    /// `isCurrent` says the pairing is still the active one, as its request context does. A look
+    /// that lands after Bots home moved on (its task cancelled) or after another Mac became the
+    /// active one shows nothing; the ask stays on disk and comes back when its Mac is active again.
+    func restore(instanceId: String, deviceId: String, isCurrent: @MainActor () -> Bool = { true }) async {
         let scope = Self.scope(instanceId: instanceId, deviceId: deviceId)
-        guard let store, isFree(for: scope), restoredScopes.insert(scope).inserted else { return }
+        guard let store, isFree(for: scope), !restoredScopes.contains(scope) else { return }
+        let look = UUID()
+        restoring[scope] = look
         await writes?.value
-        guard let saved = await store.pendingCreate(instanceId: instanceId, deviceId: deviceId),
-              isFree(for: scope) else { return }
+        let saved = await store.pendingCreate(instanceId: instanceId, deviceId: deviceId)
+        // A newer look for this pairing is under way: it decides.
+        guard restoring[scope] == look else { return }
+        restoring[scope] = nil
+        guard !Task.isCancelled, isCurrent() else { return }
+        restoredScopes.insert(scope)
+        guard let saved, isFree(for: scope) else { return }
         if let frozen = saved.frozen {
-            retained = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt, restored: true)
+            retained[scope] = Attempt(scope: scope, input: saved.input, frozen: frozen, createdAt: saved.createdAt, restored: true)
         }
-        failure = Failure(
+        failures[scope] = Failure(
             message: Self.interrupted,
             input: saved.input,
             replays: saved.frozen != nil,
@@ -254,21 +317,23 @@ final class AidenBotCreateFlow {
     /// can't make a second Bot. Returns the write, for tests.
     @discardableResult
     func discard(_ failure: Failure) -> Task<Void, Never>? {
-        if self.failure == failure { self.failure = nil }
-        guard pending == nil, !Self.sending.contains(Self.scope(instanceId: failure.instanceId, deviceId: failure.deviceId)) else { return nil }
+        let scope = Self.scope(instanceId: failure.instanceId, deviceId: failure.deviceId)
+        if failures[scope] == failure { failures[scope] = nil }
+        guard pending?.scope != scope, !Self.sending.contains(scope) else { return nil }
         return persist(nil, instanceId: failure.instanceId, deviceId: failure.deviceId)
     }
 
     private func isFree(for scope: String) -> Bool {
-        pending == nil && failure == nil && retained?.scope != scope && !Self.sending.contains(scope)
+        pending?.scope != scope && failures[scope] == nil && retained[scope] == nil && !Self.sending.contains(scope)
     }
 
     /// A restored create that fails again keeps replaying its frozen request on Try Again.
     private func makeFailure(_ message: String, _ input: AidenBotCreateInput, _ operations: AidenBotCreateOperations) -> Failure {
-        Failure(
+        let attempt = retained[operations.scope].flatMap { Self.isSameAsk($0, input) ? $0 : nil }
+        return Failure(
             message: message,
             input: input,
-            replays: retained.map { $0.scope == operations.scope && $0.restored } ?? false,
+            replays: attempt?.restored ?? false,
             instanceId: operations.instanceId,
             deviceId: operations.deviceId
         )
