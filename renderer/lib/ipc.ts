@@ -910,6 +910,11 @@ export const browserApi = {
     ),
   onEvent: (callback: (event: import("../shared/browser").BrowserEvent) => void) =>
     onNotification<import("../shared/browser").BrowserEvent>("browser:event", callback),
+  linkPreference: () =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:link-preference"),
+  setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
+    invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
+  openExternal: (url: string) => invoke<void>("browser:open-external", url),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {

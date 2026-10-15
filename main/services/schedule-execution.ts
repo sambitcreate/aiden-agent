@@ -1,20 +1,18 @@
 import * as path from "node:path";
 import { Notification, ipcMain, logger } from "../platform.js";
 import { requestAppPath } from "./app-navigation.js";
-import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { providerRegistry } from "./provider-registry.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
-import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
+import { scheduledGenerationToolPolicy } from "./scheduled-generation-policy.js";
 import { webSearchService } from "./web-search-main.js";
 import {
   assertAssistantScheduleExecutionBoundary,
   isSilentAssistantScheduleResponse,
   scheduledTaskGenerationMode,
-  scheduledTaskAllowsWebSearch,
 } from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
@@ -287,29 +285,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
-    const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
-    let webSearchReady = false;
-    if (scheduledTaskAllowsWebSearch(task)) {
-      try {
-        webSearchReady = (await webSearchService.availability()).ready === true;
-      } catch {
-        // Availability is categorical and fail-closed; a storage/provider
-        // read failure must never turn an explicit task grant into access.
-        webSearchReady = false;
-      }
-    }
-    if (!webSearchReady) excluded.add("web_search");
-    if (task.permission === "read-only") {
-      for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
-    }
+    const toolPolicy = await scheduledGenerationToolPolicy(task, () =>
+      webSearchService.availability(),
+    );
     const streamId = `scheduled-${task.id}-${Date.now().toString(36)}`;
-    const legacyAllMcp =
-      task.mcpServerIds === undefined &&
-      task.executionProfile === undefined &&
-      task.permission === "full";
-    const mcpServerIds = task.mcpServerIds ?? (legacyAllMcp ? undefined : []);
-    const allowMcpTools =
-      task.permission === "full" && (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
     const background = createBackgroundOwner(streamId);
     const surface = scheduledGenerationSurface({
       chatId,
@@ -321,11 +300,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       mode: scheduledTaskGenerationMode(task),
       prompt,
       permission: task.permission,
-      excludeToolNames: excluded,
-      allowMcpTools,
-      mcpServerIds,
-      mcpServerBindings: task.mcpServerBindings,
-      providerFingerprint: task.providerFingerprint,
+      ...toolPolicy,
     });
     const turn = beginSurfaceGeneration(llmClient.beginChatTurn.bind(llmClient), surface);
     if (!turn) {

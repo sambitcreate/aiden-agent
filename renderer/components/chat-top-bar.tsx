@@ -22,6 +22,7 @@ import { cn } from "../lib/ui-utils";
 import { githubRepositoryUrl } from "../lib/workspace-chip";
 import type { EnvironmentPanelTab } from "../lib/environment-panel-state";
 import { useEnvironmentPanel } from "./environment-panel";
+import { useLinkOpener } from "../lib/link-opener";
 import {
   Button,
   Dialog,
@@ -180,6 +181,7 @@ export function WorkspaceChip({
   onOpenTerminal: () => void;
 }) {
   const qc = useQueryClient();
+  const { openLink } = useLinkOpener();
   const [menuOpen, setMenuOpen] = React.useState(false);
   const folderPath = workspace.folderPath;
   // Without access, Git reads report "not a repository"; never present that as fact.
@@ -278,9 +280,7 @@ export function WorkspaceChip({
               </DropdownMenuItem>
             ) : null}
             {githubUrl ? (
-              <DropdownMenuItem
-                onSelect={() => window.open(githubUrl, "_blank", "noopener,noreferrer")}
-              >
+              <DropdownMenuItem onSelect={() => openLink(githubUrl)}>
                 <ExternalLink aria-hidden="true" className="size-4" />
                 Open on GitHub
               </DropdownMenuItem>

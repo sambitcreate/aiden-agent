@@ -1,7 +1,9 @@
+import { shell } from "electron";
 import { ipcMain } from "../platform.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { browserService } from "../services/browser/service.js";
 import { configStore } from "../services/config-store.js";
+import { externalUrl } from "../services/browser/core.js";
 import type { BrowserCommand } from "../../renderer/shared/browser.js";
 
 export function registerBrowserHandlers(): void {
@@ -35,5 +37,17 @@ export function registerBrowserHandlers(): void {
     } finally {
       cleanup();
     }
+  });
+  ipcMain.handle("browser:link-preference", (event) => {
+    rendererDocumentOwner(event, () => new Error("Link settings require the active application document."));
+    return browserService.linkOpening();
+  });
+  ipcMain.handle("browser:set-link-preference", (event, value: unknown) => {
+    rendererDocumentOwner(event, () => new Error("Link settings require the active application document."));
+    return browserService.setLinkOpening(value);
+  });
+  ipcMain.handle("browser:open-external", async (event, value: unknown) => {
+    rendererDocumentOwner(event, () => new Error("Opening links requires the active application document."));
+    await shell.openExternal(externalUrl(value));
   });
 }

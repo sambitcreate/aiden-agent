@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
+import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
 import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { subagentsAllowedForGeneration } from "../services/subagents/eligibility.js";
@@ -161,6 +162,30 @@ test("chat:start rejects renderer history and every unknown authority field", ()
       /Invalid generation field/u,
     );
   }
+});
+
+test("chat creation and generation envelopes refuse renderer-supplied Bot identity", () => {
+  // Bot identity, instructions and delivery surface are resolved in main from
+  // the persisted chat; the ordinary chat envelopes can never carry them.
+  const create = { workspaceId: "workspace-1", providerId: "p", model: "m" };
+  for (const field of ["botId", "instructions", "systemPrompt", "interactionSurface"]) {
+    assert.throws(
+      () => parseParams({ ...base, [field]: "forged" }),
+      /Invalid generation field/u,
+      field,
+    );
+    assert.throws(
+      () => parseChatCreate({ ...create, [field]: "forged" }),
+      /Invalid chat creation fields/u,
+      field,
+    );
+    assert.throws(
+      () => parseAssistantChatCreate({ providerId: "p", model: "m", [field]: "forged" }),
+      /Invalid Assistant chat creation fields/u,
+      field,
+    );
+  }
+  assert.equal("botId" in parseChatCreate(create), false);
 });
 
 test("parseParams rejects invalid envelopes and requires provider/model identity", () => {

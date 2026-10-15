@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS = [
   "geminiLive",
   "voice",
   "tts",
+  "links",
   "shortcut",
   "appearance",
   "about",
@@ -171,6 +172,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "text to speech",
       "listen",
     ],
+  },
+  {
+    id: "links",
+    title: "Links",
+    group: "App",
+    keywords: ["browser", "open links", "external", "system browser", "aiden browser", "url"],
   },
   {
     id: "shortcut",

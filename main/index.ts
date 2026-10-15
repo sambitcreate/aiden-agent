@@ -16,6 +16,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
+import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices } from "./handlers/devices.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
@@ -1142,14 +1143,7 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
 
 function openExternalUrl(value: string): void {
   try {
-    const url = new URL(value);
-    if (
-      url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-    ) {
-      void shell.openExternal(url.toString());
-    }
+    void shell.openExternal(externalUrl(value));
   } catch {
     logger.warn("main", "Blocked invalid external URL", { value });
   }
