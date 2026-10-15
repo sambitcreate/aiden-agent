@@ -2,9 +2,15 @@ name: CI
 
 on:
   pull_request:
+  # Started by model-catalog-main-baseline.yml after a catalog merge, which
+  # (made with the job token) produces no push event of its own.
+  workflow_dispatch:
   push:
     branches:
       - main
+      # The model catalog bot pushes here with its deploy key; a pull request it
+      # opens with the job token would not start CI on its own.
+      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -23,6 +29,9 @@ jobs:
       apple: ${{ steps.filter.outputs.apple }}
       ios: ${{ steps.filter.outputs.ios }}
       android: ${{ steps.filter.outputs.android }}
+      cli: ${{ steps.filter.outputs.cli }}
+      linux: ${{ steps.filter.outputs.linux }}
+      catalog: ${{ steps.filter.outputs.catalog }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -57,9 +66,47 @@ jobs:
       - name: Verify workflow policy and complete test assignment
         run: npm run test:ci-policy
 
+  # One macOS production build feeds the E2E shards and desktop verification.
+  # The tarball keeps the native helpers' executable modes, which the artifact
+  # zip format drops. The E2E type check runs in the static job.
+  build:
+    name: Desktop production build
+    needs: changes
+    outputs:
+      artifact-name: ${{ steps.bundle.outputs.name }}
+    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build production bundles once
+        run: npm run build
+      - name: Check main-window initial JS budget
+        run: npm run check:bundle-budget
+      - name: Package production bundles and native helpers
+        id: bundle
+        run: |
+          tar -cf "$RUNNER_TEMP/desktop-build.tar" build
+          echo "name=desktop-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload production build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: ${{ runner.temp }}/desktop-build.tar
+          if-no-files-found: error
+          retention-days: 1
+
   e2e:
     name: Electron E2E (${{ matrix.shard }}/3)
-    needs: changes
+    needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -77,8 +124,14 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Prepare Electron E2E build
-        run: npm run type-check:e2e && npm run build
+      - name: Download production build
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          # A failed-job rerun reuses the successful producer's original artifact.
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/desktop-build
+      - name: Restore production build
+        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
       - name: Build sanitized E2E failure receipt
@@ -96,7 +149,7 @@ jobs:
   static:
     name: Desktop TypeScript and lint
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -116,7 +169,7 @@ jobs:
 
   verify:
     name: Desktop build and diagnostics
-    needs: changes
+    needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
@@ -134,19 +187,44 @@ jobs:
         run: npm run test:diagnostics
       - name: Verify branding, updater, and release policy
         run: npm run test:branding
-      - name: Verify model catalog contracts
-        run: npm run test:model-catalog
-      - name: Build production bundles once
-        run: npm run build
+      - name: Download production build
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ${{ runner.temp }}/desktop-build
+      - name: Restore production build
+        run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Verify foreground file tools in pinned Electron
         run: npm run test:foreground-file-tools:electron
       - name: Verify production-profile diagnostics support workflow
         run: npm run test:e2e:diagnostics:production:run
 
+  # Desktop selections imply this job. A main push that changes only the bundled
+  # models.dev catalog runs nothing else.
+  catalog:
+    name: Model catalog contracts
+    needs: changes
+    if: ${{ needs.changes.outputs.catalog == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify model catalog contracts
+        run: npm run test:model-catalog
+
   unit:
     name: Desktop tests (${{ matrix.lane }})
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    # Catalog refreshes run these too: the runtime takes model limits from it.
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
     runs-on: macos-26
     timeout-minutes: 25
     strategy:
@@ -194,12 +272,18 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: npm run test:native
 
+  # One macOS job compiles for device hardware, then builds the simulator tests
+  # once and runs them without rebuilding. Hosted simulator XCTest is
+  # regression evidence only; physical-device acceptance (ios/AGENTS.md) still
+  # runs separately on real hardware.
   ios:
-    name: iOS app and test compilation
+    name: iOS build and simulator tests
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' }}
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 50
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -215,10 +299,14 @@ jobs:
       - name: Verify iOS shipping and TestFlight policies
         if: ${{ needs.changes.outputs.desktop == 'false' }}
         run: npm run test:ios-release
-      # Physical-device XCTest acceptance stays separate from hosted compilation.
+      # Only the resolved Swift package checkouts are cached. Build products
+      # stay uncached because a fresh checkout invalidates them anyway.
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/AidenOnTheGoSourcePackages
+          key: ios-spm-xcode-26.6-${{ hashFiles('ios/AidenOnTheGo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       - name: Compile Aiden On The Go tests for generic iOS hardware
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
         run: >-
           xcodebuild build-for-testing -quiet
           -project ios/AidenOnTheGo.xcodeproj
@@ -226,21 +314,8 @@ jobs:
           -configuration Debug
           -destination 'generic/platform=iOS'
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
-
-  # Hosted simulator XCTest is regression evidence only; physical-device
-  # acceptance (ios/AGENTS.md) still runs separately on real hardware.
-  ios-simulator:
-    name: iOS simulator tests
-    needs: changes
-    if: ${{ needs.changes.outputs.ios == 'true' }}
-    runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Select the newest available iPhone simulator
         id: simulator
         shell: bash
@@ -263,14 +338,25 @@ jobs:
             exit 1
           fi
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
-      - name: Run Aiden On The Go XCTest on the simulator
+      - name: Build Aiden On The Go tests for the simulator
         run: >-
-          xcodebuild test -quiet
+          xcodebuild build-for-testing -quiet
           -project ios/AidenOnTheGo.xcodeproj
           -scheme AidenOnTheGo
           -configuration Debug
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
-          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoSimulatorDerivedData'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Run Aiden On The Go XCTest on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
 
@@ -330,6 +416,7 @@ jobs:
           :app:testDebugUnitTest
           :app:lintDebug
           :app:compileDebugAndroidTestKotlin
+          --build-cache
           --stacktrace
 
       - name: Run Android Compose UI tests
@@ -342,11 +429,11 @@ jobs:
           working-directory: ./android
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           disable-animations: true
-          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+          script: ./gradlew :app:connectedDebugAndroidTest --build-cache --stacktrace
 
       - name: Assemble installable debug APK
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --build-cache --stacktrace
 
       - name: Record APK checksum
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -366,7 +453,7 @@ jobs:
   cli-linux:
     name: Headless CLI on Linux
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -380,7 +467,7 @@ jobs:
   cli-playground:
     name: CLI appearance playground
     needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.cli == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -405,7 +492,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, verify, unit, e2e, apple, ios, ios-simulator, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux, cli-playground]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -443,8 +530,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci-timings.mjs
 
-  linux:
+  # Always expand the matrix so required contexts exist for scoped PRs too.
+  # Both contexts fail closed if detection or any selected Linux build fails.
+  linux-required:
     name: Linux ${{ matrix.arch }}
+    if: ${{ always() }}
+    needs: [changes, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require selected Linux builds
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          LINUX_SELECTED: ${{ needs.changes.outputs.linux }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT" in
+            # Unselected, the always-started linux matrix skips its steps and reports success.
+            success:true:success|success:false:success|success:false:skipped) exit 0 ;;
+            *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT"; exit 1 ;;
+          esac
+
+  # Linux packaging and its E2E gate run for Linux-relevant changes and on
+  # every main push. The matrix job always starts and skips its steps
+  # otherwise, because a skipped matrix job reports under the unexpanded
+  # name and never satisfies the required "Linux x64"/"Linux arm64" checks.
+  linux:
+    name: Linux build ${{ matrix.arch }}
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -459,32 +576,40 @@ jobs:
       contents: read
     steps:
       - name: Check out source
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
       - name: Use Node.js 22
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 22.22.3
           cache: npm
 
       - name: Install Linux test dependencies
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
 
       - name: Install locked dependencies
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm ci
 
       - name: Verify TypeScript and lint
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run type-check && npm run lint
 
       - name: Run Pi extension, Linux contract, and native helper tests
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run test:pi-extensions && npm run test:linux-contracts && npm run test:linux-native
 
       - name: Verify Bot authority with an isolated persistent keyring
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: npm run test:secret-service-integration
 
       - name: Build, install, and verify Linux distributions
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         run: |
           set -euo pipefail
           npm run dist:linux
@@ -502,7 +627,7 @@ jobs:
           grep -F "$expected_version" <<<"$appimage_output"
 
       - name: Prepare baseline-verified RPM for Fedora acceptance
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -516,7 +641,7 @@ jobs:
           )
 
       - name: Upload baseline-verified RPM for Fedora acceptance
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-rpm-x64-${{ github.run_id }}-${{ github.run_attempt }}
@@ -527,6 +652,7 @@ jobs:
           retention-days: 1
 
       - name: Smoke the installed GUI without a keyring session
+        if: ${{ needs.changes.outputs.linux == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -554,7 +680,7 @@ jobs:
           fi
 
       - name: Run deterministic Electron E2E gate
-        if: matrix.arch == 'x64'
+        if: ${{ needs.changes.outputs.linux == 'true' && matrix.arch == 'x64' }}
         run: |
           set -euo pipefail
           # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
@@ -588,7 +714,8 @@ jobs:
 
   linux-rpm:
     name: Linux x64 · Fedora RPM
-    needs: linux
+    needs: [changes, linux]
+    if: ${{ needs.changes.outputs.linux == 'true' }}
     runs-on: ubuntu-24.04
     container: fedora:44
     timeout-minutes: 60

@@ -25,7 +25,7 @@ export function createCliProviderCredentials(file: string): CredentialStore {
           try {
             // Validate every legacy entry before replacing the original file.
             atomicJson(staged, { version: 1, entries: {} });
-            for (const [provider, value] of Object.entries(current)) {
+            for (const [provider, value] of Object.entries(current).sort(([left], [right]) => Number(left === "azure-openai-responses") - Number(right === "azure-openai-responses"))) {
               if (!value || typeof value !== "object" || !["api_key", "oauth"].includes(String((value as Credential).type))) throw new Error("Invalid legacy provider credential.");
               await migration.modify(provider, async () => value as Credential);
             }
@@ -41,12 +41,14 @@ export function createCliProviderCredentials(file: string): CredentialStore {
   }
   async function ready() {
     const current = readJson<Record<string, unknown> | null>(file, null);
-    if (!current || current.version !== 1 || !current.entries) await locked(async () => {});
+    if (!current || current.version !== 1 || !current.entries || Object.hasOwn(current.entries, "azure-openai-responses")) {
+      await locked(() => store.list());
+    }
   }
   return {
-    read: async (id) => { await ready(); return store.read(id); },
-    list: async () => { await ready(); return store.list(); },
-    modify: (id, update) => locked(() => store.modify(id, update)),
-    delete: (id) => locked(() => store.delete(id)),
+    read: async (id, options) => { options?.signal?.throwIfAborted(); await ready(); return store.read(id, options); },
+    list: async (options) => { options?.signal?.throwIfAborted(); await ready(); return store.list(options); },
+    modify: (id, update, options) => locked(() => store.modify(id, update, options)),
+    delete: (id, options) => locked(() => store.delete(id, options)),
   };
 }

@@ -1,7 +1,19 @@
 // Adapted from t3code packages/client-runtime/src/device/duoControl.test.ts @ 1c127066 (MIT)
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDuoControl, type DuoCommand, type DuoControlState } from "./device-duo-control";
+import {
+  createDuoControl,
+  createDuoPinch,
+  DUO_PINCH_DEGREES,
+  duoFoldState,
+  duoHoldOrientation,
+  duoScreenSettled,
+  type DuoCommand,
+  type DuoControlState,
+} from "./device-duo-control";
+
+/** The newest entry. Equivalent to `.at(-1)`, which the ES2021 lib lacks. */
+const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 type Request = { requestId: number; command: DuoCommand };
 
@@ -81,4 +93,97 @@ test("drops queued commands on failure, timeout and disconnect; late replies can
   h.queue.enqueue({ control: "angle", value: Infinity });
   h.queue.enqueue({ control: "angle", value: 181 });
   assert.equal(h.sent.length, 3);
+});
+
+test("a pinch drives only a hit device, accumulates past native readback, clamps, and ends once", () => {
+  let confirmed = 90;
+  const changes: Array<number | null> = [];
+  const pinch = createDuoPinch({
+    angle: () => confirmed,
+    contains: (x, y) => x > 0.2 && y > 0.2,
+    change: (angle) => changes.push(angle),
+  });
+  assert.equal(pinch.begin(0.1, 0.5), false);
+  pinch.move(1);
+  assert.deepEqual(changes, []);
+  assert.equal(pinch.begin(0.5, 0.5), true);
+  pinch.move(0.25);
+  assert.equal(last(changes), 90 + 0.25 * DUO_PINCH_DEGREES);
+  // Native readback lags the fingers; the pinch keeps its own accumulator.
+  confirmed = 100;
+  pinch.move(0.25);
+  assert.equal(last(changes), 90 + 0.5 * DUO_PINCH_DEGREES);
+  pinch.move(2);
+  assert.equal(last(changes), 180);
+  pinch.move(-3);
+  assert.equal(last(changes), 0);
+  pinch.move(Number.NaN);
+  pinch.end();
+  assert.equal(last(changes), null);
+  const count = changes.length;
+  pinch.move(1);
+  pinch.end();
+  assert.equal(changes.length, count);
+  assert.equal(pinch.active, false);
+});
+
+// Screen configs as an iPhone Duo simulator reports them for each way of holding the device (recorded by T3).
+const held = [
+  ["vertical phone, closed", { screenId: 1, orientation: "portrait", hingeAngle: 0 }, "closed", true],
+  ["horizontal phone, closed", { screenId: 1, orientation: "landscape_right", hingeAngle: 0 }, "closed", false],
+  ["vertical phone opened as a book", { screenId: 3, orientation: "landscape_left", hingeAngle: 180 }, "open", true],
+  [
+    "horizontal phone opened as a laptop",
+    { screenId: 3, orientation: "portrait_upside_down", hingeAngle: 180 },
+    "open",
+    false,
+  ],
+  ["half-open book", { screenId: 3, orientation: "landscape_left", hingeAngle: 90 }, "half", true],
+] as const;
+for (const [name, screen, fold, phoneVertical] of held) {
+  test(`reads a ${name}`, () => {
+    assert.deepEqual(duoFoldState(screen), { fold, stand: false, phoneVertical, settled: true });
+  });
+}
+
+test("a display handoff is unsettled while the cover reports the inner display's orientation", () => {
+  const handoff = [
+    { screenId: 1, orientation: "portrait", hingeAngle: 90 },
+    { screenId: 1, orientation: "landscape_left", hingeAngle: 90 },
+    { screenId: 3, orientation: "landscape_left", hingeAngle: 90 },
+  ] as const;
+  assert.deepEqual(
+    handoff.map((screen) => duoFoldState(screen).settled),
+    [false, false, true],
+  );
+  assert.equal(duoScreenSettled({ screenId: 3, hingeAngle: 0 }), false);
+});
+
+test("stands are marked so the fold group does not claim them, and missing fields fall back like the 3D view", () => {
+  assert.deepEqual(duoFoldState({ screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" }), {
+    fold: "half",
+    stand: true,
+    phoneVertical: false,
+    settled: true,
+  });
+  const closed = duoFoldState({ screenId: 1, orientation: "portrait" });
+  assert.equal(closed.fold, "closed");
+  assert.equal(closed.phoneVertical, true);
+  // Without a display ID the 3D view draws the open inner panel, so the controls do too.
+  const open = duoFoldState({ orientation: "landscape_left" });
+  assert.equal(open.fold, "open");
+  assert.equal(open.phoneVertical, true);
+});
+
+test("a stand rotates back to how the phone was held, in the frame of the display receiving it", () => {
+  assert.equal(duoHoldOrientation(true, 3), "landscape_left");
+  assert.equal(duoHoldOrientation(true, 1), "portrait");
+  assert.equal(duoHoldOrientation(false, 1), "landscape_left");
+  assert.equal(duoHoldOrientation(false, 3), "portrait_upside_down");
+  // The rotation it asks for reads back as the hold it meant, on either display.
+  for (const screenId of [1, 3]) {
+    for (const vertical of [true, false]) {
+      assert.equal(duoFoldState({ screenId, orientation: duoHoldOrientation(vertical, screenId) }).phoneVertical, vertical);
+    }
+  }
 });

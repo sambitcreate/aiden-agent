@@ -35,9 +35,12 @@ export interface KillableInferenceProcess {
   postMessage(message: unknown): void;
   terminate(): boolean;
   /** Hard-kill only the launch identity captured by this owned handle. */
-  killHard(): void;
-  /** Prove the captured launch identity is gone; throw when proof is indeterminate. */
-  hasExited(): boolean;
+  killHard(): void | Promise<void>;
+  /**
+   * Prove the captured launch identity is gone; throw when proof is
+   * indeterminate. May inspect the OS process table asynchronously.
+   */
+  hasExited(): boolean | Promise<boolean>;
   onMessage(listener: (message: unknown) => void): () => void;
   onExit(listener: (code: number | null) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
@@ -155,14 +158,14 @@ export class SubagentInferenceProcessOwner {
       await Promise.race([exit, delay(this.timing.killGraceMs)]);
       if (!exited) {
         try {
-          process.killHard();
+          await process.killHard();
         } catch {
           // An already-exited process is confirmed by the owned handle below.
         }
       }
       await Promise.race([exit, delay(this.timing.killGraceMs)]);
       if (!exited) {
-        if (!process.hasExited()) {
+        if (!(await process.hasExited())) {
           throw new Error("The isolated subagent inference process could not be stopped.");
         }
         finishExit();
@@ -431,7 +434,7 @@ export class SubagentInferenceProcessOwner {
           }
         }),
       );
-      if (process.hasExited()) finishExit();
+      if (await process.hasExited()) finishExit();
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) {
         await stopOwnedProcess();

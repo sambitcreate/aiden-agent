@@ -13,6 +13,7 @@ import {
   normalizeGitHubRepositoryIdentity,
   parseGitHubPullRequestUrl,
   parseExpectedHeadSha,
+  parseSidebarChatIds,
   pullRequestRepositoryFromPushEndpoint,
   parsePullRequestRepository,
   pullRequestRefKey,
@@ -200,6 +201,15 @@ test("isSafeChatPullRequestChatId rejects path-shaped ids", () => {
   assert.equal(isSafeChatPullRequestChatId("../escape"), false);
   assert.equal(isSafeChatPullRequestChatId("a/b"), false);
   assert.equal(isSafeChatPullRequestChatId(""), false);
+});
+
+test("parseSidebarChatIds keeps safe unique ids and refuses oversized or non-array input", () => {
+  assert.deepEqual(parseSidebarChatIds(["chat-1", "../escape", 7, "chat-1", "chat-2"]), [
+    "chat-1",
+    "chat-2",
+  ]);
+  assert.throws(() => parseSidebarChatIds("chat-1"));
+  assert.throws(() => parseSidebarChatIds(Array.from({ length: 501 }, (_, i) => `chat-${i}`)));
 });
 
 test("link cap constant is sane", () => {

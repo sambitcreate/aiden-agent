@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { assembleAgentTools, type AgentToolSources } from "../agent-tool-assembly.js";
 import { buildSubagentCapabilityTools } from "./capability-tools.js";
 import {
   inheritedSubagentReadToolCeiling,
@@ -133,35 +133,56 @@ test("the child builder constructs only the four permitted tool objects", () => 
 });
 
 test("production assembly resolves capability tools before ambient services or factories", async () => {
-  const source = await readFile(
-    new URL("../tools.ts", import.meta.url),
-    "utf-8",
-  );
-  const builder = source.indexOf("export async function buildAgentTools");
-  const capabilityBranch = source.indexOf(
-    'if (ctx.mode === "subagent" || hasCapabilityProfile)',
-    builder,
-  );
-  const webSearchRead = source.indexOf("webSearchService.toolForGeneration()", builder);
-  const normalCodingTools = source.indexOf(
-    "buildCodingTools(ctx.workspaceRoot)",
-    builder,
-  );
+  const ambientReads: string[] = [];
+  const sources: AgentToolSources = {
+    configuredMcpTools: async () => {
+      ambientReads.push("mcp");
+      return [];
+    },
+    webSearchToolForGeneration: async () => {
+      ambientReads.push("web_search");
+      return undefined;
+    },
+    skillsEnabled: async () => {
+      ambientReads.push("skills");
+      return true;
+    },
+    skillSnapshot: async () => {
+      ambientReads.push("skill_snapshot");
+      return undefined;
+    },
+  };
+  const factory = () => assert.fail("a child never constructs the subagent tool");
 
-  assert.ok(builder >= 0);
-  assert.ok(capabilityBranch > builder);
-  assert.ok(webSearchRead > capabilityBranch);
-  assert.ok(normalCodingTools > capabilityBranch);
-  assert.match(
-    source.slice(capabilityBranch, webSearchRead),
-    /return buildSubagentCapabilityTools\(/,
+  const child = await assembleAgentTools(
+    {
+      mode: "subagent",
+      workspaceRoot: os.tmpdir(),
+      workspaceId: "workspace-1",
+      permission: "full",
+      allowMcpTools: true,
+      allowSubagents: true,
+      createSubagentTool: factory,
+      capabilityProfile: { kind: "subagent", role: "planner" },
+    },
+    sources,
   );
-  assert.match(
-    source.slice(builder, capabilityBranch),
-    /hasOwnProperty\.call\(\s*ctx,\s*"capabilityProfile",?\s*\)/,
+  assert.deepEqual(
+    child.map((tool) => tool.name),
+    ["read_file", "list_dir", "glob", "grep"],
   );
-  assert.match(
-    source.slice(capabilityBranch, webSearchRead),
-    /Subagent capabilities require the explicit subagent tool mode/,
-  );
+  assert.deepEqual(ambientReads, [], "no ambient service is read for a child");
+
+  // A capability profile, even an explicitly undefined one, is honored only
+  // in the explicit subagent mode.
+  for (const capabilityProfile of [{ kind: "subagent", role: "planner" }, undefined]) {
+    await assert.rejects(
+      assembleAgentTools(
+        { workspaceRoot: os.tmpdir(), permission: "full", createSubagentTool: factory, capabilityProfile },
+        sources,
+      ),
+      /Subagent capabilities require the explicit subagent tool mode/,
+    );
+  }
+  assert.deepEqual(ambientReads, []);
 });

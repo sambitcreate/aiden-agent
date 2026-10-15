@@ -1,4 +1,7 @@
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type { McpServer } from "../types.js";
+import { copyBoundedJson, utf8Size } from "../bounded-json.js";
+import { createMcpToolCallGuard, listMcpToolInventory } from "../mcp-tool-inventory.js";
 import type { SubagentMcpClientPort, SubagentMcpRemoteTool } from "./subagent-mcp-read.js";
 import type {
   SubagentMcpCredentialBoundary,
@@ -18,9 +21,9 @@ export interface IsolatedSubagentMcpSdkClient {
   connect(transport: unknown, options: RequestOptions): Promise<void>;
   close(): Promise<void>;
   listTools(
-    params: undefined,
+    params: { cursor: string } | undefined,
     options: RequestOptions,
-  ): Promise<{ tools: readonly SubagentMcpRemoteTool[] }>;
+  ): Promise<{ tools: readonly SubagentMcpRemoteTool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments: Record<string, unknown> },
     resultSchema: undefined,
@@ -64,19 +67,50 @@ function assertRawRequestCurrent(lease: SubagentMcpConfigurationLease, signal: A
   if (signal.aborted) throw abortReason(signal);
 }
 
+/** Child results never carry more structured data than this, before redaction. */
+export const MAX_CHILD_STRUCTURED_BYTES = 256 * 1024;
+
+/**
+ * Bounded copy of structured content with every string value and key passed
+ * through the credential redactor, or undefined when it cannot be copied
+ * within bounds (unredactable data never reaches a child).
+ */
+export function redactStructuredContent(value: unknown, redact: (text: string) => string): JsonValue | undefined {
+  const copy = copyBoundedJson(value, { maxNodes: 4096, maxDepth: 32, maxSize: MAX_CHILD_STRUCTURED_BYTES, measure: utf8Size, ordinaryObjects: true });
+  if (copy === undefined) return undefined;
+  const walk = (entry: JsonValue): JsonValue => {
+    if (typeof entry === "string") return redact(entry);
+    if (Array.isArray(entry)) return entry.map(walk);
+    if (entry && typeof entry === "object") {
+      const output: Record<string, JsonValue> = {};
+      for (const [key, item] of Object.entries(entry)) {
+        Object.defineProperty(output, redact(key), { value: walk(item), enumerable: true, writable: true, configurable: true });
+      }
+      return output;
+    }
+    return entry;
+  };
+  return walk(copy);
+}
+
 function redactTextResult(result: unknown, boundary: SubagentMcpCredentialBoundary): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) return result;
   const record = result as Record<string, unknown>;
-  if (!Array.isArray(record.content)) return result;
+  const structured = record.structuredContent === undefined
+    ? undefined : redactStructuredContent(record.structuredContent, (text) => boundary.redactText(text));
+  const { structuredContent: _raw, ...rest } = record;
   return {
-    ...record,
-    content: record.content.map((part) => {
-      if (!part || typeof part !== "object" || Array.isArray(part)) return part;
-      const content = part as Record<string, unknown>;
-      return content.type === "text" && typeof content.text === "string"
-        ? { ...content, text: boundary.redactText(content.text) }
-        : part;
-    }),
+    ...rest,
+    ...(structured === undefined ? {} : { structuredContent: structured }),
+    ...(Array.isArray(record.content) ? {
+      content: record.content.map((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+        const content = part as Record<string, unknown>;
+        return content.type === "text" && typeof content.text === "string"
+          ? { ...content, text: boundary.redactText(content.text) }
+          : part;
+      }),
+    } : {}),
   };
 }
 
@@ -89,6 +123,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
   dependencies: IsolatedSubagentMcpClientDependencies;
 }): Promise<T> {
   if (input.signal.aborted) throw abortReason(input.signal);
+  if (input.server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
   if (input.server.transport === "stdio") {
     throw new Error("Subagent MCP requires an isolated remote transport.");
   }
@@ -146,18 +181,25 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           registerCredentialRedactor(current.redactText);
           return true;
         };
+        let callGuard: ReturnType<typeof createMcpToolCallGuard> | undefined;
         return await input.operation({
           credentialRevision: credentialBoundary.revision,
           credentialRevisionIsCurrent,
           redactCredentialText,
           listTools: async (requestSignal) => {
             if (requestSignal.aborted) throw abortReason(requestSignal);
-            // Exact synchronous fence immediately before raw SDK request.
-            assertRawRequestCurrent(input.configurationLease, requestSignal);
-            const { tools } = await client.listTools(undefined, requestOptions(requestSignal));
-            if (!(await credentialRevisionIsCurrent(requestSignal))) {
-              throw new Error("MCP credential revision changed.");
-            }
+            const tools = await listMcpToolInventory({
+              signal: AbortSignal.any([requestSignal, input.signal, input.configurationLease.signal]),
+              assertCurrent: () => assertRawRequestCurrent(input.configurationLease, requestSignal),
+              listPage: async (cursor, pageSignal) => {
+                // Exact synchronous fence immediately before each raw SDK request.
+                assertRawRequestCurrent(input.configurationLease, pageSignal);
+                const result = await client.listTools(cursor === undefined ? undefined : { cursor }, requestOptions(pageSignal));
+                if (!(await credentialRevisionIsCurrent(pageSignal))) throw new Error("MCP credential revision changed.");
+                return result;
+              },
+            });
+            callGuard = createMcpToolCallGuard(tools);
             return tools.map(
               ({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
                 name,
@@ -175,6 +217,8 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
             }
             return credentialRevisionIsCurrent(requestSignal).then(async (current) => {
               if (!current) throw new Error("MCP credential revision changed.");
+              const guard = callGuard;
+              guard?.assertCallable(toolName);
               beforeEffect?.();
               // No await may be inserted between this main-owned config
               // fence and the SDK instruction that emits raw request bytes.
@@ -192,6 +236,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
                 throw new Error("MCP credential revision changed.");
               }
               registerCredentialRedactor(currentBoundary.redactText);
+              guard?.validateResult(toolName, result);
               return redactTextResult(result, {
                 revision: currentBoundary.revision,
                 redactText: redactCredentialText,
@@ -204,6 +249,8 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
             // No await may be inserted between these fences and the one SDK
             // invocation that can emit request bytes.
             assertRawRequestCurrent(input.configurationLease, requestSignal);
+            const guard = callGuard;
+            guard?.assertCallable(toolName);
             beforeRawBytes();
             const raw = client.callTool(
               { name: toolName, arguments: args },
@@ -219,6 +266,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
                 throw new Error("MCP credential revision changed.");
               }
               registerCredentialRedactor(currentBoundary.redactText);
+              guard?.validateResult(toolName, result);
               return redactTextResult(result, {
                 revision: currentBoundary.revision,
                 redactText: redactCredentialText,

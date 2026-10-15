@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isPathInside } from "../shared/path-containment.js";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 
@@ -118,20 +119,15 @@ function withCrashMaintenance<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-function withinRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
 async function safeKnownFile(root: string, candidate: string): Promise<boolean> {
-  if (!withinRoot(root, candidate)) return false;
+  if (!isPathInside(root, candidate, { allowRoot: false })) return false;
   try {
     const [rootReal, candidateReal, metadata] = await Promise.all([
       fs.realpath(root),
       fs.realpath(candidate),
       fs.lstat(candidate),
     ]);
-    return metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1 && withinRoot(rootReal, candidateReal);
+    return metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1 && isPathInside(rootReal, candidateReal, { allowRoot: false });
   } catch {
     return false;
   }
@@ -531,7 +527,7 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
     "diagnostic-health.json",
   ]) {
     const candidate = path.join(roots.logsPath, name);
-    if (withinRoot(roots.logsPath, candidate) && !ownedJournalFiles.has(path.resolve(candidate))) {
+    if (isPathInside(roots.logsPath, candidate, { allowRoot: false }) && !ownedJournalFiles.has(path.resolve(candidate))) {
       await fs.rm(candidate, { force: true });
     }
   }

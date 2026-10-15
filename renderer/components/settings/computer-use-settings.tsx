@@ -2,13 +2,15 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Switch, Text, toast } from "../ui";
-import { computerUseApi, formFillApi } from "../../lib/ipc";
-import { reduceComputerUseRefreshState } from "../../lib/computer-use-control";
+import { computerUseApi, formFillApi, settingsApi } from "../../lib/ipc";
+import { reduceComputerUseRefreshState } from "../../lib/computer-use-readiness";
+import { useRequestComputerUsePermissions } from "../computer-use-access-approval";
 import {
-  restoreComputerUseNotice,
-  useComputerUseNoticeDismissed,
-} from "../../lib/computer-use-notice";
-import { queryKeys, useComputerUseStatus, useFormFillStatus, useSettings } from "../../lib/queries";
+  queryKeys,
+  useComputerUseStatus,
+  useFormFillStatus,
+  useSettings,
+} from "../../lib/queries";
 import type {
   AppSettings,
   ComputerUseStatus,
@@ -37,6 +39,73 @@ function statusPresentation(status: ComputerUseStatus | undefined, failed: boole
     return { label: "Off", color: undefined, icon: ShieldAlert, iconClass: "text-tertiary" };
   }
   return { label: "Unavailable", color: "red", icon: TriangleAlert, iconClass: "text-red" };
+}
+
+function AlwaysAllowField() {
+  const queryClient = useQueryClient();
+  const settingsQuery = useSettings();
+  const [pending, setPending] = React.useState<boolean | null>(null);
+  const checked = pending ?? settingsQuery.data?.computerUseAlwaysAllow === true;
+  const change = async (next: boolean) => {
+    setPending(next);
+    try {
+      await settingsApi.set({ computerUseAlwaysAllow: next });
+      queryClient.setQueryData<AppSettings | undefined>(queryKeys.settings, (current) =>
+        current ? { ...current, computerUseAlwaysAllow: next } : current,
+      );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t change Always allow.");
+    } finally {
+      setPending(null);
+    }
+  };
+  return (
+    <Field
+      label="Always allow in every chat"
+      description="Skip the once-per-chat permission prompt. Aiden can then use your computer in any chat without asking."
+    >
+      <Switch
+        aria-label="Always allow Computer Use in every chat"
+        checked={checked}
+        disabled={pending !== null || settingsQuery.isLoading}
+        onCheckedChange={(next) => void change(next)}
+      />
+    </Field>
+  );
+}
+
+function ResetChatGrantsField() {
+  const queryClient = useQueryClient();
+  const [resetting, setResetting] = React.useState(false);
+  const reset = async () => {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      const { cleared } = await computerUseApi.resetChatGrants();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+        queryClient.invalidateQueries({ queryKey: ["chat"] }),
+        queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
+      ]);
+      toast.success(`Reset Computer Use permissions for ${cleared} ${cleared === 1 ? "chat" : "chats"}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t reset chat permissions.");
+    } finally {
+      setResetting(false);
+    }
+  };
+  return (
+    <Field
+      label="Reset chat permissions"
+      description="Every chat asks again before Aiden uses your computer, and Always allow turns off."
+    >
+      <Button size="small" variant="transparent" onClick={() => void reset()} disabled={resetting}>
+        {resetting ? "Resetting…" : "Reset"}
+      </Button>
+    </Field>
+  );
 }
 
 function FormFillSpecialistField() {
@@ -77,8 +146,8 @@ export function ComputerUseSettings() {
   const [enableError, setEnableError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
-  const [requesting, setRequesting] = React.useState(false);
-  const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
+  const permissionRequest = useRequestComputerUsePermissions();
+  const requesting = permissionRequest.pending;
   const [refreshState, updateRefreshState] = React.useReducer(reduceComputerUseRefreshState, {
     refreshing: false,
     error: null,
@@ -152,16 +221,13 @@ export function ComputerUseSettings() {
   };
 
   const requestPermissions = async () => {
-    if (requesting) return;
-    setRequesting(true);
     try {
-      const next = await computerUseApi.requestPermissions();
+      const next = await permissionRequest.request();
+      if (!next) return;
       commitStatus(next);
       if (!next.ready) toast.info(next.detail);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't request access.");
-    } finally {
-      setRequesting(false);
     }
   };
 
@@ -176,7 +242,7 @@ export function ComputerUseSettings() {
       >
         <Field
           label="Enable Computer Use"
-          description="Let Aiden see your screen and help with apps when you turn it on in a chat."
+          description="Let Aiden see your screen and help with apps. Aiden asks once in each chat before it starts."
         >
           <div className="flex justify-end">
             <Switch
@@ -247,6 +313,8 @@ export function ComputerUseSettings() {
             ) : null}
           </Callout>
         </Field>
+        {enabled ? <AlwaysAllowField /> : null}
+        {enabled ? <ResetChatGrantsField /> : null}
         <FormFillSpecialistField />
       </FieldSet>
 
@@ -254,15 +322,15 @@ export function ComputerUseSettings() {
         open={enableReview}
         onOpenChange={setEnableReview}
         title="Let Aiden help with apps?"
-        description="You choose which chats can use this."
+        description="Aiden asks in each chat before it uses your computer."
         confirmLabel="Enable Computer Use"
         busy={saving}
         onConfirm={() => toggle(true)}
       >
         <Text as="p" color="secondary">
-          When you turn this on in a chat, its selected AI provider may receive screenshots and text
-          visible in your apps. Each click or typing action asks for your permission. You can stop
-          or turn it off at any time.
+          In a chat where you allow it, the selected AI provider may receive screenshots and text
+          visible in your apps, and Aiden can click and type for you. You can stop it or turn it off
+          at any time.
         </Text>
         <Text as="p" color="secondary">
           Next, allow Screen Recording and Accessibility in macOS. Enabling this feature alone does
@@ -277,26 +345,15 @@ export function ComputerUseSettings() {
       <FieldSet title="How it behaves">
         <div className="settings-computer-use-grid grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
           <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
-            Only chats you turn on can use Computer Use. For those responses, your selected model
-            may receive screenshots, window details, and accessibility text. Aiden doesn’t save that
-            content; your provider handles it under its data policy. Read-only inspection runs
-            without prompts, while every control action requires Allow once.
+            Aiden asks once in each chat before it uses your computer, unless you turn on Always
+            allow. In an allowed chat, your selected model may receive screenshots, window details,
+            and accessibility text, and Aiden can click and type without asking again. Aiden doesn’t
+            save that content; your provider handles it under its data policy.
           </Text>
           <div className="settings-computer-use-actions flex min-w-0 flex-col items-end gap-2 max-[640px]:items-start">
             <div className="settings-action-align flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
-              <Badge className="whitespace-nowrap">Per-chat opt-in</Badge>
-              <Badge className="whitespace-nowrap">Actions ask first</Badge>
+              <Badge className="whitespace-nowrap">Asks once per chat</Badge>
             </div>
-            {computerUseNoticeDismissed ? (
-              <Button
-                size="small"
-                variant="transparent"
-                className="h-7 px-2 text-secondary"
-                onClick={restoreComputerUseNotice}
-              >
-                Show privacy notice again
-              </Button>
-            ) : null}
           </div>
         </div>
       </FieldSet>

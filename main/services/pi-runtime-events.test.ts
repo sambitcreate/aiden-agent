@@ -174,3 +174,20 @@ test("closing the canonical channel aborts passive observer work", async () => {
   await channel.settleObservers();
   assert.equal(observerAborted, true);
 });
+
+test("observers each receive a private event copy that cannot leak into others", async () => {
+  const channel = new PiRuntimeEventChannel(identity);
+  const seen: string[] = [];
+  channel.observe((event) => {
+    if (event.payload.type === "run_start") (event.payload as { input: string }).input = "mutated";
+    (event as { sequence: number }).sequence = 99;
+  });
+  channel.observe((event) => {
+    if (event.payload.type === "run_start") seen.push(`${event.sequence}:${event.payload.input}`);
+  });
+  const emitted = channel.emit({ type: "run_start", input: "append-and-run" });
+  await channel.settleObservers();
+  assert.deepEqual(seen, ["1:append-and-run"]);
+  assert.equal(emitted.sequence, 1);
+  assert.equal(emitted.payload.type === "run_start" && emitted.payload.input, "append-and-run");
+});

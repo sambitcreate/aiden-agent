@@ -1,27 +1,31 @@
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { JsonlSessionRepo, TODO_CONTEXT } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import {
+  createAssistantMessageEventStream,
   createModels,
   fauxAssistantMessage,
   fauxProvider,
   type Api,
   type AssistantMessage,
+  type AssistantMessageEventStream,
   type Model,
 } from "@earendil-works/pi-ai";
 import {
+  createPiCompactionModels,
   CompactionSummaryBudgetError,
   compactionFailureDiagnosticFields,
   PiCompactionCoordinator,
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
 import { VccError } from "./pi-vcc/errors.js";
-import { CompactionError } from "@earendil-works/pi-agent-core";
+import { CompactionError, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./pi-legacy-harness.js";
+import { DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_RESERVE_TOKENS } from "../../renderer/shared/compaction.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   AIDEN_PI_TRANSACTION,
@@ -32,6 +36,7 @@ import {
   syncChatMessagesToPiSession,
   projectVisibleHistoryWithoutSkills,
 } from "./pi-compaction-session-store.js";
+import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { ChatMessage } from "./types.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
@@ -320,15 +325,15 @@ test("overflow retries once per recovery streak and resets after success", async
   );
 });
 
-test("length-stop overflow remains durable but is removed from retry context", async () => {
+test("length-stop with a full input window remains durable but is removed from retry context", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([fauxAssistantMessage(structuredSummary("length checkpoint"))]);
   const session = await memorySession();
   await appendCompressibleHistory(session, model);
   await session.appendMessage(user("current overflow request", Date.now() + 1));
   const overflow = assistant(model, {
-    input: 200,
-    output: 20,
+    input: 1_000,
+    output: 0,
     stopReason: "length",
   });
   await session.appendMessage(overflow);
@@ -352,6 +357,63 @@ test("length-stop overflow remains durable but is removed from retry context", a
     ),
     true,
   );
+});
+
+test("raising the output limit does not compact a prior output-limited turn on Continue", async () => {
+  const { faux, models, model: fixtureModel } = compactionFixture();
+  const originalModel = { ...fixtureModel, contextWindow: 250_000, maxTokens: 8_192 };
+  const session = await memorySession();
+  await appendCompressibleHistory(session, originalModel);
+  const failed = assistant(originalModel, {
+    input: 30_411,
+    output: 8_192,
+    stopReason: "length",
+    text: "Preserved partial response.",
+  });
+  await session.appendMessage(failed);
+  const entriesBefore = await session.getEntries();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("unnecessary summary"))]);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model: { ...originalModel, maxTokens: 131_072 },
+    thinkingLevel: "off",
+  });
+
+  const repaired = await coordinator.prepareForPrompt();
+  assert.equal(repaired.compacted, false);
+  assert.equal(repaired.shouldRetry, false);
+  assert.equal(repaired.errorMessage, undefined);
+  assert.ok(repaired.messages?.some(
+    (message) => message.role === "assistant" && message.stopReason === "length",
+  ));
+  await session.appendMessage(user("Continue"));
+  assert.equal((await coordinator.checkContextPressure()).compacted, false);
+  assert.equal(faux.state.callCount, 0, "no summary request is needed at low context usage");
+  assert.deepEqual((await session.getEntries()).slice(0, entriesBefore.length), entriesBefore);
+});
+
+test("an output-limited turn near the context threshold compacts without an overflow retry", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("threshold checkpoint"))]);
+  const session = await memorySession();
+  await appendCompressibleHistory(session, model);
+  const limited = assistant(model, { input: 900, output: 20, stopReason: "length" });
+  await session.appendMessage(limited);
+  const events: PiCompactionEvent[] = [];
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    onEvent: (event) => events.push(event),
+  }).check(limited);
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.shouldRetry, false);
+  assert.equal(events.find((event) => event.type === "start")?.reason, "threshold");
+  assert.equal(faux.state.callCount, 1);
 });
 
 test("transient provider failures remain durable but are retried without the failed tail", async () => {
@@ -1345,10 +1407,44 @@ test("Stop's terminal never waits on an unresolved queued-guidance save", async 
   assert.match(source, /owner\.send\("chat:guidance-returned"/u);
 });
 
-test("compaction transport awaits hidden-summary usage accounting", async () => {
-  const source = await readFile(new URL("./pi-compaction-core.ts", import.meta.url), "utf8");
-  assert.match(source, /await onAssistantMessage\(message\)/u);
-  assert.doesNotMatch(source, /void stream\s*\.result\(\)/u);
+test("compaction transport awaits exactly one usage record for success, errors and aborts", async () => {
+for (const registered of [false, true]) for (const reason of ["stop", "error", "aborted"] as const) {
+  let releaseAccounting!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseAccounting = resolve; });
+  let started = 0;
+  let finished = 0;
+  let dispatched = 0;
+  const model = { id: "offline", provider: "offline", api: "openai-completions" } as ResolvedModelRuntime["model"];
+  const message: AssistantMessage = { ...fauxAssistantMessage("synthetic summary"), stopReason: reason,
+    usage: { input: 23, output: 7, cacheRead: 11, cacheWrite: 3, totalTokens: 44, cost: { input: 0.023, output: 0.007, cacheRead: 0.0011, cacheWrite: 0.003, total: 0.0341 } } };
+  const stream = (): AssistantMessageEventStream => {
+    dispatched += 1;
+    const result = createAssistantMessageEventStream();
+    if (reason === "stop") result.push({ type: "done", reason, message });
+    else result.push({ type: "error", reason, error: message });
+    result.end(message); return result;
+  };
+  const runtime = { model, models: { getModel: () => registered ? model : undefined, streamSimple: stream }, streams: { streamSimple: stream }, apiKey: "offline-noncredential" } as unknown as ResolvedModelRuntime;
+  const accounted = createPiCompactionModels(runtime, async (response) => {
+    started += 1;
+    assert.equal(response.usage.totalTokens, 44);
+    await gate;
+    finished += 1;
+  });
+  const result = accounted.streamSimple(model, { messages: [] });
+  let published = false;
+  const first = result.result().then((value) => { published = true; return value; });
+  const second = result.result();
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(started, 1);
+  assert.equal(published, false, "terminal result cannot finish before accounting completes");
+  releaseAccounting();
+  const messages = await Promise.all([first, second]);
+  assert.equal(messages[0], messages[1]);
+  assert.equal(messages[0].stopReason, reason);
+  assert.equal(dispatched, 1);
+  assert.equal(finished, 1);
+}
 });
 
 test("journal synchronization stores the exact enriched skill turn once", async () => {
@@ -1961,6 +2057,49 @@ test("startup reconciliation removes indexed orphan journals", async (t) => {
 
   await store.reconcileChats(new Set());
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+test("a torn journal index is set aside intact and indexed journals are still deleted", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-torn-index-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const doomed = await store.openChat("chat-torn-index-a");
+  const doomedPath = (await doomed.getMetadata()).path;
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  const torn = (await readFile(indexPath, "utf8")).slice(0, 12);
+  await writeFile(indexPath, torn);
+
+  // A later mutation must not discard the unreadable bytes it replaces.
+  await store.openChat("chat-torn-index-b");
+  const preserved = (await readdir(root)).filter((name) => name.startsWith(".aiden-journal-index.json.") && name.endsWith(".corrupt"));
+  assert.equal(preserved.length, 1);
+  assert.equal(await readFile(path.join(root, preserved[0]!), "utf8"), torn);
+  assert.equal(typeof JSON.parse(await readFile(indexPath, "utf8")).chats, "object");
+
+  await store.deleteChat("chat-torn-index-a");
+  await assert.rejects(stat(doomedPath), { code: "ENOENT" });
+});
+
+test("an unreadable journal index fails closed instead of being replaced", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-unreadable-index-"));
+  t.after(async () => {
+    await chmod(path.join(temporary, "sessions", "aiden-journal-index.json"), 0o600).catch(() => undefined);
+    await rm(temporary, { recursive: true, force: true });
+  });
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  await store.openChat("chat-unreadable-a");
+  const indexPath = path.join(root, "aiden-journal-index.json");
+  const before = await readFile(indexPath, "utf8");
+  await chmod(indexPath, 0o000);
+
+  await assert.rejects(store.reconcileChats(new Set()), { code: "EACCES" });
+  await assert.rejects(store.openChat("chat-unreadable-b"), { code: "EACCES" });
+  await chmod(indexPath, 0o600);
+  assert.equal(await readFile(indexPath, "utf8"), before);
 });
 
 
@@ -2612,4 +2751,102 @@ test("compaction failure diagnostics keep the later cause after budget recovery 
   assert.equal(compactionFailureDiagnosticFields({
     reason: "manual", sessionFailed: false, error: new Error("unclassified"),
   }).compactionFailure, "other");
+});
+
+test("renderer compaction defaults match the pi runtime defaults they describe", () => {
+  assert.equal(DEFAULT_COMPACTION_RESERVE_TOKENS, DEFAULT_COMPACTION_SETTINGS.reserveTokens);
+  assert.equal(DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+});
+
+test("proactive LLM compaction skips system-only input without changing manual compaction", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("manual request remains explicit"))]);
+  const session = await memorySession("system-only-proactive");
+  await session.appendMessage({ role: "system", content: "Required policy", timestamp: 1 });
+  await session.appendMessage(user("Keep this current request", 2));
+  const before = await session.getEntries();
+  const coordinator = new PiCompactionCoordinator({
+    session, models, model, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+  const result = await coordinator.checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  assert.equal(result.compacted, false);
+  assert.equal(faux.state.callCount, 0, "system instructions are excluded from the serialized summary conversation");
+  assert.deepEqual(await session.getEntries(), before, "no checkpoint or journal rewrite for empty conversation");
+  const manual = await coordinator.compact();
+  assert.equal(manual.compacted, true);
+  assert.equal(faux.state.callCount, 1, "explicit manual operation preserves its existing semantics");
+});
+
+test("proactive empty-input handling leaves a previous checkpoint and its current tail intact", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage(structuredSummary("unexpected replacement"))]);
+  const session = await memorySession("system-only-prior-checkpoint");
+  await session.appendCompaction({ id: "prior-system-checkpoint", summary: "PRIOR_DECISION_73", tokensBefore: 900,
+    retainedTail: [{ role: "system", content: "Required policy", timestamp: 1 }, user("Current request", 2)] });
+  // A trailing checkpoint alone short-circuits prepareCompaction; exercise an
+  // actual subsequent preparation carrying the existing previousSummary.
+  await session.appendMessage({ role: "system", content: "Updated required policy", timestamp: 3 });
+  const prepared = prepareCompaction(await session.getBranch(), { ...DEFAULT_COMPACTION_SETTINGS, reserveTokens: 100, keepRecentTokens: 100 });
+  assert.ok(prepared.ok && prepared.value, "the fixture reaches a real preparation after the checkpoint");
+  assert.equal(prepared.value.previousSummary, "PRIOR_DECISION_73");
+  const before = await session.getEntries();
+  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 } });
+  const result = await coordinator.checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  assert.equal(result.compacted, false);
+  assert.equal(faux.state.callCount, 0);
+  assert.deepEqual(await session.getEntries(), before);
+  assert.ok((await session.buildContext()).messages.some((message) => message.role === "compactionSummary" && message.summary === "PRIOR_DECISION_73"));
+});
+
+test("system-only proactive input retains local VCC compaction behavior", async () => {
+  const { faux, models, model } = compactionFixture();
+  const session = await memorySession("system-only-vcc");
+  const current = user("Current request", 2);
+  await session.appendMessage({ role: "system", content: "Required policy", timestamp: 1 });
+  await session.appendMessage(current);
+  let localCompiles = 0;
+  const result = await new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off", engine: "vcc",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    compileVcc: async (input) => {
+      localCompiles += 1;
+      return { summary: "LOCAL_POLICY_STATE", retainedTail: [current], tokensBefore: input.preparation.tokensBefore,
+        details: { engine: "vcc" as const, version: 1 } } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+    },
+  }).checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  assert.equal(result.compacted, true);
+  assert.equal(localCompiles, 1);
+  assert.equal(faux.state.callCount, 0);
+  assert.ok((await session.buildContext()).messages.some((message) => message.role === "user" && message.content === current.content));
+});
+
+test("proactive LLM compaction still summarizes a genuine active-turn prefix beside system history", async () => {
+  const faux = fauxProvider({ api: "openai-completions", provider: "active-prefix-summary",
+    models: [{ id: "summary", contextWindow: 16_000, maxTokens: 4_000 }] });
+  const models = createModels(); models.setProvider(faux.provider);
+  const model = faux.getModel();
+  const requests: string[] = [];
+  faux.setResponses(Array.from({ length: 4 }, () => (context) => {
+    requests.push(JSON.stringify(context));
+    return fauxAssistantMessage(structuredSummary("preserve active evidence"));
+  }));
+  const session = await memorySession("system-plus-active-prefix");
+  await session.appendMessage({ role: "system", content: "Required policy", timestamp: 1 });
+  await session.appendMessage(user("ACTIVE_REQUEST_91", 2));
+  for (let index = 0; index < 100; index += 1) {
+    const response = assistant(model, { input: 0, output: 0, timestamp: index * 2 + 3, stopReason: "toolUse" });
+    response.content = [{ type: "toolCall", id: `active-${index}`, name: "read_file", arguments: {} }];
+    await session.appendMessage(response);
+    await session.appendMessage({ role: "toolResult", toolCallId: `active-${index}`, toolName: "read_file", isError: false,
+      content: [{ type: "text", text: `EVIDENCE_${index}`.padEnd(512, "x") }], timestamp: index * 2 + 4 });
+  }
+  const before = await session.getEntries();
+  const result = await new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" })
+    .checkContextPressure({ contextTokens: 13_000, compressibleHistoryMessages: 1, shouldCompact: true });
+  assert.equal(result.compacted, true);
+  assert.equal(faux.state.callCount, 2, "mixed channels preserve the existing history and split-prefix summary operations");
+  assert.ok(requests.some((request) => request.includes("ACTIVE_REQUEST_91") && request.includes("EVIDENCE_0")));
+  assert.deepEqual((await session.getEntries()).slice(0, before.length), before);
+  assert.ok(result.messages?.some((message) => message.role === "toolResult" && message.toolCallId === "active-99"), "latest complete tool evidence remains in retained tail");
 });

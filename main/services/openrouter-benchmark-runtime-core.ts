@@ -4,6 +4,7 @@ import {
   type OpenRouterBenchmarkCache,
 } from "./openrouter-benchmark-catalog-core.js";
 import type { ModelInsightsActionErrorCode, ModelInsightsStatus } from "./types.js";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -59,41 +60,17 @@ export function normalizeOpenRouterBenchmarkApiKey(value: unknown): string {
 }
 
 async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new ModelInsightsError(
-      "invalid_response",
-      "OpenRouter returned too much benchmark data.",
-    );
-  }
-  if (!response.body) {
-    throw new ModelInsightsError(
-      "invalid_response",
-      "OpenRouter returned an empty benchmark response.",
-    );
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new ModelInsightsError(
-        "invalid_response",
-        "OpenRouter returned too much benchmark data.",
-      );
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const bytes = await readBoundedBody(response, {
+    maxBytes,
+    errors: {
+      tooLarge: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned too much benchmark data."),
+      missingBody: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned an empty benchmark response."),
+      invalidChunk: () =>
+        new ModelInsightsError("invalid_response", "OpenRouter returned invalid benchmark data."),
+    },
+  });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {
@@ -175,6 +152,7 @@ function statusFrom(
     hasKey: key !== null,
     ready,
     cachedModelCount: ready ? cache.models.length : 0,
+    skippedAmbiguousCount: ready ? cache.source.skippedAmbiguous : 0,
     fetchedAt: ready ? cache.source.fetchedAt : undefined,
     asOf: ready ? cache.source.asOf : undefined,
     citation: ready ? cache.source.citation : undefined,
@@ -203,8 +181,25 @@ class AsyncMutex {
 export class OpenRouterBenchmarkRuntime {
   private readonly actionMutex = new AsyncMutex();
   private readonly stateMutex = new AsyncMutex();
+  /**
+   * The cache `catalog()` serves (null without a key), remembered so ordinary
+   * model-info reads do not decrypt the credential each time. Every mutation of
+   * the credential or cache runs under `stateMutex` and clears it via `mutate`.
+   */
+  private catalogMemo: { value: OpenRouterBenchmarkCache | null } | undefined;
 
   constructor(private readonly dependencies: OpenRouterBenchmarkRuntimeDependencies) {}
+
+  /** Run a credential/cache mutation under the state lock and drop the memo however it ends. */
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    return this.stateMutex.run(async () => {
+      try {
+        return await operation();
+      } finally {
+        this.catalogMemo = undefined;
+      }
+    });
+  }
 
   async status(): Promise<ModelInsightsStatus> {
     return this.stateMutex.run(async () =>
@@ -214,8 +209,23 @@ export class OpenRouterBenchmarkRuntime {
 
   async catalog(): Promise<OpenRouterBenchmarkCache | null> {
     return this.stateMutex.run(async () => {
-      if (!(await this.dependencies.credentials.read())) return null;
-      return this.dependencies.cache.read();
+      if (this.catalogMemo) return this.catalogMemo.value;
+      const value = (await this.dependencies.credentials.read())
+        ? await this.dependencies.cache.read()
+        : null;
+      this.catalogMemo = { value };
+      return value;
+    });
+  }
+
+  /**
+   * Forget the remembered catalog so the next read sees the stored credential.
+   * For credential changes made outside this runtime, such as onboarding
+   * reset's catch-all credential pass.
+   */
+  invalidate(): Promise<void> {
+    return this.stateMutex.run(async () => {
+      this.catalogMemo = undefined;
     });
   }
 
@@ -223,7 +233,7 @@ export class OpenRouterBenchmarkRuntime {
     const key = normalizeOpenRouterBenchmarkApiKey(apiKey);
     return this.actionMutex.run(async () => {
       const cache = await this.dependencies.fetchCatalog(key);
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         const previousKey = await this.dependencies.credentials.read();
         await this.dependencies.credentials.write(key);
         try {
@@ -253,7 +263,7 @@ export class OpenRouterBenchmarkRuntime {
           "Connect a Model Pad OpenRouter key before fetching benchmark data.",
         );
       const cache = await this.dependencies.fetchCatalog(key);
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         if ((await this.dependencies.credentials.read()) !== key) {
           throw new ModelInsightsError(
             "local_error",
@@ -268,7 +278,7 @@ export class OpenRouterBenchmarkRuntime {
 
   async disconnect(): Promise<ModelInsightsStatus> {
     return this.actionMutex.run(async () => {
-      return this.stateMutex.run(async () => {
+      return this.mutate(async () => {
         // Keep the key available for a retry if clearing the cache fails.
         await this.dependencies.cache.clear();
         await this.dependencies.credentials.deleteKey();

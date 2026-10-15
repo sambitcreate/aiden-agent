@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ManagedWorktreeFileIoError, transferManagedWorktreeFile, type ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import { syncDirectory } from "./durable-fs.js";
 
 const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const GIT_OBJECT_ID = /^[0-9a-f]{40}$/u;
@@ -118,15 +119,6 @@ async function pathExists(target: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function syncDirectory(dir: string): Promise<void> {
-  const handle = await fs.open(dir, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
   }
 }
 

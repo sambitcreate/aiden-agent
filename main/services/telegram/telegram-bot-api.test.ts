@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   TelegramApiError,
+  createFetchFileDownloader,
   createFetchTransport,
+  createFetchUploadTransport,
   TelegramBotApi,
+  telegramTransferTimeoutMs,
   type TelegramApiResponse,
   type TelegramTransport,
   type TelegramUpdate,
@@ -175,19 +178,92 @@ test("getUpdates with an already-aborted signal rejects immediately without call
 });
 
 
-test("command menu updates have a bounded request without altering long-poll transport", async (t) => {
-  const signals: Array<AbortSignal | null | undefined> = [];
-  const timeouts: number[] = [];
-  const signal = new AbortController().signal;
-  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => { timeouts.push(milliseconds); return signal; });
-  t.mock.method(globalThis, "fetch", async (_url: unknown, options?: RequestInit) => {
-    signals.push(options?.signal);
-    return { json: async () => ({ ok: true, result: true }) };
+/** Replace `AbortSignal.timeout` with controllable deadlines and capture fetch signals. */
+function mockNetwork(t: import("node:test").TestContext) {
+  const deadlines: Array<{ ms: number; controller: AbortController }> = [];
+  const requests: Array<{ url: string; signal: AbortSignal }> = [];
+  t.mock.method(AbortSignal, "timeout", (ms: number) => {
+    const controller = new AbortController();
+    deadlines.push({ ms, controller });
+    return controller.signal;
   });
+  t.mock.method(globalThis, "fetch", (url: unknown, options?: RequestInit) => {
+    const signal = options?.signal as AbortSignal;
+    requests.push({ url: String(url), signal });
+    // Behave like a request that only settles when its signal aborts.
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  return { deadlines, requests };
+}
+
+test("every Bot API request carries a deadline, and long polls get the poll window plus grace", async (t) => {
+  const { deadlines, requests } = mockNetwork(t);
   const transport = createFetchTransport(async () => "test-token");
-  await transport("setMyCommands", { commands: [] });
-  await transport("getUpdates", { timeout: 25 });
-  assert.deepEqual(timeouts, [10_000]);
-  assert.equal(signals[0], signal);
-  assert.equal(signals[1], undefined);
+  const pending = [
+    transport("setMyCommands", { commands: [] }),
+    transport("getUpdates", { timeout: 25 }),
+    transport("sendMessage", { chat_id: 1, text: "hi" }),
+  ];
+  for (const promise of pending) promise.catch(() => undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(deadlines.map(({ ms }) => ms), [10_000, 35_000, 30_000]);
+  assert.equal(requests.length, 3);
+
+  // When a deadline fires, its fetch is actually aborted rather than abandoned.
+  deadlines[1].controller.abort(new DOMException("deadline", "TimeoutError"));
+  assert.equal(requests[1].signal.aborted, true);
+  assert.equal(requests[0].signal.aborted, false);
+  await assert.rejects(pending[1], { name: "TimeoutError" });
+  for (const { controller } of deadlines) controller.abort();
+  await Promise.allSettled(pending);
+});
+
+test("stopping the poller aborts the in-flight getUpdates fetch", async (t) => {
+  const { requests } = mockNetwork(t);
+  const api = new TelegramBotApi(createFetchTransport(async () => "test-token"));
+  const stop = new AbortController();
+  const poll = api.getUpdates(7, 25, stop.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests[0].signal.aborted, false);
+  stop.abort();
+  await assert.rejects(poll, /Telegram polling aborted/u);
+  assert.equal(requests[0].signal.aborted, true, "the socket must not stay open after stop");
+});
+
+test("file transfers get deadlines scaled to their size", async (t) => {
+  const { deadlines, requests } = mockNetwork(t);
+  const api = new TelegramBotApi(
+    async () => ({ ok: true, result: { file_id: "f", file_unique_id: "u", file_path: "doc.bin", file_size: 8 * 1024 * 1024 } }),
+    createFetchFileDownloader(async () => "test-token"),
+    createFetchUploadTransport(async () => "test-token"),
+  );
+  const download = api.downloadFile("f");
+  const upload = api.sendDocument({ chatId: 1, bytes: new Uint8Array(1024), name: "small.txt" });
+  download.catch(() => undefined);
+  upload.catch(() => undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  const deadlineFor = (pattern: RegExp) => {
+    const index = requests.findIndex(({ url }) => pattern.test(url));
+    assert.notEqual(index, -1);
+    return deadlines[index].ms;
+  };
+  const downloadDeadline = deadlineFor(/\/file\/bottest-token\/doc\.bin$/u);
+  const uploadDeadline = deadlineFor(/\/sendDocument$/u);
+  assert.ok(downloadDeadline > uploadDeadline, "an 8 MB download must get longer than a 1 KB upload");
+  assert.ok(uploadDeadline >= 30_000 && uploadDeadline < 35_000);
+  for (const { controller } of deadlines) controller.abort();
+  await Promise.allSettled([download, upload]);
+});
+
+test("transfer deadlines grow with size, assume the 20 MB limit when unknown, and stay capped", () => {
+  const small = telegramTransferTimeoutMs(0);
+  const medium = telegramTransferTimeoutMs(5 * 1024 * 1024);
+  const limit = telegramTransferTimeoutMs(20 * 1024 * 1024);
+  assert.ok(small < medium && medium < limit);
+  assert.equal(telegramTransferTimeoutMs(undefined), limit);
+  assert.equal(telegramTransferTimeoutMs(Number.NaN), limit);
+  assert.equal(telegramTransferTimeoutMs(2 * 1024 * 1024 * 1024), 10 * 60_000);
 });

@@ -27,3 +27,8 @@ export async function startGenerationAndMaybeTitle(
   }
   return started;
 }
+
+/** The main-owned execution policy used by the ordinary desktop chat handler. */
+export function desktopChatExecutionOptions(turnId: string, onTurnAccepted: () => void) {
+  return { allowSubagents: true, usageSource: "chat" as const, turnId, onTurnAccepted };
+}

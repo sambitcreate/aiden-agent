@@ -2,10 +2,9 @@ import * as React from "react";
 import {
   resolveBotAvatar,
   type BotAvatar as BotAvatarValue,
-  type BotAvatarAppearance,
-  type BotAvatarEyes,
   type BotAvatarShape,
 } from "../shared/bots";
+import { AidenActivityMark, observeOffscreen } from "./aiden-activity-mark";
 import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
 
 interface AvatarBody {
@@ -57,161 +56,26 @@ const avatarBodies: Record<BotAvatarShape, AvatarBody> = {
   },
 };
 
-function EyePair({ style, y, spread }: { style: BotAvatarEyes; y: number; spread: number }) {
-  const left = 20 - spread;
-  const right = 20 + spread;
-  const ink = "var(--bot-avatar-face)";
-  const highlight = "var(--bot-avatar-eye-highlight)";
-
-  if (style === "happy") {
-    return (
-      <g fill="none" stroke={ink} strokeLinecap="round" strokeWidth="2.35">
-        <path
-          d={`M${left - 2.2} ${y + 0.8}C${left - 1.1} ${y - 2} ${left + 1.1} ${y - 2} ${left + 2.2} ${y + 0.8}`}
-        />
-        <path
-          d={`M${right - 2.2} ${y + 0.8}C${right - 1.1} ${y - 2} ${right + 1.1} ${y - 2} ${right + 2.2} ${y + 0.8}`}
-        />
-      </g>
-    );
-  }
-  if (style === "sleepy") {
-    return (
-      <g fill="none" stroke={ink} strokeLinecap="round" strokeWidth="2.35">
-        <path
-          d={`M${left - 2.3} ${y}C${left - 1} ${y + 1.2} ${left + 1} ${y + 1.2} ${left + 2.3} ${y}`}
-        />
-        <path
-          d={`M${right - 2.3} ${y}C${right - 1} ${y + 1.2} ${right + 1} ${y + 1.2} ${right + 2.3} ${y}`}
-        />
-      </g>
-    );
-  }
-  if (style === "focus") {
-    return (
-      <g fill={ink}>
-        <rect
-          x={left - 2.5}
-          y={y - 1.2}
-          width="5"
-          height="2.6"
-          rx="1.3"
-          transform={`rotate(9 ${left} ${y})`}
-        />
-        <rect
-          x={right - 2.5}
-          y={y - 1.2}
-          width="5"
-          height="2.6"
-          rx="1.3"
-          transform={`rotate(-9 ${right} ${y})`}
-        />
-      </g>
-    );
-  }
-  if (style === "wink") {
-    return (
-      <>
-        <ellipse cx={left} cy={y} rx="2.1" ry="2.9" fill={ink} />
-        <circle cx={left - 0.65} cy={y - 0.9} r="0.58" fill={highlight} />
-        <path
-          d={`M${right - 2.3} ${y}C${right - 1} ${y + 1.3} ${right + 1} ${y + 1.3} ${right + 2.3} ${y}`}
-          fill="none"
-          stroke={ink}
-          strokeLinecap="round"
-          strokeWidth="2.35"
-        />
-      </>
-    );
-  }
-
-  const wide = style === "wide";
-  const radiusX = wide ? 2.7 : 2.05;
-  const radiusY = wide ? 3.25 : 2.85;
+/** The one fixed eye mark every Bot shares; only colour and shape vary. Eyes glance while working. */
+function EyeMark({ y, spread }: { y: number; spread: number }) {
   return (
-    <>
-      <g fill={ink}>
-        <ellipse cx={left} cy={y} rx={radiusX} ry={radiusY} />
-        <ellipse cx={right} cy={y} rx={radiusX} ry={radiusY} />
-      </g>
-      <g fill={highlight} opacity="0.94">
-        <circle cx={left - 0.7} cy={y - 1} r={wide ? 0.72 : 0.58} />
-        <circle cx={right - 0.7} cy={y - 1} r={wide ? 0.72 : 0.58} />
-      </g>
-    </>
+    <g className="bot-avatar-eyes">
+      {[20 - spread, 20 + spread].map((x) => (
+        <g key={x} className="bot-avatar-eye">
+          <ellipse cx={x} cy={y} rx="2.05" ry="2.85" fill="var(--bot-avatar-face)" />
+          <circle cx={x - 0.7} cy={y - 1} r="0.58" fill="var(--bot-avatar-eye-highlight)" opacity="0.94" />
+        </g>
+      ))}
+    </g>
   );
 }
 
-function BackDetail({ appearance }: { appearance: BotAvatarAppearance }) {
-  const ink = "var(--bot-avatar-face)";
-  if (appearance.detail === "halo") {
-    return (
-      <ellipse
-        cx="20"
-        cy="5.2"
-        rx="8"
-        ry="2.5"
-        fill="none"
-        stroke={ink}
-        strokeWidth="1.5"
-        opacity="0.46"
-      />
-    );
-  }
-  if (appearance.detail === "orbit") {
-    return (
-      <ellipse
-        cx="20"
-        cy="20"
-        rx="19"
-        ry="8.2"
-        fill="none"
-        stroke={ink}
-        strokeWidth="1.45"
-        opacity="0.42"
-        transform="rotate(-18 20 20)"
-      />
-    );
-  }
-  if (appearance.detail === "antenna") {
-    return (
-      <g fill="none" stroke={ink} strokeLinecap="round" strokeWidth="1.7" opacity="0.62">
-        <path d="M20 7V2.8" />
-        <circle cx="20" cy="1.8" r="1.5" fill={ink} stroke="none" />
-      </g>
-    );
-  }
-  return null;
-}
-
-function FrontDetail({ appearance }: { appearance: BotAvatarAppearance }) {
-  const ink = "var(--bot-avatar-face)";
-  if (appearance.detail === "sparkles") {
-    return (
-      <g fill={ink} opacity="0.52">
-        <path d="M34 7.3L34.8 9.5L37 10.3L34.8 11.1L34 13.3L33.2 11.1L31 10.3L33.2 9.5Z" />
-        <path d="M5.2 27.5L5.8 29.1L7.4 29.7L5.8 30.3L5.2 31.9L4.6 30.3L3 29.7L4.6 29.1Z" />
-      </g>
-    );
-  }
-  if (appearance.detail === "bolts") {
-    return (
-      <g fill={ink} opacity="0.5">
-        <path d="M3.7 15.3L0.8 20H3.4L2.5 24.7L6.3 19.1H3.8Z" />
-        <path d="M36.3 15.3L39.2 20H36.6L37.5 24.7L33.7 19.1H36.2Z" />
-      </g>
-    );
-  }
-  return null;
-}
-
-function AvatarFace({ avatar }: { avatar: BotAvatarValue }) {
+export function AvatarFace({ avatar }: { avatar: BotAvatarValue }) {
   const appearance = resolveBotAvatar(avatar);
   const body = avatarBodies[appearance.shape];
   const color = `var(--bot-avatar-${appearance.color})`;
   return (
     <svg viewBox="0 0 40 40" focusable="false">
-      <BackDetail appearance={appearance} />
       <path d={body.path} fill="var(--bot-avatar-face)" opacity="0.14" transform="translate(0 1)" />
       <path d={body.path} fill={color} />
       <path
@@ -220,8 +84,7 @@ function AvatarFace({ avatar }: { avatar: BotAvatarValue }) {
         opacity="0.12"
         transform="translate(-1.2 -1.2) scale(.97)"
       />
-      <EyePair style={appearance.eyes} y={body.eyeY} spread={body.eyeSpread} />
-      <FrontDetail appearance={appearance} />
+      <EyeMark y={body.eyeY} spread={body.eyeSpread} />
     </svg>
   );
 }
@@ -248,12 +111,15 @@ export function BotAvatar({
   name,
   photoLoading = "none",
   size = "medium",
+  working = false,
 }: {
   avatar: BotAvatarValue;
   botId?: string;
   name: string;
   photoLoading?: "none" | "visible" | "immediate";
   size?: "small" | "medium" | "large" | "preview";
+  /** The Bot is in a running turn: its face glances (a photo shows a small activity badge instead). */
+  working?: boolean;
 }) {
   const avatarRef = React.useRef<HTMLSpanElement>(null);
   const [nearViewport, setNearViewport] = React.useState(photoLoading === "immediate");
@@ -285,12 +151,18 @@ export function BotAvatar({
   );
   const [failedRevision, setFailedRevision] = React.useState<string>();
   const showPhoto = photo && failedRevision !== photo.assetRevision;
+  React.useEffect(() => {
+    const node = avatarRef.current;
+    if (!working || !node) return;
+    return observeOffscreen(node);
+  }, [working]);
   return (
     <span
       ref={avatarRef}
       aria-hidden="true"
       title={name}
-      className={`relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
+      data-working={working ? "" : undefined}
+      className={`bot-avatar relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
         size === "small"
           ? "size-7 rounded-card p-1"
           : size === "large"
@@ -309,6 +181,11 @@ export function BotAvatar({
           src={photo.dataUrl}
           onError={() => setFailedRevision(photo.assetRevision)}
         />
+      ) : null}
+      {showPhoto && working ? (
+        <span className="absolute bottom-0 right-0 grid place-items-center rounded-full bg-background p-px text-primary">
+          <AidenActivityMark mark="glance" size={size === "large" || size === "preview" ? 14 : 10} />
+        </span>
       ) : null}
     </span>
   );

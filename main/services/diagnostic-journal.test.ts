@@ -21,6 +21,8 @@ import {
   writeDiagnosticEventSync,
   writeLegacyDiagnostic,
 } from "./diagnostic-journal.js";
+import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
+import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 
 async function withJournal(
   profile: "development" | "production",
@@ -55,6 +57,35 @@ test("production legacy adapter omits arbitrary messages and secrets", async () 
       "errorType",
       "fingerprint",
     ]);
+  });
+});
+
+test("production Bot failures keep their class and a distinct fingerprint without message text", async () => {
+  await withJournal("production", async (target) => {
+    writeLegacyDiagnostic("warn", "bots", [
+      "Bot creation failed.",
+      new BotRuntimeInventoryLeaseInvalidError(),
+    ]);
+    writeLegacyDiagnostic("warn", "bots", [
+      "Bot turn admission failed.",
+      new BotCapabilityUnavailableError("Notion workspace acme-private is unavailable"),
+    ]);
+    await flushDiagnosticJournal();
+    const contents = await fs.readFile(target, "utf8");
+    assert.doesNotMatch(contents, /creation failed|admission failed|acme-private|capabilities changed/u);
+    const records = contents
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as {
+        area: string;
+        fields?: { errorType?: string; fingerprint?: string };
+      })
+      .filter((candidate) => candidate.area === "bots");
+    assert.deepEqual(records.map(({ fields }) => fields?.errorType), [
+      "BotRuntimeInventoryLeaseInvalidError",
+      "BotCapabilityUnavailableError",
+    ]);
+    assert.notEqual(records[0]?.fields?.fingerprint, records[1]?.fields?.fingerprint);
   });
 });
 
@@ -147,6 +178,7 @@ test("rollback mode preserves fatal tombstones while disabling general writes", 
     assert.doesNotMatch(contents, /app-failed/u);
     assert.match(contents, /bootstrap-import-failed/u);
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -206,6 +238,7 @@ test("oversized retained rotations are removed at startup", async () => {
     await flushDiagnosticJournal();
     await assert.rejects(fs.stat(`${target}.1`), { code: "ENOENT" });
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -223,6 +256,7 @@ test("an expired active journal is segmented at startup and removed", async () =
     assert.doesNotMatch(await fs.readFile(target, "utf8"), /2025-01-01/u);
     await assert.rejects(fs.stat(`${target}.1`), { code: "ENOENT" });
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -241,6 +275,7 @@ test("legacy development logs are preserved owner-only but excluded from the str
     assert.equal((await fs.stat(path.join(dir, "aiden-dev.legacy.log"))).mode & 0o777, 0o600);
     assert.equal(await fs.readFile(path.join(dir, "aiden-dev.legacy.prev.log"), "utf8"), "legacy");
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -262,6 +297,7 @@ test("active and fatal segments rotate by age without a restart", async () => {
     await assert.rejects(fs.stat(`${target}.1`), { code: "ENOENT" });
     assert.doesNotMatch(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), /"sequence":1/u);
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -295,6 +331,7 @@ test("fatal retention age survives restarts and expired legacy archives are prun
     await assert.rejects(fs.stat(legacy), { code: "ENOENT" });
     await assert.rejects(fs.stat(legacyPrevious), { code: "ENOENT" });
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -321,6 +358,7 @@ test("a retention sweep cannot erase a synchronous fatal written at its boundary
     assert.ok(start >= 0 && end > start);
     assert.doesNotMatch(source.slice(start, end), /\bawait\b/u);
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -338,6 +376,7 @@ test("a symlinked log root disables the journal", async () => {
     assert.equal(diagnosticJournalStatus().enabled, false);
     await assert.rejects(fs.stat(path.join(outside, "aiden.log")), { code: "ENOENT" });
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -356,6 +395,7 @@ test("a symlinked journal cannot modify its target", async () => {
     assert.equal((await fs.stat(victim)).mode & 0o777, 0o644);
     assert.equal(diagnosticJournalStatus().writeFailed, true);
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -399,6 +439,7 @@ test("unusable paths never throw and expose an in-memory failure status", async 
     assert.equal(await flushDiagnosticJournal(), true);
     assert.equal(diagnosticJournalStatus().writeFailed, true);
   } finally {
+    await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

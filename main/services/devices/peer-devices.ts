@@ -9,16 +9,20 @@
  */
 import https from "node:https";
 import {
+  DEVICE_ID_PATTERN,
+  isDevicePlatform,
   parseDeviceSettings,
   type DeviceActionInput,
   type DeviceHostStatus,
   type DeviceKind,
+  type DevicePlatform,
   type DeviceSettings,
   DEVICE_HOST_STATUSES,
 } from "../../../renderer/shared/devices.js";
 import type { PeerHostView } from "../../../renderer/shared/peer-host.js";
 import type { PeerRequest, PeerTrust } from "../peer-transport.js";
 import { peerTlsOptions, PeerTransportError } from "../peer-transport.js";
+import { isEmulatorSerial } from "./android-device-actions.js";
 import type { DeviceHubUpstream } from "./device-hub-proxy.js";
 
 /** Booting a simulator on the other Mac can take minutes. */
@@ -27,11 +31,11 @@ const PEER_OPEN_TIMEOUT_MS = 220_000;
 const PEER_SCREENSHOT_TIMEOUT_MS = 30_000;
 const MAX_SCREENSHOT_BYTES = 32 * 1_048_576;
 const MAX_PEER_SIMULATORS = 256;
-const UDID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 
 export interface PeerSimulator {
   id: string;
   name: string;
+  platform: DevicePlatform;
   version: string;
   booted: boolean;
   kind: DeviceKind;
@@ -58,7 +62,7 @@ export interface DevicePeerPort {
   shutdown(hostId: string, deviceId: string): Promise<void>;
   settings(hostId: string, deviceId: string): Promise<DeviceSettings>;
   action(hostId: string, input: DeviceActionInput): Promise<DeviceSettings>;
-  screenshot(hostId: string, deviceId: string): Promise<Buffer>;
+  screenshot(hostId: string, deviceId: string, platform: DevicePlatform): Promise<Buffer>;
   /** Relay upstream for the device proxy. Holds the credential; main only. */
   upstream(hostId: string): Promise<DeviceHubUpstream | null>;
 }
@@ -76,11 +80,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseSimulator(value: unknown): PeerSimulator | null {
   if (!isRecord(value)) return null;
   const { id, name, version, booted, kind, platform } = value;
-  if (typeof id !== "string" || !UDID_PATTERN.test(id)) return null;
+  if (typeof id !== "string" || !DEVICE_ID_PATTERN.test(id)) return null;
   if (typeof name !== "string" || name.length < 1 || name.length > 200) return null;
   if (typeof version !== "string" || version.length > 40 || typeof booted !== "boolean") return null;
-  if (platform !== "ios" || (kind !== "iphone" && kind !== "ipad" && kind !== "other")) return null;
-  return { id, name, version, booted, kind };
+  if (!isDevicePlatform(platform) || (kind !== "iphone" && kind !== "ipad" && kind !== "other")) return null;
+  return { id, name, platform, version, booted, kind };
 }
 
 export function parsePeerSimulatorListing(value: unknown): PeerSimulatorListing {
@@ -203,7 +207,11 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
     async open(hostId, deviceId) {
       const value = await post(hostId, "/simulators/open", { deviceId }, PEER_OPEN_TIMEOUT_MS);
       const device = isRecord(value) ? parseSimulator(value.device) : null;
-      if (!device || device.id !== deviceId) throw new PeerTransportError("invalid_response");
+      // A booted Android AVD answers under its emulator serial instead of its AVD name. Any other
+      // changed id is refused; the device service also checks the AVD against its listing.
+      if (!device || (device.id !== deviceId && !(device.platform === "android" && isEmulatorSerial(device.id)))) {
+        throw new PeerTransportError("invalid_response");
+      }
       return device;
     },
     async shutdown(hostId, deviceId) {
@@ -216,20 +224,24 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
       const { hostId: _hostId, ...body } = input;
       return settingsFrom(await post(hostId, "/simulators/action", body, PEER_OPEN_TIMEOUT_MS));
     },
-    async screenshot(hostId, deviceId) {
+    async screenshot(hostId, deviceId, platform) {
       const upstream = await relayUpstream(hostId);
       if (!upstream) throw new Error("This paired Mac is disabled or unavailable.");
-      const body = Buffer.from(JSON.stringify({ udid: deviceId }));
+      // serve-sim captures on POST with the UDID in the body; serve-emu captures on GET with `?device=`.
+      const android = platform === "android";
+      const body = android ? undefined : Buffer.from(JSON.stringify({ udid: deviceId }));
+      const route = android
+        ? `/vendor/serve-emu/api/screenshot?${new URLSearchParams({ device: deviceId })}`
+        : "/vendor/serve-sim/api/screenshot";
       return new Promise<Buffer>((resolve, reject) => {
         const request = https.request(
-          `${upstream.origin}${upstream.basePath}/vendor/serve-sim/api/screenshot`,
+          `${upstream.origin}${upstream.basePath}${route}`,
           {
-            method: "POST",
+            method: android ? "GET" : "POST",
             agent: false,
             headers: {
               ...upstream.headers,
-              "content-type": "application/json",
-              "content-length": String(body.length),
+              ...(body ? { "content-type": "application/json", "content-length": String(body.length) } : {}),
             },
             ...upstream.tls,
           },

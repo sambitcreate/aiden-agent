@@ -1,0 +1,73 @@
+{
+  "sourceSha256": "8b5abd2b7de551619e595a1af4af1ded55d1afbbb4a6c632b584360535e8fe5d",
+  "piAiVersion": "1.0.3",
+  "generatedAt": "2026-10-11T20:20:24.817Z",
+  "evidenceKind": "offline-hidden-summary-accounting-boundary",
+  "node": "v22.22.3",
+  "rows": [
+    {
+      "registered": false,
+      "reason": "stop",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    },
+    {
+      "registered": false,
+      "reason": "error",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    },
+    {
+      "registered": false,
+      "reason": "aborted",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    },
+    {
+      "registered": true,
+      "reason": "stop",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    },
+    {
+      "registered": true,
+      "reason": "error",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    },
+    {
+      "registered": true,
+      "reason": "aborted",
+      "dispatched": 1,
+      "accountingStarted": 1,
+      "accountingFinished": 1,
+      "repeatedResultReads": 2,
+      "recordedTokens": 44,
+      "syntheticReportedCost": 0.0341
+    }
+  ],
+  "limitations": [
+    "Synthetic terminal messages and controlled accounting sink, not provider billing or durable storage measurement.",
+    "Error and aborted observations cover terminal responses carrying usage; a transport rejection without usage cannot establish consumed tokens."
+  ]
+}

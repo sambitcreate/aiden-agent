@@ -3,6 +3,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { readRegularUtf8File } from "./regular-file-read.js";
+import { syncDirectory } from "./durable-fs.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -20,6 +21,8 @@ interface StoredCredential {
 interface CredentialDocument {
   version: 1;
   entries: Record<string, StoredCredential>;
+  /** Collision recovery only; never exposed as an active credential. */
+  retiredAzureCredential?: StoredCredential;
 }
 
 interface EncryptedPiCredentialStoreOptions {
@@ -30,17 +33,76 @@ interface EncryptedPiCredentialStoreOptions {
   /** A committed write stays successful when directory fsync is unsupported. */
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
-  beforeWritePublish?(): void;
-  afterWritePublish?(): void;
+  /** Runs around every publication; `grantChanged` is false for an in-place OAuth refresh. */
+  beforeWritePublish?(change: PiCredentialWriteChange): void;
+  afterWritePublish?(change: PiCredentialWriteChange): void;
 }
 
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+export interface PiCredentialWriteChange {
+  readonly grantChanged: boolean;
+  /** The stored id being written or deleted; null for whole-document migrations. */
+  readonly providerId: string | null;
+}
+
+/**
+ * Aiden-internal slots (image-generation keys, the Model Pad key, ...) never
+ * authorize a Bot's inference provider, so writing them must not fence Bot
+ * runtime authority.
+ */
+export const PI_CREDENTIAL_INTERNAL_PREFIX = "aiden-internal:";
+
+/** True when a credential publication should invalidate running Bot turns. */
+export function piCredentialChangeFencesBotAuthority(change: PiCredentialWriteChange): boolean {
+  if (!change.grantChanged) return false;
+  return !(change.providerId?.startsWith(PI_CREDENTIAL_INTERNAL_PREFIX) ?? false);
+}
+
+/**
+ * OAuth fields that rotate on every refresh (or, for Copilot, are refreshed
+ * catalog metadata) rather than describing the signed-in grant.
+ */
+const VOLATILE_OAUTH_FIELDS = new Set(["access", "refresh", "expires", "availableModelIds"]);
+
+/**
+ * The non-secret-bearing part of a stored credential that identifies the
+ * grant. API keys are their whole credential. OAuth logins keep only stable
+ * metadata (account id, enterprise URL, client id, scopes, ...), so a token
+ * refresh keeps the same identity while signing out or into a different
+ * account changes it.
+ */
+export function piCredentialGrantIdentity(credential: Credential): unknown {
+  if (credential.type !== "oauth") return credential;
+  return Object.fromEntries(
+    Object.entries(credential)
+      .filter(([key]) => !VOLATILE_OAUTH_FIELDS.has(key))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+  );
+}
+
+/**
+ * Aiden-owned id stamped on every explicit OAuth sign-in. Token-only OAuth
+ * credentials (Anthropic, xAI, Kimi) carry no account field, so without it a
+ * sign-in to a different account would look like the same grant.
+ */
+const AIDEN_GRANT_ID_FIELD = "aidenGrantId";
+
+/** The credential an explicit sign-in commits: a fresh grant even if it looks like the old one. */
+export function piCredentialWithFreshGrant(credential: Credential): Credential {
+  if (credential.type !== "oauth") return credential;
+  return { ...credential, [AIDEN_GRANT_ID_FIELD]: randomUUID() } as Credential;
+}
+
+/** A refresh rebuilds the credential from scratch; keep the grant id it replaced. */
+function carryPiCredentialGrant(current: Credential | undefined, next: Credential): Credential {
+  if (current?.type !== "oauth" || next.type !== "oauth") return next;
+  const grantId = (current as Record<string, unknown>)[AIDEN_GRANT_ID_FIELD];
+  if (typeof grantId !== "string" || AIDEN_GRANT_ID_FIELD in next) return next;
+  return { ...next, [AIDEN_GRANT_ID_FIELD]: grantId } as Credential;
+}
+
+function samePiCredentialGrant(left: Credential | undefined, right: Credential | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return JSON.stringify(piCredentialGrantIdentity(left)) === JSON.stringify(piCredentialGrantIdentity(right));
 }
 
 class AsyncMutex {
@@ -176,6 +238,12 @@ function parseDocument(text: string): CredentialDocument {
     }
     entries[providerId] = { type: entry.type, ciphertext: entry.ciphertext };
   }
+  const retired = candidate.retiredAzureCredential;
+  if (retired !== undefined) {
+    // Reuse the entry validator so a restart cannot silently discard recovery data.
+    const parsed = parseDocument(JSON.stringify({ version: 1, entries: { azure: retired } }));
+    return { version: 1, entries, retiredAzureCredential: parsed.entries.azure };
+  }
   return { version: 1, entries };
 }
 
@@ -203,6 +271,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   private async writeDocument(
     document: CredentialDocument,
     beginPublication: () => void,
+    change: PiCredentialWriteChange,
   ): Promise<void> {
     const destination = await this.resolvedFilePath();
     const directory = path.dirname(destination);
@@ -216,10 +285,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       await handle.sync();
       await handle.close();
       handle = undefined;
-      this.options.beforeWritePublish?.();
+      this.options.beforeWritePublish?.(change);
       beginPublication();
       await fs.rename(temporary, destination);
-      this.options.afterWritePublish?.();
+      this.options.afterWritePublish?.(change);
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -236,6 +305,32 @@ export class EncryptedPiCredentialStore implements CredentialStore {
         // The file is already committed. Diagnostics must not turn success into failure.
       }
     }
+  }
+
+  private async migrateAzureCredential(options?: AuthOperationOptions): Promise<void> {
+    // Serialize with refresh/delete publication across all store instances. The
+    // ciphertext moves intact: OS encryption need not be unlocked for migration.
+    const mutex = await this.mutex("document");
+    await mutex.run(async () => {
+      options?.signal?.throwIfAborted();
+      const document = await this.readDocument();
+      const legacy = document.entries["azure-openai-responses"];
+      if (!legacy) return;
+      if (document.entries.azure) {
+        if (document.retiredAzureCredential &&
+            JSON.stringify(document.retiredAzureCredential) !== JSON.stringify(legacy)) {
+          throw new Error("Azure credential migration has conflicting recovery data. Reconcile the credential store before continuing.");
+        }
+        document.retiredAzureCredential = legacy;
+      } else {
+        document.entries.azure = legacy;
+      }
+      delete document.entries["azure-openai-responses"];
+      await this.writeDocument(document, () => options?.signal?.throwIfAborted(), {
+        grantChanged: true,
+        providerId: null,
+      });
+    });
   }
 
   private async ensureEncryption(): Promise<void> {
@@ -274,6 +369,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
   async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     validateProviderId(providerId);
     return credentialOperation(options, async () => {
+      if (providerId === "azure") await this.migrateAzureCredential(options);
       const entry = (await this.readDocument()).entries[providerId];
       options?.signal?.throwIfAborted();
       return entry ? this.decrypt(entry) : undefined;
@@ -282,6 +378,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
 
   async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
     return credentialOperation(options, async () => {
+      await this.migrateAzureCredential(options);
       const document = await this.readDocument();
       return Object.entries(document.entries)
         .map(([providerId, entry]) => ({ providerId, type: entry.type }))
@@ -302,9 +399,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
           options?.signal?.throwIfAborted();
           const current = await this.read(providerId, options);
           options?.signal?.throwIfAborted();
-          const next = await modifier(current);
+          const modified = await modifier(current);
           options?.signal?.throwIfAborted();
-          if (next === undefined) return current;
+          if (modified === undefined) return current;
+          const next = carryPiCredentialGrant(current, modified);
           const encrypted = await this.encrypt(next);
           options?.signal?.throwIfAborted();
           const documentMutex = await this.mutex("document");
@@ -313,7 +411,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             const document = await this.readDocument();
             options?.signal?.throwIfAborted();
             document.entries[providerId] = encrypted;
-            await this.writeDocument(document, beginPublication);
+            await this.writeDocument(document, beginPublication, {
+              grantChanged: !samePiCredentialGrant(current, next),
+              providerId,
+            });
           });
           return next;
         },
@@ -324,6 +425,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
 
   async delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
     validateProviderId(providerId);
+    if (providerId === "azure") await this.migrateAzureCredential(options);
     return credentialOperation(options, async (beginPublication) => {
       const providerMutex = await this.mutex(`provider:${providerId}`);
       await providerMutex.run(
@@ -336,7 +438,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             options?.signal?.throwIfAborted();
             if (!document.entries[providerId]) return;
             delete document.entries[providerId];
-            await this.writeDocument(document, beginPublication);
+            await this.writeDocument(document, beginPublication, { grantChanged: true, providerId });
           });
         },
         () => this.options.onLockQueued?.(`provider:${providerId}`),

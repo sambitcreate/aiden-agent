@@ -1,14 +1,15 @@
+import { mcpProviderGrantKey } from "./mcp-provider-auth-core.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import {
+  externalMcpCredentialCleanupKind,
   mcpCredentialCleanupAfterConfig,
-  mcpCredentialConnectionSnapshot,
+  mcpCredentialCleanupSnapshot,
   mcpRuntimeConnectionSnapshot,
   parsePendingMcpCredentialCleanup,
-  sameMcpCredentialConnection,
   sameMcpRuntimeConnection,
   type McpRuntimeConnectionSnapshot,
   type PendingMcpCredentialCleanupV1,
@@ -16,21 +17,24 @@ import {
 import { clearOAuth, invalidateMcpOAuthOperation, suspendMcpOAuthOperations } from "./mcp-oauth.js";
 import { presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
+import { pruneStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
+import { mcpFieldSecretReferencesChanged } from "./mcp-field-secrets-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
+import { syncDirectory } from "./durable-fs.js";
+import { createMcpAdmissionQueue, McpPendingJournalState, singleFlight } from "./mcp-admission-queue.js";
 
 const FILE = "pending-mcp-credential-cleanup.json";
-let cleanupTail: Promise<void> = Promise.resolve();
+const queue = createMcpAdmissionQueue();
+// This process is the journal's only writer: once it has read, written or
+// cleared the file it knows whether anything is pending without re-reading.
+const journal = new McpPendingJournalState();
 
+/** Mutations and reconciliation: one at a time, never during an admission. */
 function serialized<R>(operation: () => Promise<R>): Promise<R> {
-  const result = cleanupTail.then(operation, operation);
-  cleanupTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
+  return queue.exclusive(operation);
 }
 
 async function journalPath(): Promise<string> {
@@ -39,26 +43,25 @@ async function journalPath(): Promise<string> {
   return path.join(root, FILE);
 }
 
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function readPending(): Promise<PendingMcpCredentialCleanupV1 | null> {
   const target = await journalPath();
   try {
-    return parsePendingMcpCredentialCleanup(JSON.parse(await readRegularUtf8File(target)));
+    const pending = parsePendingMcpCredentialCleanup(JSON.parse(await readRegularUtf8File(target)));
+    journal.observed(true);
+    return pending;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      journal.observed(false);
+      return null;
+    }
+    journal.uncertain();
     throw error;
   }
 }
 
 async function writePending(pending: PendingMcpCredentialCleanupV1): Promise<void> {
+  // Pending (or uncertain) from before the first byte: a failed write still reads next time.
+  journal.written();
   const target = await journalPath();
   const staged = `${target}.${randomUUID()}.tmp`;
   try {
@@ -81,8 +84,14 @@ async function writePending(pending: PendingMcpCredentialCleanupV1): Promise<voi
 
 async function clearPending(): Promise<void> {
   const target = await journalPath();
-  await fs.rm(target, { force: true });
-  await syncDirectory(path.dirname(target));
+  try {
+    await fs.rm(target, { force: true });
+    await syncDirectory(path.dirname(target));
+  } catch (error) {
+    journal.uncertain();
+    throw error;
+  }
+  journal.cleared();
 }
 
 function assertCurrent(isCurrent: () => boolean): void {
@@ -116,10 +125,20 @@ async function reconcileNow(
     // immediately before committing credential deletion.
     invalidateMcpOAuthOperation(pending.serverId);
     assertCurrent(isCurrent);
-    if (cleanup.clearOAuth) await clearOAuth(pending.serverId, isCurrent);
+    if (cleanup.clearOAuth) {
+      await clearOAuth(pending.serverId, isCurrent);
+      await secrets.deleteKey(mcpProviderGrantKey(pending.serverId), isCurrent);
+    }
     if (cleanup.clearPresetKey) {
       await secrets.deleteKey(presetSecretId(pending.serverId), isCurrent);
     }
+    // Env/header values the configured record no longer references (all of
+    // them once the server is gone) leave the secrets store.
+    await pruneStoredMcpFieldSecrets(pending.serverId, current, isCurrent);
+    // Launch approvals are left alone: this config can be a cache that lags a
+    // save which reached disk, so pruning here could drop the approval of the
+    // launch actually configured. Approval is checked against the exact launch,
+    // successful saves prune to their published launch, and Remove forgets.
     assertCurrent(isCurrent);
     await clearPending();
   } finally {
@@ -128,8 +147,18 @@ async function reconcileNow(
 }
 
 export function reconcilePendingMcpCredentialCleanup(): Promise<void> {
+  // Nothing to reconcile and nothing that could write the journal is queued.
+  if (journal.knownEmpty() && !queue.exclusiveBusy()) return Promise.resolve();
   return serialized(reconcileNow);
 }
+
+/**
+ * Admission-time reconciliation. Admissions for different servers run
+ * concurrently, so they share one reconciliation rather than racing two.
+ * Exclusive operations never run alongside an admission, so the journal
+ * cannot change underneath it.
+ */
+const reconcileForAdmission = singleFlight(() => reconcileNow());
 
 export function mutateMcpWithCredentialCleanup<R>(
   serverId: string,
@@ -188,25 +217,6 @@ export function mutateCredentialForConfiguredMcp<R>(
   });
 }
 
-export function mutateMcpConfig<R>(
-  serverId: string,
-  mutation: () => Promise<R>,
-  isCurrent: () => boolean = () => true,
-): Promise<R> {
-  return mutatePortableConfigAndSync(() =>
-    serialized(async () => {
-      await reconcileNow(isCurrent);
-      const release = suspendMcpOAuthOperations(serverId);
-      try {
-        assertCurrent(isCurrent);
-        return await mutation();
-      } finally {
-        release();
-      }
-    }),
-  );
-}
-
 export function withConfiguredMcp<R>(
   serverId: string,
   expected: McpRuntimeConnectionSnapshot | null,
@@ -214,8 +224,8 @@ export function withConfiguredMcp<R>(
   isCurrent: () => boolean = () => true,
   onAdmitted: () => void = () => undefined,
 ): Promise<R> {
-  const admitted = serialized(async () => {
-    await reconcileNow(isCurrent);
+  const admitted = queue.shared(serverId, async () => {
+    if (!journal.knownEmpty()) await reconcileForAdmission();
     assertCurrent(isCurrent);
     const configured = (await configStore.listMcpServers()).find(
       (server) => server.id === serverId,
@@ -249,9 +259,10 @@ export function reconcileExternalMcpCredentialChanges(
       const previousRuntime = mcpRuntimeConnectionSnapshot(before);
       const targetRuntime = after ? mcpRuntimeConnectionSnapshot(after) : null;
       if (sameMcpRuntimeConnection(previousRuntime, targetRuntime)) continue;
-      const previousSnapshot = mcpCredentialConnectionSnapshot(before);
-      const targetSnapshot = after ? mcpCredentialConnectionSnapshot(after) : null;
-      const credentialChanged = !sameMcpCredentialConnection(previousSnapshot, targetSnapshot);
+      const previousSnapshot = mcpCredentialCleanupSnapshot(before);
+      const targetSnapshot = after ? mcpCredentialCleanupSnapshot(after) : null;
+      // Aiden's own move of unchanged values into the keychain is no credential change.
+      const cleanupKind = externalMcpCredentialCleanupKind(before, after);
       // The DataStore cache-publication hook invalidates before the new
       // snapshot becomes visible. Repeat at reconciliation admission so a
       // lease acquired during the publication/reconciliation gap is fenced.
@@ -259,20 +270,23 @@ export function reconcileExternalMcpCredentialChanges(
       const release = suspendMcpOAuthOperations(before.id);
       try {
         await disconnect(before.id);
-        if (credentialChanged) {
-          const kind = !after
-            ? "remove"
-            : before.oauth && !after.oauth
-              ? "disable-oauth"
-              : "replace";
+        if (cleanupKind) {
           await writePending({
             version: 1,
-            kind,
+            kind: cleanupKind,
             serverId: before.id,
             previous: previousSnapshot,
             target: targetSnapshot,
           });
           await reconcileNow(() => true, false);
+        }
+        // Independently of sign-in cleanup: an edit that drops or renames a
+        // stored env/header field (or removes the server) prunes its values
+        // against this authoritative config, so restoring the old marker later
+        // finds nothing. A failed prune rejects reconciliation, which keeps this
+        // transition pending so the next reload retries it.
+        if (mcpFieldSecretReferencesChanged(before, after)) {
+          await pruneStoredMcpFieldSecrets(before.id, after);
         }
       } finally {
         release();

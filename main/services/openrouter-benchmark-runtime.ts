@@ -30,7 +30,8 @@ const store = new DataStore<CacheDocument>(
   "openrouter-benchmark-cache.json",
   { version: 1, cache: null },
   undefined,
-  { maxBytes: 2 * 1024 * 1024, fileMode: 0o600, normalize: normalizeDocument },
+  // A pure cache of a manual fetch; a rescue copy would only litter.
+  { maxBytes: 2 * 1024 * 1024, fileMode: 0o600, normalize: normalizeDocument, preserveCorruptFile: false },
 );
 
 // This deliberately does not match the `openrouter` inference-provider ID.

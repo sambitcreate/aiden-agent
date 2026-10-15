@@ -1,15 +1,16 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   branchTip,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   insertEntry,
   setValue,
-  Session,
-  type AgentMessage,
+  type Session,
   type JsonValue,
   type Entry,
+  type NewEntry,
   TODO_CONTEXT,
-} from "@earendil-works/pi-agent-core";
+} from "./pi-legacy-harness.js";
 import type { Usage } from "@earendil-works/pi-ai";
 
 export interface PiSessionMetadata {
@@ -69,6 +70,13 @@ export interface PiSessionPort<Metadata extends PiSessionMetadata = PiSessionMet
     details?: unknown;
     usage?: Usage;
   }): Promise<string>;
+  /** A summary of another branch's history, fed to the model where it sits. */
+  appendBranchSummary(input: {
+    id: string;
+    fromId: string | null;
+    summary: string;
+    details?: unknown;
+  }): Promise<string>;
   appendCustomEntry(customType: string, data?: unknown): Promise<string>;
   appendMessage(message: AgentMessage): Promise<string>;
   buildContext(): Promise<PiSessionContext>;
@@ -76,6 +84,12 @@ export interface PiSessionPort<Metadata extends PiSessionMetadata = PiSessionMet
   getEntries(): Promise<PiSessionEntry[]>;
   getLeafId(): Promise<string | null>;
   getMetadata(): Promise<Metadata>;
+  /**
+   * Copy a root-to-tip branch path into this empty journal in one commit,
+   * keeping entry ids and parent links. Storage assigns fresh sequences and
+   * timestamps.
+   */
+  importBranch(entries: readonly PiSessionEntry[]): Promise<void>;
   moveTo(entryId: string | null): Promise<void>;
   withEntryProjectors(
     projectors: Readonly<Record<string, PiEntryProjector>>,
@@ -127,6 +141,29 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
     return input.id;
   }
 
+  async appendBranchSummary(
+    input: Parameters<PiSessionPort<Metadata>["appendBranchSummary"]>[0],
+  ): Promise<string> {
+    await this.#branch();
+    await this.#session.mutate(async (mutator) => {
+      const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
+      if (!tip) throw new Error("The Pi main branch is missing.");
+      await mutator.commit([
+        insertEntry({
+          type: "branch_summary",
+          id: input.id,
+          parentId: tip.value,
+          fromId: input.fromId,
+          summary: input.summary,
+          ...(input.details === undefined ? {} : { details: jsonValue(input.details) }),
+          fromHook: false,
+        }),
+        setValue(branchTip("main"), input.id),
+      ], TODO_CONTEXT);
+    }, TODO_CONTEXT);
+    return input.id;
+  }
+
   appendCustomEntry: PiSessionPort<Metadata>["appendCustomEntry"] = async (customType, data) =>
     (await this.#branch()).appendCustomEntry(customType, data === undefined ? undefined : jsonValue(data), TODO_CONTEXT);
   appendMessage: PiSessionPort<Metadata>["appendMessage"] = async (message) =>
@@ -163,11 +200,13 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
         messages.push(entry.message);
       } else if (entry.type === "compaction") {
         messages.push(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp));
-        messages.push(...entry.retainedTail);
+        for (const message of entry.retainedTail) messages.push(message);
       } else if (entry.type === "branch_summary" && entry.summary) {
         messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
       } else if (entry.type === "custom") {
-        messages.push(...(this.#entryProjectors[entry.customType]?.(entry, index, entries) ?? []));
+        for (const message of this.#entryProjectors[entry.customType]?.(entry, index, entries) ?? []) {
+          messages.push(message);
+        }
       }
     }
     return { messages, thinkingLevel, model, activeToolNames };
@@ -184,6 +223,30 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
   getLeafId: PiSessionPort<Metadata>["getLeafId"] = async () => (await this.#branch()).getTipId(TODO_CONTEXT);
   getMetadata: PiSessionPort<Metadata>["getMetadata"] = async () =>
     this.metadataOverride ?? this.#session.metadata as unknown as Metadata;
+
+  async importBranch(entries: readonly PiSessionEntry[]): Promise<void> {
+    const tipId = entries[entries.length - 1]?.id;
+    if (tipId === undefined) return;
+    let parentId: string | null = null;
+    for (const entry of entries) {
+      if (entry.parentId !== parentId) {
+        throw new Error("A Pi branch import must be one root-to-tip path.");
+      }
+      parentId = entry.id;
+    }
+    await this.#branch();
+    await this.#session.mutate(async (mutator) => {
+      const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
+      if (tip?.value != null) {
+        throw new Error("A Pi branch can only be imported into an empty journal.");
+      }
+      await mutator.commit([
+        ...entries.map(({ seq: _seq, timestamp: _timestamp, ...entry }) =>
+          insertEntry(entry as NewEntry)),
+        setValue(branchTip("main"), tipId),
+      ], TODO_CONTEXT);
+    }, TODO_CONTEXT);
+  }
 
   async moveTo(entryId: string | null): Promise<void> {
     await this.#session.setValue(branchTip("main"), entryId, TODO_CONTEXT);

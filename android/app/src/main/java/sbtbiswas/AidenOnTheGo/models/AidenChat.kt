@@ -1,7 +1,16 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import androidx.compose.runtime.Immutable
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
@@ -23,6 +32,7 @@ enum class AidenAttachmentKind {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageAttachment(
     val id: String,
     val name: String,
@@ -151,6 +161,7 @@ enum class AidenMessageOutcomeStatus {
 }
 
 @Serializable
+@Immutable
 data class AidenMessageOutcome(
     val status: AidenMessageOutcomeStatus,
     val category: String? = null,
@@ -187,25 +198,37 @@ enum class AidenAgentStepStatus {
         get() = this == FAILED || this == BLOCKED || this == CANCELLED
 }
 
+/** Patterns compiled once; transcript validation runs on every streamed frame. */
+private object AidenChatPatterns {
+    val DRIVE_PREFIX = Regex("^[A-Za-z]:/")
+    val TOOL_STEP_ID = Regex("^tool-[1-9][0-9]*$")
+    val TOOL_CALL_ID = Regex("^call-[1-9][0-9]*$")
+    val THINKING_STEP_ID = Regex("^think-[1-9][0-9]*$")
+    val WHITESPACE = Regex("\\s+")
+}
+
 @Serializable
+@Immutable
 data class AidenProducedFile(val relativePath: String, val operation: String, val bytes: Long) {
     fun isValid(toolName: String?): Boolean {
         val expected = when (toolName) { "write_file" -> "written"; "edit_file" -> "edited"; else -> return false }
         return operation == expected && relativePath.isNotEmpty() && relativePath.codePointCount(0, relativePath.length) <= 240 &&
             !relativePath.startsWith("/") && !relativePath.startsWith("~") &&
-            !Regex("^[A-Za-z]:/").containsMatchIn(relativePath) &&
+            !AidenChatPatterns.DRIVE_PREFIX.containsMatchIn(relativePath) &&
             relativePath.none { it.code < 32 || it.code == 127 || it == '\\' } &&
             relativePath.split('/').none { it.isEmpty() || it == "." || it == ".." } && bytes in 0..1_000_000_000
     }
 }
 
 @Serializable
+@Immutable
 data class AidenAgentLineChanges(
     val additions: Int,
     val deletions: Int
 )
 
 @Serializable
+@Immutable
 data class AidenAgentStep(
     val id: String,
     val order: Int,
@@ -224,7 +247,10 @@ data class AidenAgentStep(
     val target: String? = null,
     val detail: String? = null,
     val lineChanges: AidenAgentLineChanges? = null,
-    val producedFile: AidenProducedFile? = null
+    val producedFile: AidenProducedFile? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step. */
+    @Serializable(with = AidenQuestionnaireRecapSerializer::class)
+    val questionnaire: AidenQuestionnaireRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -234,19 +260,46 @@ data class AidenAgentStep(
 
     val isActive: Boolean
         get() = if (kind == Kind.THINKING) finishedAt == null else status?.isActive == true
+
+    /**
+     * The recap the transcript shows in place of this step's activity line:
+     * only a completed `ask_user_question` call carries one. A recap on any
+     * other step is ignored, and that step stays an ordinary activity line.
+     */
+    val questionnaireRecap: AidenQuestionnaireRecap?
+        get() = questionnaire?.takeIf {
+            kind == Kind.TOOL && toolName == AidenQuestionnaireRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
+@Immutable
 data class AidenChronologicalRow(
     val id: String,
     val kind: Kind,
     val text: String = "",
-    val steps: List<AidenAgentStep> = emptyList()
+    val steps: List<AidenAgentStep> = emptyList(),
+    /** Set on a [Kind.QUESTIONNAIRE] row: the owner's answers, at the step's position. */
+    val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
+    val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, VISUAL }
 }
 
 object AidenChronologicalProjection {
-    fun rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?): List<AidenChronologicalRow>? {
+    /**
+     * The reply in reading order. Each of [visuals] follows the tool step whose
+     * `toolCallId` drew it (a run of same-offset tool steps splits there), and
+     * visuals no step claims trail at the end. A live reply passes no visuals:
+     * snapshots exist only once the reply commits.
+     */
+    fun rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: List<AidenChatVisual> = emptyList()
+    ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
         var hasSpan = false
@@ -259,7 +312,15 @@ object AidenChronologicalProjection {
         }
         if ((reasoning.isNotEmpty() && !hasSpan) || reasoning.substring(reasoningCursor).isNotBlank()) return null
         val steps = timeline.steps
+        val toolCallIds = steps.mapNotNullTo(HashSet()) { step ->
+            step.toolCallId.takeIf { step.kind == AidenAgentStep.Kind.TOOL }
+        }
+        val visualsByCall = visuals.filter { it.toolCallId in toolCallIds }.groupBy { it.toolCallId }
         val result = mutableListOf<AidenChronologicalRow>()
+        fun emitVisuals(drawn: List<AidenChatVisual>) {
+            drawn.forEach { result += AidenChronologicalRow("visual-${it.id}", AidenChronologicalRow.Kind.VISUAL, visual = it) }
+        }
+        val emittedCalls = HashSet<String>()
         var cursor = 0
         var index = 0
         while (index < steps.size) {
@@ -277,12 +338,27 @@ object AidenChronologicalProjection {
                     "reasoning-${step.id}", AidenChronologicalRow.Kind.REASONING, slice, listOf(step)
                 )
                 index++
+            } else if (step.questionnaireRecap != null) {
+                // An answered questionnaire reads as its recap, not as an activity line.
+                result += AidenChronologicalRow(
+                    "questionnaire-${step.id}", AidenChronologicalRow.Kind.QUESTIONNAIRE,
+                    steps = listOf(step), questionnaire = step.questionnaireRecap
+                )
+                index++
             } else {
                 val group = mutableListOf<AidenAgentStep>()
-                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL && steps[index].contentOffset == offset) {
-                    group += steps[index++]
+                var drawn: List<AidenChatVisual> = emptyList()
+                while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
+                    steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
+                ) {
+                    val step = steps[index++]
+                    group += step
+                    val callId = step.toolCallId
+                    drawn = if (callId != null && emittedCalls.add(callId)) visualsByCall[callId].orEmpty() else emptyList()
+                    if (drawn.isNotEmpty()) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+                emitVisuals(drawn)
             }
             cursor = offset
         }
@@ -290,6 +366,7 @@ object AidenChronologicalProjection {
             val slice = text.substring(cursor)
             if (slice.isNotBlank()) result += AidenChronologicalRow("text-$cursor", AidenChronologicalRow.Kind.TEXT, slice)
         }
+        emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
 }
@@ -313,6 +390,7 @@ enum class AidenGenerationCancellationOrigin {
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationClaimCheck(
     val kind: Kind,
     val stepIds: List<String>
@@ -324,6 +402,7 @@ data class AidenGenerationClaimCheck(
 }
 
 @Serializable
+@Immutable
 data class AidenGenerationTimeline(
     val version: Int,
     val generationId: String,
@@ -393,14 +472,14 @@ data class AidenGenerationTimeline(
 
             when (step.kind) {
                 AidenAgentStep.Kind.TOOL -> {
-                    if (!step.id.matches(Regex("^tool-[1-9][0-9]*$")) || step.id.length > 128 ||
+                    if (!step.id.matches(AidenChatPatterns.TOOL_STEP_ID) || step.id.length > 128 ||
                         step.toolCallId == null || step.toolCallId.length > 128 ||
-                        !step.toolCallId.matches(Regex("^call-[1-9][0-9]*$")) ||
+                        !step.toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID) ||
                         step.toolName == null || step.label == null || step.status == null
                     ) return false
                 }
                 AidenAgentStep.Kind.THINKING -> {
-                    if (version == 1 || step.id.length > 128 || !step.id.matches(Regex("^think-[1-9][0-9]*$"))) {
+                    if (version == 1 || step.id.length > 128 || !step.id.matches(AidenChatPatterns.THINKING_STEP_ID)) {
                         return false
                     }
                 }
@@ -462,8 +541,20 @@ object AidenAgentActivityPresentation {
         "browser_wait_for" to Pair("Waiting for page", "Waited for page"),
         "browser_recording_start" to Pair("Starting browser recording", "Started browser recording"),
         "browser_recording_stop" to Pair("Stopping browser recording", "Stopped browser recording"),
+        "device_list" to Pair("Listing simulators", "Listed simulators"),
+        "device_open" to Pair("Opening simulator", "Opened simulator"),
+        "device_screenshot" to Pair("Taking simulator screenshot", "Took simulator screenshot"),
+        "device_close" to Pair("Closing simulator", "Closed simulator"),
         "vcc_recall" to Pair("Recalling chat history", "Recalled chat history"),
-        "compact_context" to Pair("Compacting context", "Compacted context")
+        "compact_context" to Pair("Compacting context", "Compacted context"),
+        "generate_image" to Pair("Generating image", "Generated image"),
+        // Activity an ACP agent (for example, Google Antigravity) ran itself.
+        "delete_file" to Pair("Deleting", "Deleted"),
+        "move_file" to Pair("Moving", "Moved"),
+        "web_fetch" to Pair("Fetching web page", "Fetched web page"),
+        "agent_subagents" to Pair("Running subagents", "Ran subagents"),
+        "agent_tool" to Pair("Using an agent tool", "Used an agent tool"),
+        "agent_context_rebuilt" to Pair("Starting a fresh agent session", "Started a fresh agent session")
     )
 
     /** Exactly one compaction: its line carries every metric. Repeated compactions
@@ -538,8 +629,39 @@ object AidenAgentActivityPresentation {
         return if (obj != null) "$verb $obj" else verb
     }
 
+    /**
+     * The timeline without answered questionnaires, which the transcript shows
+     * as their recap instead of as activity, so they leave the activity list
+     * and its tool-call tally.
+     */
+    fun activityTimeline(timeline: AidenGenerationTimeline): AidenGenerationTimeline {
+        if (timeline.steps.none { it.questionnaireRecap != null }) return timeline
+        return timeline.copy(steps = timeline.steps.filter { it.questionnaireRecap == null })
+    }
+
+    /**
+     * Tool steps a fallback live transcript lists. The stream's own tool rows
+     * carry `tool_N` ids that never match a step's `toolCallId`, so once the
+     * timeline knows the calls it is the one source. Questionnaires are left
+     * out: they render as their recap.
+     */
+    fun liveToolSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
+
+    /** Settled questionnaires, in timeline order, for a fallback transcript's recap cards. */
+    fun questionnaireSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
+
+    /**
+     * Whether a fallback live transcript lists the stream's own tool rows. Once
+     * the timeline has a tool step, its rows or a recap card already show each
+     * call, so the live rows would only repeat them.
+     */
+    fun showsLiveToolRows(tools: List<AidenLiveTool>, timeline: AidenGenerationTimeline?): Boolean =
+        tools.isNotEmpty() && timeline?.steps.orEmpty().none { it.kind == AidenAgentStep.Kind.TOOL }
+
     fun summary(timeline: AidenGenerationTimeline): String {
-        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL }
+        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
         if (tools.isEmpty()) {
             return if (timeline.status == AidenGenerationTimelineStatus.RUNNING) "Thinking"
             else "Thought ${duration(timeline.steps.mapNotNull { it.durationMs }.sum())}"
@@ -587,6 +709,7 @@ object AidenAgentActivityPresentation {
 }
 
 @Serializable
+@Immutable
 data class AidenChatMessage(
     val id: String,
     val role: AidenChatRole,
@@ -595,6 +718,12 @@ data class AidenChatMessage(
     val attachments: List<AidenMessageAttachment>? = null,
     val htmlArtifacts: List<AidenHtmlArtifact>? = null,
     @Serializable(with = AidenAppPanelsSerializer::class) val appPanels: List<AidenAppControlPanel>? = null,
+    /**
+     * Inline visuals in reply order (contract revision 28). Entries this
+     * version cannot use are dropped; the message itself survives.
+     */
+    @Serializable(with = AidenChatVisualListSerializer::class)
+    val visuals: List<AidenChatVisual>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
@@ -610,11 +739,14 @@ data class AidenChatMessage(
                 (attachments?.all { it.isWireSafe } ?: true) &&
                 (htmlArtifacts?.size ?: 0) <= 40 &&
                 (htmlArtifacts?.all { it.isWireSafe } ?: true) &&
+                (visuals?.size ?: 0) <= AidenChatVisual.MAX_PER_MESSAGE &&
+                (visuals?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
 }
 
 @Serializable
+@Immutable
 data class AidenHtmlArtifact(
     val id: String,
     val title: String
@@ -624,6 +756,73 @@ data class AidenHtmlArtifact(
                 id.length <= 256 &&
                 title.isNotEmpty() &&
                 title.length <= 120
+}
+
+/**
+ * One inline visual of an assistant reply (contract revision 28): a native
+ * `render_ui` visual or a sandboxed `render_artifact` HTML visual. Phones never
+ * draw it; they show the Mac's snapshot image, else [fallbackText], else [title].
+ */
+@Serializable
+@Immutable
+data class AidenChatVisual(
+    val id: String,
+    /** `ui` or `html`; kept as a string so an unknown kind drops only this visual. */
+    val kind: String,
+    val title: String,
+    /** The timeline tool step that drew this visual. */
+    val toolCallId: String? = null,
+    /** A text description of a native visual. */
+    val fallbackText: String? = null,
+    /** An image attachment on the same message holding the Mac's snapshot. */
+    val snapshotAttachmentId: String? = null,
+    /** `wide`, or absent. */
+    val layout: String? = null
+) {
+    val isWireSafe: Boolean
+        get() = IDENTIFIER.matches(id) &&
+                (kind == KIND_UI || kind == KIND_HTML) &&
+                title.isNotEmpty() && title.trim() == title &&
+                title.codePointCount(0, title.length) <= MAX_TITLE_LENGTH &&
+                (toolCallId == null || (toolCallId.length <= 128 && toolCallId.matches(AidenChatPatterns.TOOL_CALL_ID))) &&
+                (fallbackText == null || (fallbackText.isNotEmpty() &&
+                    fallbackText.codePointCount(0, fallbackText.length) <= MAX_FALLBACK_TEXT_LENGTH)) &&
+                (snapshotAttachmentId == null || IDENTIFIER.matches(snapshotAttachmentId)) &&
+                (layout == null || layout == LAYOUT_WIDE)
+
+    companion object {
+        const val KIND_UI = "ui"
+        const val KIND_HTML = "html"
+        const val LAYOUT_WIDE = "wide"
+        const val MAX_PER_MESSAGE = 40
+        const val MAX_TITLE_LENGTH = 120
+        const val MAX_FALLBACK_TEXT_LENGTH = 4_000
+        /** Prefix of the attachment ids the Mac gives visual snapshots. */
+        const val SNAPSHOT_ATTACHMENT_PREFIX = "visual-snapshot_"
+        private val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,256}$")
+    }
+}
+
+/**
+ * Decodes `visuals` one entry at a time, keeping the first of each id and
+ * skipping any entry this version cannot use, so one odd visual never fails
+ * its message. Additive keys inside an entry are ignored.
+ */
+object AidenChatVisualListSerializer : KSerializer<List<AidenChatVisual>> {
+    private val delegate = ListSerializer(AidenChatVisual.serializer())
+    private val entryJson = Json { ignoreUnknownKeys = true }
+    override val descriptor: SerialDescriptor = delegate.descriptor
+    override fun serialize(encoder: Encoder, value: List<AidenChatVisual>) = delegate.serialize(encoder, value)
+    override fun deserialize(decoder: Decoder): List<AidenChatVisual> {
+        val json = decoder as? JsonDecoder ?: return delegate.deserialize(decoder)
+        val entries = json.decodeJsonElement() as? JsonArray ?: return emptyList()
+        val seen = HashSet<String>()
+        return entries.mapNotNull { entry ->
+            runCatching { entryJson.decodeFromJsonElement(AidenChatVisual.serializer(), entry) }
+                .getOrNull()
+                ?.takeIf { it.isWireSafe && seen.add(it.id) }
+        }
+    }
 }
 
 @Serializable
@@ -664,7 +863,9 @@ data class AidenChatSummary(
      */
     @SerialName("rowState") val rowStateWire: String? = null,
     /** True only when assistant output arrived after the chat was last viewed. */
-    val unread: Boolean = false
+    val unread: Boolean = false,
+    /** Fork lineage (revision 21); rows never carry the summary. */
+    val forkedFrom: AidenChatForkLineageRow? = null
 ) {
     val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
 
@@ -709,7 +910,8 @@ data class AidenChatSummary(
             createdAt = chat.createdAt,
             updatedAt = chat.updatedAt,
             revision = chat.revision,
-            activity = activity
+            activity = activity,
+            forkedFrom = chat.forkedFrom?.row
         )
     }
 }
@@ -754,7 +956,9 @@ data class AidenChat(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant,
     var revision: String,
-    var titlePending: Boolean? = null
+    var titlePending: Boolean? = null,
+    /** Set when the chat was created by Fork (revision 21). */
+    val forkedFrom: AidenChatForkLineage? = null
 ) {
     val isBotChat: Boolean get() = botId != null
     val lastViewedMessageId: String? get() = messages.lastOrNull()?.id
@@ -785,6 +989,232 @@ data class AidenChat(
         fun regularWorkspaceChats(chats: List<AidenChat>): List<AidenChat> = chats.filter { !it.isBotChat }
     }
 }
+
+/**
+ * One page of `GET /chats/{chatId}/messages` (`chat-messages-window-v1`):
+ * messages oldest first, ending just before the requested cursor (or at the
+ * newest message), plus whether older visible messages exist. Since contract
+ * revision 23 (`chat-messages-window-metadata-v1`) a page also carries the
+ * chat metadata a whole-chat read returns, so a refresh from the newest page
+ * stays as authoritative for the title and model as `GET /chats/{chatId}`.
+ */
+@Serializable
+data class AidenChatMessagesWindow(
+    val chatId: String,
+    val revision: String,
+    val messages: List<AidenChatMessage>,
+    val hasOlder: Boolean,
+    val workspaceId: String? = null,
+    val botId: String? = null,
+    val title: String? = null,
+    val titlePending: Boolean? = null,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null,
+    @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant? = null,
+    /** Fork lineage (revision 21), on a fork's pages as on its whole-chat read. */
+    val forkedFrom: AidenChatForkLineage? = null
+) {
+    init {
+        if (chatId.isEmpty() || chatId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            revision.isEmpty() || revision.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            messages.size > MAXIMUM_LIMIT ||
+            messages.map { it.id }.toSet().size != messages.size ||
+            !messages.all { it.isWireSafe }
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid messages window")
+        }
+        // Revision-23 metadata is all-or-nothing and held to the chat
+        // projection's rules: a partial set fails closed rather than leaving a
+        // refresh to mix the page's title with a stale model.
+        val hasAnyMetadata = listOf(workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt)
+            .any { it != null }
+        if (hasAnyMetadata) chat() ?: throw AidenRemoteContractException.InvalidJson("Invalid messages window metadata")
+    }
+
+    /**
+     * The chat this page describes, with the page's messages, or null when the
+     * page carries no metadata and only a whole-chat read can say it.
+     */
+    fun chat(): AidenChat? {
+        val workspaceId = workspaceId ?: return null
+        val title = title ?: return null
+        val createdAt = createdAt ?: return null
+        val updatedAt = updatedAt ?: return null
+        return AidenChat(
+            id = chatId,
+            workspaceId = workspaceId,
+            botId = botId,
+            title = title,
+            providerId = providerId,
+            modelId = modelId,
+            messages = messages,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            revision = revision,
+            titlePending = titlePending,
+            forkedFrom = forkedFrom
+        )
+    }
+
+    companion object {
+        const val DEFAULT_LIMIT = 50
+        const val MAXIMUM_LIMIT = 200
+    }
+}
+
+/**
+ * Client-side transcript windowing over `chat-messages-window-v1`. The chat
+ * screen holds the newest page plus any earlier pages the reader asked for;
+ * these rules decide how a fetched page combines with what is on screen.
+ */
+object AidenTranscriptWindowing {
+    const val PAGE_SIZE = AidenChatMessagesWindow.DEFAULT_LIMIT
+
+    data class Presentation(val messages: List<AidenChatMessage>, val hasOlder: Boolean)
+
+    /** Replace the transcript with the newest window, as on open or after a `revision_conflict`. */
+    fun latest(window: AidenChatMessagesWindow): Presentation = Presentation(window.messages, window.hasOlder)
+
+    /**
+     * Fold a refreshed newest window into the transcript on screen. When the
+     * window overlaps it, earlier pages the reader already loaded are kept in
+     * front of it; otherwise the window replaces the transcript.
+     */
+    fun mergingLatest(
+        window: AidenChatMessagesWindow,
+        current: List<AidenChatMessage>,
+        currentHasOlder: Boolean
+    ): Presentation {
+        val first = window.messages.firstOrNull() ?: return latest(window)
+        if (!window.hasOlder) return latest(window)
+        val overlap = current.indexOfFirst { it.id == first.id }
+        if (overlap <= 0) return latest(window)
+        val windowIds = window.messages.mapTo(HashSet()) { it.id }
+        val earlier = current.subList(0, overlap).filterNot { windowIds.contains(it.id) }
+        return Presentation(earlier + window.messages, currentHasOlder)
+    }
+
+    /** Put an earlier page in front of the transcript on screen. */
+    fun prepending(page: AidenChatMessagesWindow, current: List<AidenChatMessage>): Presentation {
+        val presentIds = current.mapTo(HashSet()) { it.id }
+        return Presentation(page.messages.filterNot { presentIds.contains(it.id) } + current, page.hasOlder)
+    }
+
+    /** The cursor for the next earlier page: the oldest message the Mac issued. */
+    fun earlierCursor(messages: List<AidenChatMessage>): String? =
+        messages.firstOrNull { !it.id.startsWith("local-") }?.id
+}
+
+@Serializable
+enum class AidenChatForkPosition(val wire: String) {
+    /** Everything through a settled assistant reply. */
+    @SerialName("after") AFTER("after"),
+    /** Everything before a user prompt, which comes back as `prefill`. */
+    @SerialName("before") BEFORE("before")
+}
+
+@Serializable
+enum class AidenChatForkSummaryState {
+    @SerialName("pending") PENDING,
+    @SerialName("ready") READY,
+    @SerialName("failed") FAILED
+}
+
+/** What happened in the source after the fork point, summarized for the fork. */
+@Serializable
+data class AidenChatForkSummary(
+    val state: AidenChatForkSummaryState,
+    val afterMessageId: String,
+    /** The focus the summary was asked for. */
+    val focus: String? = null,
+    val text: String? = null,
+    /** A short, safe phrase; provider errors stay on the Mac. */
+    val error: String? = null
+) {
+    init {
+        if (afterMessageId.length !in 1..160 || !AFTER_MESSAGE_ID.matches(afterMessageId) ||
+            (focus != null && focus.length !in 1..AidenRemoteProtocol.MAX_FORK_SUMMARY_FOCUS_LENGTH) ||
+            (text != null && text.length !in 1..32_000) ||
+            (error != null && error.length !in 1..1_000)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork summary")
+        }
+    }
+
+    /** A pending or failed summary holds new turns until it is ready, retried or skipped. */
+    val holdsTurns: Boolean get() = state != AidenChatForkSummaryState.READY
+
+    private companion object {
+        val AFTER_MESSAGE_ID = Regex("^[A-Za-z0-9_-]+$")
+    }
+}
+
+/** The chat and message a fork came from. The source may since have been deleted. */
+@Serializable
+data class AidenChatForkLineage(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant,
+    val summary: AidenChatForkSummary? = null
+) {
+    init {
+        if (!AidenChatForkLineageRow.IDENTIFIER.matches(chatId) || !AidenChatForkLineageRow.IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    val row: AidenChatForkLineageRow
+        get() = AidenChatForkLineageRow(chatId = chatId, messageId = messageId, position = position, at = at)
+}
+
+/** Fork lineage on a chat summary row, which never carries the summary. */
+@Serializable
+data class AidenChatForkLineageRow(
+    val chatId: String,
+    val messageId: String,
+    val position: AidenChatForkPosition,
+    @Serializable(with = InstantIso8601Serializer::class) val at: Instant
+) {
+    init {
+        if (!IDENTIFIER.matches(chatId) || !IDENTIFIER.matches(messageId)) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork lineage")
+        }
+    }
+
+    internal companion object {
+        val IDENTIFIER = Regex("^[A-Za-z0-9._:-]{1,128}$")
+    }
+}
+
+/** The prompt an "Edit in fork" returns, with its attachments restaged for this device. */
+@Serializable
+data class AidenChatForkPrefill(
+    val text: String,
+    val attachments: List<AidenAttachmentReference> = emptyList()
+) {
+    init {
+        if (text.length > AidenRemoteProtocol.MAX_TEXT_LENGTH || attachments.size > AidenRemoteProtocol.MAX_FORK_PREFILL_ATTACHMENTS) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Chat fork prefill")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkResult(
+    val chat: AidenChat,
+    val prefill: AidenChatForkPrefill? = null
+) {
+    init {
+        if (chat.forkedFrom == null) {
+            throw AidenRemoteContractException.InvalidJson("Fork result chat has no lineage")
+        }
+    }
+}
+
+@Serializable
+data class AidenChatForkSummaryCancel(val cancelled: Boolean)
 
 @Serializable
 data class AidenModel(
@@ -974,11 +1404,12 @@ data class AidenStreamInputResult(
 
 /**
  * Remote Slice 2 busy-composer presentation rules (iOS parity:
- * AidenRunInputPresentation). A run input may only be offered while the
- * displayed stream is controllable, the server negotiated
- * `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
- * when the Mac durably committed the message; every other outcome keeps the
- * draft untouched so a busy→idle race can never become an implicit Send.
+ * AidenRunInputPresentation). The Queue/Steer control is shown while the
+ * displayed stream is controllable and the server negotiated
+ * `chat-run-input-v1`; it only submits when the composer also holds text.
+ * Drafts are consumed only when the Mac durably committed the message; every
+ * other outcome keeps the draft untouched so a busy→idle race can never
+ * become an implicit Send.
  */
 object AidenRunInputPresentation {
     data class Attempt(
@@ -988,12 +1419,30 @@ object AidenRunInputPresentation {
         val text: String
     )
 
+    /** The mode the busy composer starts in, and returns to once a run ends. */
+    val defaultMode: AidenStreamInputMode = AidenStreamInputMode.QUEUE
+
+    /** Whether the busy composer shows the Queue/Steer control. It stays
+     * visible (dimmed) with an empty draft so a mode can be picked before
+     * typing. */
     fun offersRunInput(
         isStreaming: Boolean,
         canControl: Boolean,
-        supports: Boolean,
-        hasDraft: Boolean
-    ): Boolean = isStreaming && canControl && supports && hasDraft
+        supports: Boolean
+    ): Boolean = isStreaming && canControl && supports
+
+    /** Whether the offered control can submit right now. */
+    fun canSubmitRunInput(
+        offered: Boolean,
+        hasDraft: Boolean,
+        isSubmitting: Boolean,
+        isStopping: Boolean
+    ): Boolean = offered && hasDraft && !isSubmitting && !isStopping
+
+    /** The chosen mode is sticky for the life of a run and resets to
+     * [defaultMode] once the run is no longer streaming. */
+    fun stickyMode(current: AidenStreamInputMode, isStreaming: Boolean): AidenStreamInputMode =
+        if (isStreaming) current else defaultMode
 
     fun consumesDraft(result: AidenStreamInputResult): Boolean =
         result.status == AidenStreamInputStatus.ADMITTED || result.committed
@@ -1122,7 +1571,7 @@ object AidenApprovalPresentation {
     private val automationTools = setOf("schedule_task", "edit_automation")
 
     fun oneLineSummary(summary: String): String {
-        val collapsed = summary.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val collapsed = summary.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
         return if (collapsed.isEmpty()) "Review requested action" else collapsed
     }
 
@@ -1322,7 +1771,7 @@ data class AidenBotReplyProjection(
             for (paragraph in paragraphs) {
                 val cleaned = paragraph.trim()
                 if (cleaned.isEmpty()) continue
-                val identity = cleaned.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+                val identity = cleaned.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
                 if (seen.add(identity)) {
                     result.add(cleaned)
                 }
@@ -1350,9 +1799,16 @@ class AidenTerminalReplayGate {
 }
 
 object AidenTerminalReconciliation {
-    fun retryDelayMilliseconds(attempt: Int): Long {
+    /**
+     * Exponential backoff (1 s doubling to a 30 s cap) with equal jitter: the
+     * delay falls in the upper half of the step, so many devices that lost the
+     * same Mac at once do not reconnect in lockstep.
+     */
+    fun retryDelayMilliseconds(attempt: Int, random: kotlin.random.Random = kotlin.random.Random.Default): Long {
         val safeAttempt = maxOf(0, minOf(attempt, 5))
-        return minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val ceiling = minOf(30_000L, 1_000L * (1L shl safeAttempt))
+        val floor = ceiling / 2
+        return floor + random.nextLong(ceiling - floor + 1)
     }
 
     fun isDefinitiveMissingStream(error: Throwable): Boolean {
@@ -1437,6 +1893,7 @@ object AidenTurnRequestBuilder {
 object AidenDraftSendReconciliation {
     fun failedDraft(submitted: String, current: String): String {
         if (current.isEmpty()) return submitted
+        if (current == submitted || (submitted.isNotEmpty() && current.startsWith("$submitted\n\n"))) return current
         return "$submitted\n\n$current"
     }
 
@@ -1457,6 +1914,25 @@ data class AidenChatModelSelection(
 )
 
 object AidenChatModelAuthority {
+    /** Agent-backed providers (mirroring the Mac's ACP harness list) run only in
+     *  chats open on the Mac, so the host leaves them out of the phone's catalog. */
+    val macOnlyAgentProviders: Map<String, String> = mapOf("antigravity" to "Google Antigravity")
+
+    /** For a chat the Mac last answered with a Mac-only agent model, which model
+     *  replies from this phone use instead. Null when the chat's own model is
+     *  available here, or for Bot chats, whose model is fixed. */
+    fun macOnlyAgentNotice(chat: AidenChat, catalog: AidenModelCatalog?, replyModelLabel: String?): String? {
+        if (chat.isBotChat) return null
+        val providerId = chat.providerId ?: return null
+        val agentLabel = macOnlyAgentProviders[providerId] ?: return null
+        if (catalog?.providers?.any { it.id == providerId } == true) return null
+        return if (replyModelLabel != null) {
+            "This chat used $agentLabel, which runs only on your Mac. Replies from here use $replyModelLabel."
+        } else {
+            "This chat used $agentLabel, which runs only on your Mac. Choose a model for replies from here."
+        }
+    }
+
     fun resolvedSelection(
         chat: AidenChat,
         catalog: AidenModelCatalog?,

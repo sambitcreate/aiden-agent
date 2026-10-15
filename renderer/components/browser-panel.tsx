@@ -19,9 +19,10 @@ import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview
 const ZOOM_STEPS = [.25, .33, .5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 type RunCommand = (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
 
-export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: string; active: boolean; onDock?: () => void }) {
+export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void }) {
   const [state, setState] = React.useState<BrowserState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = React.useState(false);
@@ -38,12 +39,24 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
   const panelRef = React.useRef<HTMLDivElement>(null);
   const hostRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
+  const annotateButtonRef = React.useRef<HTMLButtonElement>(null);
+  const annotationOpen = Boolean(annotation);
+  const annotationWasOpenRef = React.useRef(false);
+  // Closing the editor removes the focused control; hand focus back to the Annotate button.
+  React.useEffect(() => {
+    const wasOpen = annotationWasOpenRef.current;
+    annotationWasOpenRef.current = annotationOpen;
+    if (!wasOpen || annotationOpen) return;
+    const focused = document.activeElement;
+    if (!focused || focused === document.body) annotateButtonRef.current?.focus();
+  }, [annotationOpen]);
   const presentationRef = React.useRef<(() => void) | null>(null);
   const floatingSourceRef = React.useRef<{ tabId: string; width: number; height: number } | null>(null);
   const [address, setAddress] = React.useState("");
   const [addressFocused, setAddressFocused] = React.useState(false);
   ownerRef.current = workspaceId;
   const visibleState = state?.workspaceId === workspaceId ? state : null;
+  React.useEffect(() => { onStateChange?.(visibleState); }, [visibleState, onStateChange]);
   const tab = visibleState?.tabs.find((item) => item.id === visibleState.activeTabId) ?? null;
   const surfaceActive = active || Boolean(tab?.floating);
   activeRef.current = surfaceActive;
@@ -104,7 +117,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
     const unsubscribe = browserApi.onEvent((event) => { if (event.type === "state") commit(event.state); });
     void browserApi.getState(workspaceId).then((next) => { if (!cancelled) commit(next); }, (cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not open the browser."); });
     return () => { cancelled = true; unsubscribe(); };
-  }, [workspaceId, commit, cancelAnnotation]);
+  }, [workspaceId, commit, cancelAnnotation, loadAttempt]);
 
   React.useEffect(() => {
     cancelAnnotation(); setAddressFocused(false); setPickerActive(false);
@@ -253,7 +266,7 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
 
   const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
     <div className="browser-tab-strip">
-      <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+      <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {visibleState?.tabs.map((item, index) => <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>
           <button type="button" className="browser-tab-select" role="tab" aria-label={item.title || "New tab"} aria-selected={item.id === tab?.id} tabIndex={item.id === tab?.id ? 0 : -1} onClick={() => void run({ action: "select", tabId: item.id })} onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -281,7 +294,8 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
       <form className="browser-address-form" onSubmit={(event) => { event.preventDefault(); submitAddress(address); }}>
         <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
       </form>
-      <Button variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>
+      <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>
+      {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
       <BrowserMoreMenu tab={tab} state={visibleState} open={menuOpen} onOpenChange={setMenuOpen} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
     </div>
     {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
@@ -294,9 +308,9 @@ export function BrowserPanel({ workspaceId, active, onDock }: { workspaceId: str
       {tab?.viewport.mode === "responsive" && ready && !annotation && !tab.floating ? <BrowserViewportResizeHandles tab={tab} run={run} /> : null}
       {annotation ? <BrowserAnnotationEditor snapshot={annotation.snapshot} initial={annotation.initial} pending={annotationPending} onCancel={cancelAnnotation} onPreview={previewAnnotation} onSubmit={(value) => void submitAnnotation(value)} />
         : tab?.error || tab?.crashed ? <div className="browser-empty"><Globe /><Text variant="strong">{tab.crashed ? "This page stopped responding" : "This page could not be loaded"}</Text><p>{tab.error || "Reload the page to continue."}</p><Button size="small" onClick={() => void run({ action: "reload", tabId: tab.id })}>Reload page</Button></div>
-        : !ready ? <BrowserEmptyState state={visibleState} onOpen={submitAddress} run={run} /> : null}
+        : !ready ? <BrowserEmptyState state={visibleState} loadFailed={!visibleState && Boolean(error)} onRetryLoad={() => setLoadAttempt((attempt) => attempt + 1)} onOpen={submitAddress} run={run} /> : null}
     </div>
-    {visibleState ? <BrowserSettings state={visibleState} open={settingsOpen} onOpenChange={setSettingsOpen} run={run} /> : null}
+    {visibleState ? <BrowserSettings state={visibleState} open={settingsOpen} onOpenChange={setSettingsOpen} run={run} error={error} /> : null}
   </div>;
   if (!tab?.floating) return content;
   const dock = () => { void run({ action: "float", tabId: tab.id, floating: false }).then((result) => { if (result) onDock?.(); }); };
@@ -313,8 +327,10 @@ function BrowserFavicon({ src }: { src?: string }) {
     : <Globe aria-hidden="true" />;
 }
 
-function BrowserEmptyState({ state, onOpen, run }: { state: BrowserState | null; onOpen: (url: string) => void; run: RunCommand }) {
-  if (!state) return <div className="browser-empty"><Loader2 className="animate-spin" /><Text color="secondary">Opening browser…</Text></div>;
+export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOpen, run }: { state: BrowserState | null; loadFailed?: boolean; onRetryLoad?: () => void; onOpen: (url: string) => void; run: RunCommand }) {
+  // The error itself is announced by the panel's alert strip; this replaces the endless spinner with a way out.
+  if (!state && loadFailed) return <div className="browser-empty"><Globe aria-hidden="true" /><Text variant="strong">Couldn’t open the browser</Text>{onRetryLoad ? <Button size="small" onClick={onRetryLoad}>Try again</Button> : null}</div>;
+  if (!state) return <div className="browser-empty"><Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /><Text color="secondary" role="status">Opening browser…</Text></div>;
   const history = state.history.slice(0, 10);
   if (!history.length && !state.servers.length) return <div className="browser-empty"><Globe /><Text variant="strong">No page open</Text><p>Enter a URL above, or run a dev server in your workspace. Local servers appear here automatically.</p></div>;
   return <div className="browser-start-page">

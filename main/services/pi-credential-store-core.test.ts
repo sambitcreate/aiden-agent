@@ -4,7 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
-import { EncryptedPiCredentialStore, type CredentialCipher } from "./pi-credential-store-core.js";
+import {
+  EncryptedPiCredentialStore,
+  piCredentialChangeFencesBotAuthority,
+  piCredentialGrantIdentity,
+  piCredentialWithFreshGrant,
+  type CredentialCipher,
+  type PiCredentialWriteChange,
+} from "./pi-credential-store-core.js";
+import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -55,7 +63,7 @@ async function fixture(
 
 const TEST_EXPIRY = 2_000_000_000_000;
 
-const oauth = (access: string, refresh = `refresh-${access}`): Credential => ({
+const oauth = (access: string, refresh = `refresh-${access}`): Extract<Credential, { type: "oauth" }> => ({
   type: "oauth",
   access,
   refresh,
@@ -412,3 +420,147 @@ for (const operation of ["modify", "delete"] as const) {
     assert.deepEqual(await fs.readdir(path.dirname(file)), [path.basename(file)]);
   });
 }
+
+test("Azure identity migration durably moves ciphertext and survives restart and logout", async () => {
+  const { store, makeStore, file } = await fixture();
+  await store.modify("azure-openai-responses", async () => ({ type: "api_key", key: "azure-secret", env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" } }));
+  const before = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(await store.read("azure"), { type: "api_key", key: "azure-secret", env: { AZURE_OPENAI_BASE_URL: "https://deployment.example" } });
+  const after = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(after.entries.azure, before.entries["azure-openai-responses"]);
+  assert.equal(after.entries["azure-openai-responses"], undefined);
+  assert.deepEqual(await makeStore().list(), [{ providerId: "azure", type: "api_key" }]);
+  await makeStore().delete("azure");
+  assert.equal(await makeStore().read("azure"), undefined);
+});
+
+test("Azure collision preserves the current credential and encrypted recovery data", async () => {
+  const { store, makeStore, file } = await fixture();
+  await store.modify("azure", async () => oauth("current"));
+  await store.modify("azure-openai-responses", async () => oauth("previous"));
+  const legacy = JSON.parse(await fs.readFile(file, "utf8")).entries["azure-openai-responses"];
+  assert.deepEqual(await makeStore().read("azure"), oauth("current"));
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")).retiredAzureCredential, legacy);
+  await makeStore().modify("other-provider", async () => oauth("other"));
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")).retiredAzureCredential, legacy);
+  await makeStore().delete("azure");
+  assert.equal(await makeStore().read("azure"), undefined, "logout must not resurrect the retired credential");
+  assert.deepEqual(await makeStore().list(), [{ providerId: "other-provider", type: "oauth" }]);
+});
+
+test("Pi persists a rotated OAuth credential even when the requesting turn is cancelled", async () => {
+  const { createModels } = await import("@earendil-works/pi-ai");
+  const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+  const { store, makeStore } = await fixture();
+  const models = createModels({ credentials: store });
+  let begin!: () => void;
+  const started = new Promise<void>((resolve) => { begin = resolve; });
+  let finish!: () => void;
+  const released = new Promise<void>((resolve) => { finish = resolve; });
+  const base = builtinProviders().find((provider) => provider.id === "openai-codex")!;
+  models.setProvider({ ...base, auth: { oauth: {
+    name: "Fixture", login: async () => oauth("unused"),
+    refresh: async () => { begin(); await released; return oauth("rotated-after-cancel"); },
+    toAuth: async (credential) => ({ apiKey: credential.access }),
+  } } });
+  await store.modify(base.id, async () => ({ ...oauth("expired"), expires: 0 }));
+  const controller = new AbortController();
+  const pending = models.getAuth(base.id, { signal: controller.signal });
+  const rejected = assert.rejects(pending, /abort/i);
+  await started;
+  controller.abort();
+  finish();
+  await rejected;
+  // Join the credential queue before simulating a new process reading disk.
+  await store.modify(base.id, async () => undefined);
+  assert.deepEqual(await makeStore().read(base.id), oauth("rotated-after-cancel"));
+});
+
+test("a Pi OAuth refresh publishes as the same grant, so a running Bot lease survives it", async () => {
+  const { createModels } = await import("@earendil-works/pi-ai");
+  const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+  const { file } = await fixture();
+  const changes: boolean[] = [];
+  const leases = new BotRuntimeInventoryLeaseRegistry();
+  // Production wiring: only a grant change fences Bot runtime authority.
+  const fence = ({ grantChanged }: PiCredentialWriteChange) => {
+    changes.push(grantChanged);
+    if (grantChanged) leases.invalidate("provider_credential");
+  };
+  const store = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    beforeWritePublish: fence,
+  });
+  const base = builtinProviders().find((provider) => provider.id === "openai-codex")!;
+  const models = createModels({ credentials: store });
+  models.setProvider({ ...base, auth: { oauth: {
+    name: "Fixture", login: async () => oauth("unused"),
+    refresh: async (current) => ({ ...oauth("refreshed", "rotated-refresh"), accountId: current.accountId }),
+    toAuth: async (credential) => ({ apiKey: credential.access }),
+  } } });
+
+  await store.modify(base.id, async () => ({ ...oauth("expired"), expires: 0 }));
+  assert.deepEqual(changes, [true], "signing in is a grant change");
+
+  const turn = leases.acquire();
+  await models.getAuth(base.id);
+  const refreshed = await store.read(base.id);
+  assert.equal(refreshed?.type === "oauth" ? refreshed.access : undefined, "refreshed");
+  assert.deepEqual(changes, [true, false]);
+  assert.doesNotThrow(() => turn.assertCurrent());
+
+  await store.modify(base.id, async () => ({ ...oauth("other"), accountId: "account-other" }));
+  await store.delete(base.id);
+  assert.deepEqual(changes, [true, false, true, true]);
+  assert.throws(() => turn.assertCurrent());
+});
+
+test("an explicit sign-in to a token-only OAuth account is a new grant, and refreshes keep it", async () => {
+  const { file } = await fixture();
+  const changes: boolean[] = [];
+  const store = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    beforeWritePublish: ({ grantChanged }: PiCredentialWriteChange) => changes.push(grantChanged),
+  });
+  const signature = async () => JSON.stringify(piCredentialGrantIdentity((await store.read("anthropic"))!));
+  // Token-only credentials (no account field), as Anthropic returns them.
+  await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-a")));
+  const accountA = await signature();
+
+  // Pi rebuilds the credential on refresh and drops fields it does not know.
+  await store.modify("anthropic", async () => oauth("refreshed-a", "rotated-a"));
+  assert.equal(await signature(), accountA);
+
+  await store.modify("anthropic", async () => piCredentialWithFreshGrant(oauth("account-b")));
+  assert.notEqual(await signature(), accountA);
+  assert.deepEqual(changes, [true, false, true]);
+});
+
+test("writing an aiden-internal slot keeps running Bot turns, while a provider key change fences them", async () => {
+  const { file } = await fixture();
+  const leases = new BotRuntimeInventoryLeaseRegistry();
+  const fence = (change: PiCredentialWriteChange) => {
+    if (piCredentialChangeFencesBotAuthority(change)) leases.invalidate("provider_credential");
+  };
+  const store = new EncryptedPiCredentialStore({
+    filePath: () => file,
+    cipher: cipher(),
+    beforeWritePublish: fence,
+    afterWritePublish: fence,
+  });
+
+  const turn = leases.acquire();
+  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key" }));
+  await store.modify("aiden-internal:image-gen:fal", async () => ({ type: "api_key", key: "fal-image-key-2" }));
+  await store.delete("aiden-internal:image-gen:fal");
+  assert.doesNotThrow(() => turn.assertCurrent());
+
+  await store.modify("openrouter", async () => ({ type: "api_key", key: "sk-or-chat-key" }));
+  assert.throws(() => turn.assertCurrent());
+
+  const next = leases.acquire();
+  await store.delete("openrouter");
+  assert.throws(() => next.assertCurrent());
+});

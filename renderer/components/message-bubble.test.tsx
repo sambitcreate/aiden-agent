@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageBubble } from "./message-bubble.js";
-import { MessageList, richLinkHandoffDuplicateMessageId } from "./message-list.js";
+import { MessageList } from "./message-list.js";
 import { Markdown } from "./markdown.js";
 import { htmlArtifactTranscriptPlan } from "../lib/html-artifact-transcript.js";
 import {
@@ -97,49 +97,6 @@ test("one message renders at most fifty rich preview triggers", () => {
   const markup = renderToStaticMarkup(<MessageBubble role="assistant" content={content} />);
   assert.equal(markup.match(/data-rich-link-provider="github"/gu)?.length, 50);
   assert.equal(markup.match(/href="https:\/\/github\.com\/openai\/codex\/pull\//gu)?.length, 51);
-});
-
-test("the persisted handoff duplicate yields rich previews to the streaming copy", () => {
-  const messages = [
-    { id: "assistant-old", role: "assistant" as const, content: "Earlier", createdAt: 1 },
-    {
-      id: "assistant-final",
-      role: "assistant" as const,
-      content: "[PR](https://github.com/openai/codex/pull/247)",
-      createdAt: 2,
-    },
-  ];
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, true, "assistant-final"),
-    "assistant-final",
-  );
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, messages[1]!.content, false, "assistant-final"),
-    null,
-  );
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, "Different", true, "assistant-final"),
-    null,
-  );
-
-  const duplicateMarkup = renderToStaticMarkup(
-    <MessageBubble role="assistant" content={messages[1]!.content} richLinks={false} />,
-  );
-  assert.match(duplicateMarkup, /href="https:\/\/github\.com\/openai\/codex\/pull\/247"/u);
-  assert.doesNotMatch(duplicateMarkup, /data-rich-link-provider/u);
-});
-
-test("an unpersisted equal-text partial does not suppress an older assistant preview", () => {
-  const repeated = "[PR](https://github.com/openai/codex/pull/247)";
-  const messages = [
-    { id: "assistant-old", role: "assistant" as const, content: repeated, createdAt: 1 },
-  ];
-
-  assert.equal(richLinkHandoffDuplicateMessageId(messages, repeated, true, null), null);
-  assert.equal(
-    richLinkHandoffDuplicateMessageId(messages, repeated, true, "missing-current-response"),
-    null,
-  );
 });
 
 test("saved reasoning disclosures stay in order around tools and prose", () => {
@@ -539,6 +496,63 @@ test("settled reasoning uses one duration-labelled disclosure without an activit
   assert.doesNotMatch(markup, /agent-thinking-shimmer/u);
 });
 
+test("a placed HTML artifact renders between the prose around its tool call", () => {
+  const renderStep: AgentToolStep = {
+    id: "tool-1",
+    order: 0,
+    kind: "tool",
+    toolCallId: "call-1",
+    toolName: "render_artifact",
+    label: "Render artifact",
+    status: "completed",
+    startedAt: 1,
+    updatedAt: 2,
+    finishedAt: 2,
+    contentOffset: "Before chart.".length,
+  };
+  const content = "Before chart. After chart.";
+  const message = {
+    id: "assistant-placed",
+    role: "assistant" as const,
+    content,
+    createdAt: 1,
+    timeline: {
+      version: 3 as const,
+      generationId: "generation-1",
+      status: "completed" as const,
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [renderStep],
+    },
+    htmlArtifacts: [htmlArtifact("media-placed", "html-placed")],
+    htmlArtifactPlacements: [{ mediaId: "media-placed", toolCallId: "call-1" }],
+  };
+  const render = (placed: boolean) =>
+    renderToStaticMarkup(
+      <MessageList
+        chatId="chat-html"
+        messages={[placed ? message : { ...message, htmlArtifactPlacements: undefined }]}
+        streamingText={null}
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+      />,
+    );
+  const placedMarkup = render(true);
+  const frameAt = placedMarkup.indexOf('data-html-artifact="media-placed"');
+  assert.ok(frameAt > placedMarkup.indexOf("Before chart."));
+  assert.ok(frameAt < placedMarkup.indexOf("After chart."));
+  assert.equal(placedMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
+
+  const legacyMarkup = render(false);
+  assert.ok(legacyMarkup.indexOf('data-html-artifact="media-placed"') > legacyMarkup.indexOf("After chart."));
+  assert.equal(legacyMarkup.match(/data-html-artifact="media-placed"/gu)?.length, 1);
+});
+
 test("an in-flight render_artifact call stays at its tool row", () => {
   const renderStep: AgentToolStep = {
     id: "tool-1",
@@ -862,4 +876,125 @@ test("paused speech keeps both Resume and Stop available", () => {
   assert.match(markup, /aria-label="Resume reading aloud"/u);
   assert.match(markup, /aria-label="Stop reading aloud"/u);
   assert.match(markup, /data-active="true"/u);
+});
+
+test("a live generation error is announced as an alert with its reason", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error="The model server closed the connection."
+    />,
+  );
+
+  const alert = markup.match(/<[^>]*role="alert"[^>]*>([\s\S]*?)The model server closed the connection\./u);
+  assert.ok(alert, "the failure reason sits inside the alert region");
+  assert.match(alert[0], /Generation failed/u);
+});
+
+test("settled turns offer fork actions only when the chat can fork", () => {
+  const render = (props: { onFork?: () => void; forkDisabledReason?: string | null }) =>
+    renderToStaticMarkup(
+      <MessageList
+        chatId="chat-1"
+        messages={[
+          { id: "user-1", role: "user", content: "First question", createdAt: 1 },
+          { id: "assistant-1", role: "assistant", content: "First answer", createdAt: 2 },
+          { id: "user-2", role: "user", content: "Second question", createdAt: 3 },
+        ]}
+        streamingText="Still writing"
+        streamingReasoning={null}
+        timeline={null}
+        liveSubagents={[]}
+        subagentsEnabled={false}
+        onOpenSubagent={() => undefined}
+        agentActivity={null}
+        error={null}
+        {...props}
+      />,
+    );
+
+  const enabled = render({ onFork: () => undefined });
+  // Each sent prompt can be edited in a fork; only the settled reply forks after itself.
+  assert.equal((enabled.match(/aria-label="Edit in fork"/gu) ?? []).length, 2);
+  assert.equal((enabled.match(/aria-label="Fork from here"/gu) ?? []).length, 1);
+  const forkAt = enabled.indexOf('aria-label="Fork from here"');
+  assert.ok(forkAt > enabled.indexOf("First answer"));
+  assert.ok(forkAt < enabled.indexOf("Second question"));
+  assert.doesNotMatch(enabled, /aria-disabled="true"[^>]*data-fork-action/u);
+
+  const busy = render({ onFork: () => undefined, forkDisabledReason: "Finish the current response" });
+  assert.equal((busy.match(/aria-disabled="true"/gu) ?? []).length, 3);
+  assert.equal((busy.match(/title="Finish the current response"/gu) ?? []).length, 3);
+
+  assert.doesNotMatch(render({}), /data-fork-action/u);
+});
+
+test("settled replies without prose still offer Fork from here", () => {
+  const toolOnly: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-tool-only",
+    status: "completed",
+    startedAt: 1,
+    steps: [{
+      id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+      label: "Read file", status: "completed", startedAt: 1, updatedAt: 2, finishedAt: 2,
+    }],
+  };
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="chat-1"
+      messages={[
+        { id: "user-1", role: "user", content: "Draw it", createdAt: 1 },
+        { id: "assistant-image", role: "assistant", content: "", createdAt: 2, attachments: [imageAttachment()] },
+        { id: "user-2", role: "user", content: "Check the file", createdAt: 3 },
+        { id: "assistant-tool", role: "assistant", content: "", createdAt: 4, timeline: toolOnly },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+      onFork={() => undefined}
+    />,
+  );
+  assert.equal((markup.match(/aria-label="Fork from here"/gu) ?? []).length, 2);
+  // With no prose there is nothing to copy; only the two prompts keep Copy.
+  assert.equal((markup.match(/aria-label="Copy message"/gu) ?? []).length, 2);
+});
+
+test("a fork's summary card sits after its last copied message", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      chatId="fork-1"
+      messages={[
+        { id: "user-1", role: "user", content: "Copied question", createdAt: 1 },
+        { id: "assistant-1", role: "assistant", content: "Copied answer", createdAt: 2 },
+        { id: "user-2", role: "user", content: "New question in the fork", createdAt: 3 },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+      forkSummary={{ afterMessageId: "assistant-1", node: <aside data-testid="fork-summary">Summary</aside> }}
+    />,
+  );
+  const card = markup.indexOf('data-testid="fork-summary"');
+  assert.ok(card > markup.indexOf("Copied answer"));
+  assert.ok(card < markup.indexOf("New question in the fork"));
+  assert.equal((markup.match(/data-testid="fork-summary"/gu) ?? []).length, 1);
 });

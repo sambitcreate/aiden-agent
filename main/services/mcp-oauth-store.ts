@@ -8,7 +8,11 @@ import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { secureStorage } from "./secure-storage.js";
-import { parseMcpOAuthSession, type McpOAuthSession } from "./mcp-oauth-session.js";
+import {
+  parseMcpOAuthSession,
+  sameMcpOAuthGrant,
+  type McpOAuthSession,
+} from "./mcp-oauth-session.js";
 import {
   deleteSecretKeyEntry,
   parseSecretKeyMap,
@@ -19,6 +23,10 @@ import {
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { commitOwnedMutation } from "./mcp-oauth-store-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import { syncDirectory } from "./durable-fs.js";
+import { createMcpOAuthSessionCache } from "./mcp-oauth-session-cache.js";
+
+export { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
 
 const FILE = "mcp-oauth.json";
 
@@ -41,12 +49,26 @@ async function readMap(): Promise<SessionMap> {
   }
 }
 
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
+/**
+ * Fence Bot runtime authority only for grant changes. A routine token refresh
+ * rewrites this file (often in the middle of a Bot's own catalog snapshot,
+ * which opens fresh MCP clients); invalidating then would abort the very Bot
+ * create or turn admission that caused the refresh.
+ */
+function fenceBotAuthority(grantChanged: boolean): void {
+  if (grantChanged) invalidateBotRuntimeInventoryAuthority("mcp_credential");
+}
+
+/** Decrypt a stored entry for grant comparison; unreadable means "changed". */
+function storedSession(map: SessionMap, serverId: string): McpOAuthSession | undefined {
+  const b64 = secretKeyEntry(map, serverId);
+  if (!b64) return {};
   try {
-    await handle.sync();
-  } finally {
-    await handle.close();
+    return parseMcpOAuthSession(
+      JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64"))),
+    );
+  } catch {
+    return undefined;
   }
 }
 
@@ -54,6 +76,7 @@ async function writeMap(
   map: SessionMap,
   previousMap: SessionMap,
   isCurrent: MutationGuard = () => true,
+  grantChanged = true,
 ): Promise<void> {
   const target = await filePath();
   const temporary = `${target}.${randomUUID()}.tmp`;
@@ -77,16 +100,16 @@ async function writeMap(
     await commitOwnedMutation({
       isCurrent,
       publish: async () => {
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.rename(temporary, target);
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },
       rollback: async () => {
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.rename(rollback, target);
-        invalidateBotRuntimeInventoryAuthority("mcp_credential");
+        fenceBotAuthority(grantChanged);
         await fs.chmod(target, 0o600);
         await syncDirectory(path.dirname(target));
       },
@@ -99,8 +122,24 @@ async function writeMap(
   }
 }
 
+// Decrypted sessions, held in memory between writes. Every mutation
+// invalidates it whether it publishes, rolls back or fails part-way, so a read
+// after a mutation always reflects the file as that mutation left it.
+const sessions = createMcpOAuthSessionCache({
+  readMap,
+  decrypt: (b64) => parseMcpOAuthSession(JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64")))),
+});
+
 function mutate(operation: () => Promise<void>): Promise<void> {
-  const pending = mutationQueue.then(operation, operation);
+  const invalidating = async () => {
+    sessions.invalidate();
+    try {
+      await operation();
+    } finally {
+      sessions.invalidate();
+    }
+  };
+  const pending = mutationQueue.then(invalidating, invalidating);
   mutationQueue = pending.catch(() => {});
   return pending;
 }
@@ -117,25 +156,15 @@ export const mcpOAuthStore = {
     // them, then prove their generation is still current after I/O/decryption.
     await mutationQueue;
     assertMutationCurrent(isCurrent);
-    let map: SessionMap;
-    try {
-      map = await readMap();
-    } catch (error) {
-      logger.error("mcp-oauth", "Could not read the encrypted OAuth session store.", error);
-      assertMutationCurrent(isCurrent);
-      return {};
-    }
-    assertMutationCurrent(isCurrent);
-    const b64 = secretKeyEntry(map, serverId);
-    if (!b64) return {};
     let session: McpOAuthSession;
     try {
-      const json = secureStorage.decryptString(Buffer.from(b64, "base64"));
-      session = parseMcpOAuthSession(JSON.parse(json));
+      session = await sessions.get(serverId);
     } catch (error) {
-      logger.error("mcp-oauth", `Failed to decrypt OAuth session for ${serverId}`, error);
+      // A saved sign-in that cannot be read is not "never authorized": the
+      // McpOAuthCredentialStorageError tells callers which one happened.
+      logger.error("mcp-oauth", `Could not read the encrypted OAuth session for ${serverId}`, error);
       assertMutationCurrent(isCurrent);
-      return {};
+      throw error;
     }
     assertMutationCurrent(isCurrent);
     return session;
@@ -155,14 +184,11 @@ export const mcpOAuthStore = {
       const map = await readMap();
       const previousMap = { ...map };
       assertMutationCurrent(isCurrent);
+      const previous = storedSession(map, serverId);
+      const grantChanged = previous === undefined || !sameMcpOAuthGrant(previous, session);
       setSecretKeyEntry(map, serverId, Buffer.from(encrypted).toString("base64"));
-      await writeMap(map, previousMap, isCurrent);
+      await writeMap(map, previousMap, isCurrent, grantChanged);
     });
-  },
-
-  async has(serverId: string): Promise<boolean> {
-    const session = await this.get(serverId);
-    return Boolean(session.tokens);
   },
 
   async clear(serverId: string, isCurrent: MutationGuard = () => true): Promise<void> {

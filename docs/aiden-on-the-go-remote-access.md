@@ -4,7 +4,7 @@ Aiden Agent can expose a small authenticated API to Aiden On The Go on phones an
 
 ## Local Network setup
 
-1. Open **Settings → Aiden On The Go** in Aiden Agent.
+1. Open **Settings → Connections → Control this device** in Aiden Agent.
 2. Choose **On the same Wi-Fi**, then **Connect a device**.
 3. Review what Aiden will enable and choose **Enable and show code**.
 4. Scan the code in Aiden On The Go. If the camera is unavailable, use the setup code instead.
@@ -18,7 +18,7 @@ The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network acc
 Tailscale supplies reachability and network encryption, but Aiden still requires its own device credential on every request.
 
 1. Install Tailscale on the Mac and phone, sign in to the intended network, and make sure HTTPS is authorized for the Mac’s Tailscale name.
-2. Open **Settings → Aiden On The Go** and choose **Away from home**.
+2. Open **Settings → Connections → Control this device** and choose **Away from home**.
 3. Choose **Connect a device → Enable and show code**. Aiden turns on access, sets up its private connection, checks it, and shows the one-time code.
 4. Scan the code on your phone.
 
@@ -37,6 +37,35 @@ Use **Remove access** beside a paired device to invalidate it immediately. Revoc
 ## Offline behavior
 
 Closing the Aiden window does not stop Remote Access. Quitting Aiden does. The mobile app may retain its bounded offline read cache, but it cannot start new work or mutate the Mac while Aiden is stopped or unreachable. Temporary connection loss does not grant broader access and does not make an invalid or revoked credential valid.
+
+## Control another computer
+
+Any computer running Aiden Agent can use the chats, workspaces and Bots of another computer running Aiden, and be used by it in turn. Work stays on the computer that owns it: its chats, models, tools and files run there, and this Mac sends your actions to it.
+
+### Pair a computer
+
+1. On the computer you want to control, open **Settings → Connections → Control this device** and leave **Accept connection requests** on.
+2. On this Mac, open **Settings → Connections → Control other devices** and choose **Add device**. While the sheet is open, Aiden looks for computers on the same network and on your Tailscale tailnet. It never searches in the background.
+3. Choose **Connect** beside the computer. Both screens show the same six-digit match code.
+4. On the other computer, check the code and choose **Allow**. A request that is denied, cancelled or left for two minutes pairs nothing.
+
+When nobody is at the other computer, choose **Enter setup code** instead and type the code it showed for **Connect a device**. **Paste pairing link** is an advanced fallback.
+
+Pairing a computer gives it full control of this computer's chats: it can read them, send messages, stop runs and answer approvals, including runs started on this computer's own screen, its phone, Bots or schedules. Pair only computers you own. To end that access, remove the computer under **Control this device**.
+
+### Use a paired computer
+
+- **Sidebar.** The paired computer's workspaces and chats appear in the sidebar with a globe marker. The **Organize sidebar** menu chooses the view (Workspaces, Recent or Needs attention), the sort orders, a machine filter and whether workspaces from the same repository on different machines are grouped together (**Group across machines**).
+- **Chats.** Open a remote chat to read it, load older messages, send, stop, approve or deny tools, answer questions and steer, as for a local chat. Runs started anywhere on the other computer appear live.
+- **New chats.** On a new chat, choose the computer in the composer's machine picker, then one of its workspaces and models. Attachments upload to that computer.
+- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own. The Assistant stays on its own computer.
+- **Not available remotely.** Terminal, the Environment browser, computer use and open-in-editor work only on the computer you are sitting at.
+
+### Offline and identity changes
+
+When a paired computer is asleep or unreachable, its rows stay in the sidebar marked stale and read-only, and actions are disabled until it returns. Aiden reconnects on its own after sleep, unlock or a network change; choose **Reconnect** to try at once. Nothing is queued while a computer is offline.
+
+If a computer reached over the local network presents a different identity, Aiden blocks it and asks you to pair again rather than trust the new key. Use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
 
 ## Mobile usage summary
 
@@ -67,3 +96,34 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Port already in use:** stop the other local service or repair the saved Remote Access configuration before enabling it again.
 
 Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, stable Aiden-owned error codes, and categorical Tailscale inspection phase/reason/attempt counts. Successful production traffic is reduced to daily aggregate counts; durable records never contain Tailscale command output, request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.
+
+## Connection recovery
+
+Settings → Connections separates computers that control this device from computers
+this device controls. A paired computer shows its current route, route count, and last
+successful chat synchronization. “Syncing chats” means the secure connection is open
+but the chat feed is not ready. “Recently active” describes recent contact, not a live
+connection guarantee.
+
+Paired desktop computers can learn local-network and Tailscale alternatives through
+their verified connection. Aiden checks each route's certificate and paired identity
+before using it, switches when a route fails, and checks for a preferred local route
+while on a fallback. Removing a learned route suppresses it until **Restore learned
+routes** is selected. The computer still needs to be awake with Aiden running.
+
+A send whose response is lost remains a saved, unconfirmed request. Reopening the
+conversation restores its notice. **Retry** uses that exact request and its original
+key within the safe retry window; it never runs automatically. When the window ends,
+review the conversation on the host before dismissing the notice and making a new
+attempt. New draft edits remain separate from the saved request. Desktop saved
+requests are encrypted locally and bound to the original pairing; mobile records
+stay in the app's private storage and are scoped to that pairing.
+
+On Android, **Nearby** discovers desktops on the local network. New Android pairings
+require a desktop supporting the Android device identity (contract revision 31); an
+older desktop shows an update prompt. QR or manual-address pairing remains available
+when nearby discovery is unavailable. Discovery only supplies an address hint;
+setup-code verification and certificate validation still establish trust. Connection
+errors distinguish network reachability, secure-identity verification, and app-version
+problems. A secure-identity failure requires verification and pairing repair, rather
+than a trust-bypass retry.

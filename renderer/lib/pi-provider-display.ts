@@ -27,6 +27,7 @@ export const PROVIDER_ICON_SLUGS = [
   "amazon-bedrock",
   "ant-ling",
   "anthropic",
+  "antigravity",
   "apple-foundation-models",
   "azure-openai-responses",
   "cerebras",
@@ -77,6 +78,7 @@ const CUSTOM_OLLAMA_PROVIDER_ID = /^custom:ollama(?:-(?:[2-9]|[1-9]\d+))?$/u;
 
 const PROVIDER_ICON_ALIASES: Readonly<Record<string, ProviderIconSlug>> = {
   gemini: "google",
+  azure: "azure-openai-responses",
   "lm-studio": "lmstudio",
   moonshot: "moonshotai",
 };
@@ -151,6 +153,22 @@ export function isOnboardingBuiltinProviderReady(provider: OnboardingBuiltinProv
   // Pi projects ambient and stored credentials alike through hasKey, while
   // builtinProviderRecord marks every provider in this catalog as needsKey.
   return provider.models.length > 0 && provider.hasKey;
+}
+
+/** Prefer current OpenAI sign-in while retaining an already connected legacy Codex account. */
+export function onboardingChatGptSelection(
+  openai: (OnboardingBuiltinProvider & { defaultModel?: string }) | undefined,
+  codex: { configured: boolean; needsAttention?: boolean; models: readonly { id: string }[] } | undefined,
+): { providerId: string; model: string } | undefined {
+  if (openai && isOnboardingBuiltinProviderReady(openai)) {
+    const model = openai.defaultModel && openai.models.includes(openai.defaultModel)
+      ? openai.defaultModel : openai.models[0]!;
+    return { providerId: "openai", model };
+  }
+  if (codex?.configured && codex.needsAttention === false && codex.models[0]) {
+    return { providerId: "openai-codex", model: codex.models[0].id };
+  }
+  return undefined;
 }
 
 /**

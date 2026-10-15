@@ -17,17 +17,18 @@ export function geminiLiveEnabled(
 }
 
 /**
- * Screen sharing is a second attended-Live gate. It is enabled only after the
- * packaged, Screen Recording-authorized native-picker acceptance has been
- * recorded for the current build; it can never outlive the Live flag itself.
+ * Screen sharing is a second attended-Live gate. It ships enabled, keeps its
+ * own kill switch (any value other than `1` or `true`), and can never outlive
+ * the Live flag itself.
  */
 export function geminiLiveScreenEnabled(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
-  return (
-    geminiLiveEnabled(environment) &&
-    environment[GEMINI_LIVE_SCREEN_FLAG]?.trim() === "1"
-  );
+  if (!geminiLiveEnabled(environment)) return false;
+  const rawValue = environment[GEMINI_LIVE_SCREEN_FLAG];
+  if (rawValue === undefined) return true;
+  const value = rawValue.trim().toLowerCase();
+  return value === "1" || value === "true";
 }
 
 export function experimentalGeminiLiveModel(

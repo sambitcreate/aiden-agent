@@ -1,3 +1,5 @@
+import type { Attachment } from "./types";
+
 /** Device-local text drafts. Attachment bytes stay in the attachment picker. */
 interface StoredComposerDraft {
   version: 1;
@@ -55,7 +57,26 @@ export function settleComposerSubmission(chatId: string, accepted: boolean, curr
 }
 
 export function discardComposerDraft(chatId: string): void {
+  attachmentSeeds.delete(chatId);
   try { localStorage.removeItem(key(chatId)); } catch { /* Deletion still proceeds. */ }
+}
+
+// One-shot, in-memory attachment seeds for a composer that is about to open
+// (Edit in fork). Never persisted: attachment bytes stay out of storage.
+const attachmentSeeds = new Map<string, Attachment[]>();
+
+export function seedComposerAttachments(chatId: string, attachments: readonly Attachment[]): void {
+  const usable = attachments.filter((attachment) =>
+    attachment.kind === "image" ? Boolean(attachment.data) : attachment.text !== undefined,
+  );
+  if (usable.length > 0) attachmentSeeds.set(chatId, usable.map((attachment) => ({ ...attachment })));
+  else attachmentSeeds.delete(chatId);
+}
+
+export function takeComposerAttachmentSeed(chatId: string): Attachment[] | undefined {
+  const seed = attachmentSeeds.get(chatId);
+  attachmentSeeds.delete(chatId);
+  return seed;
 }
 
 type GuidanceRestoreListener = (guidance: readonly string[]) => void;
@@ -105,6 +126,46 @@ export function restoreUndeliveredGuidance(chatId: string, guidance: readonly st
   const record = read(chatId);
   const current = record.text || record.unresolvedText || "";
   write(chatId, { ...record, text: mergeRestoredGuidance(current, guidance) });
+}
+
+type StagedTextListener = (text: string) => void;
+const stagedTextListeners = new Map<string, Set<StagedTextListener>>();
+
+/**
+ * Put text in the chat's draft for the user to review and send, for example a
+ * follow-up an inline visual asked for while a reply was still running. A
+ * mounted composer merges it into its live text; otherwise the saved draft is
+ * extended so the text is there when the chat is reopened.
+ */
+export function stageComposerText(chatId: string, text: string): void {
+  if (!text.trim()) return;
+  const listeners = stagedTextListeners.get(chatId);
+  if (listeners?.size) {
+    for (const listener of [...listeners]) listener(text);
+    return;
+  }
+  const record = read(chatId);
+  const current = record.text || record.unresolvedText || "";
+  write(chatId, { ...record, text: mergeRestoredGuidance(current, [text]) });
+}
+
+export function subscribeStagedComposerText(
+  chatId: string,
+  listener: StagedTextListener,
+): () => void {
+  let listeners = stagedTextListeners.get(chatId);
+  if (!listeners) {
+    listeners = new Set();
+    stagedTextListeners.set(chatId, listeners);
+  }
+  const current = listeners;
+  current.add(listener);
+  return () => {
+    current.delete(listener);
+    if (current.size === 0 && stagedTextListeners.get(chatId) === current) {
+      stagedTextListeners.delete(chatId);
+    }
+  };
 }
 
 export function subscribeGuidanceRestore(

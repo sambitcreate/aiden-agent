@@ -13,7 +13,8 @@ const persistence = new DataStore<MainWindowState>(
   "main-window-state.json",
   normalizeMainWindowState(null),
   undefined,
-  { normalize: normalizeMainWindowState, maxBytes: 4_096 },
+  // Window geometry is regenerated on the next move; no rescue copy needed.
+  { normalize: normalizeMainWindowState, maxBytes: 4_096, preserveCorruptFile: false },
 );
 
 const trackedWindows = new WeakMap<BrowserWindow, () => MainWindowState>();

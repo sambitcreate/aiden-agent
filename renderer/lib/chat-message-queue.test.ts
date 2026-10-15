@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  admitRunInputOnceStarted,
   ChatMessageQueue,
   chatMessageQueue,
   canSteerQueuedMessage,
+  committedRunInputNotice,
   deliverQueuedMessage,
   steerQueuedMessage,
   withCommittedRunInput,
   type QueuedChatMessage,
 } from "./chat-message-queue";
+import {
+  forkSummaryHoldsSend,
+  type ChatForkLineageV1,
+  type ChatForkSummaryV1,
+} from "../shared/chat-copy-contract";
 
 test("committed steer shows once in the open chat, even if a reload already has it", () => {
   const chat = {
@@ -102,13 +109,9 @@ test("FIFO, priority, deleting and keyboard reorder preserve stable identities",
   assert.equal(queue.claim()?.id, "one");
 });
 
-test("redirect replacement is atomic and Stop clears queued work", () => {
+test("discarding a deleted chat clears queued work", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("old"));
-  assert.throws(() => queue.replaceWith({ ...message("invalid"), text: "" }), /Add a message/u);
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["old"]);
-  queue.replaceWith(message("replacement"));
-  assert.deepEqual(queue.getSnapshot().messages.map((item) => item.id), ["replacement"]);
   queue.discard();
   assert.equal(queue.getSnapshot().messages.length, 0);
   assert.equal(queue.claim(), undefined);
@@ -328,6 +331,49 @@ test("a delivery waiting for idle defers when compaction takes the chat", async 
   assert.deepEqual((await drain(queue)).sent, ["one"]);
 });
 
+test("a fork's follow-ups wait through a pending or failed summary and send in order once it settles", async () => {
+  const lineage = (summary?: ChatForkSummaryV1): ChatForkLineageV1 => ({
+    chatId: "source",
+    messageId: "a1",
+    position: "after",
+    at: 1,
+    ...(summary ? { summary } : {}),
+  });
+  const queue = new ChatMessageQueue();
+  queue.holdForForkSummary(forkSummaryHoldsSend(lineage({ state: "pending", afterMessageId: "f-a1" })));
+  ["one", "two"].forEach((id) => queue.add(message(id)));
+  assert.deepEqual((await drain(queue)).sent, [], "nothing sends while the summary runs");
+
+  // A failed summary still holds: main refuses the send until Retry or Continue.
+  queue.holdForForkSummary(
+    forkSummaryHoldsSend(lineage({ state: "failed", afterMessageId: "f-a1", error: "Summary cancelled." })),
+  );
+  // An unrelated compaction settling does not release the fork's hold.
+  queue.holdForCompaction();
+  queue.releaseCompactionHold({ compacted: true });
+  assert.deepEqual((await drain(queue)).sent, []);
+  assert.deepEqual(ids(queue), ["one", "two"]);
+  assert.equal(queue.getSnapshot().paused, false, "held messages are kept, not failed");
+
+  // Continue without summary drops the summary; the queue proceeds in order.
+  queue.holdForForkSummary(forkSummaryHoldsSend(lineage()));
+  assert.deepEqual((await drain(queue)).sent, ["one", "two"]);
+});
+
+test("a delivery waiting for idle defers when a fork summary starts holding sends", async () => {
+  const queue = new ChatMessageQueue();
+  queue.add(message("one"));
+  const idle = deferred<boolean>();
+  const input = { ...delivery(queue), waitUntilIdle: () => idle.promise };
+  const pending = deliverQueuedMessage(input);
+  queue.holdForForkSummary(true);
+  idle.resolve(true);
+  await pending;
+  assert.deepEqual(input.sent, []);
+  queue.holdForForkSummary(false);
+  assert.deepEqual((await drain(queue)).sent, ["one"]);
+});
+
 function ids(queue: ChatMessageQueue) {
   return queue.getSnapshot().messages.map((item) => item.id);
 }
@@ -383,6 +429,22 @@ test("a steer committed as history after the run ended is removed, never resent 
   assert.deepEqual(outcome, { kind: "committed", reason: "run_not_active" });
   assert.deepEqual(ids(queue), []);
   assert.deepEqual((await drain(queue)).sent, []);
+});
+
+test("input saved as history but not taken by the run reads the same as on the phones", () => {
+  // Mirrors AidenRunInputPresentation.receipt on iOS and Android for committed
+  // rejections, so a Stop that strands saved input is described identically.
+  assert.equal(
+    committedRunInputNotice("cancelled"),
+    "Saved to the chat — the run was cancelled before it could use it",
+  );
+  assert.equal(committedRunInputNotice("capacity"), "Saved to the chat — the run queue was full");
+  for (const reason of ["run_not_active", "invalid", undefined] as const) {
+    assert.equal(
+      committedRunInputNotice(reason),
+      "Saved to the chat — the run ended before it could use it",
+    );
+  }
 });
 
 test("an uncommitted steer rejection keeps the message queued for the normal follow-up", async () => {
@@ -455,4 +517,74 @@ test("messages a run cannot take as guidance are never offered to admission", as
   assert.equal(calls, 0);
   assert.equal(queue.getSnapshot().messages.length, unsteerable.length + 1);
   assert.equal(canSteerQueuedMessage(message("plain")), true);
+});
+
+test("guidance sent while this window's run is still starting waits for the run to take input", async () => {
+  // Main answers run_not_active until Pi begins the first turn, although Stop
+  // and the Steer pill are live as soon as the send starts.
+  const answers = [
+    { admitted: false, reason: "run_not_active" as const, committed: false },
+    { admitted: false, reason: "run_not_active" as const, committed: false },
+    { admitted: true, queue: "steer" as const, committed: true, messageId: "m1" },
+  ];
+  const waits: number[] = [];
+  const receipt = await admitRunInputOnceStarted({
+    admit: async () => answers.shift()!,
+    live: () => true,
+    delay: async (ms) => {
+      waits.push(ms);
+    },
+  });
+  assert.deepEqual(receipt, { admitted: true, queue: "steer", committed: true, messageId: "m1" });
+  assert.equal(waits.length, 2);
+  assert.equal(answers.length, 0);
+});
+
+test("guidance for a run that ended, was stopped or never starts still reports it ended", async () => {
+  const notActive = { admitted: false, reason: "run_not_active" as const, committed: false };
+  let attempts = 0;
+  // The window's run settled: no retry.
+  assert.deepEqual(
+    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => false, delay: async () => {} }),
+    notActive,
+  );
+  assert.equal(attempts, 1);
+
+  // The run ends (or Stop is pressed) while waiting.
+  attempts = 0;
+  let live = true;
+  assert.deepEqual(
+    await admitRunInputOnceStarted({
+      admit: async () => (attempts++, notActive),
+      live: () => live,
+      delay: async () => {
+        live = false;
+      },
+    }),
+    notActive,
+  );
+  assert.equal(attempts, 1);
+
+  // Waiting is bounded.
+  attempts = 0;
+  assert.deepEqual(
+    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => true, delay: async () => {}, retryMs: [1, 1, 1] }),
+    notActive,
+  );
+  assert.equal(attempts, 4);
+});
+
+test("only a run that has not started yet is waited for", async () => {
+  for (const receipt of [
+    { admitted: false, reason: "capacity" as const, committed: false },
+    { admitted: false, reason: "cancelled" as const, committed: false },
+    { admitted: false, reason: "run_not_active" as const, committed: true, messageId: "m" },
+  ]) {
+    let attempts = 0;
+    assert.deepEqual(
+      await admitRunInputOnceStarted({ admit: async () => (attempts++, receipt), live: () => true, delay: async () => {} }),
+      receipt,
+    );
+    assert.equal(attempts, 1);
+  }
 });

@@ -362,3 +362,20 @@ test("aborting one tool request does not close its generation", async () => {
   coordinator.decide(prompts[1]!, true);
   assert.equal(await next, "allowed");
 });
+
+test("a caller-supplied approval id is published and answered under that id; re-asking it withdraws the older ask", async () => {
+  const prompts: string[] = [];
+  const withdrawn: Array<[string, string]> = [];
+  const coordinator = new ToolApprovalCoordinator(
+    (prompt) => prompts.push(prompt.approvalId),
+    (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+  );
+  const first = coordinator.request({ ...delayedApproval, approvalId: "wait-1" });
+  const second = coordinator.request({ ...delayedApproval, approvalId: "wait-1" });
+  assert.deepEqual(prompts, ["wait-1", "wait-1"]);
+  assert.equal(await first, "cancelled");
+  assert.equal(coordinator.decideAsHost("wait-1", true), true);
+  assert.equal(await second, "allowed");
+  assert.deepEqual(withdrawn, [["wait-1", "cancelled"], ["wait-1", "allowed"]]);
+  assert.equal(coordinator.decideAsHost("wait-1", true), false, "an answered id cannot be answered again");
+});

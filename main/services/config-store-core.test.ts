@@ -201,6 +201,22 @@ test("getProvider recombines intent with this machine's cache", async (t) => {
   assert.equal(await h.store.getProvider("nope"), undefined);
 });
 
+test("listStoredProviders returns composed providers without consulting the keychain", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  h.secrets.keys[provider.id] = "ciphertext";
+  await h.store.listProviders(); // settle seeding and secret migration first
+  let keychainReads = 0;
+  const { hasKey, getProviderKey } = h.secrets.port;
+  h.secrets.port.hasKey = async (id) => { keychainReads += 1; return hasKey(id); };
+  h.secrets.port.getProviderKey = async (id, binding) => { keychainReads += 1; return getProviderKey!(id, binding); };
+
+  assert.deepEqual(await h.store.listStoredProviders(), [provider]);
+  assert.equal(keychainReads, 0);
+  await h.store.listProviders();
+  assert.ok(keychainReads > 0, "the full listing still reports key presence");
+});
+
 // A provider carried to a new machine has intent but no cache and no key. It must
 // still list, with an empty model list, rather than break the picker.
 test("a provider with no local cache lists with an empty model list", async (t) => {
@@ -397,6 +413,39 @@ test("removing a provider clears its model visibility preferences", async (t) =>
   });
 });
 
+test("removing a provider drops its Model Pad placements, pins and recent models", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  const placement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } as const;
+  await h.store.setSettings({
+    modelPadPlacements: {
+      [`${provider.id}::qwen3-8b`]: placement,
+      "openai::gpt": placement,
+    },
+    pinnedModels: [`${provider.id}::qwen3-8b`, "openai::gpt"],
+    recentModels: ["openai::gpt", `${provider.id}::qwen3-8b`, "google::gemini"],
+  });
+
+  await h.store.removeProvider(provider.id);
+
+  const settings = await createConfigStore(h.stores, h.secrets.port).getSettings();
+  assert.deepEqual(settings.modelPadPlacements, { "openai::gpt": placement });
+  assert.deepEqual(settings.pinnedModels, ["openai::gpt"]);
+  assert.deepEqual(settings.recentModels, ["openai::gpt", "google::gemini"]);
+});
+
+test("recent models are machine-local history and never reach the portable config", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setSettings({ recentModels: [`${provider.id}::qwen3-8b`, "openai::gpt"] });
+
+  const portableRaw = await fs.readFile(h.portableFile, "utf-8");
+  assert.equal(portableRaw.includes("recentModels"), false);
+  assert.equal(portableRaw.includes("openai::gpt"), false);
+  const local = await readJson<{ settings: { recentModels?: string[] } }>(h.settingsFile);
+  assert.deepEqual(local.settings.recentModels, [`${provider.id}::qwen3-8b`, "openai::gpt"]);
+});
+
 test("admitted provider removal finishes cache and visibility cleanup after renderer navigation", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
@@ -567,6 +616,9 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
   Object.assign(settings, {
     dictationActivationMode: "double-tap",
     localVoiceIdleUnloadMinutes: -5,
+    voiceLanguage: "klingon!",
+    voiceTranslateToEnglish: "yes",
+    voiceTrimSilence: 0,
     dictationDictionary: [
       { from: "  aiden  ", to: "Aiden" },
       { from: 42, to: "nope" },
@@ -586,10 +638,43 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
   const runtime = await restarted.getSettings();
   assert.equal(runtime.dictationActivationMode, undefined);
   assert.equal(runtime.localVoiceIdleUnloadMinutes, undefined);
+  assert.equal(runtime.voiceLanguage, undefined);
+  assert.equal(runtime.voiceTranslateToEnglish, undefined);
+  assert.equal(runtime.voiceTrimSilence, undefined);
   assert.deepEqual(runtime.dictationDictionary, [
     { from: "aiden", to: "Aiden" },
     { from: "pie", to: "Pi" },
   ]);
+});
+
+test("saved voice language and decode preferences survive a restart", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false });
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const runtime = await restarted.getSettings();
+  assert.equal(runtime.voiceLanguage, "de");
+  assert.equal(runtime.voiceTranslateToEnglish, true);
+  assert.equal(runtime.voiceTrimSilence, false);
+});
+
+test("clearing the voice provider returns to Automatic after a restart", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ voiceProvider: "openai" });
+  await h.store.setSettings({ voiceProvider: undefined });
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.equal((await restarted.getSettings()).voiceProvider, undefined);
 });
 
 test("every install ends up with at least one workspace", async (t) => {
@@ -672,6 +757,46 @@ test("released onboarding local identity migration re-homes cache and remembered
     models: provider.models,
     modelMetadata: provider.modelMetadata,
   });
+});
+
+test("provider identity migration re-homes Model Pad placements, pins and recent models with canonical precedence", async (t) => {
+  const releasedId = "custom:onboarding-lmstudio";
+  const canonicalId = "custom:lmstudio";
+  const legacyPlacement = { x: 0.1, y: 0.2, xSource: "measured", ySource: "user" } as const;
+  const canonicalPlacement = { x: 0.9, y: 0.8, xSource: "benchmark", ySource: "benchmark" } as const;
+  const h = await harness(t, {
+    providers: [{ ...provider, id: releasedId, defaultModel: "qwen3-8b" }],
+    settings: {
+      modelPadPlacements: {
+        [`${releasedId}::qwen3-8b`]: legacyPlacement,
+        [`${releasedId}::other`]: legacyPlacement,
+        [`${canonicalId}::other`]: canonicalPlacement,
+        "openai::gpt": legacyPlacement,
+      },
+      pinnedModels: [`${releasedId}::other`, "openai::gpt", `${canonicalId}::other`, `${releasedId}::qwen3-8b`],
+      recentModels: [`${releasedId}::qwen3-8b`, `${canonicalId}::other`, `${releasedId}::other`],
+    },
+    seeded: true,
+  });
+
+  await h.store.listProviders();
+
+  const settings = await h.store.getSettings();
+  assert.deepEqual(settings.modelPadPlacements, {
+    [`${canonicalId}::qwen3-8b`]: legacyPlacement,
+    [`${canonicalId}::other`]: canonicalPlacement,
+    "openai::gpt": legacyPlacement,
+  });
+  assert.deepEqual(settings.pinnedModels, [
+    "openai::gpt",
+    `${canonicalId}::other`,
+    `${canonicalId}::qwen3-8b`,
+  ]);
+  const persisted = await readJson<{ settings: typeof settings }>(h.settingsFile);
+  assert.deepEqual(persisted.settings.modelPadPlacements, settings.modelPadPlacements);
+  assert.deepEqual(persisted.settings.pinnedModels, settings.pinnedModels);
+  assert.deepEqual(settings.recentModels, [`${canonicalId}::qwen3-8b`, `${canonicalId}::other`]);
+  assert.deepEqual(persisted.settings.recentModels, settings.recentModels);
 });
 
 test("an edited legacy preset is retained under a reserved ID with its cache re-homed", async (t) => {
@@ -2426,6 +2551,8 @@ test("malformed known settings fields are dropped before type-assuming consumers
         profileName: { bad: true },
         exaEnabled: "yes",
         showLocalModelReasoning: "yes",
+        aidenLiveEnabled: "off",
+        aidenLiveButtonVisible: 0,
         lastProviderId: 7,
         futureSetting: { retained: true },
       },
@@ -2457,6 +2584,26 @@ test("local reasoning visibility is a durable boolean presentation preference", 
     fakeSecrets().port,
   );
   assert.equal((await next.getSettings()).showLocalModelReasoning, false);
+});
+
+test("Aiden Live switches default on and persist an explicit off", async (t) => {
+  const h = await harness(t);
+
+  const initial = await h.store.getSettings();
+  assert.equal(initial.aidenLiveEnabled, undefined);
+  assert.equal(initial.aidenLiveButtonVisible, undefined);
+  await h.store.setSettings({ aidenLiveEnabled: false, aidenLiveButtonVisible: false });
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const reloaded = await next.getSettings();
+  assert.equal(reloaded.aidenLiveEnabled, false);
+  assert.equal(reloaded.aidenLiveButtonVisible, false);
 });
 
 test("future nested settings versions survive unrelated writes", async (t) => {
@@ -2954,4 +3101,119 @@ test("chat controls cannot widen a disabled or revoked paired-host policy", asyn
   await assert.rejects(h.store.updateAppControl(operation, () => false), /cancel|current|authority|no longer active/iu);
   await assert.rejects(h.store.updateAppControl(operation, () => true, false, async () => { throw new Error("Chat access revoked"); }), /Chat access revoked/u);
   assert.equal((await h.store.getSettings()).memoryEnabled, true);
+});
+
+test("per-model compaction budgets persist, reset and reject invalid patches atomically", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ compactionModelOverrides: { "openai/model": { reserveTokens: 8_000, keepRecentTokens: 0 } } });
+  const next = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await next.getSettings()).compactionModelOverrides?.["openai/model"]?.keepRecentTokens, 0);
+  await assert.rejects(next.setSettings({ compactionModelOverrides: { "openai/model": { reserveTokens: -1 } }, memoryEnabled: false }));
+  assert.equal((await next.getSettings()).compactionModelOverrides?.["openai/model"]?.reserveTokens, 8_000);
+  assert.notEqual((await next.getSettings()).memoryEnabled, false);
+  await next.setSettings({ compactionModelOverrides: {} });
+  assert.deepEqual((await next.getSettings()).compactionModelOverrides, {});
+});
+
+
+test("cache warming is off by default and persists only an explicit boolean opt-in", async (t) => {
+  const h = await harness(t);
+  assert.equal((await h.store.getSettings()).cacheWarmingEnabled ?? false, false);
+  await h.store.setSettings({ cacheWarmingEnabled: true });
+  const restarted = createConfigStore(createPortableConfigStores(() => path.dirname(h.portableFile), () => path.dirname(h.localFile)), fakeSecrets().port);
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, true);
+  await assert.rejects(restarted.setSettings({ cacheWarmingEnabled: "true" as never }));
+  await restarted.setSettings({ cacheWarmingEnabled: false });
+  assert.equal((await restarted.getSettings()).cacheWarmingEnabled, false);
+});
+
+test("local classifier opt-in persists independently of cached models and can be disabled", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider({ ...provider, llamaCppClassifierEnabled: true });
+  const restarted = createConfigStore(h.stores, h.secrets.port);
+  assert.equal((await restarted.getProvider(provider.id))?.llamaCppClassifierEnabled, true);
+  const portable = await readJson<{ providers: StoredProvider[] }>(h.portableFile);
+  assert.equal(portable.providers[0].llamaCppClassifierEnabled, true);
+  assert.equal("models" in portable.providers[0], false);
+  await restarted.saveProvider({ ...provider, llamaCppClassifierEnabled: false });
+  assert.equal((await h.store.getProvider(provider.id))?.llamaCppClassifierEnabled, false);
+  await assert.rejects(restarted.saveProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: true }), /custom local/);
+  assert.equal((await h.store.getProvider(provider.id))?.deployment, "local");
+});
+
+test("compaction settings track writes and hand-edits while reusing the parsed snapshot between them", async (t) => {
+  const h = await harness(t);
+  assert.deepEqual({ ...(await h.store.getCompactionSettings()) }, { compactionEngine: "llm", compactionModelOverrides: undefined });
+
+  await h.store.setSettings({ compactionEngine: "vcc", compactionModelOverrides: { "openai/gpt-5": { reserveTokens: 8_000 } } });
+  const first = await h.store.getCompactionSettings();
+  assert.equal(first.compactionEngine, "vcc");
+  assert.deepEqual(first.compactionModelOverrides, { "openai/gpt-5": { reserveTokens: 8_000 } });
+  assert.equal(await h.store.getCompactionSettings(), first, "unchanged settings are not re-parsed");
+
+  // An external edit that stores an invalid override reads as absent, exactly as getSettings projects it.
+  const onDisk = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  onDisk.settings.compactionModelOverrides = { "openai/gpt-5": { reserveTokens: -1 } };
+  await fs.writeFile(h.settingsFile, JSON.stringify(onDisk), "utf-8");
+  assert.equal(await h.stores.settings.reload(), true);
+  const edited = await h.store.getCompactionSettings();
+  assert.equal(edited.compactionEngine, "vcc");
+  assert.equal(edited.compactionModelOverrides, undefined);
+  assert.equal((await h.store.getSettings()).compactionModelOverrides, undefined);
+});
+
+test("per-model compaction budgets merge atomically and clear without disturbing other models", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ compactionModelOverrides: { "anthropic/claude-sonnet": { keepRecentTokens: 4_000 } } });
+  await Promise.all([
+    h.store.setCompactionModelBudget("openai/gpt-5", { reserveTokens: 8_000 }),
+    h.store.setCompactionModelBudget("google/gemini-pro", { reserveTokens: 6_000, keepRecentTokens: 0 }),
+  ]);
+  assert.deepEqual((await h.store.getSettings()).compactionModelOverrides, {
+    "anthropic/claude-sonnet": { keepRecentTokens: 4_000 },
+    "openai/gpt-5": { reserveTokens: 8_000 },
+    "google/gemini-pro": { reserveTokens: 6_000, keepRecentTokens: 0 },
+  });
+
+  await assert.rejects(h.store.setCompactionModelBudget("no-slash", { reserveTokens: 8_000 }));
+  await assert.rejects(h.store.setCompactionModelBudget("openai/gpt-5", { reserveTokens: 1 }));
+  await h.store.setCompactionModelBudget("openai/gpt-5", undefined);
+  await h.store.setCompactionModelBudget("google/gemini-pro", {});
+  assert.deepEqual((await h.store.getSettings()).compactionModelOverrides, { "anthropic/claude-sonnet": { keepRecentTokens: 4_000 } });
+  await h.store.setCompactionModelBudget("anthropic/claude-sonnet", undefined);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call((await readJson<{ settings: object }>(h.settingsFile)).settings, "compactionModelOverrides"),
+    false,
+  );
+
+  // A hand-edited invalid document is not silently replaced by a one-model write.
+  const onDisk = await readJson<{ settings: Record<string, unknown> }>(h.settingsFile);
+  onDisk.settings.compactionModelOverrides = { "openai/gpt-5": { reserveTokens: -1 } };
+  await fs.writeFile(h.settingsFile, JSON.stringify(onDisk), "utf-8");
+  await assert.rejects(h.store.setCompactionModelBudget("google/gemini-pro", { reserveTokens: 6_000 }), /repair settings\.json/u);
+  assert.deepEqual((await readJson<{ settings: Record<string, unknown> }>(h.settingsFile)).settings.compactionModelOverrides, {
+    "openai/gpt-5": { reserveTokens: -1 },
+  });
+});
+
+test("Azure preferences migrate durably with current-model precedence and custom alias priority", async (t) => {
+  for (const custom of [false, true]) {
+    const h = await harness(t, { providers: custom ? [{ id: "azure-openai-responses", label: "My Azure", kind: "openai", baseUrl: "https://private.example/v1", models: ["deployment"], needsKey: true }] : [], settings: {
+      lastProviderId: "azure-openai-responses", hiddenModelsByProvider: { "azure-openai-responses": ["hidden"] },
+      providerThinkingByModel: { "azure-openai-responses": { deployment: "high", other: "low" }, azure: { deployment: "medium" } },
+      compactionModelOverrides: { "azure-openai-responses/deployment": { reserveTokens: 1234 }, "azure/deployment": { reserveTokens: 5678 } },
+    } });
+    const settings = await h.store.getSettings();
+    const target = custom ? "custom:azure-openai-responses" : "azure";
+    assert.equal(settings.lastProviderId, target);
+    assert.deepEqual(settings.hiddenModelsByProvider?.[target], { defaultVisibility: "shown", exceptions: ["hidden"] });
+    assert.equal(settings.providerThinkingByModel?.[target]?.deployment, custom ? "high" : "medium");
+    assert.equal(settings.providerThinkingByModel?.[target]?.other, "low");
+    assert.equal(settings.compactionModelOverrides?.[`${target}/deployment`]?.reserveTokens, custom ? 1234 : 5678);
+    assert.equal(await h.store.resolveProviderId("azure-openai-responses"), target);
+    const persisted = await readJson<{ settings: typeof settings }>(h.settingsFile);
+    assert.equal(persisted.settings.providerThinkingByModel?.["azure-openai-responses"], undefined);
+    assert.equal(persisted.settings.compactionModelOverrides?.["azure-openai-responses/deployment"], undefined);
+    assert.deepEqual(await createConfigStore(h.stores, h.secrets.port).getSettings(), settings);
+  }
 });

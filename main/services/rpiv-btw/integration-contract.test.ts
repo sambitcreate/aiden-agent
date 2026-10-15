@@ -8,7 +8,7 @@ test("foreground admission synchronously aborts BTW immediately before claiming 
     source.indexOf("beginChatTurn(chatId"),
     source.indexOf("markAppendReconciliationRequired", source.indexOf("beginChatTurn(chatId")),
   );
-  const gates = method.indexOf("chatComputerUseMutationGate.isChanging");
+  const gates = method.indexOf("chatWorkspaceMutationGate.isChanging");
   const abort = method.indexOf("btwOperationRegistry.abortForForeground(chatId)");
   const claim = method.indexOf("chatTurnAdmission.tryBegin");
   assert.ok(gates >= 0 && gates < abort && abort < claim);

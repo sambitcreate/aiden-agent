@@ -1,13 +1,14 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
-import type * as React from "react";
+import * as React from "react";
 import { Callout, ErrorBoundary, Text } from "./ui";
 import { AidenIcon } from "./aiden-icon";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import { MessageActions } from "./message-actions";
+import { ForkMessageButton, type MessageForkAction } from "./fork-message-button";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
@@ -27,16 +28,18 @@ export interface MessageBubbleProps {
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
+  /** A later step has closed this text: it can no longer grow, though the turn runs on. */
+  textClosed?: boolean;
   onStreamHandoffComplete?: () => void;
   /** Split assistant prose renders one whole-response copy action on its tail. */
   showCopy?: boolean;
   copyText?: string;
   /** Read-aloud action for the latest eligible whole response. */
   readAloud?: ReadAloudActionProps;
-  /** Disable rich previews for a duplicate transcript copy during handoff. */
-  richLinks?: boolean;
   /** Settled turn facts rendered at the trailing edge of the action row. */
   footer?: React.ReactNode;
+  /** Fork from a settled reply, or edit a sent prompt in a fork. */
+  fork?: MessageForkAction;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -58,13 +61,19 @@ export function MessageBubble({
   skill,
   streaming,
   streamComplete,
+  textClosed,
   onStreamHandoffComplete,
   showCopy = true,
   copyText,
   readAloud,
-  richLinks = true,
   footer,
+  fork,
 }: MessageBubbleProps) {
+  // A reply first drawn while streaming keeps that one Markdown tree after it
+  // settles, so its blocks, code, and links stay the same elements.
+  const [revealed, setRevealed] = React.useState(Boolean(streaming));
+  if (streaming && !revealed) setRevealed(true);
+
   if (role === "user") {
     return (
       <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
@@ -84,16 +93,27 @@ export function MessageBubble({
             <MessageAttachments attachments={attachments} role="user" />
           ) : null}
           {content ? (
-            <div className="rounded-2xl bg-control px-4 py-2.5">
+            <div className="select-text rounded-2xl bg-control px-4 py-2.5">
               <UserMessageContent content={content} />
             </div>
           ) : null}
-          {content ? (
-            <CopyButton
-              text={content}
-              label="Copy message"
-              className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-            />
+          {content || fork ? (
+            <div className="flex items-center gap-0.5">
+              {fork ? (
+                <ForkMessageButton
+                  action={fork}
+                  kind="edit"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                />
+              ) : null}
+              {content ? (
+                <CopyButton
+                  text={content}
+                  label="Copy message"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                />
+              ) : null}
+            </div>
           ) : null}
           </div>
         </div>
@@ -102,24 +122,24 @@ export function MessageBubble({
   }
 
   return (
-    <RichLinkBudget
-      key={streaming ? "streaming" : "settled"}
-      limit={MAX_RICH_LINKS_PER_MESSAGE}
-    >
+    <RichLinkBudget limit={MAX_RICH_LINKS_PER_MESSAGE}>
       <div className="group flex w-full">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
         {attachments && attachments.length > 0 ? (
           <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
-        {streaming ? (
+        {revealed ? (
           <StreamingMarkdownReveal
             content={content}
-            complete={streamComplete}
-            onHandoffComplete={onStreamHandoffComplete}
-            richLinks={richLinks}
+            // Text that settled or whose turn ended shows in full in the same
+            // tree; text a tool step closed still joins at the next release.
+            complete={streaming ? Boolean(streamComplete) : true}
+            closed={Boolean(streaming && textClosed)}
+            onHandoffComplete={streamComplete ? onStreamHandoffComplete : undefined}
+            richLinks
           />
         ) : (
-          <Markdown content={content} richLinks={richLinks} />
+          <Markdown content={content} richLinks />
         )}
         {content && showCopy ? (
           <MessageActions
@@ -127,6 +147,7 @@ export function MessageBubble({
             readAloud={readAloud}
             hidden={Boolean(streaming && !streamComplete)}
             footer={footer}
+            fork={streaming ? undefined : fork}
           />
         ) : null}
         </div>
@@ -182,7 +203,7 @@ function UnrenderableMessage({ content }: { content: string }) {
       <Text variant="small-strong" color="red">
         This message could not be formatted
       </Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
+      <Text variant="small" color="secondary" className="mt-0.5 block select-text whitespace-pre-wrap">
         {content}
       </Text>
     </Callout>

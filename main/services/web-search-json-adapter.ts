@@ -7,6 +7,7 @@
  * declared and streamed response limits, and closed provider errors.
  */
 
+import { isRecord } from "../shared/guards.js";
 import {
   normalizeWebSearchResultSet,
   webSearchError,
@@ -70,10 +71,6 @@ export interface WebSearchJsonAdapterDefinition {
 
 export interface WebSearchJsonAdapterOptions {
   readonly fetch?: WebSearchFetch;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function utf8ByteLength(value: string): number {

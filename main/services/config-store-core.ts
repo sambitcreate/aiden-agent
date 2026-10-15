@@ -1,4 +1,5 @@
-import { isCompactionEngine } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { randomBytes } from "node:crypto";
 import { normalizeAppearanceConfig, parseAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
@@ -65,6 +66,14 @@ import {
   withModelVisibility,
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
+import {
+  remapModelPadPlacementsProvider,
+  remapPinnedModelsProvider,
+  remapRecentModelsProvider,
+  withoutProviderModelPadPlacements,
+  withoutProviderPinnedModels,
+  withoutProviderRecentModels,
+} from "../../renderer/shared/model-pad-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -260,12 +269,30 @@ function hasProviderCache(
 
 export type ConfigStore = ReturnType<typeof createConfigStore>;
 
+/** Parsed compaction preferences; invalid stored overrides read as absent, as in `getSettings`. */
+export type CompactionSettingsSnapshot = Readonly<{
+  compactionEngine: CompactionEngine;
+  compactionModelOverrides: CompactionModelOverrides | undefined;
+}>;
+
+/** Notify change listeners; a throwing listener never fails the write that triggered it. */
+function notifyListeners(listeners: ReadonlySet<() => void>): void {
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch {
+      // Observers are best-effort signals.
+    }
+  }
+}
+
 export function createConfigStore(
   configStores: PortableConfigStores,
   secrets: SecretsPort,
   reportDeferredError: (area: string, error: unknown) => void = () => undefined,
 ) {
   const { portable, settings: settingsStore, local: localStore, modelCache } = configStores;
+  const workspaceListeners = new Set<() => void>();
   let seedPromise: Promise<boolean> | null = null;
   let secretMigrationAliases: Array<readonly [source: string, target: string]> = [];
   let secretMigrationTargets: Array<Readonly<{ id: string; binding: string }>> = [];
@@ -418,6 +445,9 @@ export function createConfigStore(
         const currentSettings = runtimeSettingsFrom((await settingsStore.load()).settings);
         let lastProviderId = currentSettings.lastProviderId;
         let hiddenModelsByProvider = currentSettings.hiddenModelsByProvider;
+        let modelPadPlacements = currentSettings.modelPadPlacements;
+        let pinnedModels = currentSettings.pinnedModels;
+        let recentModels = currentSettings.recentModels;
         let migrated: StoredProvider[] = [];
         let providersChanged = false;
         let aliasRoutesForMigration: Record<string, string> = {};
@@ -478,21 +508,46 @@ export function createConfigStore(
             activeProviderIds.has(targetId),
         );
         secretMigrationAliases = cacheAliasEntries;
-        for (const [legacyId, targetId] of cacheAliasEntries) {
-          hiddenModelsByProvider = remapHiddenModelProvider(
-            hiddenModelsByProvider,
-            legacyId,
-            targetId,
-          );
+        // Apply identity changes to provider/model keyed preferences too. Custom
+        // aliases retain precedence over the built-in Azure rename.
+        const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
+        const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
+        const preferenceRoutes = new Map(cacheAliasEntries);
+        if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
+        for (const [legacyId, targetId] of preferenceRoutes) {
+          hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
+          modelPadPlacements = remapModelPadPlacementsProvider(modelPadPlacements, legacyId, targetId);
+          pinnedModels = remapPinnedModelsProvider(pinnedModels, legacyId, targetId);
+          recentModels = remapRecentModelsProvider(recentModels, legacyId, targetId);
+          if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
+            providerThinkingByModel[targetId] = { ...providerThinkingByModel[legacyId], ...providerThinkingByModel[targetId] };
+            delete providerThinkingByModel[legacyId];
+          }
+          for (const key of Object.keys(compactionModelOverrides)) {
+            if (!key.startsWith(`${legacyId}/`)) continue;
+            const target = `${targetId}/${key.slice(legacyId.length + 1)}`;
+            if (!Object.prototype.hasOwnProperty.call(compactionModelOverrides, target)) compactionModelOverrides[target] = compactionModelOverrides[key]!;
+            delete compactionModelOverrides[key];
+          }
         }
         if (
+          JSON.stringify(providerThinkingByModel) !== JSON.stringify(currentSettings.providerThinkingByModel ?? {}) ||
+          JSON.stringify(compactionModelOverrides) !== JSON.stringify(currentSettings.compactionModelOverrides ?? {}) ||
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
-            JSON.stringify(currentSettings.hiddenModelsByProvider)
+            JSON.stringify(currentSettings.hiddenModelsByProvider) ||
+          JSON.stringify(modelPadPlacements) !== JSON.stringify(currentSettings.modelPadPlacements) ||
+          JSON.stringify(pinnedModels) !== JSON.stringify(currentSettings.pinnedModels) ||
+          JSON.stringify(recentModels) !== JSON.stringify(currentSettings.recentModels)
         ) {
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
+            if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
+            if (pinnedModels) config.settings.pinnedModels = pinnedModels;
+            if (recentModels) config.settings.recentModels = recentModels;
+            if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
+            if (Object.keys(compactionModelOverrides).length) config.settings.compactionModelOverrides = compactionModelOverrides;
           });
         }
         secretMigrationTargets = [
@@ -619,6 +674,8 @@ export function createConfigStore(
     }, isCurrent);
   }
 
+  let compactionSnapshot: { source: SettingsShape; value: CompactionSettingsSnapshot } | undefined;
+
   async function mutateSettings<R>(
     mutation: (draft: SettingsShape) => R | Promise<R>,
     isCurrent: () => boolean = () => true,
@@ -700,6 +757,18 @@ export function createConfigStore(
       );
     },
 
+    /**
+     * Configured providers without credential presence. Callers that only need
+     * labels or deployment shape use this so a turn never walks the keychain.
+     */
+    async listStoredProviders(): Promise<StoredProvider[]> {
+      const config = await readPortable();
+      const cache = await readModelCache();
+      return config.providers.map((intent) =>
+        composeStoredProvider(intent, ownRecordEntry(cache.byProvider, intent.id)),
+      );
+    },
+
     async getProvider(id: string): Promise<StoredProvider | undefined> {
       const config = await readPortable();
       const intent = config.providers.find((p) => p.id === id);
@@ -712,6 +781,7 @@ export function createConfigStore(
       provider: StoredProvider,
       isCurrent: () => boolean = () => true,
     ): Promise<Provider> {
+      validateLocalClassifierPreference(provider);
       const { intent, cache } = splitStoredProvider(provider);
       const stored = await mutatePortable((config) => {
         const idx = config.providers.findIndex((p) => p.id === intent.id);
@@ -747,6 +817,15 @@ export function createConfigStore(
           config.settings.hiddenModelsByProvider,
           id,
         );
+        const modelPadPlacements = withoutProviderModelPadPlacements(
+          config.settings.modelPadPlacements,
+          id,
+        );
+        if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
+        const pinnedModels = withoutProviderPinnedModels(config.settings.pinnedModels, id);
+        if (pinnedModels) config.settings.pinnedModels = pinnedModels;
+        const recentModels = withoutProviderRecentModels(config.settings.recentModels, id);
+        if (recentModels) config.settings.recentModels = recentModels;
       });
       await secrets.deleteKey(id);
     },
@@ -761,6 +840,29 @@ export function createConfigStore(
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
       return runtimeSettingsFrom((await settingsStore.load()).settings);
+    },
+
+    /**
+     * The compaction preferences alone, for hot read paths such as the
+     * composer's context meter. The settings store replaces its cached document
+     * on every write or external reload, so the parsed snapshot is reused until
+     * the document identity changes instead of cloning all settings per call.
+     */
+    async getCompactionSettings(): Promise<CompactionSettingsSnapshot> {
+      await ensureSeeded();
+      const document = await settingsStore.load();
+      if (compactionSnapshot?.source !== document) {
+        let compactionModelOverrides: CompactionModelOverrides | undefined;
+        if (document.settings.compactionModelOverrides !== undefined) {
+          try { compactionModelOverrides = parseCompactionModelOverrides(document.settings.compactionModelOverrides); }
+          catch { compactionModelOverrides = undefined; }
+        }
+        compactionSnapshot = {
+          source: document,
+          value: Object.freeze({ compactionEngine: compactionEngineFrom(document.settings.compactionEngine), compactionModelOverrides }),
+        };
+      }
+      return compactionSnapshot.value;
     },
 
     /** Read the normalized Web Search document after startup migration. */
@@ -871,6 +973,10 @@ export function createConfigStore(
     ): Promise<AppSettings> {
       if (patch.compactionEngine !== undefined && !isCompactionEngine(patch.compactionEngine)) {
         throw new Error("Invalid compaction engine.");
+      }
+      if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.compactionModelOverrides !== undefined) {
+        patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
@@ -1039,6 +1145,30 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /**
+     * Atomically set or clear one model's compaction budget against the stored
+     * overrides, so concurrent edits to other models are never lost. Stored
+     * overrides that no longer validate are left for the user to repair.
+     */
+    async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        const stored = config.settings.compactionModelOverrides;
+        let current: CompactionModelOverrides = {};
+        if (stored !== undefined) {
+          try { current = parseCompactionModelOverrides(stored); }
+          catch { throw new Error("Model compaction budgets are invalid; repair settings.json before changing them."); }
+        }
+        const next: Record<string, CompactionModelBudget> = { ...current };
+        if (budget === undefined || Object.keys(budget).length === 0) delete next[modelKey];
+        else next[modelKey] = budget;
+        const parsed = parseCompactionModelOverrides(next);
+        if (Object.keys(parsed).length === 0) delete config.settings.compactionModelOverrides;
+        else config.settings.compactionModelOverrides = parsed;
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
     /** Atomically merge one validated Anthropic preference into current settings. */
     async setAnthropicThinkingLevel(
       modelId: string,
@@ -1140,13 +1270,15 @@ export function createConfigStore(
       }
       const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
       await requireSeededForWrite();
-      return localStore.update(async (config) => {
+      const saved = await localStore.update(async (config) => {
         await assertCurrent?.(config.workspaces.find((w) => w.id === next.id));
         const idx = config.workspaces.findIndex((w) => w.id === next.id);
         if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
         else config.workspaces.push(next);
         return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
       });
+      notifyListeners(workspaceListeners);
+      return saved;
     },
 
     async removeWorkspace(id: string): Promise<void> {
@@ -1156,6 +1288,13 @@ export function createConfigStore(
         // Never leave the app without a workspace.
         if (config.workspaces.length === 0) config.workspaces = [defaultWorkspace()];
       });
+      notifyListeners(workspaceListeners);
+    },
+
+    /** Observe committed workspace saves and removals (the Remote host feed). */
+    onWorkspacesChanged(listener: () => void): () => void {
+      workspaceListeners.add(listener);
+      return () => workspaceListeners.delete(listener);
     },
   };
 }

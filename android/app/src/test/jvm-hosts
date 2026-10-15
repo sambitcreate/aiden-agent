@@ -1,0 +1,7 @@
+# Name table for JVM unit tests, passed as -Djdk.net.hosts.file (see app/build.gradle.kts).
+# MockWebServer reverse-resolves the loopback address of every request it records, and
+# the forward lookup of "localhost" goes to the system resolver too. On a loaded macOS
+# host those lookups can stall for longer than the tests' waits, so tests resolve
+# names from this file and never touch the system resolver.
+127.0.0.1 localhost
+::1 localhost

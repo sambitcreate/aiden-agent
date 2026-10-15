@@ -1,22 +1,69 @@
-/* global process, setTimeout, URL */
+/* global Buffer, process, setTimeout, URL */
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { gzipSync } from "node:zlib";
 import {
+  assertArchiveListing,
   buildBrokerApp,
+  extractDriverMember,
   runBoundedCommand,
+  sigstoreBundleArchiveDigest,
   validateArtifact,
   validateVendoredBinary,
+  verifySigstoreBundle,
 } from "./vendor-cua-driver.mjs";
 import {
   CUA_DRIVER_ARTIFACT_KEYS,
   CUA_DRIVER_ARTIFACT_PROVENANCE,
   CUA_DRIVER_SHA256,
 } from "./computer-use-signing-pins.mjs";
+
+const PINNED_VERSION = CUA_DRIVER_ARTIFACT_PROVENANCE.version;
+const RELEASE_MEMBERS = [
+  "cua-driver",
+  "cua-cursor-theme",
+  "libcua_driver_sdk.dylib",
+  "cua_driver_node_runtime.node",
+  "cua_driver_abi.h",
+];
+
+// Minimal ustar writer so fixtures can carry entries a well-behaved tar
+// refuses to create (absolute paths, `..`, symlinks named cua-driver).
+function tarEntry({ name, body = "", type = "0", linkName = "" }) {
+  const header = Buffer.alloc(512);
+  const content = Buffer.from(body, "utf8");
+  const field = (value, offset, length) => header.write(value, offset, length, "utf8");
+  const octal = (value, offset, length) =>
+    field(value.toString(8).padStart(length - 1, "0"), offset, length - 1);
+  field(name, 0, 100);
+  octal(0o755, 100, 8);
+  octal(0, 108, 8);
+  octal(0, 116, 8);
+  octal(type === "0" ? content.length : 0, 124, 12);
+  octal(0, 136, 12);
+  header.fill(" ", 148, 156);
+  field(type, 156, 1);
+  field(linkName, 157, 100);
+  field("ustar", 257, 6);
+  field("00", 263, 2);
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  field(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8);
+  const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
+  return Buffer.concat([header, type === "0" ? content : Buffer.alloc(0), padding]);
+}
+
+async function writeTarball(root, entries) {
+  const archive = path.join(root, "release.tar.gz");
+  const tar = Buffer.concat([...entries.map(tarEntry), Buffer.alloc(1024)]);
+  await writeFile(archive, gzipSync(tar));
+  return archive;
+}
 
 async function waitForProcessExit(pid, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
@@ -110,7 +157,10 @@ test("cached cua-driver validation checks the binary hash before executing it", 
     assert.equal(
       await validateVendoredBinary(binary, async () => {
         runnerCalls += 1;
-        return JSON.stringify({ schema_version: "1", binary_version: "0.8.3" });
+        return JSON.stringify({
+          schema_version: "1",
+          binary_version: PINNED_VERSION,
+        });
       }),
       false,
     );
@@ -157,7 +207,10 @@ test("cached cua-driver validation requires both signature and manifest pins", a
         async (command, args) => {
           commands.push({ command, args });
           if (command === "/usr/bin/codesign") return "";
-          return JSON.stringify({ schema_version: "1", binary_version: "0.8.3" });
+          return JSON.stringify({
+            schema_version: "1",
+            binary_version: PINNED_VERSION,
+          });
         },
         async () => CUA_DRIVER_SHA256,
       ),
@@ -167,6 +220,166 @@ test("cached cua-driver validation requires both signature and manifest pins", a
     assert.match(commands[0].args.join(" "), /identifier "cua-driver"/);
     assert.match(commands[0].args.join(" "), /YCK386LBJ7/);
     assert.equal(commands[1].command, binary);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cached cua-driver validation rejects a manifest from another release", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-manifest-"));
+  const binary = path.join(root, "cua-driver");
+  try {
+    await writeFile(binary, "simulated pinned binary", "utf8");
+    for (const manifest of [
+      { schema_version: "1", binary_version: "0.8.3" },
+      { schema_version: "2", binary_version: PINNED_VERSION },
+      { schema_version: 1, binary_version: PINNED_VERSION },
+    ]) {
+      assert.equal(
+        await validateVendoredBinary(
+          binary,
+          async (command) => (command === "/usr/bin/codesign" ? "" : JSON.stringify(manifest)),
+          async () => CUA_DRIVER_SHA256,
+        ),
+        false,
+        JSON.stringify(manifest),
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archive listing accepts the five-member release and requires one top-level driver", () => {
+  assert.deepEqual(assertArchiveListing(`${RELEASE_MEMBERS.join("\n")}\n`), RELEASE_MEMBERS);
+  for (const listing of [
+    RELEASE_MEMBERS.slice(1).join("\n"),
+    ["bin/cua-driver", ...RELEASE_MEMBERS.slice(1)].join("\n"),
+    [...RELEASE_MEMBERS, "cua-driver"].join("\n"),
+  ]) {
+    assert.throws(() => assertArchiveListing(listing), /exactly one top-level cua-driver/);
+  }
+  for (const unsafe of ["/cua-driver", "../cua-driver", "lib/../../evil", "a\\..\\b"]) {
+    assert.throws(
+      () => assertArchiveListing([...RELEASE_MEMBERS, unsafe].join("\n")),
+      /unsafe path/,
+    );
+  }
+});
+
+test(
+  "driver extraction stages only cua-driver from the release tarball",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-extract-"));
+    try {
+      const archive = await writeTarball(
+        root,
+        RELEASE_MEMBERS.map((name) => ({ name, body: `contents of ${name}` })),
+      );
+      const staging = path.join(root, "staging");
+      await mkdir(staging);
+      const extracted = await extractDriverMember(archive, staging);
+      assert.equal(extracted, path.join(staging, "cua-driver"));
+      assert.deepEqual(await readdir(staging), ["cua-driver"]);
+      assert.equal(await readFile(extracted, "utf8"), "contents of cua-driver");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "driver extraction refuses a symlinked driver and traversal entries before staging them",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-unsafe-"));
+    try {
+      const outside = path.join(root, "outside");
+      await writeFile(outside, "not the driver", "utf8");
+      const cases = [
+        {
+          entries: [{ name: "cua-driver", type: "2", linkName: outside }],
+          message: /not a regular file/,
+        },
+        {
+          entries: [
+            { name: "cua-driver", body: "driver" },
+            { name: "../escaped", body: "x" },
+          ],
+          message: /unsafe path/,
+        },
+        {
+          entries: [
+            { name: "cua-driver", body: "driver" },
+            { name: "/tmp/absolute", body: "x" },
+          ],
+          message: /unsafe path/,
+        },
+      ];
+      for (const [index, { entries, message }] of cases.entries()) {
+        const caseRoot = path.join(root, `case-${index}`);
+        const staging = path.join(caseRoot, "staging");
+        await mkdir(staging, { recursive: true });
+        const archive = await writeTarball(caseRoot, entries);
+        await assert.rejects(extractDriverMember(archive, staging), message);
+      }
+      assert.deepEqual(await readdir(path.join(root, "case-1", "staging")), []);
+      assert.equal(await readFile(outside, "utf8"), "not the driver");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+function cosignBundle(archiveSha256, { kind = "hashedrekord", algorithm = "sha256" } = {}) {
+  const body = {
+    apiVersion: "0.0.1",
+    kind,
+    spec: { data: { hash: { algorithm, value: archiveSha256 } } },
+  };
+  return {
+    base64Signature: "",
+    cert: "",
+    rekorBundle: {
+      SignedEntryTimestamp: "",
+      Payload: { body: Buffer.from(JSON.stringify(body)).toString("base64") },
+    },
+  };
+}
+
+test("Sigstore bundle digest extraction reads only a SHA-256 hashedrekord entry", () => {
+  const digest = CUA_DRIVER_ARTIFACT_PROVENANCE.sha256;
+  assert.equal(sigstoreBundleArchiveDigest(cosignBundle(digest)), digest);
+  assert.throws(() => sigstoreBundleArchiveDigest({}), /no Rekor entry/);
+  assert.throws(
+    () => sigstoreBundleArchiveDigest(cosignBundle(digest, { kind: "intoto" })),
+    /hashedrekord/,
+  );
+  assert.throws(
+    () => sigstoreBundleArchiveDigest(cosignBundle(digest, { algorithm: "sha1" })),
+    /hashedrekord/,
+  );
+  assert.throws(
+    () => sigstoreBundleArchiveDigest(cosignBundle("not-hex")),
+    /invalid archive digest/,
+  );
+});
+
+test("optional Sigstore verification rejects an unpinned bundle before running cosign", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-sigstore-"));
+  try {
+    const bundle = path.join(root, "bundle.sigstore.json");
+    await writeFile(bundle, JSON.stringify(cosignBundle(CUA_DRIVER_ARTIFACT_PROVENANCE.sha256)));
+    const commands = [];
+    await assert.rejects(
+      verifySigstoreBundle(path.join(root, "archive.tar.gz"), bundle, async (command) => {
+        commands.push(command);
+        return "";
+      }),
+      /Sigstore bundle checksum mismatch/,
+    );
+    assert.deepEqual(commands, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

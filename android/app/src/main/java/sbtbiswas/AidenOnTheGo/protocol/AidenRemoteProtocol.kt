@@ -45,9 +45,41 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
+    const val CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1"
+    const val CHAT_FORK_FEATURE = "chat-fork-v1"
+    const val CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1"
+    const val MAX_FORK_SUMMARY_FOCUS_LENGTH = 1_000
+    const val MAX_FORK_PREFILL_ATTACHMENTS = 10
+    /** Contract revision 24: phones may observe and control runs started on
+     * the Mac, in Telegram or by the scheduler. */
+    const val PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1"
+    /** Contract revision 25: Bots rework. */
+    const val BOT_DELETE_FEATURE = "bot-delete-v1"
+    const val BOT_DURABLE_SESSION_FEATURE = "bot-durable-session-v1"
+    const val BOT_ROUTINES_FEATURE = "bot-routines-v1"
+    const val BOT_CONNECTION_REQUESTS_FEATURE = "bot-connection-requests-v1"
+    const val BOT_PRESETS_FEATURE = "bot-presets-v1"
+
+    /** Contract revision 26: phones may watch and tap simulators the Mac
+     * shares, behind the negotiated `simulators:mobile` grant. */
+    const val MOBILE_SIMULATORS_FEATURE = "mobile-simulators-v1"
+
+    /** Contract revision 27: a Bot's memory routes. */
+    const val BOT_MEMORY_FEATURE = "bot-memory-v1"
+    /** Contract revision 27: routine proposal answers, routine suggestions and the routine notification feed. */
+    const val BOT_PROACTIVE_FEATURE = "bot-proactive-v1"
+    /** Contract revision 30: the status line, Steer and Queue, Queued bubbles and Chat activity. */
+    const val BOT_ACTIVITY_FEATURE = "bot-activity-v1"
+    /** Contract revision 28: assistant messages may carry inline `visuals`,
+     * each shown through a snapshot image attachment the Mac stores. */
+    const val CHAT_VISUALS_FEATURE = "chat-visuals-v1"
+    /** Contract revision 32: assistant messages may carry native `appPanels`, read and
+     * answered behind the `app-controls:read` and `app-controls:respond` grants. */
+    const val CHAT_UI_PANELS_FEATURE = "chat-ui-panels-enabled-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
-    const val MAX_QUESTION_OPTIONS = 4
+    const val MAX_QUESTION_OPTIONS = 5
     const val MAX_QUESTION_HEADER_LENGTH = 16
     const val MAX_QUESTION_OPTION_LABEL_LENGTH = 60
     const val MAX_QUESTION_LENGTH = 1_000
@@ -206,6 +238,8 @@ sealed class AidenBotPrivateResponseScope {
     data class Root(val root: String) : AidenBotPrivateResponseScope()
     object ChatProjection : AidenBotPrivateResponseScope()
     object ChatSummaryProjection : AidenBotPrivateResponseScope()
+    /** A `GET /chats/{id}/messages` page: the chat message projection, Bot-classified by its revision-23 `botId`. */
+    object MessagesWindowProjection : AidenBotPrivateResponseScope()
     /** Progress has its own strict DTO parser; this scope only applies the generic wire-key guard. */
     object ChatProgressProjection : AidenBotPrivateResponseScope()
     object SharedFixture : AidenBotPrivateResponseScope()
@@ -226,12 +260,17 @@ object AidenBotPrivateResponseValidator {
 
     private val fixtureBotRoots: Set<String> = setOf(
         "chat", "chatSummaries", "botSummary", "botList", "botDetail", "botAvatar", "botCreate",
-        "botIdentity", "botArchive", "botRestore", "botConversation", "botConversations",
+        "botIdentity", "botConversation", "botConversations",
         "botConversationQuery", "botChatCreate", "botCapabilityCatalog", "botPolicy",
-        "botPolicyUpdate", "botChatSubset", "botChatSubsetUpdate", "botFavorites",
-        "botFavoritesUpdate", "botNotice", "botNoticeAcknowledgement", "botAvatarUpload",
-        "botAvatarMetadata"
+        "botPolicyUpdate", "botAvatarUpload", "botAvatarMetadata",
+        "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
+        "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
+        "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
+        // Contract revision 27.
+        "botMemory", "botMemoryEdit", "botRoutineProposalRespond", "botRoutineSuggestions",
+        "botRoutineNotifications", "botSessionCards"
     )
+    private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
     private val privateSummaryProjectionKeys = setOf(
         "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
@@ -274,6 +313,13 @@ object AidenBotPrivateResponseValidator {
                 // Chat projections may contain additive public fields, but never
                 // receive the Bot identity exceptions for instructions/greetings.
                 validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false)
+            }
+            is AidenBotPrivateResponseScope.MessagesWindowProjection -> {
+                // A window page carries the same message projection as a chat
+                // read, so it is held to the same rules, including the Bot
+                // classification its revision-23 metadata names.
+                val botChat = (element as? kotlinx.serialization.json.JsonObject)?.containsKey("botId") == true
+                validateElement(element, root = "chatProjection", path = emptyList(), rejectPrivateChildFields = false, regularChat = !botChat)
             }
             is AidenBotPrivateResponseScope.ChatSummaryProjection -> {
                 rejectExplicitNullCursor(element)
@@ -331,7 +377,8 @@ object AidenBotPrivateResponseValidator {
                     if ((normalizedPrivateKeys.contains(normalize(key)) ||
                             (rejectPrivateChildFields &&
                                 (isPrivateChildProjectionKey(key) || privateSummaryProjectionKeys.contains(normalize(key))))) &&
-                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed)
+                        !isAllowedKnownIdentityKey(key, root, path, reasoningAllowed) &&
+                        !isAllowedRoutinePrompt(key, root, path, element)
                     ) {
                         throw AidenRemoteContractException.UnsafePayloadField(key)
                     }
@@ -387,17 +434,38 @@ object AidenBotPrivateResponseValidator {
         return false
     }
 
+    /**
+     * Revision 27: a routine proposal card and a routine suggestion carry the routine's own
+     * `prompt` (what the person approves), never a model prompt. Only those two shapes get it.
+     */
+    private fun isAllowedRoutinePrompt(
+        key: String,
+        root: String,
+        parentPath: List<String>,
+        parent: kotlinx.serialization.json.JsonObject
+    ): Boolean {
+        if (key != "prompt") return false
+        if (root == "botRoutineSuggestions") return parentPath == listOf("suggestions", "[]")
+        if (root !in botSessionRoots) return false
+        val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+        if (type != "routine_proposal") return false
+        return parentPath.lastOrNull() == "entry" || parentPath.takeLast(2) == listOf("entries", "[]")
+    }
+
     private fun isAllowedKnownIdentityKey(
         key: String,
         root: String,
         parentPath: List<String>,
         regularChat: Boolean
     ): Boolean {
+        // A waiting question's `header` is the card's short label, not an HTTP header.
+        if (key == "header" && root in listOf("botSession", "botSessionNeedsModel", "botSessionEvents") &&
+            parentPath.takeLast(3) == listOf("question", "questions", "[]")) return true
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
         if (key != "instructions" && key != "openingGreeting") return false
-        if (root in listOf("botDetail", "botArchive", "botRestore")) {
+        if (root == "botDetail") {
             return parentPath.isEmpty()
         }
         if (root in listOf("botCreate", "botIdentity")) {
@@ -408,10 +476,14 @@ object AidenBotPrivateResponseValidator {
 }
 
 object InstantIso8601Serializer : KSerializer<Instant> {
+    internal val millisecondFormat: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC)
+
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Instant", PrimitiveKind.STRING)
 
     override fun serialize(encoder: Encoder, value: Instant) {
-        encoder.encodeString(DateTimeFormatter.ISO_INSTANT.format(value))
+        // The host writes millisecond UTC timestamps; keep the fraction so a round trip is exact.
+        encoder.encodeString(InstantIso8601Serializer.millisecondFormat.format(value))
     }
 
     override fun deserialize(decoder: Decoder): Instant {
@@ -444,6 +516,22 @@ data class AidenRemoteCapability(val rawValue: String) {
         val APP_CONTROLS_READ = AidenRemoteCapability("app-controls:read")
         val APP_CONTROLS_RESPOND = AidenRemoteCapability("app-controls:respond")
         val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
+        /** Contract revision 24: phone-scoped observation of foreign runs. */
+        val RUNS_OBSERVE = AidenRemoteCapability("runs:observe")
+        /** Contract revision 24: Stop, approvals and questions on foreign runs. */
+        val RUNS_CONTROL = AidenRemoteCapability("runs:control")
+        /** Contract revision 26: watch, tap and shut down shared simulators. */
+        val SIMULATORS_MOBILE = AidenRemoteCapability("simulators:mobile")
+        /**
+         * Contract revision 27: this phone renders the `memory_update` and `routine_proposal`
+         * Bot session entries. It grants no authority.
+         */
+        val BOT_CARDS = AidenRemoteCapability("bot:cards")
+        /**
+         * Contract revision 30: this phone receives the activity and queued session frames and
+         * Bot detail `chatActivity`. It grants no authority.
+         */
+        val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -454,6 +542,25 @@ data class AidenRemoteCapability(val rawValue: String) {
         )
 
         val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE, APP_CONTROLS_READ, APP_CONTROLS_RESPOND)
+
+        /** The phone-scoped run subset. It is never granted at pairing; a
+         * phone can only negotiate it behind `phone-run-control-v1`. */
+        val PHONE_RUNS = listOf(RUNS_OBSERVE, RUNS_CONTROL)
+
+        /** The phone simulator grant, negotiable only behind `mobile-simulators-v1`. */
+        val PHONE_SIMULATORS = listOf(SIMULATORS_MOBILE)
+
+        /** The Bot card rendering grant, negotiable behind `bot-memory-v1` or `bot-proactive-v1`. */
+        val PHONE_BOT_CARDS = listOf(BOT_CARDS)
+
+        /** Negotiable behind `bot-activity-v1`. */
+        val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
+
+        /** Every grant `POST /device/capabilities` may add. */
+        val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
+
+        /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
+        val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY
     }
 }
 
@@ -501,7 +608,9 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val HANDLE_CAPACITY = AidenRemoteErrorCode("handle_capacity")
         val TURN_ALREADY_ACTIVE = AidenRemoteErrorCode("turn_already_active")
         val STREAM_GONE = AidenRemoteErrorCode("stream_gone")
+        val RUN_GONE = AidenRemoteErrorCode("run_gone")
         val APPROVAL_ALREADY_RESOLVED = AidenRemoteErrorCode("approval_already_resolved")
+        val APPROVAL_RESOLVED = AidenRemoteErrorCode("approval_resolved")
         val APPROVAL_EXPIRED = AidenRemoteErrorCode("approval_expired")
         val QUESTION_ALREADY_RESOLVED = AidenRemoteErrorCode("question_already_resolved")
         val QUESTION_EXPIRED = AidenRemoteErrorCode("question_expired")
@@ -513,6 +622,11 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val SCHEDULE_RUN_IN_PROGRESS = AidenRemoteErrorCode("schedule_run_in_progress")
         val SERVER_INTERRUPTED = AidenRemoteErrorCode("server_interrupted")
         val INTERNAL_ERROR = AidenRemoteErrorCode("internal_error")
+        /** Contract revision 27. */
+        val MEMORY_ENTRY_NOT_FOUND = AidenRemoteErrorCode("memory_entry_not_found")
+        val MEMORY_OVER_BUDGET = AidenRemoteErrorCode("memory_over_budget")
+        val MEMORY_BLOCKED = AidenRemoteErrorCode("memory_blocked")
+        val ROUTINE_PROPOSAL_NOT_FOUND = AidenRemoteErrorCode("routine_proposal_not_found")
 
         val V1_KNOWN = setOf(
             INVALID_REQUEST, PAYLOAD_TOO_LARGE, RATE_LIMITED, AUTHENTICATION_REQUIRED,
@@ -525,7 +639,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             STREAM_GONE, APPROVAL_ALREADY_RESOLVED, APPROVAL_EXPIRED, OPERATION_IN_PROGRESS,
             OPERATION_STALE, GIT_CAPABILITY_DENIED, SCHEDULE_DISABLED, SCHEDULE_RUN_IN_PROGRESS,
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
-            SKILL_UNAVAILABLE
+            SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED,
+            MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND
         )
     }
 }

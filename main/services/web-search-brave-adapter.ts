@@ -1,5 +1,6 @@
 /** Brave Search web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -24,10 +25,6 @@ export interface BraveWebSearchApiKeyCredential {
 }
 
 export type BraveWebSearchCredential = BraveWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("brave", value);
@@ -85,19 +82,6 @@ export function buildBraveWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Parse Brave's `{ web: { results: [...] } }` JSON envelope. */
 export function parseBraveWebSearchResponse(
   payload: unknown,
@@ -117,7 +101,7 @@ export function parseBraveWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.web.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({

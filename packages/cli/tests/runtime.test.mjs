@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -25,6 +25,41 @@ test("--version reports the Aiden CLI version", () => {
 	assert.equal(result.stdout.trim(), outer.version);
 });
 
+test("--version answers before the runtime loads and agrees with pi's own answer", () => {
+	const fast = runCli(["--version"]);
+	// A second flag skips the entry's static answer, so pi's main() replies.
+	const viaPi = runCli(["--version", "--offline"], { env: { ...process.env, PI_OFFLINE: "1" } });
+	assert.equal(viaPi.status, 0, viaPi.stderr);
+	assert.equal(fast.stdout, viaPi.stdout);
+	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
+});
+
+test("aiden help lists the Aiden commands", () => {
+	const result = runCli(["help"]);
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /^Aiden commands:/);
+	assert.match(result.stdout, /^ {2}workspace /m);
+});
+
+test("the SQLite experimental warning is filtered and other warnings are not", () => {
+	const filter = pathToFileURL(path.join(pkgDir, "src", "sqlite-warning.ts")).href;
+	const script = [
+		`import { suppressSqliteExperimentalWarning } from ${JSON.stringify(filter)};`,
+		"suppressSqliteExperimentalWarning();",
+		"await import('node:sqlite');",
+		"process.emitWarning('Probe feature is experimental', 'ExperimentalWarning');",
+		"process.emitWarning('SQLite probe without a type');",
+	].join("\n");
+	const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+		encoding: "utf-8",
+		timeout: 60_000,
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+	assert.match(result.stderr, /ExperimentalWarning: Probe feature is experimental/);
+	assert.match(result.stderr, /Warning: SQLite probe without a type/);
+});
+
 test("--help brands the CLI as aiden", () => {
 	const result = runCli(["--help"]);
 	assert.equal(result.status, 0, result.stderr);
@@ -38,6 +73,7 @@ test("AIDEN_CODING_AGENT_DIR isolates state (rebranded env override)", () => {
 		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
 	});
 	assert.equal(result.status, 0, result.stderr);
+	assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
 	// The agent dir being populated proves the rebranded env var redirected
 	// state away from ~/.pi and ~/.aiden.
 	assert.ok(existsSync(path.join(agentDir, "auth.json")), "auth.json must land in the agent dir");
@@ -163,10 +199,81 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 			.map((line) => JSON.parse(line))
 			.filter((message) => message.type === "response" && message.command === "get_commands")
 			.flatMap((message) => message.data.commands.map((command) => command.name));
-		for (const expected of ["usage", "voice", "dictate", "btw"]) {
+		for (const expected of ["usage", "voice", "dictate", "btw", "mcp", "aiden-mcp"]) {
 			assert.ok(commands.includes(expected), `/${expected} missing over RPC; got: ${commands.join(", ")}`);
 		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });
 	}
+});
+
+test("native MCP command routing leaves Aiden's migrated inventory intact", () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+  try {
+    const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
+    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify([server]));
+    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+    const native = runCli(["pi-mcp", "list"], options);
+    assert.equal(native.status, 0, native.stderr);
+    const legacy = runCli(["mcp", "list"], options);
+    assert.equal(legacy.status, 0, legacy.stderr);
+    assert.deepEqual(JSON.parse(legacy.stdout), [server]);
+  } finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+  try {
+    const legacy = path.join(agentDir, "mcp.json");
+    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+    writeFileSync(legacy, "{ not json");
+    const malformed = runCli(["mcp", "list"], options);
+    assert.equal(malformed.status, 0, malformed.stderr);
+    assert.deepEqual(JSON.parse(malformed.stdout), []);
+    assert.match(malformed.stderr, /skipped MCP migration; .* is not valid JSON/);
+    assert.equal(readFileSync(legacy, "utf8"), "{ not json");
+    if (process.getuid?.() !== 0) {
+      writeFileSync(legacy, JSON.stringify([{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }]));
+      chmodSync(legacy, 0o000);
+      const unreadable = runCli(["mcp", "list"], options);
+      chmodSync(legacy, 0o600);
+      assert.equal(unreadable.status, 0, unreadable.stderr);
+      assert.match(unreadable.stderr, /skipped MCP migration; .* is unreadable \(EACCES\)/);
+    }
+  } finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+for (const revoke of [false, true]) {
+  test(`bundled codemode executes nested tools with current workspace authority (revoke=${revoke})`, () => {
+    const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
+    const agentDir = path.join(root, "agent"), workspace = path.join(root, "workspace");
+    mkdirSync(agentDir); mkdirSync(workspace);
+    try {
+      writeFileSync(path.join(agentDir, "workspaces.json"), JSON.stringify([{ id: "fixture", name: "Fixture", folderPath: realpathSync(workspace), access: "full" }]));
+      const result = runCli(["--mode", "json", "--no-session", "--tools", "codemode,write,fixture_revoke", "-e",
+        path.resolve(pkgDir, "tests/fixtures/codemode-provider.mjs"), "--model", "offline-fixture/fixture", "Exercise codemode"], {
+        cwd: workspace,
+        env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", AIDEN_TEST_REVOKE: revoke ? "1" : "0" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const events = result.stdout.trim().split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
+      const nested = events.find((event) => event.type === "tool_execution_end" && event.toolName === "write" && event.parentToolCallId === "codemode-fixture");
+      assert.ok(nested, result.stderr + JSON.stringify(events.filter((event) => event.type.startsWith("tool_execution"))));
+      assert.equal(nested.isError, revoke, JSON.stringify(nested));
+      const file = path.join(workspace, "codemode-result.txt");
+      if (revoke) {
+        assert.equal(existsSync(file), false, "revoked nested write must have no filesystem effect");
+        assert.match(JSON.stringify(nested), /Workspace tool access is disabled/);
+      } else assert.equal(readFileSync(file, "utf8"), "worker executed");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("bundled ChatGPT OAuth module loads and rejects missing installation identity before networking", async () => {
+  const module = await import(pathToFileURL(path.resolve(pkgDir, "dist/app/chunks/openai-chatgpt.js")).href);
+  await assert.rejects(module.openaiChatGPTOAuth.login({
+    signal: new AbortController().signal,
+    prompt: async () => { throw new Error("Unexpected prompt before identity validation"); },
+    notify: () => { throw new Error("Unexpected network login before identity validation"); },
+  }), /requires a device ID/);
 });

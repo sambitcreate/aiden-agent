@@ -682,3 +682,28 @@ test("runtime ownership is rechecked at disk publication and preserves later wri
   assert.equal(diskTask.chatId, "newer-chat-claim");
   assert.equal(diskTask.updatedAt, newer.updatedAt);
 });
+
+
+test("loads legacy Azure scheduled tasks through the renamed native provider", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "google-task",
+      name: "Google task",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      providerId: "azure-openai-responses",
+      model: "deployment",
+      prompt: "Summarize changes.",
+      permission: "read-only",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
+  assert.equal((await store.list())[0]?.providerId, "azure");
+});

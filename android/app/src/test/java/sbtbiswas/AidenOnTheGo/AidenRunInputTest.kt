@@ -34,23 +34,53 @@ class AidenRunInputTest {
     )
 
     @Test
-    fun runInputOptionsRequireBusyControlledSupportedDraft() {
+    fun runInputControlShowsForBusyControlledSupportedRunsEvenWithoutDraft() {
         assertTrue(AidenRunInputPresentation.offersRunInput(
-            isStreaming = true, canControl = true, supports = true, hasDraft = true
+            isStreaming = true, canControl = true, supports = true
         ))
         // Old servers keep the Stop-only control.
         assertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming = true, canControl = true, supports = false, hasDraft = true
+            isStreaming = true, canControl = true, supports = false
         ))
         assertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming = false, canControl = true, supports = true, hasDraft = true
+            isStreaming = false, canControl = true, supports = true
         ))
         assertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming = true, canControl = false, supports = true, hasDraft = true
+            isStreaming = true, canControl = false, supports = true
         ))
-        assertFalse(AidenRunInputPresentation.offersRunInput(
-            isStreaming = true, canControl = true, supports = true, hasDraft = false
+    }
+
+    @Test
+    fun runInputSubmitsOnlyWithDraftAndNoInFlightSubmitOrStop() {
+        assertTrue(AidenRunInputPresentation.canSubmitRunInput(
+            offered = true, hasDraft = true, isSubmitting = false, isStopping = false
         ))
+        // An empty draft keeps the control visible but cannot send.
+        assertFalse(AidenRunInputPresentation.canSubmitRunInput(
+            offered = true, hasDraft = false, isSubmitting = false, isStopping = false
+        ))
+        assertFalse(AidenRunInputPresentation.canSubmitRunInput(
+            offered = true, hasDraft = true, isSubmitting = true, isStopping = false
+        ))
+        assertFalse(AidenRunInputPresentation.canSubmitRunInput(
+            offered = true, hasDraft = true, isSubmitting = false, isStopping = true
+        ))
+        assertFalse(AidenRunInputPresentation.canSubmitRunInput(
+            offered = false, hasDraft = true, isSubmitting = false, isStopping = false
+        ))
+    }
+
+    @Test
+    fun runInputModeStartsAsQueueStaysStickyAndResetsWhenTheRunEnds() {
+        assertEquals(AidenStreamInputMode.QUEUE, AidenRunInputPresentation.defaultMode)
+        assertEquals(
+            AidenStreamInputMode.STEER,
+            AidenRunInputPresentation.stickyMode(AidenStreamInputMode.STEER, isStreaming = true)
+        )
+        assertEquals(
+            AidenStreamInputMode.QUEUE,
+            AidenRunInputPresentation.stickyMode(AidenStreamInputMode.STEER, isStreaming = false)
+        )
     }
 
     @Test

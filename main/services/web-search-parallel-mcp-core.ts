@@ -8,8 +8,6 @@
 
 export const PARALLEL_MCP_ORIGIN = "https://search.parallel.ai";
 export const PARALLEL_MCP_ENDPOINT = `${PARALLEL_MCP_ORIGIN}/mcp`;
-/** Compatibility alias used by provider evidence notes. */
-export const PARALLEL_MCP_URL = PARALLEL_MCP_ENDPOINT;
 export const PARALLEL_MCP_TOOL = "web_search";
 export const MAX_PARALLEL_MCP_REQUEST_BYTES = 32 * 1024;
 export const MAX_PARALLEL_MCP_RESPONSE_BYTES = 256 * 1024;
@@ -482,6 +480,3 @@ export function parseParallelMcpResponse(
   return { ok: false, error: closedError("invalid_response") };
 }
 
-/** Descriptive aliases for generic Web Search callers. */
-export const buildParallelMcpWebSearchRequest = buildParallelMcpRequest;
-export const parseParallelMcpWebSearchResponse = parseParallelMcpResponse;

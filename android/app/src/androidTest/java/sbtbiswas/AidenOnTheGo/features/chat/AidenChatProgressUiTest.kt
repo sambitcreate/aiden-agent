@@ -1,5 +1,15 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.activity.ComponentDialog
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -27,6 +37,154 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 class AidenChatProgressUiTest {
     @get:Rule
     val compose = createComposeRule()
+
+    /**
+     * Presses Back on the roster sheet the way the system delivers it. The app
+     * opts into OnBackInvokedCallback, so system Back reaches the sheet's
+     * ComponentDialog through its OnBackPressedDispatcher, where both the
+     * detail BackHandler and Material's dismiss callback are registered.
+     *
+     * An Espresso key-event Back would instead have to pick the sheet's window
+     * and wait for it to hold input focus. Right after a state restore on a
+     * slow emulator, Espresso picked a dialog root that never gained focus and
+     * timed out (RootViewWithoutFocusException), whichever root matcher was used.
+     */
+    private fun pressBackInSheet() {
+        val sheets = compose.onAllNodes(isRoot()).fetchSemanticsNodes().mapNotNull { node ->
+            (node.root as? ViewRootForTest)?.view?.findViewTreeOnBackPressedDispatcherOwner() as? ComponentDialog
+        }.distinct()
+        assertEquals("Expected exactly one roster sheet window", 1, sheets.size)
+        compose.runOnUiThread { sheets.single().onBackPressedDispatcher.onBackPressed() }
+    }
+
+    @Test
+    fun chatInspectorOwnerRestoresAfterDelayedNegotiationAndRosterHydration() {
+        val restoration = StateRestorationTester(compose)
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val hydrated = roster("turn-current", listOf(parent, child))
+        val roster = mutableStateOf<AidenChatAgentRoster?>(hydrated)
+        val access = mutableStateOf<Boolean?>(true)
+        var dismissals = 0
+        restoration.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                // The same always-mounted owner used by AidenChatDetailScreen:
+                // null access corresponds to the coordinator's initial null serverInfo.
+                AidenAgentRosterSheet(
+                    currentRoster = roster.value, selectedRoster = roster.value,
+                    history = emptyList(), onSelectTurn = {}, requested = requested,
+                    canRead = access.value, chatId = "chat_progress", instanceId = "mac", deviceId = "phone",
+                    onDismiss = { requested = false; dismissals++ }
+                )
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null; roster.value = null }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, dismissals); access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { roster.value = hydrated }
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        pressBackInSheet()
+        compose.onNodeWithText("Sub-agents").assertExists()
+        pressBackInSheet()
+        compose.onNodeWithText("Agents").assertExists()
+        compose.runOnIdle { assertEquals(0, dismissals) }
+        pressBackInSheet()
+        compose.runOnIdle { assertEquals(1, dismissals) }
+    }
+
+    @Test
+    fun authoritativeDenialDiscardsPendingInspectorInsteadOfRestoringIt() {
+        val child = agent("child").copy(label = "Child")
+        val current = roster("turn-current", listOf(child))
+        val access = mutableStateOf<Boolean?>(true)
+        var dismissals = 0
+        compose.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, emptyList(), {}, requested = requested,
+                    canRead = access.value, onDismiss = { requested = false; dismissals++ })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, dismissals); access.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, dismissals); access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+    }
+
+    @Test
+    fun unpairingWhileNegotiationIsPendingDiscardsInspector() {
+        val child = agent("child").copy(label = "Child")
+        val current = roster("turn-current", listOf(child))
+        val access = mutableStateOf<Boolean?>(true)
+        val device = mutableStateOf<String?>("phone")
+        var dismissals = 0
+        compose.setContent {
+            var requested by rememberSaveable { mutableStateOf(true) }
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, emptyList(), {}, requested = requested,
+                    canRead = access.value, instanceId = "mac", deviceId = device.value,
+                    onDismiss = { requested = false; dismissals++ })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { access.value = null; device.value = null }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, dismissals); device.value = "new-phone"; access.value = true }
+        compose.onNodeWithText("Child").assertDoesNotExist()
+    }
+
+    @Test
+    fun nestedAgentBackRestoresParentThenRosterAfterRecreation() {
+        val restoration = StateRestorationTester(compose)
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val current = roster("turn-current", listOf(parent, child))
+        var dismissed = false
+        restoration.setContent {
+            AidenTheme {
+                AidenAgentRosterSheet(current, current, listOf(current), {}, onDismiss = { dismissed = true })
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithContentDescription("Open parent agent Parent").assertExists()
+        pressBackInSheet()
+        compose.onNodeWithText("Sub-agents").assertExists()
+        compose.onNodeWithText("Back").assertExists()
+        pressBackInSheet()
+        compose.onNodeWithText("Agents").assertExists()
+        compose.onNodeWithText("Back").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(false, dismissed) }
+        pressBackInSheet()
+        compose.runOnIdle { assertEquals(true, dismissed) }
+    }
+
+    @Test
+    fun selectedDetailFollowsRemovalAndResetsOnTurnChange() {
+        val parent = agent("parent").copy(label = "Parent")
+        val child = agent("child").copy(label = "Child", parentAgentId = "parent", depth = 2)
+        val current = mutableStateOf(roster("turn-current", listOf(parent, child)))
+        compose.setContent {
+            AidenTheme {
+                AidenAgentRosterSheet(current.value, current.value, listOf(current.value), {}, onDismiss = {})
+            }
+        }
+        compose.onNodeWithText("Child").performClick()
+        compose.runOnIdle { current.value = current.value.copy(agents = listOf(parent)) }
+        compose.onNodeWithText("Parent").assertExists()
+        compose.onNodeWithText("Back").assertExists()
+        compose.runOnIdle { current.value = current.value.copy(turnId = "turn-next") }
+        compose.onNodeWithText("Agents").assertExists()
+        compose.onNodeWithText("Back").assertDoesNotExist()
+    }
 
     @Test
     fun currentAgentChipDoesNotUseHistoricalRosterCount() {

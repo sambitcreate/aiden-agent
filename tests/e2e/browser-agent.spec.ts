@@ -22,7 +22,7 @@ test("a real agent generation opens the closed Environment browser and edits the
   try {
     const { page, lmStudio } = aiden;
     await finishLmStudioOnboarding(page);
-    const browserPanel = page.getByRole("tabpanel", { name: "Browser", exact: true });
+    const browserPanel = page.locator("#environment-browser-panel");
     await expect(browserPanel).toBeHidden();
     expect(lmStudio.enqueueToolScenario).toBeDefined();
     const prompt = "Browser integration scenario: enter Aiden agent and save my settings.";

@@ -26,6 +26,7 @@ import {
   useShortcutLabel,
 } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { workspaceFileOpenErrorPresentation } from "../lib/workspace-file-open-error";
 import type {
   Workspace,
   WorkspaceFileDocument,
@@ -190,6 +191,9 @@ export function FilesPanel({
     error: null,
     loading: false,
   });
+  const openErrorPresentation = documentState.error
+    ? workspaceFileOpenErrorPresentation(documentState.error)
+    : null;
   const [draft, setDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<SaveIssue | null>(null);
@@ -754,8 +758,15 @@ export function FilesPanel({
                     <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm select-text">
                       {documentState.error}
                     </Text>
+                    {openErrorPresentation?.guidance ? (
+                      <Text variant="small" color="tertiary" as="p" className="mt-1 max-w-sm">
+                        {openErrorPresentation.guidance}
+                      </Text>
+                    ) : null}
                   </div>
-                  <Button size="small" disabled={interactionBlocked} onClick={() => void loadFile()}>Try again</Button>
+                  {openErrorPresentation?.retryable !== false ? (
+                    <Button size="small" disabled={interactionBlocked} onClick={() => void loadFile()}>Try again</Button>
+                  ) : null}
                 </div>
               ) : documentState.data ? (
                 <div className={cn(

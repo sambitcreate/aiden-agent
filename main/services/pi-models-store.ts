@@ -101,9 +101,21 @@ interface CatalogBackingStore extends ModelsStore {
 }
 
 export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): CatalogBackingStore {
+  async function migrateAzure() {
+    if (!(await store.load()).entries["azure-openai-responses"]) return;
+    await store.update((document) => {
+      const legacy = document.entries["azure-openai-responses"];
+      if (!legacy) return;
+      // Catalogs are disposable; a current Azure catalog wins in full. Custom
+      // endpoints live in the separate portable provider configuration.
+      document.entries.azure ??= { ...legacy, models: legacy.models.map((model) => ({ ...model, provider: "azure" })) };
+      delete document.entries["azure-openai-responses"];
+    });
+  }
   return {
     async read(providerId) {
       if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      if (providerId === "azure") await migrateAzure();
       const document = await store.load();
       const entry = document.entries[providerId];
       return entry ? clone(entry) : undefined;
@@ -119,6 +131,7 @@ export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): 
     },
 
     async delete(providerId, _options, receipt) {
+      if (providerId === "azure") await migrateAzure();
       if (receipt) receipt.state = "not-published";
       if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
       await store.update((document) => {
@@ -151,6 +164,16 @@ class CatalogPublicationError extends Error {
 }
 
 /**
+ * The empty entry a failed retirement delete leaves behind. It must read as no
+ * catalog: since pi-ai 1.1 a hydrated account catalog (Radius) replaces the
+ * shipped baseline, so an empty one would list no models at all. Real entries
+ * always carry `checkedAt` (Pi refreshes and Aiden's 404/501 negative cache).
+ */
+function isRetirementTombstone(entry: ModelsStoreEntry): boolean {
+  return entry.models.length === 0 && entry.checkedAt === undefined && entry.lastModified === undefined;
+}
+
+/**
  * Every reader/writer, including native Pi refresh and offline hydration, shares
  * the publication queue. Rejected writes are retired, or reads quarantined if
  * cleanup fails, before another publisher can write. Cleanup cannot erase a
@@ -169,7 +192,7 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
     } catch (deleteError) {
       try {
         // A failed delete may have committed, or may have left the old entry.
-        // An empty replacement is safe for both Pi hydration and our overlays.
+        // Write an empty tombstone instead; reads treat it as absent.
         await backing.write(providerId, { models: [] });
       } catch (fallbackError) {
         throw new CatalogPublicationError("Could not retire an obsolete model catalog.", [deleteError, fallbackError]);
@@ -188,7 +211,9 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
   const modelsStore: ModelsStore = {
     read: (id, options) => serialized(id, async () => {
       options?.signal?.throwIfAborted();
-      return quarantined.has(id) ? undefined : backing.read(id, options);
+      if (quarantined.has(id)) return undefined;
+      const entry = await backing.read(id, options);
+      return entry === undefined || isRetirementTombstone(entry) ? undefined : entry;
     }),
     write: (id, entry, options) => {
       const snapshot = clone(entry);

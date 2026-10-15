@@ -1,0 +1,88 @@
+{
+  "evidenceKind": "pr-merged-source-local-validation",
+  "generatedAt": "2026-10-12T04:23:53.479661+00:00",
+  "sourceCommit": "4b21540b845feaff6ee315d540db52419a960618",
+  "mainBaseline": "231d25110074973f23276581f706251b9ef3e4e7",
+  "focused": {
+    "passed": 383
+  },
+  "typescript": {
+    "total": 8836,
+    "passed": 8834,
+    "existingSkips": 2
+  },
+  "cli": {
+    "passed": 86
+  },
+  "ios": {
+    "passed": 4
+  },
+  "android": {
+    "passed": 102
+  },
+  "electron": {
+    "initialPassed": 23,
+    "initialFailed": 1,
+    "failedSpec": "tests/e2e/chat-message-queue.spec.ts:353",
+    "symptom": "Test assertions passed; owned Electron PID remained alive past 35000ms shutdown bound.",
+    "targetedReruns": 1,
+    "targetedRerunPassed": true,
+    "status": "flaky failure retained, not a clean first-pass suite",
+    "retries": 0
+  },
+  "checks": [
+    "production build",
+    "root and Electron types",
+    "CLI build and types",
+    "repository lint excluding only ignored tmp/**",
+    "research artifact lint",
+    "source whitespace"
+  ],
+  "logs": {
+    "focused": {
+      "path": "/tmp/aiden-pr-focused.log",
+      "sha256": "dfbbe14d21a9cabbb6b76f69c355f7f818b5d6a5889fd4b0b6a70d74fb9ee359"
+    },
+    "types": {
+      "path": "/tmp/aiden-pr-types.log",
+      "sha256": "721626e05d7e6861d8e243c02a911e0a074c309c3b7c748488c15ed7e5787a3a"
+    },
+    "build": {
+      "path": "/tmp/aiden-pr-build.log",
+      "sha256": "b4d4e300b0a633ca760423071fa1db253e4438e53e382ff64a0f67b5f240b48f"
+    },
+    "cli": {
+      "path": "/tmp/aiden-pr-cli.log",
+      "sha256": "1b3d85f054348a4bd80c7936c6f10cb0c4febf27bc8fb7c212e03a0cfa4e2a40"
+    },
+    "lint-tracked": {
+      "path": "/tmp/aiden-pr-lint-tracked.log",
+      "sha256": "981de30850d296d40bc79a2c1230ca88a3d256d8e17ebdf8c9a799a0b4221e97"
+    },
+    "full-tests": {
+      "path": "/tmp/aiden-pr-full-tests.log",
+      "sha256": "04d0d351a75087504692d767229b5875dd7950cf7477cd68cf04090c805bb61c"
+    },
+    "electron": {
+      "path": "/tmp/aiden-pr-electron.log",
+      "sha256": "df950c45556a5c2452942a17864311ca4d528a7f97bc83c48d002cf793db5e12"
+    },
+    "native-ios": {
+      "path": "/tmp/aiden-pr-native-ios.log",
+      "sha256": "ccf3ccbef7fbe3788edb0bb6c906a52c97d8e6c52141f934cd9c2d18cc075b95"
+    },
+    "native-android": {
+      "path": "/tmp/aiden-pr-native-android.log",
+      "sha256": "365cdc77dbb2afa088be7713734412559be5967cc3d3a59ada227f29827ea8dd"
+    },
+    "steer-rerun": {
+      "path": "/tmp/aiden-pr-steer-rerun.log",
+      "sha256": "1d2ddf57e8e6b82d50db9913388dc560eaaff01c4fd5da2b8b68a5ea08aecff5"
+    }
+  },
+  "limitations": [
+    "Local evidence is not hosted CI or release acceptance.",
+    "Original Electron trace/screenshot folder disappeared before it could be copied; original text log remains.",
+    "No live Astra quality or billed-cost comparison."
+  ]
+}

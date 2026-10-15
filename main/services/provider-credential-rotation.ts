@@ -161,6 +161,12 @@ export function removeProviderWithCredentialCleanup(
   return mutatePortableConfigAndSync(() =>
     serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (!providerTransitionNeedsCredentialAccess(await configStore.getProvider(providerId), null)) {
+        // As when saving, a keyless local provider must be removable on a Linux
+        // desktop with no keyring session, so this never reads or writes secrets.
+        await configStore.removeProvider(providerId, isCurrent);
+        return;
+      }
       await reconcilePendingProviderCredentialRotationNow();
       const previous = await configStore.getProvider(providerId);
       const previousKey = previous

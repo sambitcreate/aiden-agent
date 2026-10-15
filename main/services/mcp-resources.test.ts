@@ -3,8 +3,8 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpError, ErrorCode, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpResourceTool, mcpResourceToolName, MCP_RESOURCE_LIMITS } from "./mcp-resources.js";
+import { McpError, ErrorCode, LATEST_PROTOCOL_VERSION, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, mcpResourceToolName, MCP_RESOURCE_LIMITS } from "./mcp-resources.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -65,8 +65,9 @@ test("server, generation, raw URI and remote-tool identities cannot cross author
   await assert.rejects(invoke(a.tool, { action: "read", handle: "memo://private/one" }), /does not belong/);
   assert.equal(reads, 0);
   assert.notEqual(a.tool.name, b.tool.name);
-  assert.notEqual(mcpResourceToolName(identity), mcpAgentToolName(identity, "resources"));
-  assert.notEqual(mcpResourceToolName(identity), mcpAgentToolName(identity, mcpResourceToolName(identity)));
+  const named = (tool: string) => mcpAgentToolName(identity, tool, { configured: [identity], inventory: [tool] });
+  assert.notEqual(mcpResourceToolName(identity), named("resources"));
+  assert.notEqual(mcpResourceToolName(identity), named(mcpResourceToolName(identity)));
 });
 
 test("inventory is frozen for a generation despite subsequent remote list changes", async () => {
@@ -77,16 +78,79 @@ test("inventory is frozen for a generation despite subsequent remote list change
   assert.equal(lists, 1);
 });
 
-test("pagination cycles, excess pages/entries, oversized metadata fail closed", async () => {
+for (const end of [null, ""]) {
+  test(`real SDK resource lists ending with nextCursor ${JSON.stringify(end)} publish every page`, async (t) => {
+    // Wire-level fixture: the SDK Server would not emit these legal end markers itself.
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const methods: string[] = [];
+    serverSide.onmessage = (message: JSONRPCMessage) => {
+      if (!("method" in message) || !("id" in message)) return;
+      methods.push(message.method);
+      const cursor = (message.params as { cursor?: string } | undefined)?.cursor;
+      const result = message.method === "initialize"
+        ? { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { resources: {} }, serverInfo: { name: "raw", version: "1" } }
+        : message.method === "resources/list"
+          ? { resources: [{ name: cursor ? "Second" : "First", uri: cursor ? "memo://two" : "memo://one" }], nextCursor: cursor ? end : "page-two" }
+          : { resourceTemplates: [{ name: "Query", uriTemplate: "memo://query/{q}" }], nextCursor: end };
+      void serverSide.send({ jsonrpc: "2.0", id: message.id, result });
+    };
+    await serverSide.start();
+    const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
+    await client.connect(clientSide);
+    t.after(async () => { await client.close(); });
+    const { tool } = fixture({
+      listResources: (params, options) => listMcpResourcesPage(client, params, options),
+      listResourceTemplates: (params, options) => listMcpResourceTemplatesPage(client, params, options),
+      readResource: (params, options) => client.readResource(params, options),
+    });
+    const { resources } = await invoke(tool, { action: "list" });
+    assert.deepEqual(resources.map(({ name }: { name: string }) => name), ["First", "Second", "Query"]);
+    assert.deepEqual(methods.filter((method) => method !== "initialize"), ["resources/list", "resources/list", "resources/templates/list"]);
+  });
+}
+
+test("pagination cycles and excess pages or entries list a truncated inventory; oversized metadata fails closed", async () => {
   for (const client of [
-    port({ listResources: async () => ({ resources: [], nextCursor: "repeat" }) }),
-    port({ listResources: async ({ cursor } = {}) => ({ resources: [], nextCursor: (Number(cursor ?? "0") + 1).toString() }) }),
-    port({ listResources: async () => ({ resources: Array.from({ length: 129 }, () => ({ name: "Doc", uri: "memo://one" })) }) }),
-    port({ listResources: async () => ({ resources: [{ name: "x".repeat(2049), uri: "memo://one" }] }) }),
+    port({ listResources: async () => ({ resources: [{ name: "Doc", uri: "memo://one" }], nextCursor: "repeat" }) }),
+    port({ listResources: async ({ cursor } = {}) => ({ resources: [{ name: `Doc ${cursor ?? "0"}`, uri: `memo://${cursor ?? "0"}` }], nextCursor: (Number(cursor ?? "0") + 1).toString() }) }),
+    port({ listResources: async () => ({ resources: Array.from({ length: 129 }, (_, index) => ({ name: "Doc", uri: `memo://${index}` })) }) }),
   ]) {
     const { tool } = fixture(client);
-    await assert.rejects(invoke(tool, { action: "list" }), /bounds|limit/);
+    const listed = await invoke(tool, { action: "list" });
+    assert.equal(listed.truncated, true);
+    assert.ok(listed.resources.length >= 1 && listed.resources.length <= MCP_RESOURCE_LIMITS.entries);
+    assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= MCP_RESOURCE_LIMITS.bytes);
+    // Every listed handle stays readable; nothing beyond the listing is.
+    assert.equal((await invoke(tool, { action: "read", handle: listed.resources[0].handle })).contents.length, 1);
     await assert.rejects(invoke(tool, { action: "read", handle: "forged" }));
+  }
+  const { tool: complete } = fixture();
+  assert.equal((await invoke(complete, { action: "list" })).truncated, undefined);
+  const { tool } = fixture(port({ listResources: async () => ({ resources: [{ name: "x".repeat(2049), uri: "memo://one" }] }) }));
+  await assert.rejects(invoke(tool, { action: "list" }), /bounds|limit/);
+});
+
+test("large listings stop within the response budget instead of failing", async () => {
+  const { tool } = fixture(port({ listResources: async () => ({ resources: Array.from({ length: 100 }, (_, index) => ({ name: `Doc ${index} ${"n".repeat(400)}`, uri: `memo://${index}` })) }) }));
+  const listed = await invoke(tool, { action: "list" });
+  assert.equal(listed.truncated, true);
+  assert.ok(listed.resources.length > 10 && listed.resources.length < 100);
+  assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= MCP_RESOURCE_LIMITS.bytes);
+});
+
+test("a listing that ends within the truncation note's bytes of the limit still lists, and listing again reuses it", async () => {
+  // Handles are fixed-length UUIDs, so sweeping the name length walks the final
+  // entry across every byte of headroom below the response limit.
+  for (let pad = 0; pad < 100; pad += 1) {
+    const { tool } = fixture(port({
+      listResources: async () => ({ resources: Array.from({ length: 128 }, (_, index) => ({ name: `Doc ${index} ${"n".repeat(300 + pad)}`, uri: `memo://${index}` })) }),
+      listResourceTemplates: async () => ({ resourceTemplates: [] }),
+    }));
+    const listed = await invoke(tool, { action: "list" });
+    assert.equal(listed.truncated, true, `pad ${pad}`);
+    assert.ok(Buffer.byteLength(JSON.stringify(listed)) <= MCP_RESOURCE_LIMITS.bytes);
+    const again = await invoke(tool, { action: "list" });
+    assert.deepEqual(again.resources.map(({ handle }: { handle: string }) => handle), listed.resources.map(({ handle }: { handle: string }) => handle));
   }
 });
 
@@ -124,20 +188,27 @@ test("template variable set is exact and static resources reject variables", asy
   assert.equal(reads, 0);
 });
 
-test("read results reject oversized text and URI metadata; binary never enters model context", async () => {
-  for (const readResource of [
-    async () => ({ contents: [{ uri: "x".repeat(2049), text: "secret" }] }),
-    async ({ uri }: { uri: string }) => ({ contents: [{ uri, text: "é".repeat(MCP_RESOURCE_LIMITS.bytes) }] }),
-  ]) {
-    const { tool } = fixture(port({ readResource }));
-    const { resources } = await invoke(tool, { action: "list" });
-    await assert.rejects(invoke(tool, { action: "read", handle: resources[0].handle }), /bounds|limit/);
-  }
+test("oversized resource text keeps its start and end with the full size; URI metadata still fails closed", async () => {
+  const { tool: invalid } = fixture(port({ readResource: async () => ({ contents: [{ uri: "x".repeat(2049), text: "secret" }] }) }));
+  await assert.rejects(invoke(invalid, { action: "read", handle: (await invoke(invalid, { action: "list" })).resources[0].handle }), /bounds|limit/);
+  const text = "START" + "é\n\"".repeat(MCP_RESOURCE_LIMITS.bytes) + "END-OF-RESOURCE";
+  const { tool: large } = fixture(port({ readResource: async ({ uri }) => ({ contents: [{ uri, text }, { uri, text: "second" }] }) }));
+  const read = await large.execute("call", { action: "read", handle: (await invoke(large, { action: "list" })).resources[0].handle });
+  const serialized = (read.content[0] as { text: string }).text;
+  assert.ok(Buffer.byteLength(serialized) <= MCP_RESOURCE_LIMITS.bytes);
+  const result = JSON.parse(serialized);
+  assert.match(result.contents[0].text, /^START/u);
+  assert.match(result.contents[0].text, /END-OF-RESOURCE$/u);
+  assert.match(result.contents[0].text, new RegExp(`${Buffer.byteLength(text)} bytes in full`, "u"));
+  // Later blocks that no longer fit are named, never silently dropped.
+  assert.ok(result.contents.length === 2);
+  assert.ok(result.contents[1].text === "second" || /omitted/u.test(result.contents[1].omitted));
+
   const { tool } = fixture(port({ readResource: async ({ uri }) => ({ contents: [{ uri, blob: "secret binary" }] }) }));
   const { resources } = await invoke(tool, { action: "list" });
-  const result = await invoke(tool, { action: "read", handle: resources[0].handle });
-  assert.ok(result.contents[0].omitted);
-  assert.ok(!JSON.stringify(result).includes("secret binary"));
+  const binary = await invoke(tool, { action: "read", handle: resources[0].handle });
+  assert.ok(binary.contents[0].omitted);
+  assert.ok(!JSON.stringify(binary).includes("secret binary"));
 });
 
  test("optional discovery methods may be absent, but other errors are never treated as empty inventories", async () => {
@@ -239,4 +310,41 @@ test("accepted plain expansions encode every reserved character and Unicode with
   const result = await invoke(tool, { action: "read", handle: resources[1].handle, variables: { id: "!'()*:/?#[]@%é" } });
   const encoded = "%21%27%28%29%2A%3A%2F%3F%23%5B%5D%40%25%C3%A9";
   assert.equal(result.requestedUri, `memo://root/%20/${encoded}/${encoded}`);
+});
+
+test("resource reads return bounded raster content with URI metadata and no inline binary strings", async () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const { tool } = fixture(port({ readResource: async ({ uri }) => ({ contents: [
+    { uri, text: "A small diagram" },
+    { uri: "memo://image", mimeType: "image/png", blob: png },
+    { uri: "memo://binary", mimeType: "application/octet-stream", blob: "cHJpdmF0ZSBiaW5hcnk=" },
+  ] }) }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const result = await tool.execute("image-read", { action: "read", handle: resources[0].handle });
+  assert.deepEqual(result.content[1], { type: "image", mimeType: "image/png", data: png });
+  const metadata = JSON.parse((result.content[0] as { text: string }).text);
+  assert.equal(metadata.requestedUri, "memo://private/one");
+  assert.equal(metadata.contents[0].text, "A small diagram");
+  assert.equal(metadata.contents[1].uri, "memo://image");
+  assert.match(metadata.contents[1].image, /Attached/u);
+  assert.match(metadata.contents[2].omitted, /no file was created/u);
+  assert.ok(!JSON.stringify(metadata).includes(png));
+  assert.ok(!JSON.stringify(result).includes("cHJpdmF0ZSBiaW5hcnk="));
+});
+
+test("resource image validation rejects MIME mismatch, malformed/oversized data and excess images", async () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const { tool } = fixture(port({ readResource: async ({ uri }) => ({ contents: [
+    { uri, mimeType: "image/png", blob: "!!!!" },
+    { uri, mimeType: "image/jpeg", blob: png },
+    { uri, mimeType: "image/png", blob: Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64") },
+    { uri, mimeType: "image/svg+xml", blob: Buffer.from("<svg/>").toString("base64") },
+    ...Array.from({ length: 5 }, (_, index) => ({ uri: `memo://valid/${index}`, mimeType: "image/png", blob: png })),
+  ] }) }));
+  const { resources } = await invoke(tool, { action: "list" });
+  const result = await tool.execute("image-read", { action: "read", handle: resources[0].handle });
+  assert.equal(result.content.filter((part) => part.type === "image").length, 4);
+  const metadata = JSON.parse((result.content[0] as { text: string }).text);
+  for (const index of [0, 1, 2, 3, 8]) assert.match(metadata.contents[index].omitted, /image omitted/u);
+  assert.equal(metadata.contents.filter((part: { image?: string }) => part.image).length, 4);
 });

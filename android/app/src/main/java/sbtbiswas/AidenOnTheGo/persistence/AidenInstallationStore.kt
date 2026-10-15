@@ -111,7 +111,9 @@ class AidenInstallationStore(
         instanceId: String,
         serverCapabilities: List<AidenRemoteCapability>,
         serverName: String?,
-        deviceCapabilities: List<AidenRemoteCapability>
+        deviceCapabilities: List<AidenRemoteCapability>,
+        /** The features `/server` announced; null keeps the ones stored. */
+        serverFeatures: List<String>? = null
     ) {
         val list = _installations.value.toMutableList()
         val index = list.indexOfFirst { it.instanceId == instanceId }
@@ -127,7 +129,8 @@ class AidenInstallationStore(
                 deviceCapabilities = item.deviceCapabilities.filter { refreshedDeviceGrants.contains(it) },
                 serverCapabilities = serverCapabilities,
                 name = serverName ?: item.name,
-                lastConnectedAt = Instant.now()
+                lastConnectedAt = Instant.now(),
+                serverFeatures = serverFeatures ?: item.serverFeatures
             )
             list[index] = updated
             _installations.value = list
@@ -149,12 +152,7 @@ class AidenInstallationStore(
         // The negotiation route can only add progress grants; a response that
         // drops or widens unrelated authority is contract-invalid. Reject it
         // instead of persisting different non-progress authority.
-        val progress = setOf(
-            AidenRemoteCapability.TASKS_READ,
-            AidenRemoteCapability.AGENTS_READ,
-            AidenRemoteCapability.QUESTIONS_RESPOND,
-            AidenRemoteCapability.SKILLS_INVOKE
-        )
+        val progress = AidenRemoteCapability.NEGOTIABLE.toSet()
         if (item.deviceCapabilities.toSet() - progress != deviceCapabilities.toSet() - progress) return
         list[index] = item.copy(deviceCapabilities = deviceCapabilities)
         _installations.value = list

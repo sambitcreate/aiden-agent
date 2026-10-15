@@ -1,3 +1,4 @@
+import type { PiModelToolsHost } from "./pi-model-tools.js";
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
@@ -76,6 +77,31 @@ export function isLocalModelProvider(
   return isLocalProviderDeployment(provider);
 }
 
+/** Secondary operations are accounted against their own provider, independent of the chat model. */
+export function modelOperationUsageRecord(
+  record: Parameters<NonNullable<PiModelToolsHost["onUsage"]>>[0],
+  providers: readonly Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">[],
+  source: UsageRequestSource,
+  // A host facade may have a newer authoritative local-provider snapshot.
+  localOverride = false,
+): UsageRequestRecord {
+  const provider = providers.find((candidate) => candidate.id === record.provider);
+  const local = localOverride || (provider !== undefined && isLocalModelProvider(provider));
+  const cost = record.usage?.cost.total;
+  return {
+    source,
+    providerId: record.provider,
+    providerLabel: record.providerLabel,
+    modelId: record.model,
+    modelLabel: record.modelLabel,
+    local,
+    status: record.status,
+    tokens: reportedTokens(record.usage),
+    costStatus: local ? "not-applicable" : typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? "reported" : "unavailable",
+    ...(typeof cost === "number" && Number.isFinite(cost) ? { costUsd: Math.max(0, cost) } : {}),
+  };
+}
+
 function modelHasPricing(model: Model<Api>): boolean {
   return [model.cost, ...(model.cost.tiers ?? [])].some((rates) =>
     [rates.input, rates.output, rates.cacheRead, rates.cacheWrite].some(
@@ -84,9 +110,11 @@ function modelHasPricing(model: Model<Api>): boolean {
   );
 }
 
-function statusFor(message: AssistantMessage): UsageRequestStatus {
+function statusFor(message: AssistantMessage, source: UsageRequestSource): UsageRequestStatus {
   if (message.stopReason === "aborted") return "cancelled";
-  if (message.stopReason === "error" || message.stopReason === "length") return "failed";
+  if (message.stopReason === "error") return "failed";
+  // Warming intentionally caps output at one token; reaching that cap succeeds.
+  if (message.stopReason === "length" && source !== "cache-warm") return "failed";
   return "completed";
 }
 
@@ -135,7 +163,7 @@ export function assistantUsageRecord(input: {
     modelId: responseModel || input.model.id,
     modelLabel: responseModel || input.model.name || input.model.id,
     local,
-    status: statusFor(input.message),
+    status: statusFor(input.message, input.source),
     tokens: reportedTokens(input.message.usage),
     costStatus: local
       ? "not-applicable"

@@ -4,33 +4,61 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
 } from "@tanstack/react-router";
 import * as React from "react";
 import { RootView } from "./root-view";
 import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
-import { SettingsView } from "./settings-view";
-import { ProfileView } from "./profile-view";
-import { ScheduledTasksView } from "../components/scheduled-tasks-view";
-import { BotsView } from "./bots-view";
-import { QueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { createAppQueryClient } from "../lib/query-client";
 import { ErrorBoundaryView } from "../components/ui";
-import { BotChatRoute as BotChatRouteView } from "./bot-chat-route";
+import { RemoteChatView } from "./remote-chat-view";
+import { RemoteNewChatView } from "./remote-new-chat-view";
+import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { parseBotPageSearch } from "./bots/bot-page-search";
+import { StudioCapabilityRoute } from "./studio-capability-route";
+import { guardHistoryTraversal } from "../lib/guarded-history";
+
+// Chat is the startup surface, so only its shell and pane are in the entry
+// chunk. Every other route loads its own chunk; the router awaits the chunk
+// before committing the navigation, so the previous view stays on screen
+// instead of flashing a placeholder.
+const SettingsView = lazyRouteComponent(() => import("./settings-view"), "SettingsView");
+const ProfileView = lazyRouteComponent(() => import("./profile-view"), "ProfileView");
+const ScheduledTasksView = lazyRouteComponent(
+  () => import("../components/scheduled-tasks-view"),
+  "ScheduledTasksView",
+);
+const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
+const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
+const DesignView = lazyRouteComponent(() => import("../design/design-route"), "DesignRoute");
+const ImagesView = lazyRouteComponent(() => import("../images/images-route"), "ImagesRoute");
+
+/** Let the router preload the lazy view a wrapper route component renders. */
+function preloadsWith<P>(
+  component: (props: P) => React.ReactNode,
+  ...lazy: Array<{ preload?: () => Promise<void> }>
+) {
+  return Object.assign(component, {
+    preload: () => Promise.all(lazy.map((view) => view.preload?.())).then(() => undefined),
+  });
+}
 
 function BotsCapabilityRoute({ children }: React.PropsWithChildren) {
   const capabilities = useAppCapabilities();
   return capabilities.bots ? children : <Navigate to="/" replace />;
 }
 
-function BotsRoute() {
+const BotsRoute = preloadsWith(function BotsRoute() {
   return (
     <BotsCapabilityRoute>
       <BotsView />
     </BotsCapabilityRoute>
   );
-}
+}, BotsView);
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -98,22 +126,110 @@ const botsRoute = createRoute({
 const botRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/bots/$botId",
+  validateSearch: parseBotPageSearch,
   component: BotsRoute,
   staticData: { title: "Bot" },
 });
 
 const botChatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
-  path: "/bots/$botId/chat/$chatId",
-  component: function BotChatRoute() {
-    const { botId, chatId } = botChatRoute.useParams();
+  path: "/bots/$botId/chat",
+  component: preloadsWith(function BotChatRoute() {
+    const { botId } = botChatRoute.useParams();
     return (
       <BotsCapabilityRoute>
-        <BotChatRouteView botId={botId} chatId={chatId} />
+        <BotChatRouteView botId={botId} />
       </BotsCapabilityRoute>
     );
-  },
+  }, BotChatRouteView),
   staticData: { title: "Bot conversation" },
+});
+
+// A chat that lives on a paired host. The placeholder pane is replaced by the
+// remote chat pane; the route shape is the contract the sidebar links to.
+const hostChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/host/$hostId/chat/$chatId",
+  component: function HostChatRoute() {
+    const { hostId, chatId } = hostChatRoute.useParams();
+    return <RemoteChatView key={`${hostId}/${chatId}`} hostId={hostId} chatId={chatId} />;
+  },
+  staticData: { title: "Remote chat" },
+});
+
+// A new chat that runs on a paired host, in one of that host's projects.
+const hostNewChatRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/host/$hostId/new",
+  validateSearch: parseRemoteNewChatSearch,
+  component: function HostNewChatRoute() {
+    const { hostId } = hostNewChatRoute.useParams();
+    const { workspaceId } = hostNewChatRoute.useSearch();
+    return (
+      <RemoteNewChatView
+        key={`${hostId}/${workspaceId ?? ""}`}
+        hostId={hostId}
+        {...(workspaceId ? { workspaceId } : {})}
+      />
+    );
+  },
+  staticData: { title: "New remote chat" },
+});
+
+// Studio surfaces keep the chat shell's sidebar. ChatLayout suppresses the
+// Environment workbench and terminal on these paths (isStudioPath).
+const designRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design",
+  component: preloadsWith(function DesignStudioRoute() {
+    return (
+      <StudioCapabilityRoute feature="designStudio">
+        <DesignView />
+      </StudioCapabilityRoute>
+    );
+  }, DesignView),
+  staticData: { title: "Design" },
+});
+
+const designProjectRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/design/$projectId",
+  component: preloadsWith(function DesignStudioProjectRoute() {
+    const { projectId } = designProjectRoute.useParams();
+    return (
+      <StudioCapabilityRoute feature="designStudio">
+        <DesignView projectId={projectId} />
+      </StudioCapabilityRoute>
+    );
+  }, DesignView),
+  staticData: { title: "Design project" },
+});
+
+const imagesRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/images",
+  component: preloadsWith(function CreateImagesRoute() {
+    return (
+      <StudioCapabilityRoute feature="createImages">
+        <ImagesView />
+      </StudioCapabilityRoute>
+    );
+  }, ImagesView),
+  staticData: { title: "Images" },
+});
+
+const imagesWorkflowRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/images/$workflowId",
+  component: preloadsWith(function CreateImagesWorkflowRoute() {
+    const { workflowId } = imagesWorkflowRoute.useParams();
+    return (
+      <StudioCapabilityRoute feature="createImages">
+        <ImagesView workflowId={workflowId} />
+      </StudioCapabilityRoute>
+    );
+  }, ImagesView),
+  staticData: { title: "Image workflow" },
 });
 
 // Full-screen settings (outside the chat shell).
@@ -121,10 +237,10 @@ const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   validateSearch: parseSettingsSearch,
-  component: function SettingsRoute() {
+  component: preloadsWith(function SettingsRoute() {
     const { section } = settingsRoute.useSearch();
     return <SettingsView initialSection={section} />;
-  },
+  }, SettingsView),
   staticData: { title: "Settings" },
 });
 
@@ -137,15 +253,22 @@ const routeTree = rootRoute.addChildren([
     botsRoute,
     botRoute,
     botChatRoute,
+    hostChatRoute,
+    hostNewChatRoute,
+    designRoute,
+    designProjectRoute,
+    imagesRoute,
+    imagesWorkflowRoute,
   ]),
   settingsRoute,
 ]);
 
-const queryClient = new QueryClient();
+const queryClient = createAppQueryClient();
 
 const router = createRouter({
   routeTree,
-  history: createMemoryHistory(),
+  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
+  history: guardHistoryTraversal(createMemoryHistory()),
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
   context: {

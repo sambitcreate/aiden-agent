@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -17,6 +18,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import java.io.File
@@ -96,6 +98,39 @@ class AidenBotContractTest {
     }
 
     @Test
+    fun testForkSummaryCarriesFocusAndNeverInstructions() {
+        fun lineage(summary: String) =
+            """{"chatId":"c0","messageId":"m0","position":"after","at":"2026-10-05T12:00:00Z","summary":$summary}"""
+        // A chat, a fork result's chat, and a chat list.
+        fun chatShapes(lineage: String) = listOf(
+            """{"id":"c1","messages":[],"forkedFrom":$lineage}""",
+            """{"chat":{"id":"c1","messages":[],"forkedFrom":$lineage}}""",
+            """{"chats":[{"id":"c1","messages":[],"forkedFrom":$lineage}]}"""
+        )
+        val focused = lineage("""{"state":"ready","afterMessageId":"m1","focus":"the parser","text":"Summary"}""")
+        for (payload in chatShapes(focused)) {
+            AidenBotPrivateResponseValidator.validate(payload, AidenBotPrivateResponseScope.ChatProjection)
+        }
+        // The pre-release `instructions` name for the focus is private like any other.
+        val renamed = lineage("""{"state":"ready","afterMessageId":"m1","instructions":"the parser","text":"Summary"}""")
+        for (payload in chatShapes(renamed) + listOf(
+            """{"id":"c1","instructions":"leaked","messages":[]}""",
+            """{"id":"c1","messages":[{"id":"m1","instructions":"leaked"}]}""",
+            """{"id":"c1","messages":[],"forkedFrom":{"chatId":"c0","instructions":"leaked"}}"""
+        )) {
+            assertThrows("Expected rejection for $payload", AidenRemoteContractException.UnsafePayloadField::class.java) {
+                AidenBotPrivateResponseValidator.validate(payload, AidenBotPrivateResponseScope.ChatProjection)
+            }
+        }
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(
+                """{"summaries":[{"id":"c1","forkedFrom":$renamed}]}""",
+                AidenBotPrivateResponseScope.ChatSummaryProjection
+            )
+        }
+    }
+
+    @Test
     fun testPrivateMetadataIsRejectedAtUnknownChildDepth() {
         val rawForbiddenPayloads = listOf(
             """{"message":{"child":{"systemPrompt":"private instructions"}}}""",
@@ -121,7 +156,14 @@ class AidenBotContractTest {
     fun testCheckedInSharedFixtureDecodesEveryBotProjectionDirectly() {
         val fixture = loadSharedContractFixture()
 
-        assertEquals(19, fixture.contractRevision)
+        // Revision 32: conversation app control panels and app_controls_changed.
+        assertTrue(fixture.contractRevision >= 32)
+        // Revision 19 run-control losers learn the winning decision; phones keep
+        // their mobile-only grants, so the fixture never offers host capabilities.
+        val runControlError = requireNotNull(fixture.runControlError).error
+        assertEquals(AidenRemoteErrorCode.APPROVAL_RESOLVED, runControlError.code)
+        assertEquals("deny", runControlError.details?.decision)
+        assertTrue(fixture.capabilities.none { it.rawValue in setOf("host:events", "runs:observe", "runs:control") })
         assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
@@ -148,10 +190,10 @@ class AidenBotContractTest {
         assertEquals(AidenBotAvatarAssetMimeType.PNG, fixture.botAvatarMetadata.mimeType)
         assertEquals(512, fixture.botAvatarMetadata.width)
         assertEquals(fixture.botCreate.request.avatar, fixture.botCreate.response.avatar.semantic)
-        assertEquals(fixture.botCapabilityCatalog.revision, fixture.botCreate.request.access.catalogRevision)
-        assertNull(fixture.botIdentity.response.openingGreeting)
-        assertEquals(AidenBotHealth.ARCHIVED, fixture.botArchive.bot.health)
-        assertEquals(AidenBotHealth.READY, fixture.botRestore.bot.health)
+        // Revision 25: access is optional on create (omitted = Full) and a new Bot may need a model.
+        assertNull(fixture.botCreate.request.access)
+        assertEquals(AidenBotSessionState.NEEDS_MODEL, fixture.botCreate.response.sessionState)
+        assertEquals(fixture.botIdentity.request?.purpose, fixture.botIdentity.response.purpose)
         assertEquals(AidenBotConversationActivityState.WAITING_FOR_APPROVAL, fixture.botConversation.activityState)
         assertEquals(listOf(fixture.botConversation), fixture.botConversations.conversations)
         assertEquals(30, fixture.botConversationQuery.limit)
@@ -160,12 +202,6 @@ class AidenBotContractTest {
         assertEquals(AidenBotAccessMode.FULL, fixture.botPolicy.accessMode)
         assertEquals(AidenBotAccessMode.CUSTOM, fixture.botPolicyUpdate.response.accessMode)
         assertEquals(fixture.botCapabilityCatalog.revision, fixture.botPolicyUpdate.request.catalogRevision)
-        assertEquals(AidenBotChatAccessMode.INHERIT, fixture.botChatSubset.mode)
-        assertEquals(AidenBotChatAccessMode.CUSTOM, fixture.botChatSubsetUpdate.response.mode)
-        assertEquals(fixture.botPolicyUpdate.response.revision, fixture.botChatSubsetUpdate.request.expectedBotPolicyRevision)
-        assertEquals(fixture.botFavoritesUpdate.response, fixture.botFavorites)
-        assertTrue(fixture.botNotice.requiresAcknowledgement)
-        assertEquals(AidenBotDecision.CONTINUE_FULL, fixture.botNoticeAcknowledgement.response.acceptedDecision)
         assertEquals(fixture.botAvatarMetadata, fixture.botAvatarUpload.response)
         val taskProgress = requireNotNull(fixture.taskProgress)
         val agentRoster = requireNotNull(fixture.agentRoster)
@@ -240,43 +276,20 @@ class AidenBotContractTest {
 
     @Test
     fun testBotAvatarRecipeAndPresentation() {
-        val recipe = AidenBotAvatarRecipe(
-            version = 1,
-            shape = AidenBotAvatarShape.ORB,
-            color = AidenBotAvatarColor.LILAC,
-            eyes = AidenBotAvatarEyes.HAPPY,
-            detail = AidenBotAvatarDetail.SPARKLES
-        )
-        val avatar = AidenBotSemanticAvatar.Recipe(recipe)
-        val presentation = aidenBotAvatarPresentation(avatar)
-
+        val recipe = AidenBotAvatarRecipe(version = 1, shape = AidenBotAvatarShape.ORB, color = AidenBotAvatarColor.PLUM)
+        val presentation = aidenBotAvatarPresentation(AidenBotSemanticAvatar.Recipe(recipe))
         assertEquals(AidenBotAvatarShape.ORB, presentation.shape)
-        assertEquals(AidenBotAvatarColor.LILAC, presentation.color)
-        assertEquals(AidenBotAvatarEyes.HAPPY, presentation.eyes)
-        assertEquals(AidenBotAvatarDetail.SPARKLES, presentation.detail)
-
-        // Legacy conversion
-        val legacyAvatar = AidenBotSemanticAvatar.Legacy(AidenBotLegacyAvatar.SPARK)
-        val legacyPres = aidenBotAvatarPresentation(legacyAvatar)
-        assertEquals(AidenBotAvatarShape.WISP, legacyPres.shape)
-        assertEquals(AidenBotAvatarColor.SUN, legacyPres.color)
+        assertEquals(AidenBotAvatarColor.PLUM, presentation.color)
     }
 
     @Test
     fun testBotCreationRequestValidation() {
-        val recipe = AidenBotAvatarRecipe(
-            shape = AidenBotAvatarShape.HEX,
-            color = AidenBotAvatarColor.MINT,
-            eyes = AidenBotAvatarEyes.WIDE,
-            detail = AidenBotAvatarDetail.HALO
-        )
+        val recipe = AidenBotAvatarRecipe(shape = AidenBotAvatarShape.HEX, color = AidenBotAvatarColor.MINT)
         val validRequest = AidenBotCreateRequest(
             name = "Valid Bot",
             purpose = "Helps with unit tests",
-            openingGreeting = "Hello from Bot!",
             instructions = "You are a test bot.",
-            avatar = AidenBotSemanticAvatar.Recipe(recipe),
-            access = AidenBotAccessUpdate.full("rev_1")
+            avatar = AidenBotSemanticAvatar.Recipe(recipe)
         )
         assertEquals("Valid Bot", validRequest.name)
 
@@ -287,8 +300,7 @@ class AidenBotContractTest {
                 name = longName,
                 purpose = "Test",
                 instructions = "Instructions",
-                avatar = AidenBotSemanticAvatar.Recipe(recipe),
-                access = AidenBotAccessUpdate.full("rev_1")
+                avatar = AidenBotSemanticAvatar.Recipe(recipe)
             )
         }
     }
@@ -374,46 +386,142 @@ class AidenBotContractTest {
         assertFalse(exceeding.isSubset(ceiling))
     }
 
-    @Test
-    fun testFavoriteOrderSupportsMembershipAndStableReordering() {
-        fun favoriteOrder(current: List<String>, moving: String, action: String): List<String> {
-            val list = current.toMutableList()
-            when (action) {
-                "add" -> if (!list.contains(moving)) list.add(moving)
-                "remove" -> list.remove(moving)
-                "earlier" -> {
-                    val idx = list.indexOf(moving)
-                    if (idx > 0) {
-                        list.removeAt(idx)
-                        list.add(idx - 1, moving)
-                    }
-                }
-                "later" -> {
-                    val idx = list.indexOf(moving)
-                    if (idx in 0 until list.size - 1) {
-                        list.removeAt(idx)
-                        list.add(idx + 1, moving)
-                    }
-                }
-            }
-            return list
-        }
+    // --- Contract revision 27 ---
 
-        assertEquals(listOf("a", "b", "c"), favoriteOrder(listOf("a", "b"), "c", "add"))
-        assertEquals(listOf("b", "a", "c"), favoriteOrder(listOf("a", "b", "c"), "b", "earlier"))
-        assertEquals(listOf("a", "c", "b"), favoriteOrder(listOf("a", "b", "c"), "b", "later"))
-        assertEquals(listOf("a", "c"), favoriteOrder(listOf("a", "b", "c"), "b", "remove"))
+    private fun rawFixture(): JsonObject {
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }
+            .bufferedReader().use { it.readText() }
+        return json.parseToJsonElement(text).jsonObject
+    }
+
+    /** What the client does with a response body: the privacy guard for its route, then the strict decode. */
+    private fun <T> asClientReads(root: String, serializer: kotlinx.serialization.KSerializer<T>, element: kotlinx.serialization.json.JsonElement): T {
+        AidenBotPrivateResponseValidator.validate(element.toString(), AidenBotPrivateResponseScope.Root(root))
+        return AidenBotWireJson.json.decodeFromString(serializer, element.toString())
     }
 
     @Test
-    fun testConversationDeletionRequiresIdleActiveWritableBot() {
-        fun canDeleteConversation(activityState: AidenBotConversationActivityState, botHealth: AidenBotHealth, canWrite: Boolean): Boolean {
-            return activityState == AidenBotConversationActivityState.IDLE && botHealth == AidenBotHealth.READY && canWrite
-        }
+    fun revision27FixturesDecodeThroughTheClientPath() {
+        val fixture = rawFixture()
+        val memory = asClientReads("botMemory", AidenBotMemory.serializer(), fixture.getValue("botMemory"))
+        assertEquals("bot_fixture_01", memory.botId)
+        val edit = fixture.getValue("botMemoryEdit").jsonObject
+        assertEquals(
+            "Prefers short, friendly answers.",
+            asClientReads("botMemoryEdit", AidenBotMemoryEditResponse.serializer(), edit.getValue("response")).view.user.entries.first().text
+        )
+        assertEquals(
+            AidenBotRoutineProposalOutcome.ACCEPTED,
+            asClientReads(
+                "botRoutineProposalRespond",
+                AidenBotRoutineProposalRespondResult.serializer(),
+                fixture.getValue("botRoutineProposalRespond").jsonObject.getValue("response")
+            ).status
+        )
+        // A suggestion carries the routine's own prompt; the privacy guard lets exactly that through.
+        val suggestion = asClientReads("botRoutineSuggestions", AidenBotRoutineSuggestionList.serializer(), fixture.getValue("botRoutineSuggestions"))
+        assertTrue(suggestion.suggestions.single().prompt.startsWith("Check in briefly."))
+        val feed = asClientReads("botRoutineNotifications", AidenBotRoutineNotificationList.serializer(), fixture.getValue("botRoutineNotifications"))
+        assertEquals("Your first meeting is at 9:30 with Priya.", feed.notifications.single().preview)
+        val session = asClientReads("botSession", AidenBotSession.serializer(), fixture.getValue("botSessionCards"))
+        assertEquals(
+            listOf(AidenBotSessionEntry.MemoryUpdate::class, AidenBotSessionEntry.RoutineProposal::class, AidenBotSessionEntry.RoutineProposal::class),
+            session.entries.map { it::class }
+        )
+        // The whole checked-in fixture, revision 27 roots included, passes the shared guard.
+        loadSharedContractFixture()
+    }
 
-        assertTrue(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.READY, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.RUNNING, AidenBotHealth.READY, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.ARCHIVED, true))
-        assertFalse(canDeleteConversation(AidenBotConversationActivityState.IDLE, AidenBotHealth.READY, false))
+    @Test
+    fun aPromptOutsideARoutineCardIsStillRefused() {
+        val message = """{"botId":"bot_fixture_01","epoch":"e","seq":1,"state":"idle","interrupted":false,"entries":[{"type":"message","id":"m","role":"assistant","text":"hi","prompt":"leak"}],"hasOlder":false,"question":null,"approval":null}"""
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate(message, AidenBotPrivateResponseScope.Root("botSession"))
+        }
+        // A model prompt never rides along on a memory view either.
+        assertThrows(AidenRemoteContractException.UnsafePayloadField::class.java) {
+            AidenBotPrivateResponseValidator.validate("""{"prompt":"x"}""", AidenBotPrivateResponseScope.Root("botMemory"))
+        }
+    }
+
+    @Test
+    fun aSessionSnapshotSkipsEntryTypesThisBuildCannotRead() {
+        val session = rawFixture().getValue("botSessionCards").jsonObject
+        val entries = session.getValue("entries").jsonArray
+        val future = json.parseToJsonElement("""{"type":"mood_ring","id":"entry_25","colour":"teal"}""")
+        val withFuture = JsonObject(session + ("entries" to kotlinx.serialization.json.JsonArray(listOf(future) + entries)))
+        val decoded = AidenBotWireJson.json.decodeFromString(AidenBotSession.serializer(), withFuture.toString())
+        // The unknown entry is dropped; every known one is still there.
+        assertEquals(listOf("entry_20", "entry_21", "entry_22"), decoded.entries.map { it.id })
+
+        // Known types stay strict: a malformed memory update still refuses the session.
+        val malformed = JsonObject(entries[0].jsonObject + ("text" to JsonPrimitive("Saved")))
+        val withMalformed = JsonObject(session + ("entries" to kotlinx.serialization.json.JsonArray(listOf(future, malformed))))
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromString(AidenBotSession.serializer(), withMalformed.toString())
+        }
+        // An entry without a string `type` is malformed, not unknown.
+        val untyped = JsonObject(session + ("entries" to kotlinx.serialization.json.JsonArray(listOf(json.parseToJsonElement("""{"id":"entry_26"}""")))))
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromString(AidenBotSession.serializer(), untyped.toString())
+        }
+    }
+
+    @Test
+    fun anEntryFrameOfAnUnknownTypeIsIgnoredWithoutClosingTheFeed() {
+        val stream = """
+            data: {"protocolVersion":1,"botId":"bot_fixture_01","epoch":"epoch_fixture_01","seq":4,"type":"entry","payload":{"entry":{"type":"mood_ring","id":"entry_30"}}}
+
+            data: {"protocolVersion":1,"botId":"bot_fixture_01","epoch":"epoch_fixture_01","seq":5,"type":"entry","payload":{"entry":{"type":"memory_update","id":"entry_31"}}}
+
+        """.trimIndent() + "\n"
+        val events = kotlinx.coroutines.runBlocking {
+            val collected = mutableListOf<AidenBotSessionEvent>()
+            AidenBotSessionEventStream.parse(stream.byteInputStream(), "bot_fixture_01").collect { collected += it }
+            collected
+        }
+        assertEquals(2, events.size)
+        assertTrue(events[0].payload is AidenBotSessionEventPayload.SkippedEntry)
+        assertEquals(AidenBotSessionEntry.MemoryUpdate("entry_31"), (events[1].payload as AidenBotSessionEventPayload.Entry).entry)
+
+        // Applying both keeps the (epoch, seq) chain intact: the skipped frame only advances seq.
+        val start = AidenBotWireJson.json.decodeFromString(AidenBotSession.serializer(), rawFixture().getValue("botSessionCards").toString())
+        val afterSkip = (sbtbiswas.AidenOnTheGo.features.bots.aidenApplyBotSessionEvent(start, events[0])
+            as sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionEventOutcome.Applied).session
+        assertEquals(4L, afterSkip.seq)
+        assertEquals(start.entries, afterSkip.entries)
+        val afterUpdate = (sbtbiswas.AidenOnTheGo.features.bots.aidenApplyBotSessionEvent(afterSkip, events[1])
+            as sbtbiswas.AidenOnTheGo.features.bots.AidenBotSessionEventOutcome.Applied).session
+        assertEquals("entry_31", afterUpdate.entries.last().id)
+
+        // A malformed frame of a known type still fails closed.
+        val bad = """{"protocolVersion":1,"botId":"bot_fixture_01","epoch":"epoch_fixture_01","seq":6,"type":"entry","payload":{"entry":{"type":"routine_proposal","id":"entry_32"}}}"""
+        assertThrows(Exception::class.java) { AidenBotSessionEventStream.decodeFrame(bad.toByteArray(), "bot_fixture_01") }
+    }
+
+    @Test
+    fun aRetiredOpeningGreetingIsAcceptedAndIgnored() {
+        val fixture = rawFixture()
+        val detail = fixture.getValue("botDetail").jsonObject
+        val plain = AidenBotWireJson.json.decodeFromString(AidenBotDetail.serializer(), detail.toString())
+        val legacy = JsonObject(detail + ("openingGreeting" to JsonPrimitive("Hi! I'm Scout.")))
+        // An older Mac's greeting passes the Bot detail guard and decodes to the same Bot.
+        assertEquals(plain, asClientReads("botDetail", AidenBotDetail.serializer(), legacy))
+        // Encoding never writes it back.
+        assertFalse(AidenBotWireJson.json.encodeToJsonElement(AidenBotDetail.serializer(), plain).jsonObject.containsKey("openingGreeting"))
+        // It must still be a bounded string.
+        for (invalid in listOf(JsonPrimitive(3), JsonPrimitive("g".repeat(2_001)))) {
+            assertThrows(Exception::class.java) {
+                AidenBotWireJson.json.decodeFromString(AidenBotDetail.serializer(), JsonObject(detail + ("openingGreeting" to invalid)).toString())
+            }
+        }
+        // Requests never send it, and an older request shape that names it still reads.
+        val createRequest = fixture.getValue("botCreate").jsonObject.getValue("request").jsonObject
+        val olderCreate = JsonObject(createRequest + ("openingGreeting" to JsonPrimitive("")))
+        val create = AidenBotWireJson.json.decodeFromString(AidenBotCreateRequest.serializer(), olderCreate.toString())
+        assertEquals(createRequest, AidenBotWireJson.json.encodeToJsonElement(AidenBotCreateRequest.serializer(), create))
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromString(AidenBotIdentityPatch.serializer(), """{"openingGreeting":"Hi"}""")
+        }
     }
 }

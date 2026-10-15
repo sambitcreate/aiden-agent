@@ -1,0 +1,10 @@
+{
+  "baselineCommit": "203a8f2082aaa60c3d22bc8b464a7f29541606dd",
+  "source": "main/services/generation-context.ts",
+  "sourceSha256": "fa3bca66db2eba2c72f99528f35bc5ffc22ee9c109ebcccebdc4d22b6825999c",
+  "patch": "docs/research/experiments/context-compaction-recovery-marker.patch",
+  "patchSha256": "9695235eed98f6148ad1dcaea42469b23e9864e201d25b9a14cd0ba3adc250ba",
+  "patchedSourceSha256": "c9b2ad3e0c6b801150d94655c8d16564f6f427de2d728a8dec5fac82ff4f7413",
+  "output": "tmp/research/generation-context-before-scaling.ts",
+  "outputSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5"
+}

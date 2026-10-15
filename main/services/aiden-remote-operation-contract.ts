@@ -43,6 +43,19 @@ export class AidenOperationUnknownOutcomeError extends Error {
   }
 }
 
+/**
+ * The action refused before it changed anything (a state check such as a
+ * paused Bot or a missing model). The ledger forgets the admission instead of
+ * recording a rejection, so a retry with the same key is evaluated afresh, and
+ * the caller sees `cause`. Throw it only when nothing can have committed.
+ */
+export class AidenOperationNotExecutedError extends Error {
+  constructor(readonly cause: unknown) {
+    super("The operation was refused before it ran.");
+    this.name = "AidenOperationNotExecutedError";
+  }
+}
+
 export interface AidenIdempotencySnapshotEntry {
   scopeDigest: string;
   requestDigest: string;
@@ -317,6 +330,11 @@ function cloneDurableResult(value: unknown): DurableJsonValue {
   const clone = cloneDurableJson(value);
   durableJsonUtf8Bytes(clone);
   return clone;
+}
+
+/** Throws `AidenOperationContractError` when a replay ledger could not record this result. */
+export function assertDurableOperationResult(value: unknown): void {
+  cloneDurableResult(value);
 }
 
 function serializedSnapshotBytes(snapshot: AidenIdempotencySnapshot): number {
@@ -731,6 +749,11 @@ export class AidenIdempotencyLedger {
           if (error instanceof AidenOperationUnknownOutcomeError) {
             this.retainUnknownOutcome(entry);
             throw new AidenOperationContractError("idempotency_in_flight");
+          }
+          if (error instanceof AidenOperationNotExecutedError) {
+            // Nothing ran: no rejection is recorded, so the same key re-evaluates next time.
+            if (this.entries.get(ledgerKey) === entry) this.entries.delete(ledgerKey);
+            throw error.cause;
           }
           this.settleRejected(ledgerKey, entry, error);
           throw error;

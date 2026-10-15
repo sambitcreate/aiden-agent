@@ -1,3 +1,4 @@
+import { remoteDeviceTypeLabel } from "../../lib/remote-connection-status";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -43,6 +44,7 @@ import {
   toast,
 } from "../ui";
 import { CopyButton } from "../copy-button";
+import { AcceptConnectionRequestsField } from "./remote-connection-requests-field";
 import { aidenRemoteApi } from "../../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../../lib/queries";
 import type {
@@ -228,7 +230,7 @@ function SettingsDeviceRow({
       <div className="min-w-0 flex-1">
         <Text variant="small-strong" truncate className="block">{device.name}</Text>
         <Text variant="small" color="secondary" className="block">
-          {device.type === "mac" ? "Mac" : device.type === "linux" ? "Linux" : device.type === "ipad" ? "iPad" : "iPhone"} · {state === "pending"
+          {remoteDeviceTypeLabel(device.type)} · {state === "pending"
             ? "Finishing connection"
             : `${state === "previous" ? "Removed" : "Last seen"} ${friendlyDate(timestamp)}`}
         </Text>
@@ -246,7 +248,7 @@ export function RemoteAccessSettings() {
   const capabilities = useAppCapabilities();
   const hostLabel = capabilities.platform === "darwin" ? "Mac" : "computer";
   const queryClient = useQueryClient();
-  const settingsQuery = useAidenRemoteSettings();
+  const settingsQuery = useAidenRemoteSettings(true);
   const [setupTransport, setSetupTransport] = React.useState<"lan" | "tailscale" | null>(null);
   const [setupReview, setSetupReview] = React.useState<{
     transport: "lan" | "tailscale"; instanceId: string; enabled: boolean;
@@ -614,6 +616,18 @@ export function RemoteAccessSettings() {
             />
           </div>
         </Field>
+        {status.acceptPairingRequests !== undefined ? (
+          <AcceptConnectionRequestsField
+            accept={status.acceptPairingRequests}
+            hostLabel={hostLabel}
+            busy={busy === "pairingRequests"}
+            disabled={busy !== null}
+            onChange={(accept) => void mutate(
+              "pairingRequests",
+              () => aidenRemoteApi.setAcceptPairingRequests(accept),
+            )}
+          />
+        ) : null}
         <Field
           label="Desktop name"
           description={`Shown on paired devices. Identity remains ${snapshot.instanceId.slice(-6)}.`}

@@ -1,4 +1,5 @@
 import { ipcMain } from "../platform.js";
+import { stopAllPiCacheWarmers } from "./pi-cache-warming.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AppearancePreviewState } from "./appearance-preview-core.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -22,8 +23,17 @@ export const applySettingsEffects = createSettingsApplicationEffects({
     void telegramService.refreshCommands();
   },
   reconfigureIdleUnload: async () => {
-    const { reconfigureParakeetIdleUnload } = await import("./parakeet.js");
-    void reconfigureParakeetIdleUnload();
+    const { reconfigureLocalSpeechIdleUnload } = await import("./local-speech.js");
+    void reconfigureLocalSpeechIdleUnload();
+  },
+  stopCacheWarmers: () => stopAllPiCacheWarmers(),
+  revokeComputerUseGrants: async () => {
+    const { revokeComputerUseGrants } = await import("./computer-use/access-gate.js");
+    revokeComputerUseGrants();
+  },
+  stopLiveSessions: async () => {
+    const { geminiLiveService } = await import("./gemini-live/service-main.js");
+    geminiLiveService.stopAllSessions();
   },
   publishAppearance: (saved) =>
     ipcMain.broadcast(

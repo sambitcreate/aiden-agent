@@ -13,6 +13,7 @@ import sbtbiswas.AidenOnTheGo.features.workspaces.projectAidenWorkspaceSidebar
 import sbtbiswas.AidenOnTheGo.features.workspaces.regularNewestFirst
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsHomeContentState
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotsHomeContentState
+import sbtbiswas.AidenOnTheGo.features.remote.aidenProductAreaLayerTransform
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -67,6 +68,44 @@ class AidenProductShellTest {
 
         store.activateSelectedArea("mac_1", botsAvailable = true)
         assertEquals(AidenProductArea.BOTS, store.activeArea.value)
+    }
+
+    @Test
+    fun testAreaSwitchSlidesInAreaOrder() {
+        val bots = AidenProductArea.BOTS.ordinal
+        val workspaces = AidenProductArea.WORKSPACES.ordinal
+
+        val restingOnBots = aidenProductAreaLayerTransform(bots, bots.toFloat())
+        assertEquals(0f, restingOnBots.offsetFraction, 0f)
+        assertEquals(1f, restingOnBots.alpha, 0f)
+        assertEquals(0f, aidenProductAreaLayerTransform(workspaces, bots.toFloat()).alpha, 0f)
+
+        // Halfway from Bots to Workspaces: Bots leaves toward the leading edge while
+        // Workspaces arrives from the trailing edge, and the two cross-fade evenly.
+        val midway = (bots + workspaces) / 2f
+        val leaving = aidenProductAreaLayerTransform(bots, midway)
+        val arriving = aidenProductAreaLayerTransform(workspaces, midway)
+        assertTrue(leaving.offsetFraction < 0f)
+        assertTrue(arriving.offsetFraction > 0f)
+        assertEquals(-leaving.offsetFraction, arriving.offsetFraction, 1e-6f)
+        assertEquals(0.5f, leaving.alpha, 1e-6f)
+        assertEquals(0.5f, arriving.alpha, 1e-6f)
+    }
+
+    @Test
+    fun testAreaSwitchSpringOvershootKeepsLayersInBounds() {
+        val bots = AidenProductArea.BOTS.ordinal
+        val overshoot = AidenProductArea.WORKSPACES.ordinal + 0.08f
+
+        val hidden = aidenProductAreaLayerTransform(bots, overshoot)
+        assertEquals(0f, hidden.alpha, 0f)
+        assertEquals(
+            aidenProductAreaLayerTransform(bots, AidenProductArea.WORKSPACES.ordinal.toFloat()).offsetFraction,
+            hidden.offsetFraction,
+            0f
+        )
+        val active = aidenProductAreaLayerTransform(AidenProductArea.WORKSPACES.ordinal, overshoot)
+        assertTrue(active.alpha in 0f..1f)
     }
 
     @Test
@@ -191,49 +230,21 @@ class AidenProductShellTest {
 
     @Test
     fun testBotsHomeContentStates() {
-        fun resolve(hasSnapshot: Boolean, loading: Boolean, bots: Int, error: Boolean = false) =
+        fun resolve(hasSnapshot: Boolean, bots: Int, error: Boolean = false, query: Boolean = false, matches: Int = bots) =
             aidenBotsHomeContentState(
                 hasSnapshot = hasSnapshot,
-                isLoading = loading,
                 totalBotCount = bots,
-                activeBotCount = bots,
-                conversationCount = 0,
-                hasQuery = false,
-                filteredBotCount = bots,
-                filteredConversationCount = 0,
+                hasQuery = query,
+                filteredBotCount = matches,
                 hasError = error
             )
 
-        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, true, 0))
-        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, false, 0))
-        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, false, 0, error = true))
-        assertEquals(AidenBotsHomeContentState.EMPTY, resolve(true, false, 0))
-        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, false, 2))
-    }
-
-    @Test
-    fun testBotContactSectionsNeverDuplicateFavorites() {
-        val allBots = listOf("bot-1", "bot-2", "bot-3", "bot-4")
-        val favorites = listOf("bot-1", "bot-3")
-
-        val favoriteSection = allBots.filter { favorites.contains(it) }
-        val regularSection = allBots.filter { !favorites.contains(it) }
-
-        assertEquals(listOf("bot-1", "bot-3"), favoriteSection)
-        assertEquals(listOf("bot-2", "bot-4"), regularSection)
-        assertTrue(favoriteSection.intersect(regularSection.toSet()).isEmpty())
-    }
-
-    @Test
-    fun testArchivedBotChatsRemainReadOnly() {
-        fun isChatReadOnly(botHealth: AidenBotHealth, accessMode: AidenBotAccessMode): Boolean {
-            if (botHealth == AidenBotHealth.ARCHIVED) return true
-            return false
-        }
-
-        assertTrue(isChatReadOnly(AidenBotHealth.ARCHIVED, AidenBotAccessMode.FULL))
-        assertTrue(isChatReadOnly(AidenBotHealth.ARCHIVED, AidenBotAccessMode.CUSTOM))
-        assertFalse(isChatReadOnly(AidenBotHealth.READY, AidenBotAccessMode.FULL))
-        assertFalse(isChatReadOnly(AidenBotHealth.READY, AidenBotAccessMode.CUSTOM))
+        assertEquals(AidenBotsHomeContentState.LOADING, resolve(false, 0))
+        assertEquals(AidenBotsHomeContentState.ERROR, resolve(false, 0, error = true))
+        assertEquals(AidenBotsHomeContentState.EMPTY, resolve(true, 0))
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2))
+        assertEquals(AidenBotsHomeContentState.NO_RESULTS, resolve(true, 2, query = true, matches = 0))
+        // A saved snapshot keeps showing through a later load error.
+        assertEquals(AidenBotsHomeContentState.CONTENT, resolve(true, 2, error = true))
     }
 }

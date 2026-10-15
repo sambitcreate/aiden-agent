@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Detail pane beside the shell on wide windows, before a chat is opened. -->
+    <string name="navigation_detail_placeholder_title">No chat open</string>
+    <string name="navigation_detail_placeholder_body">Choose a chat from the list to read and reply here.</string>
+</resources>

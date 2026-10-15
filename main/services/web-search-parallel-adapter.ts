@@ -1,5 +1,6 @@
 /** Parallel Search REST API adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
@@ -22,10 +23,6 @@ export interface ParallelWebSearchApiKeyCredential {
 }
 
 export type ParallelWebSearchCredential = ParallelWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("parallel", value);
@@ -87,19 +84,6 @@ export function buildParallelWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 function excerptsText(value: unknown): string {
   if (!Array.isArray(value)) return "";
   return value
@@ -126,7 +110,7 @@ export function parseParallelWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({

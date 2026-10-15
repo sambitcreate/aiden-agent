@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 
-import { nativeCCompileInvocation } from "./native-c-build-core.mjs";
+import { compileNativeC, nativeCCompileInvocation } from "./native-c-build-core.mjs";
 
 test("native helper builds retain the universal macOS contract", async () => {
   const invocation = await nativeCCompileInvocation({
@@ -90,4 +92,46 @@ test("subagent shell cleanup never enters an unbounded reap", async () => {
   assert.match(cleanup, /deadline = monotonic_ms\(\) \+ 1000U;/u);
   assert.doesNotMatch(cleanup, /waitpid\([^;]*,\s*0\)/u);
   assert.equal((cleanup.match(/waitpid\([^;]*WNOHANG\)/gu) ?? []).length, 2);
+});
+
+test("native helper compiles are skipped only while sources, local headers, flags, and output are unchanged", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-native-stamp-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "native", "shared"), { recursive: true });
+  const source = path.join(root, "native", "helper", "main.c");
+  await mkdir(path.dirname(source));
+  await writeFile(source, '#include <stdio.h>\n#include "../shared/platform.h"\nint main(void) { return 0; }\n');
+  await writeFile(path.join(root, "native", "shared", "platform.h"), '#include "limits.h"\n#define AIDEN 1\n');
+  await writeFile(path.join(root, "native", "shared", "limits.h"), "#define AIDEN_LIMIT 4\n");
+  const output = path.join(root, "build", "native", "aiden-helper");
+
+  let compiles = 0;
+  let failNext = false;
+  const executeFile = async (_executable, args) => {
+    compiles += 1;
+    const target = args[args.indexOf("-o") + 1];
+    await writeFile(target, "partial");
+    if (failNext) throw new Error("compiler failed");
+    await chmod(target, 0o755);
+  };
+  const compile = (args = ["-O2", source, "-o", output]) => compileNativeC({
+    executeFile, executable: "/usr/bin/cc", args, env: { LANG: "C" }, cwd: root, source, output,
+  });
+
+  assert.equal(await compile(), true, "first build compiles");
+  assert.equal(await compile(), false, "an unchanged build is skipped");
+  assert.equal(compiles, 1);
+
+  await writeFile(path.join(root, "native", "shared", "limits.h"), "#define AIDEN_LIMIT 8\n");
+  assert.equal(await compile(), true, "a transitively included header invalidates the build");
+  assert.equal(await compile(["-O0", source, "-o", output]), true, "changed flags invalidate the build");
+  await rm(output);
+  assert.equal(await compile(["-O0", source, "-o", output]), true, "a missing output is rebuilt");
+
+  failNext = true;
+  await writeFile(source, "int main(void) { return 1; }\n");
+  await assert.rejects(compile(), /compiler failed/u);
+  failNext = false;
+  assert.equal(await compile(), true, "a failed compile never leaves a stamp that skips the retry");
+  assert.equal(compiles, 6);
 });

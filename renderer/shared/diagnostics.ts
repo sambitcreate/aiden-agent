@@ -12,6 +12,36 @@ export type RendererDiagnosticKind = (typeof RENDERER_DIAGNOSTIC_KINDS)[number];
 export const DIAGNOSTIC_ERROR_TYPES = [
   "AbortError",
   "AggregateError",
+  "BotAccessChangedError",
+  "BotApplicationUnavailableError",
+  "BotAvatarInputError",
+  "BotAvatarReplayError",
+  "BotAvatarRevisionConflictError",
+  "BotAvatarStateError",
+  "BotAvatarUnavailableError",
+  "BotCapabilityBindingDriftError",
+  "BotCapabilityCatalogConflictError",
+  "BotCapabilityCommitUncertainError",
+  "BotCapabilityNoticeRequiredError",
+  "BotCapabilityRevisionConflictError",
+  "BotCapabilitySubsetError",
+  "BotCapabilityUnavailableError",
+  "BotCapabilityValidationError",
+  "BotDeletedError",
+  "BotHarnessHostClosedError",
+  "BotHistoricalChatReadOnlyError",
+  "BotIdentityRevisionConflictError",
+  "BotInboxProjectionError",
+  "BotLifecycleJournalConflictError",
+  "BotLifecycleJournalStateError",
+  "BotManagedWorkspaceConflictError",
+  "BotManagedWorkspaceNotProvisionedError",
+  "BotManagedWorkspaceRollbackError",
+  "BotManagedWorkspaceStateError",
+  "BotPersistentChatDeletionError",
+  "BotRuntimeAuthorityError",
+  "BotRuntimeInventoryLeaseInvalidError",
+  "BotSessionError",
   "DOMException",
   "Error",
   "EvalError",
@@ -30,6 +60,8 @@ export const DIAGNOSTIC_ERROR_TYPES = [
   "UnknownError",
 ] as const;
 
+// Bot error classes are fixed, content-free names. Listing them keeps Bot
+// failures distinguishable in production logs instead of all "UnknownError".
 export type DiagnosticErrorType = (typeof DIAGNOSTIC_ERROR_TYPES)[number];
 
 export function normalizeDiagnosticErrorType(value: unknown): DiagnosticErrorType {
@@ -66,4 +98,14 @@ export interface DiagnosticSupportStatusView {
     disablesOnRestart: boolean;
     crashDumpCount: number;
   };
+  /** Unreadable chat files moved aside, bytes intact, in the chats folder. */
+  quarantinedChats?: number;
+}
+
+/** Plain-language notice for chat files Aiden could not read and set aside. */
+export function quarantinedChatsNotice(count: number | undefined): string | null {
+  if (!count || count < 1) return null;
+  return count === 1
+    ? "1 damaged chat file could not be opened. Aiden set it aside unchanged in the chats folder instead of deleting it."
+    : `${count} damaged chat files could not be opened. Aiden set them aside unchanged in the chats folder instead of deleting them.`;
 }

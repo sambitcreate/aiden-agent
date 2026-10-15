@@ -281,7 +281,7 @@ function ProviderListGroup({
         </Text>
         <Badge>{providers.length}</Badge>
       </div>
-      <div className="overflow-hidden rounded-card border border-separator bg-popover shadow-control">
+      <div className="overflow-hidden rounded-card bg-popover shadow-control">
         {providers.map((provider) => (
           <ProviderListRow
             key={provider.id}
@@ -376,7 +376,7 @@ function ProviderCard({
       data-web-search-provider-card
       data-provider-id={provider.id}
       data-in-route={inRoute ? "true" : "false"}
-      className="flex min-w-0 flex-col gap-3 rounded-card border border-separator bg-popover p-4 shadow-control transition-[border-color,box-shadow,transform] duration-150 ease-out hover:border-primary/20 hover:shadow-control-hover motion-reduce:transition-none"
+      className="flex min-w-0 flex-col gap-3 rounded-card bg-popover p-4 shadow-control transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-control hover:shadow-control-hover motion-reduce:transition-none"
     >
       <div className="flex min-w-0 items-start gap-3">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
@@ -510,7 +510,7 @@ function RouteEntryRow({
         event.preventDefault();
         onMove(index, event.key === "ArrowUp" ? -1 : 1);
       }}
-      className="group flex min-w-0 items-center gap-2 rounded-control border border-separator bg-popover px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
+      className="group flex min-w-0 items-center gap-2 rounded-control bg-popover px-2.5 py-2 outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover focus-visible:bg-input focus-visible:shadow-control motion-reduce:transition-none"
     >
       <span
         aria-hidden="true"
@@ -1549,7 +1549,7 @@ export function WebSearchSettings() {
 
         <section
           aria-label="Current Web Search route"
-          className="rounded-card border border-separator bg-well px-4 py-3"
+          className="rounded-card bg-well px-4 py-3"
         >
           <div className="flex flex-wrap items-center gap-2">
             <Text variant="small-strong">Current route</Text>
@@ -1717,7 +1717,7 @@ export function WebSearchSettings() {
 
       <section
         aria-labelledby="web-search-current-setup"
-        className="overflow-hidden rounded-card border border-separator bg-popover shadow-control"
+        className="overflow-hidden rounded-card bg-popover shadow-control"
       >
         <div className="p-4">
           <div className="flex items-start gap-3">
@@ -2030,7 +2030,7 @@ export function WebSearchSettings() {
               <ChevronRight className="size-4" />
             </Button>
           </div>
-          <div className="overflow-hidden rounded-card border border-separator bg-popover">
+          <div className="overflow-hidden rounded-card bg-popover">
             {configuredProviders.slice(0, 3).map((provider) => (
               <div
                 key={provider.id}
@@ -2060,7 +2060,7 @@ export function WebSearchSettings() {
 
       <section
         aria-labelledby="web-search-privacy"
-        className="rounded-card border border-separator bg-well p-4"
+        className="rounded-card bg-well p-4"
       >
         <div className="flex items-start gap-3">
           <LockKeyhole aria-hidden="true" className="mt-0.5 size-4.5 shrink-0 text-secondary" />

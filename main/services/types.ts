@@ -1,5 +1,8 @@
+import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
+import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import type { CompactionEngine } from "../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
@@ -13,11 +16,15 @@ import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
-import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
+import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
+import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
+import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
+import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -68,6 +75,8 @@ export interface StoredProvider {
    * treat them as local even off localhost.
    */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   /** Legacy marker retained only for persisted custom-connection migration. */
   isPreset?: boolean;
   /**
@@ -158,6 +167,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -189,12 +199,16 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
 export interface GitHubPullRequestListStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequests?: GitHubPullRequestSummary[];
 }
 
@@ -207,6 +221,8 @@ export interface GitHubRepositoryRef {
 export interface GitHubRepositoryStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   repository?: GitHubRepositoryRef;
 }
 
@@ -313,6 +329,14 @@ export interface ChatMessage {
   /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
   appPanels?: import("../../renderer/shared/app-controls").AppControlPanel[];
   htmlArtifacts?: ChatHtmlArtifactV1[];
+  /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
+  htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
+  /** Producing generate_image call per generated image attachment. */
+  imagePlacements?: ChatImagePlacementV1[];
+  /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
+  uiVisuals?: ChatUiVisualV1[];
+  /** Snapshot image (a reserved attachment) per visual, for clients that cannot draw it. */
+  visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -323,17 +347,8 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-export interface ModelRanking {
-  /** Fixed-snapshot percentile, where 1 is the most capable model. */
-  capabilityPercentile: number;
-  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 /** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
 export interface ModelBenchmarkScores {
@@ -349,10 +364,17 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -381,8 +403,11 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
@@ -392,6 +417,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
@@ -433,6 +460,10 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /** Main-owned provenance for chats created by Fork; absent for ordinary chats and copies. */
+  forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }
@@ -440,15 +471,25 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   /** Main-owned receipt for an idempotent first-message commit; never renderer-authored. */
   firstMessageCommit?: { turnId: string; fingerprint: string };
-  /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
-  computerUseEnabled?: boolean;
+  /**
+   * The user granted Computer Use for this chat ("Allow for this chat" on the
+   * access card). The global Computer Use beta setting remains authoritative.
+   */
+  computerUseAllowed?: boolean;
+  /**
+   * Set while a Computer Use access request waits on missing macOS
+   * permissions, so the chat can offer Continue after the user restarts Aiden.
+   */
+  computerUsePendingContinue?: boolean;
   messages: ChatMessage[];
 }
 
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
-export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked" | "skipped";
+/** Why a run was recorded without doing work. Only Bot routines skip today. */
+export type ScheduledRunSkipReason = "bot_paused" | "duplicate";
 
 export interface ScheduledMcpServerBinding {
   id: string;
@@ -485,6 +526,16 @@ export interface ScheduledTask {
   /** Explicit Web Search authority. Missing legacy values are always treated as false. */
   webSearchEnabled?: boolean;
   chatId?: string;
+  /**
+   * Main-owned Bot that owns this routine. A Bot routine submits to that Bot's
+   * conversation instead of a workspace chat and is hidden from the generic
+   * scheduled-task surfaces. Immutable once set.
+   */
+  botId?: string;
+  /** Frequency-first schedule a Bot routine was created from; `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
+  /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
+  sourceProposalId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -498,6 +549,8 @@ export interface ScheduledRun {
   startedAt: number;
   finishedAt: number;
   result: ScheduledRunResult;
+  /** Present only when `result` is "skipped". */
+  reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
   chatId?: string;
@@ -526,6 +579,12 @@ export interface ScheduledTaskInput {
   executionProfile?: ScheduledTaskExecutionProfile;
   /** Explicit Web Search authority. New tasks default to false. */
   webSearchEnabled?: boolean;
+  /** Main-owned Bot routine owner. Renderer schedule mutations cannot set this field. */
+  botId?: string;
+  /** Main-owned Bot routine schedule; when set, `cron` is derived from it. */
+  routineSchedule?: BotRoutineSchedule;
+  /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
+  sourceProposalId?: string;
   notify?: boolean;
 }
 
@@ -554,9 +613,20 @@ export interface McpServer {
   headers?: Record<string, string>;
   /** Remote servers only: authenticate with OAuth (browser sign-in) instead of / in addition to headers. */
   oauth?: boolean;
+  /** Explicit authorization-server metadata document for custom remote OAuth connections. */
+  authServerMetadataUrl?: string;
+  oauthClientName?: string;
+  /** Built-in provider reference; requires separate device-local consent before use. */
+  authProvider?: string;
+  /** Optional bounded server description used for tool discovery. */
+  description?: string;
   /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 /** An Agent Skill — instructions exposed to the model as a callable tool. */
@@ -652,10 +722,24 @@ export interface AppSettings {
   /** Explicit host-owner consent; older pairings cannot enable this. */
   remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
@@ -663,8 +747,14 @@ export interface AppSettings {
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */
   geminiUsageScope?: GeminiUsageScope;
-  /** Selected on-device speech model id (see local-models catalog). */
+  /** Selected on-device speech model id (see local-speech-catalog). */
   localVoiceModel?: string;
+  /** "auto" or a base language code; resolved per model at use (see renderer/shared/voice-language.ts). */
+  voiceLanguage?: string;
+  /** Translate speech to English when the active on-device model can. */
+  voiceTranslateToEnglish?: boolean;
+  /** Trim silence and segment long audio with Silero VAD before on-device decode (default on). */
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
@@ -697,6 +787,8 @@ export interface AppSettings {
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
+  /** Per-subagent model and effort defaults; parsed leniently, absent means children inherit. */
+  subagentModels?: import("./subagents/subagent-model-selection.js").SubagentModelSettings;
   /** Presentation-only Pi thinking visibility for models running on a local deployment. */
   showLocalModelReasoning?: boolean;
   /** Global skill discovery/invocation gate. Omitted means enabled. */
@@ -705,6 +797,12 @@ export interface AppSettings {
   memoryEnabled?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** "Always allow" Computer Use in every chat without the per-chat access card. */
+  computerUseAlwaysAllow?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled; false refuses every Live start. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button in the window corner. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -876,6 +974,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this attended turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals; automatic when absent. */
+  inlineVisuals?: import("../../renderer/shared/appearance.js").InlineVisualsMode;
   messages: Array<{
     role: ChatRole;
     content: string;

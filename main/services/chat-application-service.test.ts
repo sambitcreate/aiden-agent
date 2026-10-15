@@ -6,6 +6,7 @@ import {
   type ChatApplicationDependencies,
   type ChatApplicationOwner,
 } from "./chat-application-service.js";
+import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 
 function chat(id = "chat-1", workspaceId = "workspace-1"): Chat {
@@ -124,6 +125,51 @@ test("shared chat creation preserves workspace and renderer-owner commit gates",
   );
 });
 
+test("public chat creation in flight across a workspace mutation is refused and drained first", async () => {
+  const mutationGate = new WorkspaceMutationGate();
+  const operations = new WorkspaceOperationRegistry();
+  let storeEntered = () => {};
+  const entered = new Promise<void>((resolve) => { storeEntered = resolve; });
+  let resumeStore = () => {};
+  const resumed = new Promise<void>((resolve) => { resumeStore = resolve; });
+  const committed: string[] = [];
+  const application = fixture({
+    workspaceMutationGate: mutationGate,
+    workspaceOperationRegistry: operations,
+    chatStore: {
+      create: async (input: { assertCurrent?: () => void; workspaceId: string; title?: string }) => {
+        storeEntered();
+        await resumed;
+        input.assertCurrent?.();
+        committed.push(input.title ?? "");
+        return chat("created", input.workspaceId);
+      },
+    },
+  } as unknown as Partial<ChatApplicationDependencies>);
+
+  const inFlight = application.service.create({ workspaceId: "workspace-1", title: "Before" }, owner());
+  await entered;
+  const finishMutation = mutationGate.begin("workspace-1");
+  let drained = false;
+  const draining = operations.cancelAndSettle("workspace-1").then(() => { drained = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(drained, false, "the mutation waits for the in-flight create to settle");
+
+  resumeStore();
+  await assert.rejects(inFlight, /workspace changed before the chat was created/u);
+  await draining;
+  assert.equal(drained, true);
+  await assert.rejects(
+    application.service.create({ workspaceId: "workspace-1", title: "During" }, owner()),
+    /workspace is changing/u,
+  );
+
+  finishMutation();
+  const after = await application.service.create({ workspaceId: "workspace-1", title: "After" }, owner());
+  assert.equal(after?.id, "created");
+  assert.deepEqual(committed, ["After"]);
+});
+
 test("shared chat reads retain inactive-renderer reconciliation semantics", async () => {
   let checks = 0;
   const application = fixture({
@@ -180,6 +226,8 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   const events: string[] = [];
   const application = fixture({
     toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
+    // Queued snapshots of the chat's visuals stop before anything is removed.
+    visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
     subagentRunStore: {
       deleteChat: async () => { events.push("tombstone"); },
       completeChatDeletion: async () => { events.push("complete"); },
@@ -208,7 +256,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
@@ -358,4 +406,57 @@ test("all chat deletion paths fence uploads and clear them only at durable roll-
       attachments.beginUpload("device-1", "chat-1").release();
     }
   }
+});
+
+test("renderer rename and delete refuse feature-owned chats when asked to", async () => {
+  const designChat: Chat = {
+    ...chat("design-chat"),
+    owner: { kind: "design-project", projectId: "project-1" },
+  } as Chat;
+  const events: string[] = [];
+  const application = fixture({
+    chatStore: {
+      get: async () => designChat,
+      rename: async (_id: string, _title: string, assertCurrent: (chat: Chat) => Promise<void>) => {
+        await assertCurrent(designChat);
+        events.push("renamed");
+        return designChat;
+      },
+      remove: async (_id: string, assertCurrent: (chat: Chat) => Promise<void>) => {
+        await assertCurrent(designChat);
+        events.push("removed");
+      },
+    } as unknown as ChatApplicationDependencies["chatStore"],
+    llmClient: {
+      isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
+      waitForChatIdle: async () => true,
+      requiresAppendReconciliation: () => false,
+      markAppendReconciliationRequired: () => undefined,
+      clearAppendReconciliationRequired: () => undefined,
+      beginChatWorkspaceChange: () => () => undefined,
+      beginChatDeletion: (id: string) => {
+        events.push(`deleting:${id}`);
+        return () => undefined;
+      },
+      cancelChat: async (id: string) => {
+        events.push(`cancelled:${id}`);
+      },
+    } as unknown as ChatApplicationDependencies["llmClient"],
+  });
+
+  await assert.rejects(
+    application.service.rename("design-chat", "Renamed", { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  await assert.rejects(
+    application.service.remove("design-chat", { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  // A refused delete never marks the chat as deleting, cancels the owning run or reaches the store.
+  assert.deepEqual(events, []);
+
+  // Without the option the shared service keeps its existing behavior.
+  await application.service.rename("design-chat", "Renamed");
+  assert.deepEqual(events, ["renamed"]);
 });

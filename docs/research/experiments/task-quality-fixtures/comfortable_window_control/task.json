@@ -1,0 +1,35 @@
+{
+  "id": "comfortable_window_control",
+  "api_contract": "merge_ranges(ranges) returns sorted non-overlapping half-open integer ranges as lists [start,end]; input ranges have start < end.",
+  "latest_user_request": "Implement merge_ranges. Merge overlapping ranges, but keep merely touching half-open ranges separate. Do not mutate the input. There is no earlier context or plan to recover.",
+  "earlier_messages": [],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_touching": {
+      "expected": "fail",
+      "required_failure": "touching_separate"
+    },
+    "wrong_inplace": {
+      "expected": "fail",
+      "required_failure": "input_unchanged"
+    },
+    "wrong_float": {
+      "expected": "fail",
+      "required_failure": "integer_endpoints"
+    }
+  },
+  "oracle_establishes": [
+    "Overlap versus adjacency, sorting, nested/duplicate intervals, empty inputs and tested input nonmutation."
+  ],
+  "oracle_does_not_establish": [
+    "Arbitrary invalid ranges, performance scalability, or a baseline expectation that no tool calls are necessary."
+  ]
+}

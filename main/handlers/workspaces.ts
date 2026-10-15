@@ -5,6 +5,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
 import {
   gitBranches,
+  gitCachedRepositoryIdentity,
   gitCheckout,
   gitCommit,
   gitCompare,
@@ -21,7 +22,8 @@ import {
   type GitDiffInput,
   type GitPushInput,
 } from "../services/git.js";
-import { githubCurrentPullRequest } from "../services/github-pull-request.js";
+import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
+import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import {
   listWorkspaceFiles,
@@ -138,6 +140,17 @@ async function withOptionalWorkspaceOperation<T>(
   );
 }
 
+// Repository changes (commit, checkout, stage, fetch, push) are pushed to the
+// renderer so its Git queries can poll slowly as a safety net only.
+const gitRepoWatcher = new GitRepoWatcher({
+  notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
+});
+
+function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefined): void {
+  if (!resolved) return;
+  void gitRepoWatcher.observe(resolved.workspace.id, resolved.folderPath);
+}
+
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:list", async () => workspaceApplicationService.list());
 
@@ -173,12 +186,23 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("workspaces:gitInfo", async (event, workspaceId: unknown) =>
-    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) =>
-      resolved ? gitInfo(resolved.folderPath, signal) : { isRepo: false },
-    ),
+    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+      observeGitRepository(resolved);
+      return resolved ? gitInfo(resolved.folderPath, signal) : { isRepo: false };
+    }),
   );
 
-  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown) =>
+  // Credential-free repository identity for cross-machine sidebar grouping.
+  // Reuses the shared Git info read, which records the identity as it goes.
+  ipcMain.handle("workspaces:repositoryIdentity", async (event, workspaceId: unknown) =>
+    withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
+      if (!resolved) return null;
+      const info = await gitInfo(resolved.folderPath, signal);
+      return info.isRepo ? (gitCachedRepositoryIdentity(resolved.folderPath) ?? null) : null;
+    }),
+  );
+
+  ipcMain.handle("git:pullRequestStatus", async (event, workspaceId: unknown, interactive?: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
       if (!resolved) return { availability: "not-repo" as const, message: "This workspace has no accessible folder." };
       const info = await gitInfo(resolved.folderPath, signal);
@@ -188,7 +212,11 @@ export function registerWorkspaceHandlers(): void {
       if (!info.hasRemote) {
         return { availability: "no-pull-request" as const, message: "This repository has no remote to inspect for pull requests." };
       }
-      return githubCurrentPullRequest(resolved.folderPath, signal);
+      return githubCurrentPullRequest(
+        resolved.folderPath,
+        signal,
+        interactive === true ? { interactive: true } : undefined,
+      );
     }),
   );
 
@@ -233,9 +261,10 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("git:review", async (event, workspaceId: unknown) =>
-    withWorkspaceOperation(event, workspaceId, (resolved, signal) =>
-      gitReview(resolved.folderPath, signal),
-    ),
+    withWorkspaceOperation(event, workspaceId, (resolved, signal) => {
+      observeGitRepository(resolved);
+      return gitReview(resolved.folderPath, signal);
+    }),
   );
 
   ipcMain.handle("git:diff", async (event, workspaceId: unknown, input: unknown) =>
@@ -251,9 +280,10 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("git:pushCapability", async (event, workspaceId: unknown) =>
-    withWorkspaceOperation(event, workspaceId, (resolved, signal) =>
-      gitPushCapability(resolved.folderPath, signal),
-    ),
+    withWorkspaceOperation(event, workspaceId, (resolved, signal) => {
+      observeGitRepository(resolved);
+      return gitPushCapability(resolved.folderPath, signal);
+    }),
   );
 
   ipcMain.handle("git:push", async (event, workspaceId: unknown, input: unknown) =>

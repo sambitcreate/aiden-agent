@@ -276,6 +276,8 @@ interface PendingWorkspaceState {
   writeScheduled: boolean;
   /** Monotonic in-memory content revision. */
   revision: number;
+  /** True when `history` has grown since it was last capped. */
+  uncapped?: boolean;
   /** Latest revision handed to the best-effort disk writer. */
   persistedRevision: number;
   /** The one serialized disk write, if any. */
@@ -310,7 +312,7 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
 
   async read(workspaceId: string): Promise<string> {
     const state = this.pending.get(workspaceId);
-    if (state) return state.history;
+    if (state) return this.cappedHistory(state);
     let history = "";
     try {
       const file = path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`);
@@ -320,7 +322,7 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
       // Missing or unreadable history is a safe empty starting point.
     }
     const existing = this.pending.get(workspaceId);
-    if (existing) return existing.history;
+    if (existing) return this.cappedHistory(existing);
     this.pending.set(workspaceId, {
       history,
       pendingControlSequence: "",
@@ -330,6 +332,14 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
       persistedRevision: 0,
     });
     return history;
+  }
+
+  private cappedHistory(state: PendingWorkspaceState): string {
+    if (state.uncapped) {
+      state.history = capHistory(state.history, this.maxLines, this.maxChars);
+      state.uncapped = false;
+    }
+    return state.history;
   }
 
   append(workspaceId: string, data: string): void {
@@ -348,11 +358,11 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     const sanitized = sanitizeTerminalHistoryChunk(state.pendingControlSequence, data);
     state.pendingControlSequence = sanitized.pendingControlSequence;
     if (sanitized.visibleText.length > 0) {
-      state.history = capHistory(
-        `${state.history}${sanitized.visibleText}`,
-        this.maxLines,
-        this.maxChars,
-      );
+      // Capping re-splits the whole history, so it runs on read, on the
+      // debounced write, or once the uncapped tail doubles — not per chunk.
+      state.history += sanitized.visibleText;
+      state.uncapped = true;
+      if (state.history.length > this.maxChars * 2) this.cappedHistory(state);
       state.revision += 1;
       this.scheduleDebouncedWrite(workspaceId);
     }
@@ -414,7 +424,7 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     }
     if (state.persistedRevision >= state.revision) return;
     const revision = state.revision;
-    const history = state.history;
+    const history = this.cappedHistory(state);
     const file = path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`);
     const operation = Promise.resolve()
       .then(() => this.writeFile(file, history))

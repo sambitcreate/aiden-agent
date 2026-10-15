@@ -1,0 +1,24 @@
+/* xyflow theme mapped onto Aiden's semantic tokens. Imported only by lazy studio routes. */
+.studio-canvas {
+  --xy-background-color: var(--color-background);
+  --xy-background-pattern-color: var(--color-separator);
+  --xy-edge-stroke: var(--color-tertiary);
+  --xy-edge-stroke-selected: var(--color-accent);
+  --xy-connectionline-stroke: var(--color-accent);
+  --xy-selection-background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  --xy-selection-border: none;
+  --xy-minimap-background-color: var(--color-popover);
+  --xy-node-background-color: transparent;
+  --xy-node-border: none;
+}
+
+.studio-canvas:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-canvas .react-flow__viewport {
+    transition: none;
+  }
+}

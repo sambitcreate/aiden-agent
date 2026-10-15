@@ -3,11 +3,28 @@ import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
+import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
+  parseAidenRemoteBotSession,
+  parseAidenRemoteBotSessionActivity,
+  parseAidenRemoteBotDetail,
+  parseAidenRemoteBotIdentityPatchRequest,
+  parseAidenRemoteBotMessageRequest,
+  parseAidenRemoteBotSessionEntry,
+  parseAidenRemoteBotSessionEvent,
   AIDEN_REMOTE_BASE_PATH,
+  AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES,
   AIDEN_REMOTE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
-  AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
+  AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
+  AIDEN_REMOTE_RUN_EVENT_TYPES,
+  AIDEN_REMOTE_RUN_STATES,
   AIDEN_REMOTE_CHAT_MAX_PREVIOUS_TURNS,
   AIDEN_REMOTE_ERROR_CODES,
   AIDEN_REMOTE_EVENT_TYPES,
@@ -27,6 +44,8 @@ import {
   parseAidenRemoteContractFixture,
   parseAidenRemoteStreamInputRequest,
   parseAidenRemoteStreamInputResult,
+  parseAidenRemoteChatForkResult,
+  parseAidenRemoteChatSummaryProjection,
 } from "./aiden-remote-protocol.js";
 
 const protocolRoot = path.resolve(process.cwd(), "protocol/aiden-remote/v1");
@@ -91,16 +110,48 @@ const endpointAuthorityVectors: readonly [string, boolean][] = [
   ["[2001:db8:0:0:0:0:0]", false],
 ];
 
-// Simulator control is a desktop-to-desktop grant: pairing never issues it and
-// phones are never told it exists, so the shared mobile fixture omits it.
-const MOBILE_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
-  (capability) => !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability),
+// Simulator control is a desktop-to-desktop grant that pairing never issues,
+// and the phone simulator viewer grant and the Bot card and activity opt-ins are
+// negotiated only after pairing.
+const PAIRING_CAPABILITIES = AIDEN_REMOTE_CAPABILITIES.filter(
+  (capability) =>
+    !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+    !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
+    !(AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
 );
+// Host-wide grants are issued to desktops only, so phones are never told they
+// exist either and the shared mobile fixture omits both families.
+const MOBILE_CAPABILITIES = PAIRING_CAPABILITIES.filter(
+  (capability) => !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability),
+);
+
+test("every server feature token the host can announce fits the server feature budget", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE } = await import("./aiden-remote-providers.js");
+  const { REMOTE_TTS_FEATURE } = await import("./aiden-remote-tts.js");
+  const tokens = new Set<string>([AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, REMOTE_TTS_FEATURE]);
+  for (const [name, value] of Object.entries(protocol)) {
+    if (name.endsWith("_FEATURE") && typeof value === "string") tokens.add(value);
+  }
+  assert.ok(tokens.has("bot-memory-v1") && tokens.has("bot-proactive-v1"));
+  assert.ok(
+    tokens.size <= AIDEN_REMOTE_MAX_SERVER_FEATURES,
+    `${tokens.size} feature tokens exceed the ${AIDEN_REMOTE_MAX_SERVER_FEATURES}-token /server budget`,
+  );
+});
 
 test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsafe wire keys", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
-  assert.equal(fixture.contractRevision, 19);
+  assert.equal(fixture.contractRevision, 32);
   assert.match(JSON.stringify(fixture.events), /"producedFile":\{"relativePath":"out\/report.txt","operation":"written","bytes":12\}/u);
+  const fixtureTimeline = fixture.events.find((event) => event.type === "timeline");
+  const parsedTimeline = parseGenerationTimeline(record(fixtureTimeline?.payload, "timeline payload").timeline);
+  const recapStep = parsedTimeline?.steps.find((step) => step.kind === "tool" && step.questionnaire);
+  assert.ok(recapStep?.kind === "tool", "the fixture timeline carries a questionnaire recap");
+  assert.equal(recapStep.toolName, "ask_user_question");
+  assert.equal(recapStep.status, "completed");
+  assert.equal(recapStep.questionnaire?.outcome, "answered");
+  assert.deepEqual(recapStep.questionnaire?.items.map((item) => [item.kind, item.answers]), [["option", ["Plain text"]], ["skipped", []]]);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
@@ -218,6 +269,224 @@ test("agent interrupt fixture stops one current-turn agent and rejects rosters t
   assert.throws(() => parseAidenRemoteContractFixture(unadvertised), /chat agent interrupt/u);
 });
 
+test("revision 19 fixtures carry host health, host feed, run stream and run control shapes that fail closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  assert.equal(fixture.hostHealth?.instanceId, fixture.pairingBootstrap.instanceId);
+  assert.equal(fixture.hostHealth?.contractRevision, fixture.contractRevision);
+  assert.equal(fixture.hostFeedEvents?.[0]?.type, "snapshot");
+  const runEvents = fixture.runEvents ?? [];
+  const ended = runEvents[runEvents.length - 1];
+  assert.equal(ended?.type, "run.ended");
+  assert.equal(ended?.terminal, true);
+  // run.ended reuses the last content sequence so a resumed cursor stays valid.
+  assert.equal(ended?.sequence, runEvents[runEvents.length - 2]?.sequence);
+  assert.equal(fixture.runControlError?.error.code, "approval_resolved");
+  assert.equal(fixture.runControlError?.error.details?.decision, "deny");
+  // Phones keep their mobile-only grants: the shared fixture never offers host grants.
+  for (const capability of AIDEN_REMOTE_HOST_CAPABILITIES) {
+    assert.equal(fixture.capabilities.includes(capability), false, capability);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const snapshotWorkspace = (copy: Record<string, unknown>) => {
+    const events = copy.hostFeedEvents as Record<string, unknown>[];
+    const payload = record(events[0]!.payload, "snapshot payload");
+    return (payload.workspaces as Record<string, unknown>[])[0]!;
+  };
+  assert.throws(
+    mutate((copy) => {
+      snapshotWorkspace(copy).repository = {
+        canonicalKey: "https://user:token@github.com/example/aiden-fixture",
+        relativePath: "",
+      };
+    }),
+    /credential-free/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      snapshotWorkspace(copy).repository = { canonicalKey: "github.com/example/aiden-fixture", relativePath: "../escape" };
+    }),
+    /inside the repository/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(copy.hostHealth, "hostHealth").instanceId = "instance_other";
+    }),
+    /another instance/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(copy.hostHealth, "hostHealth").secret = "x";
+    }),
+    /unsupported field/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      (copy.hostFeedEvents as unknown[]).splice(1, 1);
+    }),
+    /one sequence at a time/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      const events = copy.runEvents as Record<string, unknown>[];
+      events.push(structuredClone(events[events.length - 1]!));
+    }),
+    /after run\.ended/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      const error = record(record(copy.runControlError, "runControlError").error, "error");
+      record(error.details, "details").decision = "maybe";
+    }),
+    /decision is invalid/u,
+  );
+
+  // Revision 23: the messages window carries the chat's metadata, held to the chat projection's rules.
+  assert.equal(fixture.messagesWindow?.title, "Fixture review chat");
+  assert.equal(fixture.messagesWindow?.modelId, "model_fixture");
+  const window = (copy: Record<string, unknown>) => record(copy.messagesWindow, "messagesWindow");
+  assert.throws(mutate((copy) => { delete window(copy).title; }));
+  assert.throws(mutate((copy) => { delete window(copy).modelId; }));
+  assert.throws(mutate((copy) => { window(copy).updatedAt = "2026-08-18T18:00:00.000Z"; }));
+  // A revision-22 window predates the metadata, so it may not carry it.
+  assert.throws(
+    mutate((copy) => {
+      copy.contractRevision = 22;
+      record(copy.hostHealth, "hostHealth").contractRevision = 22;
+    }),
+    /unsupported field/u,
+  );
+});
+
+test("pairing request fixtures only carry a sealed envelope for an approved request and fail closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.pairingRequests;
+  assert.ok(section);
+  assert.equal(section.feature, "pairing-requests-v1");
+  assert.deepEqual(
+    section.status.map((status) => [status.state, status.envelope !== undefined]),
+    [["pending", false], ["approved", true], ["denied", false]],
+  );
+  assert.ok(section.matchCodeVectors.every((vector) => /^[0-9]{6}$/u.test(vector.matchCode)));
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy.pairingRequests as Record<string, unknown>);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const statuses = (copy: Record<string, unknown>) => copy.status as Record<string, unknown>[];
+  assert.throws(
+    mutate((copy) => {
+      statuses(copy)[2]!.envelope = structuredClone(statuses(copy)[1]!.envelope);
+    }),
+    /Only an approved pairing request carries an envelope/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete statuses(copy)[1]!.envelope;
+    }),
+    /Only an approved pairing request carries an envelope/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(statuses(copy)[1]!.envelope, "envelope").requestId = "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5";
+    }),
+    /bound to its request/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.create, "create").request, "request").deviceType = "iphone";
+    }),
+    /only from mac or linux/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.create, "create").response, "response").credential = "secret";
+    }),
+    /unsupported field credential/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      (copy.matchCodeVectors as Record<string, unknown>[])[0]!.matchCode = "48334";
+    }),
+    /six digits/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(record(copy.reveal, "reveal").response, "response").hostNonce = "short";
+    }),
+    /32 bytes of unpadded base64url/u,
+  );
+
+  // Pairing requests arrived in revision 20: a revision-19 fixture still
+  // parses without the section and is refused with it.
+  const revision19 = structuredClone(raw);
+  delete revision19.phoneRunEvents;
+  delete revision19.peerRouteAdvertisement;
+  delete revision19.mobileSimulators;
+  revision19.contractRevision = 19;
+  record(revision19.hostHealth, "hostHealth").contractRevision = 19;
+  // The messages window's metadata is revision 23, so the older fixture omits it.
+  const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
+  revision19.messagesWindow = { chatId, revision, messages, hasOlder };
+  delete revision19.chatFork;
+  // Bot chat activity is revision 30.
+  delete revision19.botActivity;
+  delete revision19.botActivityPrivacy;
+  // Message visuals are revision 28.
+  for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
+  assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
+  delete revision19.pairingRequests;
+  assert.equal(parseAidenRemoteContractFixture(revision19).pairingRequests, undefined);
+});
+
+test("phone run fixtures carry the phone approval projection and arrive in revision 24", async () => {
+  const raw = await json("fixtures/contract.json");
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const approvals = (fixture.phoneRunEvents ?? [])
+    .filter((event) => event.type === "approval_required")
+    .map((event) => event.payload as Record<string, unknown>);
+  assert.deepEqual(approvals.map((approval) => approval.canAllow), [true, false]);
+  for (const approval of approvals) {
+    assert.equal("details" in approval, false);
+    assert.equal("detailsOmitted" in approval, false);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => () => {
+    const copy = structuredClone(raw) as Record<string, unknown>;
+    change(copy);
+    return parseAidenRemoteContractFixture(copy);
+  };
+  const phoneApproval = (copy: Record<string, unknown>) =>
+    (copy.phoneRunEvents as Array<{ type: string; payload: Record<string, unknown> }>)
+      .filter((event) => event.type === "approval_required");
+  assert.throws(
+    mutate((copy) => {
+      phoneApproval(copy)[0]!.payload.details = { kind: "scheduled-task" };
+    }),
+    /unsupported field details/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      phoneApproval(copy)[1]!.payload.scopes = ["once", "always"];
+    }),
+    /deny-only phone run approval offers no scopes/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      copy.contractRevision = 23;
+      (copy.hostHealth as Record<string, unknown>).contractRevision = 23;
+    }),
+    /require contract revision 24/u,
+  );
+});
+
 test("agent roster historical turn selectors are bounded, newest-first, and current-turn-free", async () => {
   const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
   const roster = fixture.agentRoster;
@@ -261,6 +530,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.equal(info.version, "1.0.0");
   const paths = record(document.paths, "OpenAPI paths");
   const requiredPaths = [
+    "/providers",
     "/health",
     "/pairing/manual-bootstrap",
     "/pairing/exchange",
@@ -277,6 +547,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}",
     "/chats/{chatId}/read",
     "/chats/{chatId}/move",
+    "/chats/{chatId}/fork",
+    "/chats/{chatId}/fork-summary/{action}",
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
     "/chats/{chatId}/agents/{agentId}/interrupt",
@@ -288,19 +560,31 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments/{attachmentId}/content",
     "/bots",
     "/bots/{botId}",
-    "/bots/{botId}/restore",
+    "/bot-presets",
+    "/bots/from-preset",
+    "/bots/{botId}/session",
+    "/bots/{botId}/session/events",
+    "/bots/{botId}/messages",
+    "/bots/{botId}/resume",
+    "/bots/{botId}/dismiss",
+    "/bots/{botId}/stop",
+    "/bots/{botId}/questions/{waitId}/answer",
+    "/bots/{botId}/routines",
+    "/bots/{botId}/routines/{routineId}",
+    "/bots/{botId}/connection-requests",
+    "/bots/{botId}/memory",
+    "/bots/{botId}/memory/edits",
+    "/bots/{botId}/routine-proposals/{proposalId}/respond",
+    "/bots/{botId}/routine-suggestions",
+    "/bots/routine-notifications",
     "/bot-conversations",
     "/bots/{botId}/chats",
     "/bot-capabilities",
     "/bots/{botId}/capabilities",
-    "/chats/{chatId}/capabilities",
     "/bot-conversations/{chatId}/files",
     "/bot-conversations/{chatId}/files/{fileId}",
     "/bots/{botId}/avatar",
     "/bots/{botId}/avatar/{assetRevision}",
-    "/bot-favorites",
-    "/bot-access-notice",
-    "/bot-access-notice/acknowledgement",
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/approval",
@@ -350,6 +634,17 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/read-aloud",
     "/chats/{chatId}/read-aloud/stop",
     "/chats/{chatId}/read-aloud/audio/{jobId}/{segment}/{offset}",
+    "/host/events",
+    "/chats/{chatId}/messages",
+    "/chats/{chatId}/runs/current/events",
+    "/runs/{runId}/events",
+    "/runs/{runId}/cancel",
+    "/runs/{runId}/approvals/{approvalId}/respond",
+    "/runs/{runId}/questions/{promptId}/respond",
+    "/runs/{runId}/inputs",
+    "/pairing/requests",
+    "/pairing/requests/{requestId}/reveal",
+    "/pairing/requests/{requestId}",
     "/chats/{chatId}/controls/{panelId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
@@ -366,7 +661,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     record(schemas.PairingExchangeRequest, "PairingExchangeRequest").properties,
     "PairingExchangeRequest properties",
   );
-  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "mac", "linux"]);
+  assert.deepEqual(record(pairingRequestProperties.deviceType, "deviceType").enum, ["iphone", "ipad", "android", "mac", "linux"]);
   assert.deepEqual(record(pairingRequestProperties.acceptsBotCapabilities, "acceptsBotCapabilities"), {
     type: "boolean",
     description: "Explicitly accepts the Bot capability vocabulary and the additive serverCapabilities projection. Bot grants are never issued when this field is absent or false.",
@@ -379,7 +674,46 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     ).capabilities,
     "PairingExchangeResponse capabilities",
   );
-  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, MOBILE_CAPABILITIES);
+  assert.deepEqual(record(pairingResponseCapabilities.items, "pairing capability items").enum, PAIRING_CAPABILITIES);
+  assert.deepEqual(
+    record(
+      record(
+        record(record(schemas.DeviceCapabilitiesUpdateRequest, "update request").properties, "update request properties")
+          .accepts,
+        "accepts",
+      ).items,
+      "accepts items",
+    ).enum,
+    AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
+  );
+  // Revision 19 vocabularies: the documented SSE envelopes enumerate exactly
+  // the event types and run states the host emits.
+  const hostFeedEvent = record(schemas.HostFeedEvent, "HostFeedEvent");
+  assert.deepEqual(
+    record(record(hostFeedEvent.properties, "HostFeedEvent properties").type, "host feed type").enum,
+    AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
+  );
+  const runEvent = record(schemas.RunEvent, "RunEvent");
+  assert.deepEqual(
+    record(record(runEvent.properties, "RunEvent properties").type, "run event type").enum,
+    AIDEN_REMOTE_RUN_EVENT_TYPES,
+  );
+  assert.deepEqual(record(schemas.RunState, "RunState").enum, AIDEN_REMOTE_RUN_STATES);
+  for (const route of [
+    "/runs/{runId}/cancel",
+    "/runs/{runId}/approvals/{approvalId}/respond",
+    "/runs/{runId}/questions/{promptId}/respond",
+    "/runs/{runId}/inputs",
+  ]) {
+    const post = record(record(paths[route], route).post, `${route} post`);
+    assert.equal(post["x-aiden-capability"], "runs:control", route);
+    assert(
+      (post.parameters as Array<Record<string, unknown>>).some(
+        (parameter) => parameter.$ref === "#/components/parameters/IdempotencyKey",
+      ),
+      `${route} requires an Idempotency-Key`,
+    );
+  }
   const serverSchema = record(schemas.Server, "Server");
   const serverProperties = record(
     serverSchema.properties,
@@ -501,15 +835,32 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
   assert.deepEqual(manualPairingPost.security, []);
 
   const methods = new Set(["get", "post", "put", "patch", "delete"]);
+  // Only readiness and pairing admission are reachable without a credential.
+  const unauthenticatedRoutes = new Set([
+    "/health",
+    "/pairing/exchange",
+    "/pairing/manual-bootstrap",
+    "/pairing/requests",
+    "/pairing/requests/{requestId}/reveal",
+    "/pairing/requests/{requestId}",
+  ]);
   for (const [route, pathValue] of Object.entries(paths)) {
-    if (route !== "/health" && route !== "/pairing/exchange" && route !== "/pairing/manual-bootstrap") {
+    const operations = Object.entries(record(pathValue, route)).filter(([method]) => methods.has(method));
+    const publicOperations = operations.filter(
+      ([, operationValue]) => JSON.stringify(record(operationValue, route).security) === "[]",
+    );
+    assert.equal(
+      publicOperations.length,
+      unauthenticatedRoutes.has(route) ? operations.length : 0,
+      `${route} must be either entirely public pairing/readiness or entirely authenticated`,
+    );
+    if (!unauthenticatedRoutes.has(route)) {
       const inherited = (record(pathValue, route).parameters as Array<Record<string, unknown>> | undefined) ?? [];
       assert(inherited.some((parameter) => parameter.$ref === "#/components/parameters/ProtocolVersion"), `${route} must require the exact protocol-version header`);
     }
-    for (const [method, operationValue] of Object.entries(record(pathValue, route))) {
-      if (!methods.has(method)) continue;
+    for (const [method, operationValue] of operations) {
       const operationRecord = record(operationValue, `${method} ${route}`);
-      if (route === "/health" || route === "/pairing/exchange" || route === "/pairing/manual-bootstrap") continue;
+      if (unauthenticatedRoutes.has(route)) continue;
       assert(
         AIDEN_REMOTE_CAPABILITIES.includes(
           operationRecord["x-aiden-capability"] as (typeof AIDEN_REMOTE_CAPABILITIES)[number],
@@ -603,10 +954,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     privateResponseFields.normalization,
     "Remove hyphens, underscores, periods, and whitespace, then lowercase before comparison.",
   );
-  assert.deepEqual(privateResponseFields.allowedSchemaProperties, [
-    "BotDetail.instructions",
-    "BotDetail.openingGreeting",
-  ]);
+  assert.deepEqual(privateResponseFields.allowedSchemaProperties, ["BotDetail.instructions"]);
   assert.deepEqual(privateResponseFields.chatSummaryOnlyForbiddenNormalizedNames, [
     "messages", "attachments", "htmlartifacts", "outcome", "timeline", "reasoning",
     "botid", "providerid", "modelid", "preview",
@@ -635,23 +983,30 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["get /bots/{botId}", ["bot:read"]],
     ["patch /bots/{botId}", ["bot:read", "bot:write"]],
     ["delete /bots/{botId}", ["bot:read", "bot:write"]],
-    ["post /bots/{botId}/restore", ["bot:read", "bot:write"]],
+    ["get /bot-presets", ["bot:read"]],
+    ["post /bots/from-preset", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}/session", ["bot:read", "chat:read"]],
+    ["get /bots/{botId}/session/events", ["bot:read", "chat:read"]],
+    ["post /bots/{botId}/messages", ["bot:read", "bot:write", "chat:write"]],
+    ["post /bots/{botId}/resume", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/dismiss", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/stop", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/questions/{waitId}/answer", ["bot:read", "bot:write"]],
+    ["get /bots/{botId}/routines", ["bot:read"]],
+    ["post /bots/{botId}/routines", ["bot:read", "bot:write"]],
+    ["patch /bots/{botId}/routines/{routineId}", ["bot:read", "bot:write"]],
+    ["delete /bots/{botId}/routines/{routineId}", ["bot:read", "bot:write"]],
+    ["post /bots/{botId}/connection-requests", ["bot:read", "bot:write"]],
     ["get /bot-conversations", ["bot:read", "chat:read"]],
     ["post /bots/{botId}/chats", ["bot:read", "bot:write", "chat:write"]],
     ["get /bot-capabilities", ["bot:read"]],
     ["patch /bots/{botId}/capabilities", ["bot:read", "bot:write"]],
-    ["get /chats/{chatId}/capabilities", ["bot:read", "chat:read"]],
-    ["patch /chats/{chatId}/capabilities", ["bot:read", "bot:write", "chat:write"]],
     ["get /bot-conversations/{chatId}/files", ["bot:read", "files:read"]],
     ["get /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "files:read"]],
     ["put /bot-conversations/{chatId}/files/{fileId}", ["bot:read", "bot:write", "files:write"]],
     ["put /bots/{botId}/avatar", ["bot:read", "bot:write"]],
     ["delete /bots/{botId}/avatar", ["bot:read", "bot:write"]],
     ["get /bots/{botId}/avatar/{assetRevision}", ["bot:read"]],
-    ["get /bot-favorites", ["bot:read"]],
-    ["patch /bot-favorites", ["bot:read", "bot:write"]],
-    ["get /bot-access-notice", ["bot:read"]],
-    ["post /bot-access-notice/acknowledgement", ["bot:read", "bot:write"]],
   ]);
   for (const [operationKey, expected] of conjunctiveCapabilities) {
     const separator = operationKey.indexOf(" ");
@@ -697,7 +1052,19 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotAvatarAsset",
     "BotAvatarView",
     "BotSummary",
-    "BotFavoritesView",
+    "BotSessionState",
+    "BotSession",
+    "BotMessageRequest",
+    "BotMessageReceipt",
+    "BotRoutine",
+    "BotRoutineList",
+    "BotRoutineCreateRequest",
+    "BotRoutineUpdateRequest",
+    "BotConnectionRequest",
+    "BotConnectionRequestReceipt",
+    "BotPresetList",
+    "BotPresetCreateRequest",
+    "BotPresetCreateResult",
     "BotList",
     "BotCapabilityOption",
     "BotFileScopeOption",
@@ -710,19 +1077,14 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "BotIdentityPatch",
     "BotConversationItem",
     "BotConversationPage",
-    "BotFavoritesUpdateRequest",
-    "BotAccessNoticeAcknowledgementRequest",
     "BotAvatarUploadRequest",
   ];
   for (const name of closedBotSchemas) {
     assert.equal(record(schemas[name], name).additionalProperties, false, `${name} must be closed`);
   }
   for (const name of [
-    "BotAccessNoticeStatus",
     "BotAccessView",
     "BotAccessUpdateRequest",
-    "ChatBotAccessView",
-    "ChatBotAccessUpdateRequest",
     "BotChatCreateRequest",
   ]) {
     const variants = record(schemas[name], name).oneOf;
@@ -732,10 +1094,12 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
       assert.equal(record(variant, `${name}[${index}]`).additionalProperties, false);
     });
   }
-  const avatarVariants = record(schemas.BotSemanticAvatar, "BotSemanticAvatar").oneOf;
-  assert(Array.isArray(avatarVariants));
-  assert.deepEqual(record(avatarVariants[0], "legacy avatar").enum, ["spark", "orbit", "leaf", "prism", "wave", "ember"]);
-  assert.equal(record(avatarVariants[1], "v1 avatar").additionalProperties, false);
+  const avatarSchema = record(schemas.BotSemanticAvatar, "BotSemanticAvatar");
+  assert.deepEqual(avatarSchema.required, ["version", "shape", "color"]);
+  assert.equal(avatarSchema.additionalProperties, false);
+  const avatarProperties = record(avatarSchema.properties, "BotSemanticAvatar properties");
+  assert.deepEqual(record(avatarProperties.color, "avatar color").enum, [...AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES]);
+  assert.equal((record(avatarProperties.color, "avatar color").enum as unknown[]).length, 12);
 
   const botSummary = record(schemas.BotSummary, "BotSummary");
   const botSummaryProperties = record(botSummary.properties, "BotSummary properties");
@@ -744,22 +1108,19 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(botSummaryProperties.id, "BotSummary id").maxLength, 160);
   assert.equal(record(botSummaryProperties.purpose, "BotSummary purpose").maxLength, 280);
   assert.equal(botSummary["x-aiden-updated-at-not-before-created-at"], true);
-  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable", "archived"]);
+  assert.deepEqual(record(schemas.BotHealth, "BotHealth").enum, ["ready", "degraded", "unavailable"]);
   for (const name of ["BotSummary", "BotDetail"]) {
-    const healthCondition = record((record(schemas[name], name).allOf as unknown[])[0], `${name} health condition`);
-    assert.deepEqual(record(healthCondition.then, `${name} archived branch`).required, ["archivedAt"]);
-    assert.deepEqual(record(record(healthCondition.else, `${name} active branch`).not, `${name} active exclusion`).required, ["archivedAt"]);
+    assert.equal("archivedAt" in record(record(schemas[name], name).properties, name), false, `${name} carries no archivedAt`);
   }
   const botListProperties = record(record(schemas.BotList, "BotList").properties, "BotList properties");
   assert.equal(record(botListProperties.bots, "Bot list items").maxItems, 256);
   assert.equal(record(botListProperties.maxBots, "Bot list maximum").const, 256);
-  assert.equal(record(schemas.BotList, "BotList")["x-aiden-favorites-exclude-archived-bots"], true);
-  assert.equal(record(schemas.BotFavoritesView, "BotFavoritesView")["x-aiden-excludes-archived-bots"], true);
 
   const botDetailProperties = record(record(schemas.BotDetail, "BotDetail").properties, "BotDetail properties");
   assert.equal(record(schemas.BotDetail, "BotDetail")["x-aiden-updated-at-not-before-created-at"], true);
   assert.equal(record(botDetailProperties.instructions, "instructions").maxLength, 32_000);
-  assert.equal(record(botDetailProperties.openingGreeting, "openingGreeting").maxLength, 2_000);
+  // Revision 27 retired the greeting: never emitted, accepted and ignored in requests.
+  assert.equal("openingGreeting" in botDetailProperties, false);
   assert.equal(record(botDetailProperties.access, "Bot access").$ref, "#/components/schemas/BotAccessView");
   const botModelSelection = record(botDetailProperties.modelSelection, "Bot model selection");
   assert.deepEqual(botModelSelection.required, ["providerId", "modelId"]);
@@ -773,7 +1134,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   const identityPatch = record(schemas.BotIdentityPatch, "BotIdentityPatch");
   assert.equal(identityPatch.minProperties, 1);
-  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar"]);
+  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "chatActivity"]);
 
   const conversationPageProperties = record(record(schemas.BotConversationPage, "BotConversationPage").properties, "BotConversationPage properties");
   assert.equal(record(conversationPageProperties.conversations, "conversations").maxItems, 50);
@@ -793,7 +1154,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.deepEqual(record(queryParameter("limit").schema, "limit schema"), { type: "integer", minimum: 1, maximum: 50, default: 30 });
 
   const catalogProperties = record(record(schemas.BotCapabilityCatalog, "BotCapabilityCatalog").properties, "BotCapabilityCatalog properties");
-  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities", "notice"]);
+  assert.deepEqual(Object.keys(catalogProperties), ["revision", "providers", "fileScopes", "shellAvailable", "connections", "skillsEnabled", "skills", "otherCapabilities"]);
   assert.equal(record(catalogProperties.providers, "providers").maxItems, 64);
   assert.equal(
     record(catalogProperties.providers, "providers")["x-aiden-max-total-models"],
@@ -803,7 +1164,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal(record(catalogProperties.skills, "skills").maxItems, 256);
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").type, "boolean");
   assert.equal(record(catalogProperties.skillsEnabled, "skillsEnabled").default, true);
-  assert.equal(record(catalogProperties.notice, "notice").$ref, "#/components/schemas/BotAccessNoticeStatus");
   const customSelection = record(schemas.BotCustomSelection, "BotCustomSelection");
   assert.deepEqual(customSelection.required, ["providerId", "modelId", "fileScopeIds", "shellEnabled", "connectionIds", "skillIds", "otherCapabilityIds"]);
   const customProperties = record(customSelection.properties, "BotCustomSelection properties");
@@ -821,13 +1181,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   assert.equal("custom" in record(fullAccess.properties, "full access properties"), false);
   assert.equal(record(record(customAccess.properties, "custom access properties").accessMode, "custom mode").const, "custom");
   assert((customAccess.required as unknown[]).includes("custom"));
-  const chatAccessVariants = record(schemas.ChatBotAccessView, "ChatBotAccessView").oneOf as unknown[];
-  const inheritedAccess = record(chatAccessVariants[0], "inherited ChatBotAccessView");
-  const reducedAccess = record(chatAccessVariants[1], "custom ChatBotAccessView");
-  assert.equal(record(record(inheritedAccess.properties, "inherit properties").mode, "inherit mode").const, "inherit");
-  assert.equal("custom" in record(inheritedAccess.properties, "inherit properties"), false);
-  assert.equal(record(record(reducedAccess.properties, "custom chat properties").mode, "custom chat mode").const, "custom");
-  assert((reducedAccess.required as unknown[]).includes("custom"));
   const botUpdateVariants = record(schemas.BotAccessUpdateRequest, "BotAccessUpdateRequest").oneOf as unknown[];
   assert.deepEqual(record(botUpdateVariants[0], "full Bot update").required, [
     "accessMode",
@@ -843,18 +1196,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "catalogRevision",
     "custom",
   ]);
-  const chatUpdateVariants = record(schemas.ChatBotAccessUpdateRequest, "ChatBotAccessUpdateRequest").oneOf as unknown[];
-  assert.deepEqual(record(chatUpdateVariants[0], "inherit chat update").required, [
-    "mode",
-    "catalogRevision",
-    "expectedBotPolicyRevision",
-  ]);
-  assert.deepEqual(record(chatUpdateVariants[1], "custom chat update").required, [
-    "mode",
-    "catalogRevision",
-    "expectedBotPolicyRevision",
-    "custom",
-  ]);
   const botChatCreateVariants = record(schemas.BotChatCreateRequest, "BotChatCreateRequest").oneOf as unknown[];
   assert.equal(record(schemas.BotChatCreateRequest, "BotChatCreateRequest")["x-aiden-provider-model-must-be-currently-available"], true);
   assert.equal(record(botChatCreateVariants[0], "inherited Bot chat create").maxProperties, 0);
@@ -862,30 +1203,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     "providerId",
     "modelId",
   ]);
-  const noticeVariants = record(schemas.BotAccessNoticeStatus, "BotAccessNoticeStatus").oneOf as unknown[];
-  const pendingNotice = record(noticeVariants[0], "pending notice");
-  const acceptedNotice = record(noticeVariants[1], "accepted notice");
-  assert.equal(record(record(pendingNotice.properties, "pending notice properties").requiresAcknowledgement, "pending acknowledgement").const, true);
-  assert.equal(
-    record(record(pendingNotice.properties, "pending notice properties").version, "pending version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.equal("acceptedAt" in record(pendingNotice.properties, "pending notice properties"), false);
-  assert.equal(record(record(acceptedNotice.properties, "accepted notice properties").requiresAcknowledgement, "accepted acknowledgement").const, false);
-  assert.equal(
-    record(record(acceptedNotice.properties, "accepted notice properties").version, "accepted version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.deepEqual(acceptedNotice.required, ["version", "requiresAcknowledgement", "acceptedAt", "acceptedDecision"]);
-  assert.deepEqual(record(record(acceptedNotice.properties, "accepted notice properties").acceptedDecision, "acceptedDecision").enum, ["continue_full", "customize_first"]);
-  const acknowledgementProperties = record(record(schemas.BotAccessNoticeAcknowledgementRequest, "BotAccessNoticeAcknowledgementRequest").properties, "ack properties");
-  assert.equal(
-    record(acknowledgementProperties.version, "ack version").const,
-    AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION,
-  );
-  assert.deepEqual(record(acknowledgementProperties.decision, "decision").enum, ["continue_full", "customize_first"]);
-  assert.equal(record(acknowledgementProperties.confirmedForeground, "confirmedForeground").const, true);
-
   const avatarAssetProperties = record(record(schemas.BotAvatarAsset, "BotAvatarAsset").properties, "BotAvatarAsset properties");
   assert.equal(record(avatarAssetProperties.mimeType, "avatar MIME").const, "image/png");
   assert.equal(record(avatarAssetProperties.width, "avatar width").const, 512);
@@ -931,10 +1248,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}", "patch", "BotIdentityPatch"],
     ["/bots/{botId}/chats", "post", "BotChatCreateRequest"],
     ["/bots/{botId}/capabilities", "patch", "BotAccessUpdateRequest"],
-    ["/chats/{chatId}/capabilities", "patch", "ChatBotAccessUpdateRequest"],
     ["/bots/{botId}/avatar", "put", "BotAvatarUploadRequest"],
-    ["/bot-favorites", "patch", "BotFavoritesUpdateRequest"],
-    ["/bot-access-notice/acknowledgement", "post", "BotAccessNoticeAcknowledgementRequest"],
   ] as const) {
     assert.equal(requestSchemaRef(route, method), `#/components/schemas/${schema}`);
   }
@@ -943,23 +1257,32 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots", "post", "201", "BotDetail"],
     ["/bots/{botId}", "get", "200", "BotDetail"],
     ["/bots/{botId}", "patch", "200", "BotDetail"],
-    ["/bots/{botId}", "delete", "200", "BotDetail"],
-    ["/bots/{botId}/restore", "post", "200", "BotDetail"],
     ["/bot-conversations", "get", "200", "BotConversationPage"],
     ["/bots/{botId}/chats", "post", "201", "BotChatCreateResponse"],
     ["/bot-capabilities", "get", "200", "BotCapabilityCatalog"],
     ["/bots/{botId}/capabilities", "patch", "200", "BotAccessView"],
-    ["/chats/{chatId}/capabilities", "get", "200", "ChatBotAccessView"],
-    ["/chats/{chatId}/capabilities", "patch", "200", "ChatBotAccessView"],
     ["/bot-conversations/{chatId}/files", "get", "200", "FileIndex"],
     ["/bot-conversations/{chatId}/files/{fileId}", "get", "200", "FileDocument"],
     ["/bot-conversations/{chatId}/files/{fileId}", "put", "200", "FileDocument"],
     ["/bots/{botId}/avatar", "put", "200", "BotAvatarAsset"],
     ["/bots/{botId}/avatar", "delete", "200", "BotDetail"],
-    ["/bot-favorites", "get", "200", "BotFavoritesView"],
-    ["/bot-favorites", "patch", "200", "BotFavoritesView"],
-    ["/bot-access-notice", "get", "200", "BotAccessNoticeStatus"],
-    ["/bot-access-notice/acknowledgement", "post", "200", "BotAccessNoticeStatus"],
+    ["/bot-presets", "get", "200", "BotPresetList"],
+    ["/bots/from-preset", "post", "201", "BotPresetCreateResult"],
+    ["/bots/{botId}/session", "get", "200", "BotSession"],
+    ["/bots/{botId}/messages", "post", "200", "BotMessageReceipt"],
+    ["/bots/{botId}/resume", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/dismiss", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/stop", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/questions/{waitId}/answer", "post", "200", "BotQuestionAnswerReceipt"],
+    ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
+    ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
+    ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
+    ["/bots/{botId}/connection-requests", "post", "200", "BotConnectionRequestReceipt"],
+    ["/bots/{botId}/memory", "get", "200", "BotMemory"],
+    ["/bots/{botId}/memory/edits", "post", "200", "BotMemoryEditResponse"],
+    ["/bots/{botId}/routine-proposals/{proposalId}/respond", "post", "200", "BotRoutineProposalRespondResult"],
+    ["/bots/{botId}/routine-suggestions", "get", "200", "BotRoutineSuggestionList"],
+    ["/bots/routine-notifications", "get", "200", "BotRoutineNotificationList"],
   ] as const) {
     assert.equal(responseSchemaRef(route, method, status), `#/components/schemas/${schema}`);
   }
@@ -973,8 +1296,6 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/capabilities", "patch", "mutation_blocked"],
     ["/bot-conversations/{chatId}/files/{fileId}", "put", "mutation_blocked"],
     ["/bots/{botId}/avatar", "put", "mutation_blocked"],
-    ["/bots/{botId}/restore", "post", "restore"],
-    ["/bot-favorites", "patch", "reject_archived_additions"],
   ] as const) {
     assert.equal(
       operation(route, method)["x-aiden-archived-access"],
@@ -998,12 +1319,11 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/workspaces", "post"],
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
+    ["/chats/{chatId}/fork", "post"],
     ["/chats/{chatId}/turns", "post"],
     ["/bots", "post"],
-    ["/bots/{botId}/restore", "post"],
     ["/bots/{botId}/chats", "post"],
     ["/bots/{botId}/avatar", "put"],
-    ["/bot-access-notice/acknowledgement", "post"],
     ["/streams/{streamId}/cancel", "post"],
     ["/streams/{streamId}/inputs", "post"],
     ["/approvals/{approvalId}/respond", "post"],
@@ -1027,14 +1347,12 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/workspaces/{workspaceId}", "delete"],
     ["/chats/{chatId}", "patch"],
     ["/chats/{chatId}", "delete"],
+    ["/chats/{chatId}/fork", "post"],
     ["/bots/{botId}", "patch"],
     ["/bots/{botId}", "delete"],
-    ["/bots/{botId}/restore", "post"],
     ["/bots/{botId}/capabilities", "patch"],
-    ["/chats/{chatId}/capabilities", "patch"],
     ["/bots/{botId}/avatar", "put"],
     ["/bots/{botId}/avatar", "delete"],
-    ["/bot-favorites", "patch"],
     ["/scheduled-tasks/{taskId}", "patch"],
     ["/scheduled-tasks/{taskId}", "delete"],
     ["/scheduled-tasks/settings", "patch"],
@@ -1641,6 +1959,82 @@ test("produced-file OpenAPI constraints agree with runtime path and provenance v
   assert.equal(validate({ ...base, producedFile: { ...producedFile, operation: "edited" }, toolName: "edit_file" }), true);
 });
 
+test("questionnaire recap OpenAPI constraints agree with the runtime timeline parser", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const ajv = new Ajv2020({ strict: false });
+  const validateTimeline = ajv.compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
+  const step = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "ask_user_question", label: "Ask a question", status: "completed", startedAt: 1, updatedAt: 1, finishedAt: 1, contentOffset: 0 };
+  const timeline = (questionnaire: unknown, overrides: Record<string, unknown> = {}) => ({
+    version: 3,
+    generationId: "gen-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 1,
+    steps: [{ ...step, ...overrides, questionnaire }],
+  });
+  const item = (kind: string, answers: string[], question = "Which format?", header = "Format") => ({ question, header, kind, answers });
+  const answered = (...items: unknown[]) => ({ version: 1, outcome: "answered", items });
+  const cases: Array<[name: string, candidate: Record<string, unknown>, expected: boolean]> = [
+    ["option and skipped", timeline(answered(item("option", ["Plain text"]), item("skipped", []))), true],
+    ["multi and multi-line custom", timeline(answered(item("multi", ["A", "B"]), item("custom", ["line one\n\tline two"]))), true],
+    ["dismissed, all skipped", timeline({ version: 1, outcome: "dismissed", items: [item("skipped", [])] }), true],
+    ["expired, all skipped", timeline({ version: 1, outcome: "expired", items: [item("skipped", []), item("skipped", [])] }), true],
+    ["four items", timeline(answered(...Array.from({ length: 4 }, () => item("skipped", [])))), true],
+    ["60 astral code points in a label", timeline(answered(item("option", ["😀".repeat(60)]))), true],
+    ["61 code points in a label", timeline(answered(item("option", ["x".repeat(61)]))), false],
+    ["1000 astral code points of custom text", timeline(answered(item("custom", ["😀".repeat(1000)]))), true],
+    ["1001 code points of custom text", timeline(answered(item("custom", ["x".repeat(1001)]))), false],
+    ["16 astral code points in a header", timeline(answered(item("skipped", [], "Which?", "😀".repeat(16)))), true],
+    ["17 code points in a header", timeline(answered(item("skipped", [], "Which?", "x".repeat(17)))), false],
+    ["line separator in a question", timeline(answered(item("skipped", [], "a b"))), true],
+    ["duplicate multi labels", timeline(answered(item("multi", ["A", "A"]))), false],
+    ["six multi labels", timeline(answered(item("multi", ["A", "B", "C", "D", "E", "F"]))), false],
+    ["empty multi", timeline(answered(item("multi", []))), false],
+    ["two option labels", timeline(answered(item("option", ["A", "B"]))), false],
+    ["two custom answers", timeline(answered(item("custom", ["A", "B"]))), false],
+    ["skipped with an answer", timeline(answered(item("skipped", ["A"]))), false],
+    ["dismissed with an option answer", timeline({ version: 1, outcome: "dismissed", items: [item("option", ["A"])] }), false],
+    ["expired with a custom answer", timeline({ version: 1, outcome: "expired", items: [item("custom", ["A"])] }), false],
+    ["bell in a question", timeline(answered(item("skipped", [], "ring\u0007"))), false],
+    ["carriage return in an answer", timeline(answered(item("custom", ["a\rb"]))), false],
+    ["DEL in a header", timeline(answered(item("skipped", [], "Which?", "Fo\u007Frmat"))), false],
+    ["blank question", timeline(answered(item("skipped", [], " \n\t "))), false],
+    ["no-break-space header", timeline(answered(item("skipped", [], "Which?", " ﻿"))), false],
+    ["blank option label", timeline(answered(item("option", ["  "]))), false],
+    ["five items", timeline(answered(...Array.from({ length: 5 }, () => item("skipped", [])))), false],
+    ["no items", timeline(answered()), false],
+    ["unknown recap version", timeline({ version: 2, outcome: "answered", items: [item("skipped", [])] }), false],
+    ["unknown outcome", timeline({ version: 1, outcome: "cancelled", items: [item("skipped", [])] }), false],
+    ["unknown kind", timeline(answered(item("text", ["A"]))), false],
+    ["wrong tool", timeline(answered(item("option", ["A"])), { toolName: "read_file", label: "Read file" }), false],
+    ["failed step", timeline(answered(item("option", ["A"])), { status: "failed" }), false],
+    ["running step", timeline(answered(item("option", ["A"])), { status: "running", finishedAt: undefined }), false],
+  ];
+  const { contentOffset: _offset, ...versionTwoStep } = step;
+  cases.push([
+    "version 2 timeline",
+    { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [{ ...versionTwoStep, questionnaire: answered(item("option", ["A"])) }] },
+    false,
+  ]);
+  for (const [name, candidate, expected] of cases) {
+    const wire = JSON.parse(JSON.stringify(candidate)) as Record<string, unknown>;
+    assert.equal(validateTimeline(wire), expected, `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`);
+    assert.equal(Boolean(parseGenerationTimeline(wire)), expected, `runtime: ${name}`);
+  }
+  // Without the recap, the base step is valid on both sides, so each rejection
+  // above comes from the questionnaire rule rather than the surrounding step.
+  const { questionnaire: _q, ...bare } = record((timeline(undefined).steps as unknown[])[0], "step");
+  for (const overrides of [{}, { toolName: "read_file", label: "Read file" }, { status: "failed" }]) {
+    const plain = { ...timeline(undefined), steps: [{ ...bare, ...overrides }] };
+    assert.equal(validateTimeline(plain), true, JSON.stringify(overrides));
+    assert.ok(parseGenerationTimeline(plain), JSON.stringify(overrides));
+  }
+  const versionTwo = { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [versionTwoStep] };
+  assert.equal(validateTimeline(versionTwo), true);
+  assert.ok(parseGenerationTimeline(versionTwo));
+});
+
 test("approval scope schemas accept the shared fixture and only allow-with-scope requests", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as {
@@ -1665,6 +2059,31 @@ test("approval scope schemas accept the shared fixture and only allow-with-scope
   assert.equal(request({ decision: "allow", scope: "always" }), true);
   assert.equal(request({ decision: "deny", scope: "chat" }), false);
   assert.equal(request({ decision: "allow", scope: "workspace" }), false);
+});
+
+test("pairing request OpenAPI schemas accept the shared fixture and keep phones and stray envelopes out", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const fixture = parseAidenRemoteContractFixture(await json("fixtures/contract.json"));
+  const section = fixture.pairingRequests!;
+  const ajv = new Ajv2020({ strict: false });
+  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const create = schema("PairingRequestCreate");
+  const created = schema("PairingRequestCreated");
+  const status = schema("PairingRequestStatus");
+  assert.equal(create(section.create.request), true);
+  assert.equal(created(section.create.response), true);
+  assert.equal(schema("PairingRequestReveal")(section.reveal.request), true);
+  assert.equal(schema("PairingRequestRevealed")(section.reveal.response), true);
+  for (const entry of section.status) assert.equal(status(entry), true, entry.state);
+  assert.equal(schema("ErrorEnvelope")(section.error), true);
+
+  assert.equal(create({ ...section.create.request, deviceType: "iphone" }), false);
+  assert.equal(create({ ...section.create.request, credential: "x" }), false);
+  const approved = section.status.find((entry) => entry.state === "approved")!;
+  const { envelope, ...withoutEnvelope } = approved;
+  assert.equal(status(withoutEnvelope), false, "approved always carries its envelope");
+  assert.equal(status({ ...withoutEnvelope, state: "denied", envelope }), false, "a denial never carries a credential");
 });
 
 test("stream input contracts reject unknown modes, oversized text, and unknown reasons", () => {
@@ -1725,4 +2144,416 @@ test("stream input contracts reject unknown modes, oversized text, and unknown r
     }),
     /queue/u,
   );
+});
+
+test("provider creation schemas accept the shared keyless fixture and reject unsafe credential shapes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const fixture = await json("fixtures/contract.json") as { providerCreation: Record<string, unknown>; providerCreationReceipt: Record<string, unknown> };
+  const ajv = new Ajv2020({ strict: false });
+  const request = ajv.compile({ $ref: "#/components/schemas/ProviderCreation", components: spec.components });
+  const receipt = ajv.compile({ $ref: "#/components/schemas/ProviderCreationReceipt", components: spec.components });
+  assert.equal(request(fixture.providerCreation), true, JSON.stringify(request.errors));
+  assert.equal(receipt(fixture.providerCreationReceipt), true, JSON.stringify(receipt.errors));
+  assert.equal(request({ ...fixture.providerCreation, apiKey: "unneeded-key" }), false);
+  assert.equal(request({ ...fixture.providerCreation, needsKey: true }), false);
+  assert.equal(request({ ...fixture.providerCreation, confirmedForeground: false }), false);
+  assert.equal(request({ ...fixture.providerCreation, extra: true }), false);
+  assert.equal(receipt({ ...fixture.providerCreationReceipt, apiKey: "leaked-key" }), false);
+});
+
+test("fork lineage parses on chats and rows, and a prefill only follows a fork before a prompt", async () => {
+  const fixture = record(await json("fixtures/contract.json"), "fixture");
+  const chatFork = record(fixture.chatFork, "chatFork");
+  const fork = record(record(chatFork.fork, "fork").response, "fork response");
+  const editFork = record(record(chatFork.editFork, "editFork").response, "editFork response");
+  const clone = <T>(value: T): T => structuredClone(value);
+  const forkChat = () => clone(record(fork.chat, "chat"));
+  const lineage = () => record(forkChat().forkedFrom, "forkedFrom");
+
+  const parsed = parseAidenRemoteChatForkResult(clone(fork));
+  assert.equal(parsed.chat.forkedFrom?.chatId, "chat_fixture_source_01");
+  assert.equal(parsed.chat.forkedFrom?.summary?.state, "pending");
+  assert.equal(parsed.prefill, undefined);
+  const edit = parseAidenRemoteChatForkResult(clone(editFork));
+  assert.equal(edit.prefill?.text, "Now check the error codes.");
+  assert.equal(edit.prefill?.attachments?.[0]?.name, "codes.txt");
+
+  // A prompt to edit exists only when the fork cut before it.
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({ ...clone(fork), prefill: { text: "x" } }),
+    /prefill belongs to a fork before a prompt/u,
+  );
+  // A fork response always names its source.
+  const { forkedFrom: _lineage, ...plainChat } = forkChat();
+  assert.throws(() => parseAidenRemoteChatForkResult({ chat: plainChat }), /must carry forkedFrom/u);
+  // A prefill is one turn, which holds at most ten attachments.
+  const prefill = clone(record(editFork.prefill, "prefill"));
+  const attachment = (prefill.attachments as unknown[])[0];
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({
+      ...clone(editFork),
+      prefill: { ...prefill, attachments: Array.from({ length: 11 }, () => attachment) },
+    }),
+    /at most 10/u,
+  );
+  // The next turn redeems restaged attachments by their upload ID.
+  assert.throws(
+    () => parseAidenRemoteChatForkResult({
+      ...clone(editFork),
+      prefill: { ...prefill, attachments: [{ ...record(attachment, "attachment"), id: "attachment_1" }] },
+    }),
+    /uploaded attachment ID/u,
+  );
+  for (const change of [
+    { position: "middle" },
+    { chatId: "../other" },
+    { at: "yesterday" },
+    { summary: { state: "pending" } },
+    { extra: true },
+    // The desktop keeps the files a summary saw, and calls the focus instructions; neither crosses the wire.
+    { summary: { state: "pending", afterMessageId: "m1", files: { read: [], modified: [] } } },
+    { summary: { state: "pending", afterMessageId: "m1", instructions: "the parser" } },
+    { summary: { state: "ready", afterMessageId: "m1" } },
+    { summary: { state: "pending", afterMessageId: "m1", error: "Summary cancelled." } },
+  ]) {
+    const chat = forkChat();
+    chat.forkedFrom = { ...lineage(), ...change };
+    assert.throws(() => parseAidenRemoteChatForkResult({ chat }), Error, JSON.stringify(change));
+  }
+
+  // A Chat read carries every settled summary state.
+  for (const summary of chatFork.summaryStates as unknown[]) {
+    const chat = forkChat();
+    chat.forkedFrom = { ...lineage(), summary };
+    assert.deepEqual(parseAidenRemoteChatForkResult({ chat }).chat.forkedFrom?.summary, summary);
+  }
+
+  // Rows show lineage for the sidebar glyph but never carry the summary.
+  const row = clone(record((record(fixture.chatSummaries, "chatSummaries").summaries as unknown[])[0], "row"));
+  const { summary: _summary, ...rowLineage } = lineage();
+  assert.deepEqual(parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: rowLineage }).forkedFrom, rowLineage);
+  assert.equal(parseAidenRemoteChatSummaryProjection(row).forkedFrom, undefined);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...row, forkedFrom: lineage() }));
+});
+
+test("mobile simulator fixtures pin the phone viewer's listing, input and MJPEG shapes from revision 26", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const section = parseAidenRemoteContractFixture(raw).mobileSimulators;
+  assert.ok(section);
+  assert.equal(section.capability, "simulators:mobile");
+  // The listing carries a running Android emulator and a stopped AVD (listed by
+  // its AVD name), both shown on a phone as "Open on your Mac to view".
+  assert.deepEqual(
+    (section.listing.devices as Array<{ id: string; platform: string }>).map(({ id, platform }) => [id, platform]),
+    [
+      ["5A0C1F3E-0000-4000-8000-000000000001", "ios"],
+      ["5A0C1F3E-0000-4000-8000-000000000002", "ios"],
+      ["emulator-5554", "android"],
+      ["Pixel_9_API_35", "android"],
+    ],
+  );
+  // The second sample frame contains the boundary bytes, so only Content-Length frames it.
+  const second = Buffer.from(section.mjpeg.framesBase64[1]!, "base64");
+  assert.ok(second.includes(Buffer.from("\r\n--frame")));
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => () => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return parseAidenRemoteContractFixture(copy);
+  };
+  const mobile = (copy: Record<string, unknown>) => record(copy.mobileSimulators, "mobileSimulators");
+  assert.throws(
+    mutate((copy) => {
+      delete (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[2]!.platform;
+    }),
+    /missing platform/u,
+  );
+  // The fixture admits exactly the ids the desktop lists: a leading dot or a path separator never parses.
+  for (const id of [".hidden", "../hub/admin", "a b", "x".repeat(129)]) {
+    assert.throws(
+      mutate((copy) => {
+        (record(mobile(copy).listing, "listing").devices as Array<Record<string, unknown>>)[3]!.id = id;
+      }),
+      /device 3 id is invalid/u,
+      id,
+    );
+  }
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).listing, "listing").chatDeviceIds = ["NOT-LISTED"];
+    }),
+    /chatDeviceIds must name listed devices/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).sharingOff, "sharingOff").devices = [
+        { id: "A", name: "iPhone", platform: "ios", version: "26.0", booted: true, kind: "iphone" },
+      ];
+    }),
+    /no devices while sharing is off/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      // A phone never sends the Duo hinge command or keyboard keys through this contract.
+      (mobile(copy).inputMessages as Array<Record<string, unknown>>)[0]!.tag = 0x10;
+    }),
+    /tag phones never send/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      record(mobile(copy).refusal, "refusal").error = {
+        code: "not_found",
+        message: "x",
+        requestId: "request_fixture_sim_01",
+        retryable: false,
+      };
+    }),
+    /must be capability_denied/u,
+  );
+  assert.throws(
+    mutate((copy) => {
+      delete copy.phoneRunEvents;
+      delete copy.chatFork;
+      copy.contractRevision = 25;
+      record(copy.hostHealth, "hostHealth").contractRevision = 25;
+    }),
+    /require contract revision 26/u,
+  );
+});
+
+test("chat visuals arrive in revision 28 and a malformed visual never costs its message", async () => {
+  const raw = await json("fixtures/contract.json");
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const message = fixture.chat.messages.find((entry) => entry.visuals?.length);
+  assert.deepEqual(message?.visuals?.map((visual) => [visual.kind, visual.toolCallId]), [["html", "call-1"], ["ui", "call-2"]]);
+  // Every snapshot names an image attachment on the same message.
+  for (const visual of message?.visuals ?? []) {
+    assert.equal(message?.attachments?.find((attachment) => attachment.id === visual.snapshotAttachmentId)?.kind, "image");
+  }
+
+  const chat = structuredClone(record(raw, "fixture").chat) as { messages: Record<string, unknown>[] };
+  const target = chat.messages.find((entry) => Array.isArray(entry.visuals))!;
+  const [html, ui] = target.visuals as Record<string, unknown>[];
+  target.visuals = [
+    { ...html, snapshotAttachmentId: "attachment-that-is-not-here" },
+    { ...ui, kind: "video" },
+    { ...ui, id: "ui_fixture_02", title: " padded " },
+    { ...ui, id: "ui_fixture_03", toolCallId: "tool_fixture_01" },
+    { ...ui, id: "ui_fixture_04", privateTree: {} },
+    ui,
+  ];
+  const parsed = parseAidenRemoteChatProjection(chat);
+  const kept = parsed.messages.find((entry) => entry.id === target.id);
+  assert.equal(kept?.text, target.text);
+  assert.deepEqual(kept?.visuals?.map((visual) => visual.id), ["ui_fixture_01"]);
+
+  // A revision-27 Mac (Bot memory, no visuals) cannot carry them.
+  const revision27 = structuredClone(raw) as Record<string, unknown>;
+  revision27.contractRevision = 27;
+  record(revision27.hostHealth, "hostHealth").contractRevision = 27;
+  assert.throws(() => parseAidenRemoteContractFixture(revision27), /require contract revision 28/u);
+});
+
+test("failed-turn entries parse strictly, with and without a message to retry", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSessionFailedTurns: unknown[] };
+  const [withRetry, withoutRetry] = raw.botSessionFailedTurns.map(parseAidenRemoteBotSessionEntry);
+  assert.deepEqual(withRetry, raw.botSessionFailedTurns[0]);
+  assert.equal(withRetry?.type === "failed_turn" && withRetry.retryText, "Plan my week, please.");
+  assert.deepEqual(withoutRetry, { type: "failed_turn", id: "entry_16:failed" });
+  for (const invalid of [
+    { type: "failed_turn", id: "entry_1:failed", retryText: "" },
+    { type: "failed_turn", id: "entry_1:failed", errorMessage: "provider down" },
+    { type: "failed_turn", id: "entry 1" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(invalid));
+  }
+});
+
+test("Bot sessions carry the waiting approval, and approval frames parse strictly", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botSession: Record<string, unknown>; botSessionEvents: unknown[] };
+  const events = raw.botSessionEvents.map(parseAidenRemoteBotSessionEvent);
+  assert.deepEqual(events, raw.botSessionEvents, "every fixture frame round-trips");
+  const approvals = events.flatMap((event) => (event.type === "approval" ? [event.payload.approval] : []));
+  assert.equal(approvals.length, 2);
+  assert.equal(approvals[0]?.canAllow, true);
+  assert.equal(approvals[1], null, "a settled approval clears");
+
+  const waiting = approvals[0]!;
+  assert.deepEqual(parseAidenRemoteBotSession({ ...raw.botSession, approval: waiting }).approval, waiting);
+  const { approval: _approval, ...missing } = raw.botSession;
+  assert.throws(() => parseAidenRemoteBotSession(missing), /approval is required/u);
+  for (const invalid of [
+    { ...waiting, scopes: ["once"] },
+    { ...waiting, canAllow: "yes" },
+    { ...waiting, waitId: "wait id" },
+    { ...waiting, summary: "" },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botSession, approval: invalid }));
+  }
+});
+
+test("the shared Bot avatar palette fixture is exactly the desktop colour table", async () => {
+  const raw = (await json("fixtures/contract.json")) as { botAvatarPalette?: unknown };
+  // iOS and Android test their palettes against this same fixture.
+  assert.deepEqual(raw.botAvatarPalette, { face: BOT_AVATAR_FACE_HEX, colors: BOT_AVATAR_COLOR_HEX });
+  assert.deepEqual(Object.keys(BOT_AVATAR_COLOR_HEX), [...BOT_AVATAR_COLORS]);
+  for (const value of [BOT_AVATAR_FACE_HEX, ...Object.values(BOT_AVATAR_COLOR_HEX)]) {
+    assert.match(value, /^#[0-9A-F]{6}$/u);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 30: Bot chat activity on phones
+// ---------------------------------------------------------------------------
+
+test("Bot activity frames carry only the §11 allow-list, and every privacy sample is refused", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.botActivity!;
+  assert.deepEqual(section.session, raw.botActivity.session, "the activity session round-trips");
+  assert.deepEqual(section.events, raw.botActivity.events, "every activity frame round-trips");
+  const shown = [section.session.activity, ...section.events.flatMap((event) => (event.type === "activity" ? [event.payload.activity] : []))];
+  for (const activity of shown) {
+    if (activity === null || activity === undefined) continue;
+    assert.deepEqual(Object.keys(activity).filter((key) => !["phase", "app", "startedAt"].includes(key)), []);
+  }
+  for (const sample of raw.botActivityPrivacy.rejectedActivities) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), Error, JSON.stringify(sample));
+    const frame = { ...raw.botActivity.events[0], payload: { activity: sample } };
+    assert.throws(() => parseAidenRemoteBotSessionEvent(frame), Error, JSON.stringify(sample));
+  }
+  // A few samples are pinned to their reason, so a TypeError can never pass for a refusal.
+  const refusedWith = (field: string, pattern: RegExp) => {
+    const sample = raw.botActivityPrivacy.rejectedActivities.find((candidate: Record<string, unknown>) => field in candidate);
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), pattern, field);
+  };
+  refusedWith("detail", /unsupported field detail/u);
+  refusedWith("step", /unsupported field step/u);
+  refusedWith("query", /unsupported field query/u);
+  for (const sample of raw.botActivityPrivacy.rejectedQueued) {
+    assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: [sample] }), Error, JSON.stringify(sample));
+  }
+  const [duplicateIds, twentyOneItems] = raw.botActivityPrivacy.rejectedQueuedLists;
+  assert.equal(duplicateIds.length, 2);
+  assert.equal(twentyOneItems.length, 21);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: duplicateIds }), /ids must be unique/u);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: twentyOneItems }), /at most 20/u);
+  assert.throws(() => parseAidenRemoteBotSession({ ...raw.botActivity.session, queued: "not a list" }), /must be an array/u);
+  const repeated = ({ unit, count }: { unit: string; count: number }) => unit.repeat(count);
+  const bounds = raw.botActivityPrivacy.textBounds;
+  const queuedWith = (text: string) => ({ ...raw.botActivity.session, queued: [{ submissionId: "18", mode: "queue", text }] });
+  for (const sample of bounds.queuedText.rejected) {
+    assert.throws(() => parseAidenRemoteBotSession(queuedWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+  }
+  for (const sample of bounds.queuedText.accepted) {
+    assert.equal(parseAidenRemoteBotSession(queuedWith(repeated(sample))).queued![0]!.text, repeated(sample));
+  }
+  const appWith = (app: string) => ({ phase: "app", app, startedAt: 1_760_450_000_000 });
+  for (const sample of bounds.app.rejected) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(appWith(repeated(sample))), /characters/u, `${sample.count} x ${sample.unit}`);
+  }
+  for (const sample of bounds.app.accepted) {
+    assert.equal(parseAidenRemoteBotSessionActivity(appWith(repeated(sample))).app, repeated(sample));
+  }
+  for (const sample of raw.botActivityPrivacy.rejectedChatActivity) {
+    assert.throws(() => parseAidenRemoteBotDetail({ ...raw.botActivity.detail, chatActivity: sample }), Error, JSON.stringify(sample));
+    assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({ chatActivity: sample }, { allowChatActivity: true }));
+  }
+});
+
+test("an optional Bot activity key sent as the literal null is refused, never read as absent", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const { activities, sessions, events, entries } = raw.botActivityPrivacy.rejectedNullLiterals;
+  assert.deepEqual(activities.map((sample: Record<string, unknown>) => sample.app), [null]);
+  assert.deepEqual(sessions.map((sample: Record<string, unknown>) => sample.queued), [null]);
+  assert.deepEqual(events.map((sample: Record<string, any>) => sample.payload.queued), [null]);
+  assert.deepEqual(entries.map((sample: Record<string, unknown>) => [sample.label, sample.submissionId]), [[null, "17"]]);
+  for (const sample of activities) {
+    assert.throws(() => parseAidenRemoteBotSessionActivity(sample), /app must be/u, JSON.stringify(sample));
+    const { app: _app, ...withoutApp } = sample;
+    assert.deepEqual(parseAidenRemoteBotSessionActivity(withoutApp), withoutApp, "the same activity without the key is fine");
+  }
+  for (const sample of sessions) {
+    assert.throws(() => parseAidenRemoteBotSession(sample), /queued messages must be an array/u);
+    const { queued: _queued, ...withoutQueued } = sample;
+    assert.equal("queued" in parseAidenRemoteBotSession(withoutQueued), false, "an absent list stays absent");
+  }
+  for (const sample of events) {
+    assert.throws(() => parseAidenRemoteBotSessionEvent(sample), /queued messages must be an array/u);
+  }
+  for (const sample of entries) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(sample), /Only the person's message can carry a submissionId/u);
+    const { label: _label, ...withoutLabel } = sample;
+    const entry = parseAidenRemoteBotSessionEntry(withoutLabel);
+    assert.equal(entry.type === "message" && entry.submissionId, "17", "the same bubble without the key keeps its id");
+  }
+});
+
+test("the person's own message carries its submissionId for bot:activity devices only, and every misuse is refused", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.botActivity!;
+  const sent = section.session.entries[0]!;
+  assert.equal(sent.type === "message" && sent.role === "user" && sent.submissionId, "17");
+  // The queued message 18 was placed in the turn: its bubble now carries the same id.
+  assert.deepEqual(section.entryEvent, raw.botActivity.entryEvent, "the entry frame round-trips");
+  const placed = section.entryEvent.type === "entry" ? section.entryEvent.payload.entry : undefined;
+  assert.equal(placed?.type === "message" && placed.submissionId, raw.botActivity.session.queued[0].submissionId);
+
+  // What a device without bot:activity is sent for the same session and frame: no new key anywhere.
+  const { nonHolder } = raw.botActivityPrivacy;
+  const legacy = parseAidenRemoteBotSession(nonHolder.session);
+  const legacyFrame = parseAidenRemoteBotSessionEvent(nonHolder.entryEvent);
+  for (const value of [legacy, legacyFrame]) {
+    assert.equal(JSON.stringify(value).includes("submissionId"), false);
+  }
+  assert.equal("activity" in legacy || "queued" in legacy, false);
+  const withoutId = (entry: Record<string, unknown>) => {
+    const { submissionId: _submissionId, ...rest } = entry;
+    return rest;
+  };
+  assert.deepEqual(legacy.entries, raw.botActivity.session.entries.map(withoutId), "the same messages, without their ids");
+  assert.equal(legacyFrame.seq, raw.botActivity.entryEvent.seq, "the same seq");
+  assert.deepEqual(nonHolder.entryEvent.payload.entry, withoutId(raw.botActivity.entryEvent.payload.entry));
+
+  for (const sample of raw.botActivityPrivacy.rejectedSubmissionIdEntries) {
+    assert.throws(() => parseAidenRemoteBotSessionEntry(sample), Error, JSON.stringify(sample));
+  }
+  const [assistantWithId, routineWithId] = raw.botActivityPrivacy.rejectedSubmissionIdEntries;
+  assert.throws(() => parseAidenRemoteBotSessionEntry(assistantWithId), /Only the person's message can carry a submissionId/u);
+  assert.equal(routineWithId.label, "Morning brief", "a routine's input");
+  assert.throws(() => parseAidenRemoteBotSessionEntry(routineWithId), /Only the person's message can carry a submissionId/u);
+  const { submissionId: _routineId, ...routine } = routineWithId;
+  assert.deepEqual(parseAidenRemoteBotSessionEntry(routine), routine, "the same routine bubble without an id is fine");
+});
+
+test("whenBusy and chatActivity are refused unless the host wires bot-activity-v1", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const send = raw.botActivity.send.request;
+  assert.throws(() => parseAidenRemoteBotMessageRequest(send), /unsupported field whenBusy/u);
+  assert.deepEqual(parseAidenRemoteBotMessageRequest(send, { allowWhenBusy: true }), send);
+  assert.deepEqual(parseAidenRemoteBotMessageRequest({ text: "Hi" }, { allowWhenBusy: true }), { text: "Hi" });
+  assert.throws(() => parseAidenRemoteBotMessageRequest({ text: "Hi", whenBusy: "followUp" }, { allowWhenBusy: true }));
+  const patch = raw.botActivity.identityPatch.request;
+  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest(patch), /unsupported field chatActivity/u);
+  assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(patch, { allowChatActivity: true }), patch);
+});
+
+test("the shared phase table is the one the Mac draws, and an unknown phase reads as Working", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const { phases, thinkingKeeps, app, elapsed } = raw.botActivity as {
+    phases: Array<{ id: string; word: string; mark: string }>;
+    thinkingKeeps: string[];
+    app: { app: string; word: string };
+    elapsed: Array<{ startedAt: number; now: number; label: string | null }>;
+  };
+  assert.deepEqual(phases.map((phase) => phase.id), [...BOT_ACTIVITY_PHASES]);
+  for (const phase of phases) {
+    assert.deepEqual(botActivityDisplay(phase.id, "follows"), { phase: phase.id, word: phase.word, mark: phase.mark });
+    assert.equal(botActivityDisplay(phase.id, "thinking").phase, thinkingKeeps.includes(phase.id) ? phase.id : "thinking");
+  }
+  assert.equal(botActivityDisplay("app", "follows", app.app).word, app.word);
+  assert.deepEqual(botActivityDisplay("teleporting", "follows"), botActivityDisplay("working", "follows"));
+  for (const row of elapsed) assert.equal(botElapsedLabel(row.startedAt, row.now), row.label, JSON.stringify(row));
 });

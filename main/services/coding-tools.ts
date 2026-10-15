@@ -5,6 +5,7 @@
 //
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
+import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { spawn } from "node:child_process";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
@@ -20,6 +21,7 @@ import {
 } from "node:fs";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { assertPathInside } from "../shared/path-containment.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
@@ -45,8 +47,8 @@ let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
-/** Sharing a local file is an outbound disclosure and always needs attended approval. */
-export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image"]);
+/** Outbound disclosure or paid model operations always need attended approval. */
+export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image", "generate_image", "classify"]);
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
@@ -71,7 +73,7 @@ function textLines(text: string): string[] {
 }
 
 /** Count a shortest line edit script without exposing file contents in tool details. */
-function lineChangeCounts(before: string, after: string): Pick<
+export function lineChangeCounts(before: string, after: string): Pick<
   FileMutationDetailsV1,
   "additions" | "deletions"
 > {
@@ -218,19 +220,13 @@ async function compileSafeGlob(pattern: string, signal?: AbortSignal): Promise<R
 /** Resolve a user/agent-supplied path within the root, rejecting lexical escapes. */
 function resolveInRoot(root: string, p: string): string {
   const resolved = path.resolve(root, p ?? ".");
-  const rel = path.relative(root, resolved);
-  if (rel === "") return root;
-  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw new Error(`Path "${p}" is outside the workspace folder.`);
-  }
+  if (path.relative(root, resolved) === "") return root;
+  assertPathInside(root, resolved, `Path "${p}" is outside the workspace folder.`);
   return resolved;
 }
 
 function assertRealPathInRoot(root: string, resolved: string, suppliedPath: string): string {
-  const rel = path.relative(root, resolved);
-  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw new Error(`Path "${suppliedPath}" resolves outside the workspace folder.`);
-  }
+  assertPathInside(root, resolved, `Path "${suppliedPath}" resolves outside the workspace folder.`);
   return resolved;
 }
 
@@ -847,7 +843,7 @@ function rejectProtectedCredential(
 }
 
 /** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
-function isEnvironmentSecretPath(relativePath: string): boolean {
+export function isEnvironmentSecretPath(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]/)
     .some((segment) => {
@@ -867,7 +863,7 @@ function rejectEnvironmentSecret(root: string, fullPath: string): void {
   }
 }
 
-/** Build a short human summary of a mutating tool call for the approval prompt. */
+/** Build approval disclosure; image prompts must remain complete before provider dispatch. */
 export function summarizeToolCall(toolName: string, args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   switch (toolName) {
@@ -877,6 +873,10 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "generate_image":
+      return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
+    case "classify":
+      return `Send structured data and questions to ${String(a.provider ?? "?")}/${String(a.model ?? "?")} for classification (may incur charges)`;
     case "share_image":
       return `Share image in chat: ${String(a.path ?? "?")}`;
     default:
@@ -1931,7 +1931,10 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         : result.outputLimitExceeded
           ? "Command exceeded the output limit."
           : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-      return textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS));
+      return {
+        ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
+        isError: true,
+      };
     },
   };
 }

@@ -21,6 +21,10 @@ import {
 import { withCodingToolMatcher } from "./coding-tool-matcher.js";
 import { createShareImageTool } from "./share-image-tool.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
+import { runToolCall } from "@earendil-works/pi-agent-core";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { createPiCodemodeTool } from "./pi-codemode.js";
+import { advanceAttendedToolErrorState } from "./assistant/tool-loop-guard.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -89,6 +93,19 @@ test("approval summaries describe the consequence of mutating tools", () => {
     "Share image in chat: /Users/person/Picture.png",
   );
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("share_image"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("generate_image"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("classify"), true);
+  assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
+  assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
+  assert.match(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "9:16" }),
+    /studio\/canvas at 9:16 \(may incur charges\)/,
+  );
+  assert.doesNotMatch(
+    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
+    /ignore this/,
+  );
+  assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
 });
 
 test("share_image advertises outbound sharing rather than image inspection", () => {
@@ -1310,6 +1327,64 @@ test("filesystem tools do not follow workspace symlinks outside the root", async
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("run_command reports real exit failures through Pi and codemode without re-executing effects", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-outcome-"));
+  try {
+    await fs.writeFile(path.join(root, "failure.cjs"), 'require("node:fs").appendFileSync("attempts", "x"); process.stdout.write("progress\\n".repeat(7000) + "FINAL_ASSERTION_FAILED\\n"); process.exitCode = 7;');
+    const tools = buildCodingTools(root);
+    const runCommand = tools.find((tool) => tool.name === "run_command")!;
+    const assistantMessage = fauxAssistantMessage("Run the fixture command");
+    const outcomes: boolean[] = [];
+    const codemode = createPiCodemodeTool({
+      tools: () => [runCommand],
+      executeTool: async (_parent, name, args) => {
+        const outcome = await runToolCall({ type: "toolCall", id: "nested", name, arguments: args as { command: string } }, {
+          tools, assistantMessage, context: { messages: [assistantMessage], tools },
+        });
+        outcomes.push(outcome.isError);
+        return outcome;
+      },
+    });
+    const first = await codemode.execute("parent", { code: 'const r = await tools.run_command({command:"node failure.cjs"}); text({isError:r.isError, text:r.content[0].text});' });
+    const returned = JSON.parse(first.content[0].type === "text" ? first.content[0].text : "null");
+    assert.equal(returned.isError, true, "a failed process must be visible to programmatic callers");
+    assert.match(returned.text, /^Command exited with error \(code 7\)\./u);
+    assert.match(returned.text, /Output truncated: \d+ of \d+ characters omitted from the middle; no retained output available/u);
+    assert.match(returned.text, /FINAL_ASSERTION_FAILED\s*$/u, "the failing tail survives truncation");
+    assert.ok(returned.text.length <= 20_000);
+    assert.equal(first.isError, false, "JavaScript can successfully inspect a nested command failure");
+    assert.deepEqual(outcomes, [true]);
+    assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "x", "reporting a failure must not rerun its effects");
+
+    const firstGuard = advanceAttendedToolErrorState(0, [{ isError: outcomes[0] }]);
+    assert.equal(firstGuard.shouldStop, false);
+    const retry = await runCommand.execute("retry", { command: "node failure.cjs" });
+    assert.equal(retry.isError, true);
+    assert.equal(advanceAttendedToolErrorState(firstGuard.consecutiveErrorTurns, [retry]).shouldStop, true);
+    assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "xx", "only the explicit retry may execute again");
+
+    const success = await runCommand.execute("success", { command: "node -e 'process.stdout.write(\"ok\")'" });
+    assert.notEqual(success.isError, true);
+    assert.equal(success.content[0].type === "text" ? success.content[0].text : "", "ok");
+    assert.equal(advanceAttendedToolErrorState(1, [success]).consecutiveErrorTurns, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run_command output-limit termination is an error even when output starts normally", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-output-limit-"));
+  try {
+    await fs.writeFile(path.join(root, "output.cjs"), 'process.stdout.write("x".repeat(11 * 1024 * 1024)); setInterval(() => {}, 1000);');
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+    const result = await runCommand.execute("overflow", { command: "node output.cjs" });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].type === "text" ? result.content[0].text : "", /^Command exceeded the output limit\./u);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

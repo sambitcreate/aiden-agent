@@ -17,9 +17,16 @@ paths, idempotence, and rejection of unexpected source/version changes.
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
 runtime limits and request admission. `npm run dist` refreshes and validates it before every
 package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
-tracked file, runs `npm run test:model-catalog`, and commits a changed snapshot with the GitHub
-Actions bot. A failed fetch leaves the known-good snapshot untouched; a non-fast-forward push is
-allowed to fail so the newer `main` run remains authoritative.
+tracked file and runs `npm run test:model-catalog`. A changed snapshot does not go straight to
+`main`: the workflow pushes it to a fresh `automation/models-dev-catalog-*` branch with its deploy
+key, opens a pull request with auto-merge, and closes any older catalog pull request it
+supersedes. CI runs the catalog contracts and the desktop unit lanes on that branch (the runtime
+takes model limits from the snapshot), and GitHub merges once `main`'s required checks pass. A
+merge made through the job token starts no workflows, so `Model catalog main baseline` starts full
+CI on `main` unless a recent `main` CI run already tested a commit that contains the latest catalog
+merge (checked by commit ancestry). It checks right after catalog branch CI passes (waiting briefly
+for the merge) and every 30 minutes, so a late merge is still covered. A failed fetch leaves the known-good snapshot
+untouched.
 
 The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
 Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,
@@ -107,8 +114,6 @@ artifact=/absolute/path/to/downloaded-package.rpm
 gh attestation verify "$artifact" \
   --hostname github.com \
   --repo sambitcreate/aiden-agent \
-  --signer-repo sambitcreate/aiden-agent \
-  --signer-workflow sambitcreate/aiden-agent/.github/workflows/release.yml \
   --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/release.yml@refs/heads/main \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --source-ref refs/heads/main \

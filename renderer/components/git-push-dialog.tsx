@@ -16,8 +16,8 @@ import {
   PullRequestCreateDialog,
   chatPullRequestChecksLabel,
   chatPullRequestRef,
-  openPullRequestExternal,
 } from "./chat-pull-requests";
+import { useLinkOpener } from "../lib/link-opener";
 import {
   Button,
   Dialog,
@@ -55,6 +55,7 @@ export function GitPushDialog({
   returnFocus: () => HTMLElement | null;
 }) {
   const queryClient = useQueryClient();
+  const { openLink } = useLinkOpener();
   const [remote, setRemote] = React.useState("");
   const [destinationBranch, setDestinationBranch] = React.useState("");
   const [setUpstream, setSetUpstream] = React.useState(true);
@@ -309,6 +310,7 @@ export function GitPushDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) onOpenChange(nextOpen);
@@ -367,7 +369,7 @@ export function GitPushDialog({
                       key={`${view.host}/${view.repository}#${view.number}`}
                       type="button"
                       className="flex w-full min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
-                      onClick={() => openPullRequestExternal(view.url)}
+                      onClick={() => openLink(view.url)}
                     >
                       <ChatPullRequestStateIcon view={view} />
                       <span className="min-w-0 flex-1 truncate text-small text-primary">
@@ -479,7 +481,7 @@ export function GitPushDialog({
               </div>
             </div>
 
-            <Label className="items-center justify-between rounded-control border border-field px-3 py-2.5">
+            <Label className="items-center justify-between rounded-control bg-well px-3 py-2.5">
               <span className="min-w-0 pr-3">
                 <span className="block text-regular text-primary">
                   Remember as upstream

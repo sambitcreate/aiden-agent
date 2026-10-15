@@ -593,7 +593,8 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             .sorted { left, right in
                 left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
             }
-        let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChatSummary.workspaceId)
+        let triagedChats = aidenNeedsAttentionFirst(regularChats)
+        let chatsByWorkspace = Dictionary(grouping: triagedChats, by: \AidenChatSummary.workspaceId)
         let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
             let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
@@ -604,7 +605,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             return AidenWorkspaceSidebarSection(
                 workspace: workspace,
                 chats: visibleChats,
-                newestActivityAt: max(workspace.updatedAt, allChats.first?.updatedAt ?? .distantPast)
+                newestActivityAt: max(workspace.updatedAt, allChats.map(\.updatedAt).max() ?? .distantPast)
             )
         }
         .sorted { left, right in
@@ -616,7 +617,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             }
             return left.workspace.id < right.workspace.id
         }
-        let recents = regularChats.filter { chat in
+        let recents = triagedChats.filter { chat in
             guard !query.isEmpty else { return true }
             return chat.title.localizedCaseInsensitiveContains(query)
                 || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
@@ -858,14 +859,15 @@ struct AidenWorkspaceShellView: View {
                 } detail: {
                     NavigationStack {
                         if let selectedSidebarChat {
-                            AidenChatDetailView(
+                            AidenForkableChatDetailView(
                                 coordinator: coordinator,
                                 chat: selectedSidebarChat,
                                 autoStartVoice: selectedSidebarChatStartsVoice,
                                 onChatUpdated: acceptSelectedChatUpdate,
                                 onChatActivityChanged: { chatID, activity in
                                     homeModel.setActivity(activity, forChatID: chatID)
-                                }
+                                },
+                                onForkOpened: acceptOpenedFork
                             )
                             .id(selectedSidebarChat.id)
                         } else {
@@ -887,14 +889,15 @@ struct AidenWorkspaceShellView: View {
                             )
                         ) {
                             if let selectedSidebarChat {
-                                AidenChatDetailView(
+                                AidenForkableChatDetailView(
                                     coordinator: coordinator,
                                     chat: selectedSidebarChat,
                                     autoStartVoice: selectedSidebarChatStartsVoice,
                                     onChatUpdated: acceptSelectedChatUpdate,
                                     onChatActivityChanged: { chatID, activity in
                                         homeModel.setActivity(activity, forChatID: chatID)
-                                    }
+                                    },
+                                    onForkOpened: acceptOpenedFork
                                 )
                                 .id(selectedSidebarChat.id)
                             }
@@ -1531,10 +1534,18 @@ struct AidenWorkspaceShellView: View {
     private func homeChatRow(_ chat: AidenChatSummary, showsWorkspace: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(chat.title)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if chat.forkedFrom != nil {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                            .accessibilityLabel("Fork")
+                    }
+                    Text(chat.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(2)
+                }
 
                 if showsWorkspace,
                    let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
@@ -1788,6 +1799,15 @@ struct AidenWorkspaceShellView: View {
     private func openChat(_ chat: AidenChat, startsVoice: Bool = false) {
         cancelPendingSidebarChatNavigation()
         commitOpenChat(chat, startsVoice: startsVoice)
+    }
+
+    /// Lists a fork opened from the selected chat. The detail pushes it over
+    /// its source in either layout (the compact stack or the split detail
+    /// column), so Back returns to the source and the sidebar keeps the
+    /// source selected.
+    private func acceptOpenedFork(_ chat: AidenChat) {
+        homeModel.accept(chat)
+        homeModel.markViewed(chatID: chat.id)
     }
 
     private func acceptSelectedChatUpdate(_ updated: AidenChat) {
@@ -3256,6 +3276,12 @@ private struct AidenAppSettingsView: View {
                 }
 
                 Section {
+                    NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
+                        Label("Providers", systemImage: "server.rack")
+                    }
+                } footer: { Text("Manage model connections on your paired Mac.") }
+
+                Section {
                     Toggle(
                         "Use memory",
                         isOn: Binding(
@@ -3299,7 +3325,7 @@ private struct AidenAppSettingsView: View {
                 } footer: {
                     Text(
                         voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed by Parakeet on your paired desktop, and not retained. Text appears after you stop recording."
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired Mac, and not retained. Text appears after you stop recording."
                             : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                     )
                 }

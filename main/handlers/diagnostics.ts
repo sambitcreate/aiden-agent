@@ -11,6 +11,7 @@ import {
 } from "../../renderer/shared/diagnostics.js";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
+import { chatStore } from "../services/chat-store.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 import { rendererDiagnosticClassification, type DiagnosticEventName } from "../services/diagnostics-contract.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
@@ -126,7 +127,12 @@ export function registerDiagnosticHandlers(): void {
 
   ipcMain.handle("diagnostics:status", async (event) => {
     diagnosticOwner(event);
-    return diagnosticSupportStatus(roots);
+    const [status, quarantinedChats] = await Promise.all([
+      diagnosticSupportStatus(roots),
+      // Damaged chat files are set aside, never deleted; tell the user they exist.
+      chatStore.quarantinedPayloadCount().catch(() => 0),
+    ]);
+    return { ...status, quarantinedChats };
   });
   ipcMain.handle("diagnostics:reveal", async (event) => {
     diagnosticOwner(event);

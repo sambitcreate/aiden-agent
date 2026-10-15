@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
+import { Progress } from "../ui-primitives";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
@@ -216,7 +217,6 @@ export function AboutSettings() {
           </div>
         </Field>
         <Field
-          className="border-t border-separator"
           label="Software update"
           description={
             showUpdateControls
@@ -235,19 +235,11 @@ export function AboutSettings() {
           ) : (
           <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
             {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
-              <div
-                className="h-1 w-full max-w-48 overflow-hidden rounded-full bg-control"
-                role="progressbar"
-                aria-label="Update download progress"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.floor(updateSnapshot.percent)}
-              >
-                <div
-                  className="h-full rounded-full bg-accent transition-[width] duration-150"
-                  style={{ width: `${updateSnapshot.percent}%` }}
-                />
-              </div>
+              <Progress
+                className="max-w-48"
+                label="Update download progress"
+                value={updateSnapshot.percent}
+              />
             ) : null}
             <Button
               size="small"
@@ -277,16 +269,20 @@ export function AboutSettings() {
           </div>
           )}
         </Field>
+      </FieldSet>
+
+      <DiagnosticsSettings />
+
+      <FieldSet title="Reset">
         <Field
-          className="border-t border-separator"
-          label="Reset onboarding"
-          description="Clear this profile’s setup and preferences, restart Aiden, and return to the first onboarding step."
+          label="Reset profile, providers and preferences"
+          description="Remove this profile’s setup, saved API keys and sign-ins, then restart Aiden into onboarding. Chats and projects stay."
         >
           <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
             <Button
               ref={resetButtonRef}
               size="small"
-              variant="filled"
+              variant="destructive"
               disabled={resetting}
               onClick={() => {
                 setResetError(null);
@@ -294,13 +290,12 @@ export function AboutSettings() {
               }}
             >
               {resetting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-              {resetting ? "Resetting…" : "Reset onboarding…"}
+              {resetting ? "Resetting…" : "Reset and restart…"}
             </Button>
           </div>
         </Field>
       </FieldSet>
 
-      <DiagnosticsSettings />
 
       <AlertDialog
         open={confirmReset}
@@ -308,7 +303,7 @@ export function AboutSettings() {
           setConfirmReset(open);
           if (!open) setResetError(null);
         }}
-        title="Reset onboarding and restart Aiden?"
+        title="Reset profile, providers and preferences?"
         description={
           <div className="space-y-2">
             <p>

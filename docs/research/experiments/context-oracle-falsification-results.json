@@ -1,0 +1,108 @@
+{
+  "evidenceKind": "offline-reference-oracle-falsification",
+  "generatedAt": "2026-10-11T20:18:25.209Z",
+  "node": "v22.22.3",
+  "sourceSha256": {
+    "package-lock.json": "8f6a1f2461929b956fa07763319d41d306b2efc618ddd19c3100545931ab7c48",
+    "main/services/pi-upgrade-replay-runner.ts": "564357716224a62d1c2d60c32c3c010c1a78c7be8fc2620b50759cd91a6b9149",
+    "main/services/pi-upgrade-evaluation.ts": "8cab2f458fa22bc81b42a20490000a6f6d6e812ad7c0539d5962fbe72f13b0b5",
+    "docs/research/experiments/context-oracle-falsification.ts": "0b6eaa2e2672ebbfc7b49e39eec2d76f78e83f1e047cdb816e20bb027ebb5753"
+  },
+  "observations": [
+    {
+      "name": "drop-all-historical-decisions",
+      "rows": [
+        {
+          "caseId": "long_coding_chat",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 1
+        },
+        {
+          "caseId": "tool_heavy_turn",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 3,
+          "pendingReferencesRetained": 2
+        },
+        {
+          "caseId": "attachment_heavy_first_prompt",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 0,
+          "pendingReferencesRetained": 0
+        },
+        {
+          "caseId": "repeated_compaction",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 1
+        },
+        {
+          "caseId": "provider_model_switch",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 1
+        },
+        {
+          "caseId": "bot_mac_telegram_alternation",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 1
+        },
+        {
+          "caseId": "child_initial_fork",
+          "continuationCorrect": false,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 1
+        }
+      ]
+    },
+    {
+      "name": "contradict-markers-but-retain-spelling",
+      "rows": [
+        {
+          "caseId": "long_coding_chat",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 2
+        },
+        {
+          "caseId": "tool_heavy_turn",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 3,
+          "pendingReferencesRetained": 3
+        },
+        {
+          "caseId": "attachment_heavy_first_prompt",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 0,
+          "pendingReferencesRetained": 0
+        },
+        {
+          "caseId": "repeated_compaction",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 2
+        },
+        {
+          "caseId": "provider_model_switch",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 2
+        },
+        {
+          "caseId": "bot_mac_telegram_alternation",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 2
+        },
+        {
+          "caseId": "child_initial_fork",
+          "continuationCorrect": true,
+          "pendingReferencesExpected": 2,
+          "pendingReferencesRetained": 2
+        }
+      ]
+    }
+  ],
+  "limitations": "Known negation passing is an oracle limitation; not evidence of model comprehension. No live model calls or billing."
+}

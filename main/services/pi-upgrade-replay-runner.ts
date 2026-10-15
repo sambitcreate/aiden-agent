@@ -88,11 +88,12 @@ function historicalTurns(prefix: string, count: number, chars = 1_200): AgentMes
 interface ExecutableCase {
   messages: AgentMessage[];
   markers: string[];
+  historicalMarker?: string;
   expectedFallback?: boolean;
   projectionCheck?: (messages: AgentMessage[]) => boolean;
 }
 
-function executableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
+function baseExecutableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
   switch (caseId) {
     case "long_coding_chat":
       return {
@@ -165,6 +166,23 @@ function executableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
   }
 }
 
+function executableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
+  const fixture = baseExecutableCase(caseId);
+  if (caseId === "attachment_heavy_first_prompt") return fixture;
+  const historicalMarker = `HISTORY-${caseId}`;
+  return {
+    ...fixture,
+    historicalMarker,
+    messages: [user(`Earlier decision: preserve ${historicalMarker}.`), ...fixture.messages],
+    markers: [...fixture.markers, historicalMarker],
+  };
+}
+
+export interface PiUpgradeReplayOptions {
+  /** Fault injection for offline replay validation; never invokes a real provider. */
+  transformSummary?: (text: string) => string;
+}
+
 function summary(markers: readonly string[]): string {
   return `## Goal\nPreserve replay continuity.\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] retained\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- ${markers.join(" ") || "bounded fallback"}\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${markers.join(" ") || "attachment fallback"}`;
 }
@@ -172,12 +190,13 @@ function summary(markers: readonly string[]): string {
 function replayResponse(
   markers: readonly string[],
   observed: Set<string>,
+  transformSummary: (text: string) => string,
 ) {
   return (context: { messages: AgentMessage[] }) => {
     const serialized = JSON.stringify(context.messages);
     const received = markers.filter((marker) => serialized.includes(marker));
     for (const marker of received) observed.add(marker);
-    return fauxAssistantMessage(summary(received));
+    return fauxAssistantMessage(transformSummary(summary(received)));
   };
 }
 
@@ -256,7 +275,6 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
   const service = new ContextLifecycleService({
     getChat: async () => chat,
     listChatsByBot: async () => [chat],
-    isBotArchived: async () => false,
     beginChatTurn: () => ({
       chatId: chat.id, turnId: "phase7", ownerId: "telegram:phase7", isActive: () => true,
       reserveAppendPayload: () => undefined, reserveSkillPreparation: () => undefined,
@@ -274,7 +292,7 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
 
 // Replay text must fit the declared summary window. Synthetic usage still crosses
 // the trigger deliberately; these fixtures are not installed/provider acceptance evidence.
-async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: ExecutableCase): Promise<PiUpgradeReplayMeasurement> {
+async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: ExecutableCase, replayOptions: PiUpgradeReplayOptions): Promise<PiUpgradeReplayMeasurement> {
   const provider = fauxProvider({
     api: "openai-completions",
     provider: `replay-${caseId}`,
@@ -286,7 +304,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
   const responseCount = caseId === "repeated_compaction" ? 8 : 4;
   const responses = Array.from(
     { length: responseCount },
-    () => replayResponse(fixture.markers, providerObservedMarkers),
+    () => replayResponse(fixture.markers, providerObservedMarkers, replayOptions.transformSummary ?? ((text) => text)),
   );
   provider.setResponses(responses);
   const models = createModels();
@@ -305,7 +323,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
   const started = performance.now();
   const replayMessages = [
     ...fixture.messages,
-    assistantText(`Replay continuation acknowledged ${fixture.markers.join(" ")}.`),
+    assistantText("Replay continuation acknowledged."),
   ].map((message, index, all): AgentMessage => {
     const timestamp = Date.now() + index;
     if (message.role !== "assistant") return { ...message, timestamp };
@@ -336,7 +354,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     primaryChecks.push(check);
   };
   if (caseId === "repeated_compaction") {
-    const firstCheckpointEnd = 13;
+    const firstCheckpointEnd = 14;
     await appendAndCheck(replayMessages.slice(0, firstCheckpointEnd));
     await appendAndCheck(replayMessages.slice(firstCheckpointEnd), 10_000);
   } else {
@@ -382,6 +400,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
     caseId,
     continuationCorrect:
       retained === fixture.markers.length &&
+      fixture.historicalMarker !== undefined && providerObservedMarkers.has(fixture.historicalMarker) &&
       surfaceCorrect &&
       primaryResults.length === (caseId === "repeated_compaction" ? 2 : 1) &&
       (fixture.projectionCheck?.(fixture.messages) ?? true),
@@ -401,7 +420,7 @@ async function semanticReplay(caseId: PiUpgradeReplayCaseId, fixture: Executable
   };
 }
 
-export async function runPiUpgradeReplayCases(): Promise<PiUpgradeReplayMeasurement[]> {
+export async function runPiUpgradeReplayCases(replayOptions: PiUpgradeReplayOptions = {}): Promise<PiUpgradeReplayMeasurement[]> {
   let migrationFailures = 0;
   const migrationRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-evaluation-migration-"));
   try {
@@ -426,7 +445,7 @@ export async function runPiUpgradeReplayCases(): Promise<PiUpgradeReplayMeasurem
   return Promise.all(PI_UPGRADE_REPLAY_CASE_IDS.map(async (caseId, caseIndex) => {
     const fixture = executableCase(caseId);
     if (caseId !== "attachment_heavy_first_prompt") {
-      const measurement = await semanticReplay(caseId, fixture);
+      const measurement = await semanticReplay(caseId, fixture, replayOptions);
       return { ...measurement, migrationFailures: caseIndex === 0 ? migrationFailures : 0 };
     }
     const started = performance.now();

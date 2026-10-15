@@ -5,10 +5,6 @@
 // The parser is the same remark stack the chat renderer uses, so what is
 // spoken matches what the response displays.
 
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import { TTS_LIMITS } from "../../../renderer/shared/tts.js";
 
 export const SPEECH_TEXT_POLICY_VERSION = 1;
@@ -52,7 +48,33 @@ interface MdastNode {
   checked?: boolean | null;
 }
 
-const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
+interface MarkdownParser {
+  parse(source: string): unknown;
+}
+
+// The remark stack (~44 ms to evaluate) loads on the first read-aloud request
+// instead of on the main-process startup path.
+let parser: MarkdownParser | null = null;
+let parserLoading: Promise<void> | null = null;
+
+/** Load the Markdown parser once; prepareSpeechText requires it. */
+export function ensureSpeechTextParser(): Promise<void> {
+  parserLoading ??= Promise.all([
+    import("unified"),
+    import("remark-parse"),
+    import("remark-gfm"),
+    import("remark-math"),
+  ]).then(
+    ([{ unified }, { default: remarkParse }, { default: remarkGfm }, { default: remarkMath }]) => {
+      parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
+    },
+    (error: unknown) => {
+      parserLoading = null;
+      throw error;
+    },
+  );
+  return parserLoading;
+}
 
 // Modest-table ceiling: larger tables are skipped with a notice instead of a
 // invented summary (plan §5). Generous enough for typical model output.
@@ -265,7 +287,8 @@ class Projection {
 /**
  * Project one response's Markdown body onto speakable plain text plus
  * segmentation and omission notices. Returns null when nothing is speakable.
- * Throws SpeechTextError for bounded-size violations.
+ * Throws SpeechTextError for bounded-size violations. Callers must first
+ * await ensureSpeechTextParser().
  */
 export function prepareSpeechText(input: {
   markdown: string;
@@ -277,6 +300,9 @@ export function prepareSpeechText(input: {
       "source_too_large",
       "This response is too large to read aloud.",
     );
+  }
+  if (!parser) {
+    throw new Error("Speech text parser is not loaded; await ensureSpeechTextParser() first.");
   }
   const projection = new Projection();
   const tree = parser.parse(source) as MdastNode;

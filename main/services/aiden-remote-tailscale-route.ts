@@ -209,12 +209,6 @@ export function aidenTailscaleCanonicalLoopbackPort(
   return aidenTailscaleCanonicalLoopbackTargets(status)[0]?.port;
 }
 
-export function aidenTailscaleCanonicalHandlerTarget(
-  status: AidenTailscaleStatus,
-): string | undefined {
-  return httpsEndpoint(status).handlers[AIDEN_TAILSCALE_PATH]?.Proxy;
-}
-
 export function aidenTailscaleCanonicalLoopbackTargets(
   status: AidenTailscaleStatus,
 ): Array<{ target: string; port: number }> {

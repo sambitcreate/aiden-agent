@@ -6,6 +6,7 @@ import {
   type ArtificialAnalysisUserCache,
 } from "./artificial-analysis-catalog-core.js";
 import type { ArtificialAnalysisCacheStore } from "./artificial-analysis-runtime-core.js";
+import { syncDirectory } from "./durable-fs.js";
 
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
@@ -16,15 +17,6 @@ interface FileArtificialAnalysisCacheStoreOptions {
   onInvalid?(error: Error): void;
   onDurabilityWarning?(error: Error): void;
   syncDirectory?(directory: string): Promise<void>;
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 async function readBoundedFile(file: string, maxBytes: number): Promise<string> {

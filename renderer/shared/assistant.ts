@@ -1,3 +1,5 @@
+import type { ClassifierApprovalDetails } from "./classifier-approval.js";
+import type { ComputerUseAccessApprovalDetails } from "./computer-use-access.js";
 // Shared between main and every renderer: the reserved workspace id that keeps
 // assistant threads out of the main window's sidebar. The sidebar always lists
 // chats filtered by the active workspace, and workspace ids are main-generated,
@@ -205,13 +207,15 @@ export function isSubagentShellApprovalShell(value: unknown): value is SubagentS
 }
 
 export type ToolApprovalDetails =
+  | ClassifierApprovalDetails
   | AssistantAutomationApprovalDetails
   | ScheduledTaskApprovalDetails
   | SubagentWorkspaceWriteApprovalDetails
   | SubagentMcpMutationApprovalDetails
   | SubagentShellApprovalDetails
   | SubagentRunGrantApprovalDetails
-  | FormFillBatchApprovalDetails;
+  | FormFillBatchApprovalDetails
+  | ComputerUseAccessApprovalDetails;
 
 function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean {
   const allowedWhitespace =

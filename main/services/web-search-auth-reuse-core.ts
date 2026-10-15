@@ -26,9 +26,6 @@ export const WEB_SEARCH_EXISTING_AUTH_SOURCE_PROVIDER_IDS = ["openai", "openai-c
  */
 export const WEB_SEARCH_EXISTING_AUTH_SUPPORTED_SOURCE_PROVIDER_IDS = ["openai"] as const;
 
-export const WEB_SEARCH_EXISTING_AUTH_OPENAI_CONSENT_COPY =
-  "Allow Web Search to use the saved OpenAI API key. Searches use your OpenAI API quota and billing; the key stays encrypted on this device and is never copied into Web Search settings." as const;
-
 export type WebSearchExistingAuthSourceProviderId =
   (typeof WEB_SEARCH_EXISTING_AUTH_SOURCE_PROVIDER_IDS)[number];
 
@@ -141,10 +138,6 @@ const SOURCE_AUTH_KINDS: Readonly<
   openai: "api-key",
   "openai-codex": "subscription",
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function own(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -288,16 +281,6 @@ export function normalizeWebSearchExistingAuthBindingDocument(
   };
 }
 
-export function parseWebSearchExistingAuthBindingDocument(
-  value: unknown,
-): WebSearchExistingAuthBindingDocument | null {
-  try {
-    return normalizeWebSearchExistingAuthBindingDocument(value);
-  } catch {
-    return null;
-  }
-}
-
 export function emptyWebSearchExistingAuthBindingDocument(): WebSearchExistingAuthBindingDocument {
   return {
     version: WEB_SEARCH_EXISTING_AUTH_BINDING_VERSION,
@@ -384,3 +367,4 @@ export function webSearchExistingAuthRendererOptions(
     ),
   );
 }
+import { isRecord } from "../shared/guards.js";

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { assertPathInside } from "../shared/path-containment.js";
 import { listConfinedWorkspaceDirectory, type WorkspaceDirectoryIdentities } from "./managed-worktree-file-io.js";
 import { mapWorkspaceMetadata, WORKSPACE_METADATA_CONCURRENCY } from "./workspace-metadata.js";
 import { readRegularFile, type RegularFileIdentity } from "./regular-file-read.js";
@@ -191,10 +192,7 @@ function assertRelativePath(value: string): string {
 }
 
 function assertInRoot(root: string, candidate: string, suppliedPath: string): string {
-  const relative = path.relative(root, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`Path "${suppliedPath}" resolves outside the workspace folder.`);
-  }
+  assertPathInside(root, candidate, `Path "${suppliedPath}" resolves outside the workspace folder.`);
   return candidate;
 }
 

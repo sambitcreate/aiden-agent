@@ -1,0 +1,43 @@
+{
+  "id": "old_only_constraints",
+  "api_contract": "render_events(events) returns a CSV string with header id,label and LF line endings; events are dictionaries with string id and label.",
+  "latest_user_request": "Implement the event export described earlier. The public function is render_events.",
+  "earlier_messages": [
+    {
+      "role": "user",
+      "content": "This is an audit export: preserve input row order and every repeated event. Do not deduplicate or sort. Values may contain commas, quotes, newlines, and Unicode."
+    }
+  ],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_deduplicate": {
+      "expected": "fail",
+      "required_failure": "audit_rows"
+    },
+    "wrong_unquoted": {
+      "expected": "fail",
+      "required_failure": "csv_roundtrip"
+    },
+    "wrong_crlf": {
+      "expected": "fail",
+      "required_failure": "lf_record_framing"
+    },
+    "correct_quote_all": {
+      "expected": "pass"
+    }
+  },
+  "oracle_establishes": [
+    "Ordered duplicate-preserving export, escaped-field roundtrip, empty header, input immutability on supplied cases."
+  ],
+  "oracle_does_not_establish": [
+    "Arbitrary CSV dialects, hostile objects, huge datasets, or whether a model remembered the historical message."
+  ]
+}

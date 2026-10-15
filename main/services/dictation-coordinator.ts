@@ -3,6 +3,7 @@ import {
   HYBRID_TAP_THRESHOLD_MS,
   type DictationActivationMode,
 } from "../../renderer/shared/dictation-preferences.js";
+import { MAX_TIMER_DELAY_MS, transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
 import type { PasteDeliveryResult, PasteOutcome } from "./dictation-paste.js";
 
 export type DictationStage = "idle" | "starting" | "recording" | "transcribing" | "delivering";
@@ -21,6 +22,11 @@ export interface DictationCoordinatorDeps {
   isHoldToTalk?: () => boolean | Promise<boolean>;
   /** Preferred over isHoldToTalk; `hybrid` treats a quick tap as toggle and a hold as push-to-talk. */
   getActivationMode?: () => DictationActivationMode | Promise<DictationActivationMode>;
+  /**
+   * Local-first provider check before the microphone opens. A failure shows its
+   * setup message and never starts recording or warms a model.
+   */
+  resolveVoice?: () => Promise<VoiceResolutionCheck>;
   /** Best-effort preload of the transcription model when a recording starts. */
   warmUp?: () => void | Promise<void>;
   /** User dictionary applied to the final transcript before delivery. */
@@ -38,14 +44,41 @@ export interface DictationCoordinatorDeps {
   ) => (() => void) | null | undefined;
 }
 
+export type VoiceResolutionCheck = { ok: true } | { ok: false; message: string };
+
+export const VOICE_CHECK_FAILED_MESSAGE =
+  "Aiden couldn't check your voice setup. Open Settings → Voice and try again.";
+
 const RESULT_HIDE_DELAY_MS = 1_200;
-const ERROR_HIDE_DELAY_MS = 2_000;
+// The pill window cannot take focus, so an error is readable only while it is
+// on screen. Hold it long enough to read: a floor for short notices, plus
+// roughly reading speed for longer guidance, capped so it never lingers.
+const ERROR_HIDE_MIN_MS = 4_000;
+const ERROR_HIDE_MAX_MS = 10_000;
+const ERROR_HIDE_MS_PER_CHARACTER = 60;
+
+export function errorHideDelayMs(message: string): number {
+  return Math.min(
+    ERROR_HIDE_MAX_MS,
+    Math.max(ERROR_HIDE_MIN_MS, message.length * ERROR_HIDE_MS_PER_CHARACTER),
+  );
+}
 export const WARNING_HIDE_DELAY_MS = 4_000;
 const MAX_TRANSCRIPT_LENGTH = 100_000;
 export const HOLD_RELEASE_GRACE_MS = 50;
-// Cloud renderers fail within 45 seconds. Parakeet owns a 120-second process
-// timeout, so the coordinator's last-resort fence must not preempt local work.
+// Armed when recording stops, before the audio length is known. The audio-scaled
+// fence replaces it at finalize, so a long on-device recording is not preempted.
 export const TRANSCRIPTION_WATCHDOG_MS = 135_000;
+const WATCHDOG_HEADROOM_MS = 10_000;
+
+/**
+ * The last-resort fence must outlast the renderer's own audio-scaled budget.
+ * It is sized with the on-device budget for every provider: that budget is
+ * never shorter than the cloud's, so the fence never preempts either.
+ */
+export function transcriptionWatchdogMs(audioSeconds?: number): number {
+  return Math.min(MAX_TIMER_DELAY_MS, transcriptionBudgetMs("local", audioSeconds) + WATCHDOG_HEADROOM_MS);
+}
 
 /**
  * Serialized dictation lifecycle. Every external event enters the same queue,
@@ -70,6 +103,8 @@ export class DictationCoordinator {
   private operationSequence = 0;
   private operationId: string | null = null;
   private stopHoldWatch: (() => void) | null = null;
+  /** A setup error a freshly created pill missed because it was not subscribed yet. */
+  private replayOnReady: DictationStatePayload | null = null;
 
   constructor(private readonly deps: DictationCoordinatorDeps) {}
 
@@ -132,7 +167,7 @@ export class DictationCoordinator {
     this.watchdogTimer = null;
   }
 
-  private armWatchdog(): void {
+  private armWatchdog(delayMs: number = TRANSCRIPTION_WATCHDOG_MS): void {
     this.clearWatchdogTimer();
     const operationId = this.operationId;
     if (!operationId) return;
@@ -142,14 +177,12 @@ export class DictationCoordinator {
         if (this.stage !== "transcribing" || this.operationId !== operationId) return;
         this.stage = "idle";
         this.operationId = null;
-        this.deps.broadcast({
-          state: "error",
+        this.broadcastError(
           operationId,
-          message: "Transcription took too long. Your recording was stopped safely; try again.",
-        });
-        this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          "Transcription took too long. Your recording was stopped safely; try again.",
+        );
       });
-    }, TRANSCRIPTION_WATCHDOG_MS);
+    }, delayMs);
   }
 
   private endHoldWatch(): void {
@@ -239,6 +272,11 @@ export class DictationCoordinator {
     }
   }
 
+  private broadcastError(operationId: DictationStatePayload["operationId"], message: string): void {
+    this.deps.broadcast({ state: "error", operationId, message });
+    this.scheduleHide(errorHideDelayMs(message));
+  }
+
   private scheduleHide(delayMs: number): void {
     this.clearHideTimer();
     this.hideTimer = this.deps.setTimer(() => {
@@ -276,18 +314,28 @@ export class DictationCoordinator {
       this.clearHideTimer();
       this.clearReleaseTimer();
       if (this.stage === "idle") {
+        this.replayOnReady = null;
         // Freeze the activation behavior for this operation. A Settings edit
         // takes effect on the next recording, never halfway through this one.
         await this.refreshHoldMode();
-        this.stage = "starting";
         this.pendingRelease = false;
         this.pressedAt = pressedAt;
         this.operationSequence += 1;
         this.operationId = `${this.now()}-${this.operationSequence}`;
-        this.startWarmUp();
         // Hybrid must observe the key-up from the start to tell a tap from a
-        // hold; plain hold keeps watching only once capture is live.
+        // hold; plain hold keeps watching only once capture is live. Start it
+        // before the provider check so a slow check cannot delay the key-up.
         if (this.watchesFromPress()) this.beginHoldWatch();
+        // No usable provider: explain the setup step instead of opening the
+        // microphone or warming a model.
+        const check = await this.checkVoice();
+        if (!check.ok) {
+          this.endHoldWatch();
+          await this.showSetupError(check.message);
+          return;
+        }
+        this.stage = "starting";
+        this.startWarmUp();
         try {
           const created = await this.deps.showPill();
           if (created) this.pillReady = false;
@@ -342,6 +390,31 @@ export class DictationCoordinator {
     });
   }
 
+  private async checkVoice(): Promise<VoiceResolutionCheck> {
+    if (!this.deps.resolveVoice) return { ok: true };
+    try {
+      return await this.deps.resolveVoice();
+    } catch (error) {
+      this.deps.logError("Could not resolve the voice provider.", error);
+      return { ok: false, message: VOICE_CHECK_FAILED_MESSAGE };
+    }
+  }
+
+  private async showSetupError(message: string): Promise<void> {
+    const operationId = this.operationId ?? undefined;
+    try {
+      const created = await this.deps.showPill();
+      if (created) this.pillReady = false;
+    } catch (error) {
+      this.deps.logError("Could not show the dictation pill.", error);
+    }
+    this.stage = "idle";
+    this.operationId = null;
+    this.broadcastError(operationId, message);
+    // A cold pill subscribes only after it loads; replay the message then.
+    if (!this.pillReady) this.replayOnReady = { state: "error", operationId, message };
+  }
+
   /** Backward-compatible alias for press(). */
   toggle(): Promise<void> {
     return this.press();
@@ -393,6 +466,12 @@ export class DictationCoordinator {
   ready(): Promise<void> {
     return this.enqueue(() => {
       this.pillReady = true;
+      const replay = this.replayOnReady;
+      this.replayOnReady = null;
+      if (replay && this.stage === "idle" && replay.message) {
+        this.broadcastError(replay.operationId, replay.message);
+        return;
+      }
       if (this.stage === "starting") {
         this.stage = "recording";
         this.deps.broadcast({
@@ -408,7 +487,8 @@ export class DictationCoordinator {
     });
   }
 
-  progress(value: unknown, operationId?: unknown): Promise<void> {
+  /** `audioSeconds` (recording length) lets long on-device clips extend the watchdog. */
+  progress(value: unknown, operationId?: unknown, audioSeconds?: unknown): Promise<void> {
     return this.enqueue(() => {
       if (
         this.stage !== "transcribing" ||
@@ -417,6 +497,9 @@ export class DictationCoordinator {
         (value !== "finalizing" && value !== "fallback-consent" && value !== "fallback")
       ) {
         return;
+      }
+      if (typeof audioSeconds === "number" && Number.isFinite(audioSeconds) && audioSeconds >= 0) {
+        this.armWatchdog(transcriptionWatchdogMs(audioSeconds));
       }
       this.deps.broadcast({ state: value as DictationProgress, operationId });
     });
@@ -441,8 +524,7 @@ export class DictationCoordinator {
         if (!transcript) {
           this.stage = "idle";
           this.operationId = null;
-          this.deps.broadcast({ state: "error", operationId, message: "No speech detected." });
-          this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          this.broadcastError(operationId, "No speech detected.");
           return;
         }
         try {
@@ -483,15 +565,10 @@ export class DictationCoordinator {
         this.stage = "idle";
         this.operationId = null;
         this.deps.logError("Dictation delivery failed.", error);
-        this.deps.broadcast({
-          state: "error",
+        this.broadcastError(
           operationId,
-          message:
-            error instanceof Error && error.message.trim()
-              ? error.message.trim()
-              : "Dictation failed.",
-        });
-        this.scheduleHide(ERROR_HIDE_DELAY_MS);
+          error instanceof Error && error.message.trim() ? error.message.trim() : "Dictation failed.",
+        );
       }
     });
   }
@@ -509,12 +586,10 @@ export class DictationCoordinator {
       this.operationId = null;
       this.pendingRelease = false;
       this.endHoldWatch();
-      this.deps.broadcast({
-        state: "error",
+      this.broadcastError(
         operationId,
-        message: typeof value === "string" && value.trim() ? value.trim() : "Dictation failed.",
-      });
-      this.scheduleHide(ERROR_HIDE_DELAY_MS);
+        typeof value === "string" && value.trim() ? value.trim() : "Dictation failed.",
+      );
     });
   }
 

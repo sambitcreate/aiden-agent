@@ -22,6 +22,12 @@ interface QueueSnapshot {
   editingId?: string;
   /** Set while a chat-wide operation (manual compaction) must finish before delivery. */
   holdReason?: "compaction";
+  /**
+   * Set while this chat is a fork whose summary is pending or failed. Main
+   * refuses its sends until the summary is ready or the user continues
+   * without it, so queued follow-ups wait here in order.
+   */
+  forkSummaryHeld?: boolean;
 }
 
 /** The subset of a compaction result that decides whether held follow-ups may proceed. */
@@ -62,22 +68,6 @@ export class ChatMessageQueue {
     this.publish({
       ...this.snapshot,
       messages: [...this.snapshot.messages, structuredClone(message)],
-    });
-  }
-  replaceWith(message: QueuedChatMessage, requestStop?: () => boolean) {
-    // Validate before discarding the old queue so an invalid redirect cannot
-    // erase already accepted local follow-ups.
-    new ChatMessageQueue().validate(message);
-    if (this.snapshot.sendingId) {
-      throw new Error("Wait for the queued message to finish saving before redirecting.");
-    }
-    if (requestStop && !requestStop()) {
-      throw new Error("The current response has ended. Send your message normally.");
-    }
-    this.publish({
-      messages: [structuredClone(message)],
-      paused: false,
-      holdReason: this.snapshot.holdReason,
     });
   }
   edit(id: string): boolean {
@@ -124,7 +114,17 @@ export class ChatMessageQueue {
     this.publish({ ...this.snapshot, paused: false });
   }
   discard() {
-    this.publish({ messages: [], paused: true, holdReason: this.snapshot.holdReason });
+    this.publish({
+      messages: [],
+      paused: true,
+      holdReason: this.snapshot.holdReason,
+      forkSummaryHeld: this.snapshot.forkSummaryHeld,
+    });
+  }
+  /** Follow the fork's summary state; releasing lets the queue continue in order. */
+  holdForForkSummary(held: boolean) {
+    if (Boolean(this.snapshot.forkSummaryHeld) === held) return;
+    this.publish({ ...this.snapshot, forkSummaryHeld: held || undefined });
   }
   /** Accept follow-ups while compaction runs, but deliver none until it settles. */
   holdForCompaction() {
@@ -157,6 +157,7 @@ export class ChatMessageQueue {
     if (
       this.snapshot.paused ||
       this.snapshot.holdReason ||
+      this.snapshot.forkSummaryHeld ||
       this.snapshot.sendingId ||
       this.snapshot.editingId
     )
@@ -224,6 +225,7 @@ export async function deliverQueuedMessage(input: {
       !input.isCurrent() ||
       input.queue.getSnapshot().paused ||
       input.queue.getSnapshot().holdReason ||
+      input.queue.getSnapshot().forkSummaryHeld ||
       input.queue.getSnapshot().sendingId !== message.id
     ) {
       input.queue.settle(message.id, "deferred");
@@ -256,6 +258,39 @@ export function canSteerQueuedMessage(message: QueuedChatMessage): boolean {
   );
 }
 
+/** Pauses between admission attempts while a run is still starting (about 8.5 s in all). */
+export const RUN_INPUT_START_RETRY_MS: readonly number[] = [
+  50, 100, 200, 400, 750, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000,
+];
+
+/**
+ * Admits run input, waiting out the start of a run this window owns. Stop and
+ * the Steer pill are live as soon as a send begins, but Pi takes input only
+ * once its first turn has started; until then main answers `run_not_active`.
+ * While the run is still this window's live run that answer means "not yet",
+ * so admission is tried again. A run that ended, was stopped, or never starts
+ * within the bound gets the rejection as before. Nothing is written to the
+ * transcript by a rejected attempt, so retrying cannot duplicate guidance.
+ */
+export async function admitRunInputOnceStarted(input: {
+  admit: () => Promise<ChatRunInputAdmissionResult>;
+  /** The run is still this window's own, unsettled and not being stopped. */
+  live: () => boolean;
+  delay?: (ms: number) => Promise<void>;
+  retryMs?: readonly number[];
+}): Promise<ChatRunInputAdmissionResult> {
+  const delay = input.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryMs = input.retryMs ?? RUN_INPUT_START_RETRY_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    const receipt = await input.admit();
+    const notStartedYet =
+      !receipt.admitted && !receipt.committed && receipt.reason === "run_not_active";
+    if (!notStartedYet || attempt >= retryMs.length || !input.live()) return receipt;
+    await delay(retryMs[attempt]!);
+    if (!input.live()) return receipt;
+  }
+}
+
 /** User-facing copy for a steer that main did not write to the transcript. */
 export function steerRejectionMessage(reason: ChatRunInputRejectionReason | undefined): string {
   switch (reason) {
@@ -267,6 +302,22 @@ export function steerRejectionMessage(reason: ChatRunInputRejectionReason | unde
       return "Steer accepts plain text only.";
     default:
       return "The current response has ended. Send your message normally.";
+  }
+}
+
+/**
+ * User-facing copy for run input main saved to the transcript but the run
+ * never took (it ended, was stopped, or was full). iOS and Android show the
+ * same receipts for the same Remote outcomes, so keep the three in step.
+ */
+export function committedRunInputNotice(reason: ChatRunInputRejectionReason | undefined): string {
+  switch (reason) {
+    case "cancelled":
+      return "Saved to the chat — the run was cancelled before it could use it";
+    case "capacity":
+      return "Saved to the chat — the run queue was full";
+    default:
+      return "Saved to the chat — the run ended before it could use it";
   }
 }
 

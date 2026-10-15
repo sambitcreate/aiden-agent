@@ -1,0 +1,314 @@
+// The renderer's view of a Bot's one durable conversation (plan Task 1.4).
+//
+// Main projects the Pi Durable transcript into these entries and streams them
+// over `bots:live:event`; `bots:live:subscribe` returns a full snapshot. Every
+// event carries `(epoch, seq)`: `epoch` changes whenever the Bot's session is
+// reopened, and `seq` increases by one per event within an epoch. A client
+// that sees a different epoch or a gap re-subscribes for a fresh snapshot.
+
+import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
+import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
+import type { ConnectCardEntry } from "./bot-connections.js";
+import type { AskUserQuestionV1 } from "./ask-user-question.js";
+import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
+import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
+
+export type { BotSessionState };
+
+/** The exact reply a routine gives when it has nothing new; kept, never shown. */
+export const BOT_SILENT_REPLY = "[SILENT]";
+
+/** A question the Bot is waiting on: the A–E quick-reply card. One per Bot at a time. */
+export interface BotPendingQuestion {
+  botId: string;
+  /** The durable wait id; the answer is posted against it. */
+  waitId: string;
+  toolCallId: string;
+  questions: AskUserQuestionV1[];
+}
+
+/**
+ * `details` of an answered Bot `ask_user_question` tool result: what the person
+ * chose, as shown in the transcript (`summarizeAskUserQuestionResponse`).
+ */
+export interface BotQuestionAnswerDetails {
+  answerText: string;
+}
+
+/** The person-facing answer text of a question tool result, or undefined. */
+export function botQuestionAnswerText(details: unknown): string | undefined {
+  if (details === null || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const text = (details as { answerText?: unknown }).answerText;
+  return typeof text === "string" && text.trim().length > 0 ? text : undefined;
+}
+
+export interface BotTranscriptToolCall {
+  id: string;
+  name: string;
+  /** The phase this call puts its Bot in (`botToolPhase`). */
+  kind: BotToolPhase;
+  /** Past tense, for recaps: "Read 1 file", "Used Notion". */
+  label: string;
+  /** A short, safe object of the action, built and redacted in main. */
+  detail?: string;
+  /** The connection's display label, for connection tools. */
+  app?: string;
+}
+
+/**
+ * How a tool call ended. `blocked`: the Bot's access or the person refused it
+ * before it ran. `stopped`: the person stopped the reply, or the app restarted,
+ * while it ran; not a problem to report.
+ */
+export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
+
+export type BotTranscriptEntry =
+  | {
+      id: string;
+      type: "user";
+      text: string;
+      imageCount: number;
+      at?: number;
+    }
+  /** The input of a routine run, shown as a label instead of a bubble. */
+  | {
+      id: string;
+      type: "routine";
+      label: string;
+      text: string;
+      at?: number;
+    }
+  | {
+      id: string;
+      type: "assistant";
+      text: string;
+      toolCalls: BotTranscriptToolCall[];
+      stopReason: "stop" | "length" | "toolUse" | "error" | "aborted" | "other";
+      errorMessage?: string;
+      at?: number;
+    }
+  | {
+      id: string;
+      type: "tool_result";
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+      status: BotToolResultStatus;
+      /** From the answer that made the call to its result. */
+      durationMs?: number;
+      at?: number;
+    }
+  | {
+      id: string;
+      type: "notice";
+      notice: "interrupted" | "session_reset";
+    }
+  | {
+      id: string;
+      type: "connect_card";
+      card: ConnectCardEntry;
+    }
+  /** The person's answer to an A–E question, shown where the question was. */
+  | {
+      id: string;
+      type: "question_answer";
+      text: string;
+      at?: number;
+    }
+  /**
+   * A file the Bot wrote or edited in its folder (host-confirmed by the tool
+   * result, never inferred from text). Shown as a chip that opens Files.
+   */
+  | {
+      id: string;
+      type: "file";
+      /** Path inside the Bot's folder, `/`-separated. */
+      path: string;
+      operation: "written" | "edited";
+      at?: number;
+    }
+  /** An image the Bot shared (`share_image`), shown as an image chip. */
+  | {
+      id: string;
+      type: "shared_image";
+      name: string;
+      mimeType: string;
+      size: number;
+      /** Base64 bytes. */
+      data: string;
+    }
+  /**
+   * A reply that failed after the retry policy gave up (spec §10). Shown as
+   * "I couldn't finish that reply." with Retry, which sends `retryText` again
+   * as a new message with a new request id. `retryText` is null when the turn
+   * had no typed message to resend (a routine, the self-intro, photos only).
+   */
+  | {
+      id: string;
+      type: "failed_turn";
+      retryText: string | null;
+      /** The model's error, for the Mac only; never sent to phones. */
+      errorMessage?: string;
+      at?: number;
+    }
+  /** A quiet "Memory updated" line after the Bot saved something. */
+  | { id: string; type: "memory_update"; targets: BotMemoryTarget[]; source: BotMemorySource; at?: number }
+  /** A routine the Bot suggested; the person approves or dismisses it. */
+  | {
+      id: string;
+      type: "routine_proposal";
+      proposal: BotRoutineProposalEntryData;
+      status: BotRoutineProposalStatus;
+      routineId?: string;
+      at?: number;
+    };
+
+/** What a failed turn says, on every client. */
+export const BOT_FAILED_TURN_TEXT = "I couldn't finish that reply.";
+
+/** Id of the failed-turn entry that follows a failed assistant entry. */
+export function botFailedTurnId(assistantEntryId: string): string {
+  return `${assistantEntryId}:failed`;
+}
+
+/**
+ * The failed turn that Retry applies to: the newest entry, when it is a failed
+ * turn with a message to resend. Older failures are history, not actions.
+ */
+export function botRetryableFailedTurn(
+  entries: readonly BotTranscriptEntry[],
+): Extract<BotTranscriptEntry, { type: "failed_turn" }> | null {
+  const last = entries[entries.length - 1];
+  return last?.type === "failed_turn" && last.retryText !== null ? last : null;
+}
+
+/** The step behind the current phase, for the Mac's hover peek and Detailed steps. */
+export interface BotLiveActivityStep {
+  kind: BotToolPhase;
+  /** Present tense, the phase word: "Reading", "Using Notion". */
+  label: string;
+  detail?: string;
+}
+
+/** What a Bot in a running turn is doing now (spec §5). Null when no turn runs. */
+export interface BotLiveActivity {
+  phase: BotActivityPhase;
+  /** The connection's label, for `app`. */
+  app?: string;
+  /** When the turn started, for elapsed time. */
+  startedAt: number;
+  step?: BotLiveActivityStep;
+}
+
+/** A message waiting for the running turn: a follow-up (queued) or a steer (joins at the next step). */
+export interface BotQueuedMessage {
+  /** The durable submission id; Remove withdraws it. */
+  submissionId: string;
+  mode: "steer" | "followUp";
+  text: string;
+  imageCount: number;
+}
+
+export interface BotLiveSnapshot {
+  botId: string;
+  epoch: string;
+  seq: number;
+  entries: BotTranscriptEntry[];
+  /** Text of the reply being written right now, or null. */
+  partial: string | null;
+  state: BotSessionState;
+  /** The question the Bot is waiting on, or null. */
+  question: BotPendingQuestion | null;
+  /** What the Bot is doing in the running turn, or null. */
+  activity: BotLiveActivity | null;
+  /** Messages waiting for the running turn, oldest first. */
+  queued: BotQueuedMessage[];
+}
+
+export type BotLiveEventBody =
+  | { type: "entry"; entry: BotTranscriptEntry }
+  | { type: "partial"; text: string | null }
+  | { type: "state"; state: BotSessionState }
+  | { type: "question"; question: BotPendingQuestion | null }
+  | { type: "activity"; activity: BotLiveActivity | null }
+  | { type: "queued"; queued: BotQueuedMessage[] }
+  /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
+  | { type: "snapshot"; snapshot: BotLiveSnapshot };
+
+export type BotLiveEvent = { botId: string; epoch: string; seq: number } & BotLiveEventBody;
+
+/** What a Bots sidebar row shows, read from the same projection. */
+export interface BotLiveSummary {
+  botId: string;
+  preview: string | null;
+  updatedAt: number | null;
+  state: BotSessionState;
+  /** An approval or an A–E question is waiting on the person ("Needs you"). */
+  needsYou: boolean;
+  /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
+  lastReplyAt: number | null;
+}
+
+/** When the newest reply with visible text arrived, or null when none has a time. */
+export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "assistant" && entry.text.trim() && entry.at !== undefined) return entry.at;
+  }
+  return null;
+}
+
+/** The last thing worth previewing in a list row: the newest visible message text. */
+export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { text: string; at?: number } | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "assistant" && entry.text.trim()) {
+      return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "user" && (entry.text.trim() || entry.imageCount > 0)) {
+      const text = entry.text.trim() ? oneLine(entry.text) : entry.imageCount === 1 ? "Photo" : `${entry.imageCount} photos`;
+      return { text, ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "question_answer") {
+      return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "routine") {
+      return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+  }
+  return null;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * Apply one event to a snapshot. Returns null when the event cannot be applied
+ * (another epoch, or a gap in `seq`): the caller re-subscribes.
+ */
+export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent): BotLiveSnapshot | null {
+  if (event.botId !== snapshot.botId) return snapshot;
+  if (event.type === "snapshot") return event.snapshot;
+  if (event.epoch !== snapshot.epoch) return null;
+  if (event.seq <= snapshot.seq) return snapshot;
+  if (event.seq !== snapshot.seq + 1) return null;
+  switch (event.type) {
+    case "entry":
+      return {
+        ...snapshot,
+        seq: event.seq,
+        entries: [...snapshot.entries.filter((entry) => entry.id !== event.entry.id), event.entry],
+      };
+    case "partial":
+      return { ...snapshot, seq: event.seq, partial: event.text };
+    case "state":
+      return { ...snapshot, seq: event.seq, state: event.state };
+    case "question":
+      return { ...snapshot, seq: event.seq, question: event.question };
+    case "activity":
+      return { ...snapshot, seq: event.seq, activity: event.activity };
+    case "queued":
+      return { ...snapshot, seq: event.seq, queued: event.queued };
+  }
+}

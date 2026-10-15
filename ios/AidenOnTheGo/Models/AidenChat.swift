@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import ImageIO
 
-private func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
+func aidenDecodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
     _ type: Value.Type,
     from values: KeyedDecodingContainer<Key>,
     forKey key: Key
@@ -27,6 +27,9 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let reasoning: String?
     let attachments: [AidenMessageAttachment]?
     let htmlArtifacts: [AidenHtmlArtifact]?
+    /// Additive in contract revision 28: the inline visuals this reply drew, in
+    /// reply order. Entries this client cannot parse are dropped individually.
+    let visuals: [AidenChatVisual]?
     let appPanels: [AidenAppControlPanel]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
@@ -39,6 +42,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         reasoning: String? = nil,
         attachments: [AidenMessageAttachment]? = nil,
         htmlArtifacts: [AidenHtmlArtifact]? = nil,
+        visuals: [AidenChatVisual]? = nil,
         appPanels: [AidenAppControlPanel]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
@@ -50,6 +54,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.reasoning = reasoning
         self.attachments = attachments
         self.htmlArtifacts = htmlArtifacts
+        self.visuals = visuals
         self.appPanels = appPanels
         self.outcome = outcome
         self.timeline = timeline
@@ -72,6 +77,10 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .htmlArtifacts
         )
+        // Additive and lenient: a malformed list or entry never rejects the
+        // message, so an older or newer Mac's visuals cannot hide the reply.
+        visuals = (try? values.decodeIfPresent([AidenLossyChatVisual].self, forKey: .visuals))
+            .map(AidenChatVisual.deduplicated)
         let panels = try? values.decode([AidenAppControlPanel].self, forKey: .appPanels)
         appPanels = role == .assistant && (panels?.count ?? 0) <= 4 && (panels?.allSatisfy(\.isWireSafe) ?? false) && Set(panels?.map(\.id) ?? []).count == panels?.count ? panels : nil
         outcome = try aidenDecodeOptionalNonNull(
@@ -96,6 +105,8 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             && (attachments?.allSatisfy(\.isWireSafe) ?? true)
             && (htmlArtifacts?.count ?? 0) <= 40
             && (htmlArtifacts?.allSatisfy(\.isWireSafe) ?? true)
+            && (visuals?.count ?? 0) <= AidenChatVisual.maximumPerMessage
+            && (visuals?.allSatisfy(\.isWireSafe) ?? true)
             && (outcome?.isWireSafe ?? true)
             // Generation timelines originate in JavaScript, where String.length
             // measures UTF-16 code units. Keep that wire offset convention while
@@ -104,7 +115,185 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, reasoning, attachments, htmlArtifacts, appPanels, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, visuals, appPanels, outcome, timeline, createdAt
+    }
+}
+
+/// One inline visual (contract revision 28): a native `render_ui` component or
+/// a sandboxed `render_artifact` page drawn on the Mac. Phones never receive
+/// its markup; they show the Mac's snapshot image, its text description, or
+/// its title, at the timeline tool step that drew it.
+struct AidenChatVisual: Codable, Identifiable, Equatable, Sendable {
+    static let maximumPerMessage = 40
+    static let maximumTitleLength = 120
+    static let maximumFallbackTextLength = 4_000
+    static let snapshotAttachmentPrefix = "visual-snapshot_"
+
+    enum Kind: String, Codable, Sendable {
+        case ui
+        case html
+        /// A kind a newer Mac introduced; it still shows its snapshot or text.
+        case other
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Kind(rawValue: raw) ?? .other
+        }
+    }
+
+    enum Layout: String, Codable, Sendable {
+        case wide
+    }
+
+    let id: String
+    let kind: Kind
+    let title: String
+    let toolCallId: String?
+    let fallbackText: String?
+    let snapshotAttachmentId: String?
+    let layout: Layout?
+
+    init(
+        id: String,
+        kind: Kind,
+        title: String,
+        toolCallId: String? = nil,
+        fallbackText: String? = nil,
+        snapshotAttachmentId: String? = nil,
+        layout: Layout? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.toolCallId = toolCallId
+        self.fallbackText = fallbackText
+        self.snapshotAttachmentId = snapshotAttachmentId
+        self.layout = layout
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        title = try values.decode(String.self, forKey: .title)
+        toolCallId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .toolCallId)
+        fallbackText = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .fallbackText)
+        snapshotAttachmentId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .snapshotAttachmentId)
+        // Layout is a presentation hint; an unknown value is ignored rather
+        // than costing the visual.
+        layout = try? values.decodeIfPresent(Layout.self, forKey: .layout)
+        guard isWireSafe else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "Chat visual contains an unsafe identity, title, tool call, or description."
+            )
+        }
+    }
+
+    var isWireSafe: Bool {
+        Self.isSafeIdentifier(id)
+            && !title.isEmpty
+            && title.unicodeScalars.count <= Self.maximumTitleLength
+            && (toolCallId.map(Self.isToolCallIdentifier) ?? true)
+            && (fallbackText.map { !$0.isEmpty && $0.unicodeScalars.count <= Self.maximumFallbackTextLength } ?? true)
+            && (snapshotAttachmentId.map(Self.isSafeIdentifier) ?? true)
+    }
+
+    /// Keeps the first entry per id, in reply order, so row identities stay unique.
+    static func deduplicated(_ entries: [AidenLossyChatVisual]) -> [AidenChatVisual] {
+        var seen = Set<String>()
+        return entries.compactMap(\.value).filter { seen.insert($0.id).inserted }
+    }
+
+    private static func isSafeIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.unicodeScalars.count <= 256 && value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 46, 58, 95: return true
+            default: return false
+            }
+        }
+    }
+
+    /// `call-<n>` with a positive decimal `n`, as the Mac's timeline names tool calls.
+    private static func isToolCallIdentifier(_ value: String) -> Bool {
+        guard value.hasPrefix("call-") else { return false }
+        let digits = value.dropFirst(5)
+        return !digits.isEmpty && digits.count <= 16 && digits.first != "0"
+            && digits.unicodeScalars.allSatisfy { (48...57).contains($0.value) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, toolCallId, fallbackText, snapshotAttachmentId, layout
+    }
+}
+
+/// Decodes one `visuals` entry without letting a malformed entry fail the list.
+struct AidenLossyChatVisual: Decodable {
+    let value: AidenChatVisual?
+
+    init(from decoder: Decoder) throws {
+        value = try? AidenChatVisual(from: decoder)
+    }
+}
+
+/// Presentation decisions for inline visuals, kept pure so they can be tested
+/// without rendering the transcript.
+enum AidenChatVisualPresentation {
+    /// Whether an attachment is a visual's snapshot rather than a user-facing
+    /// image: either a visual names it, or it carries the reserved id prefix.
+    static func isSnapshotAttachment(_ attachment: AidenMessageAttachment, in message: AidenChatMessage) -> Bool {
+        attachment.id.hasPrefix(AidenChatVisual.snapshotAttachmentPrefix)
+            || (message.visuals?.contains { $0.snapshotAttachmentId == attachment.id } ?? false)
+    }
+
+    /// The attachments the ordinary attachment strip shows: everything except
+    /// snapshots, which appear once, inline at their visual.
+    static func stripAttachments(for message: AidenChatMessage) -> [AidenMessageAttachment] {
+        (message.attachments ?? []).filter { !isSnapshotAttachment($0, in: message) }
+    }
+
+    /// The image attachment holding a visual's snapshot, when the message
+    /// carries one that the image views can display.
+    static func snapshotAttachment(
+        for visual: AidenChatVisual,
+        in message: AidenChatMessage
+    ) -> AidenMessageAttachment? {
+        guard let id = visual.snapshotAttachmentId, let attachments = message.attachments else { return nil }
+        let matches = attachments.filter { $0.id == id }
+        guard matches.count == 1, let attachment = matches.first,
+              AidenMessageAttachmentPresentation.isDisplayableImage(attachment)
+        else { return nil }
+        return attachment
+    }
+
+    /// The visuals that get an inline row, in reply order. An html visual
+    /// without a usable snapshot gets none: its "Can't view on this device"
+    /// card already represents it. Other kinds always get a row, falling back
+    /// from snapshot to description to title.
+    static func rowVisuals(in message: AidenChatMessage) -> [AidenChatVisual] {
+        (message.visuals ?? []).filter { visual in
+            visual.kind != .html || snapshotAttachment(for: visual, in: message) != nil
+        }
+    }
+
+    /// HTML artifacts that still need the "Can't view on this device" card:
+    /// those without a visual whose snapshot this message can show.
+    static func unviewableHtmlArtifacts(in message: AidenChatMessage) -> [AidenHtmlArtifact] {
+        let replaced = Set((message.visuals ?? []).compactMap { visual in
+            snapshotAttachment(for: visual, in: message) == nil ? nil : visual.id
+        })
+        return (message.htmlArtifacts ?? []).filter { !replaced.contains($0.id) }
+    }
+}
+
+enum AidenMessageAttachmentPresentation {
+    /// An attachment the inline image views decode: a bounded, non-empty PNG or JPEG image.
+    static func isDisplayableImage(_ attachment: AidenMessageAttachment) -> Bool {
+        attachment.kind == .image
+            && (attachment.mimeType == "image/jpeg" || attachment.mimeType == "image/png")
+            && attachment.size > 0
+            && attachment.size <= AidenAttachmentImageValidation.maximumBytes
     }
 }
 
@@ -185,6 +374,125 @@ struct AidenAgentLineChanges: Codable, Equatable, Sendable {
     let deletions: Int
 }
 
+/// What the owner chose in a settled `ask_user_question` card, carried on its
+/// completed timeline step so the transcript can show the questions and
+/// answers in place of the generic activity line. Decoding throws for any
+/// recap the desktop would reject; `AidenAgentStep` then drops only the recap.
+struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
+    static let toolName = "ask_user_question"
+    static let maxItems = 4
+    static let maxOptions = 5
+    static let maxQuestionLength = 1_000
+    static let maxHeaderLength = 16
+    static let maxLabelLength = 60
+    static let maxCustomLength = 1_000
+
+    enum Outcome: String, Codable, Sendable {
+        case answered
+        case dismissed
+        case expired
+    }
+
+    struct Item: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case option
+            case multi
+            case custom
+            case skipped
+        }
+
+        /// How the answer line under a question reads.
+        enum Answer: Equatable, Sendable {
+            /// One option label, or a multi-select's labels joined with ", ".
+            case chosen(String)
+            /// The owner's own words, quoted.
+            case custom(String)
+            /// A question left without an answer.
+            case unanswered(String)
+        }
+
+        let question: String
+        let header: String
+        let kind: Kind
+        let answers: [String]
+
+        func answer(for outcome: Outcome) -> Answer {
+            switch kind {
+            case .skipped:
+                switch outcome {
+                case .answered: return .unanswered("Skipped")
+                case .dismissed: return .unanswered("Dismissed")
+                case .expired: return .unanswered("No answer")
+                }
+            case .custom:
+                return .custom("\u{201C}\(answers.first ?? "")\u{201D}")
+            case .option, .multi:
+                return .chosen(answers.joined(separator: ", "))
+            }
+        }
+    }
+
+    let version: Int
+    let outcome: Outcome
+    let items: [Item]
+
+    init(version: Int = 1, outcome: Outcome, items: [Item]) {
+        self.version = version
+        self.outcome = outcome
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        outcome = try values.decode(Outcome.self, forKey: .outcome)
+        items = try values.decode([Item].self, forKey: .items)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid ask_user_question recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, outcome, items
+    }
+
+    var isValid: Bool {
+        guard version == 1, (1...Self.maxItems).contains(items.count) else { return false }
+        return items.allSatisfy { item in
+            guard Self.isSafeText(item.question, maximum: Self.maxQuestionLength),
+                  Self.isSafeText(item.header, maximum: Self.maxHeaderLength) else { return false }
+            switch item.kind {
+            case .skipped:
+                return item.answers.isEmpty
+            case .option:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxLabelLength)
+            case .multi:
+                return outcome == .answered
+                    && (1...Self.maxOptions).contains(item.answers.count)
+                    && Set(item.answers).count == item.answers.count
+                    && item.answers.allSatisfy { Self.isSafeText($0, maximum: Self.maxLabelLength) }
+            case .custom:
+                return outcome == .answered && item.answers.count == 1
+                    && Self.isSafeText(item.answers[0], maximum: Self.maxCustomLength)
+            }
+        }
+    }
+
+    /// Non-blank, within `maximum` code points, and free of C0 controls other
+    /// than tab and newline, and of DEL.
+    private static func isSafeText(_ value: String, maximum: Int) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && value.unicodeScalars.count <= maximum
+            && !value.unicodeScalars.contains { scalar in
+                (scalar.value < 32 && scalar.value != 9 && scalar.value != 10) || scalar.value == 127
+            }
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -209,6 +517,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let detail: String?
     let lineChanges: AidenAgentLineChanges?
     let producedFile: AidenProducedFile?
+    /// Present only on a completed `ask_user_question` step.
+    let questionnaire: AidenQuestionnaireRecap?
 
     init(
         id: String,
@@ -228,7 +538,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         target: String?,
         detail: String?,
         lineChanges: AidenAgentLineChanges?,
-        producedFile: AidenProducedFile? = nil
+        producedFile: AidenProducedFile? = nil,
+        questionnaire: AidenQuestionnaireRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -248,6 +559,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.detail = detail
         self.lineChanges = lineChanges
         self.producedFile = producedFile
+        self.questionnaire = questionnaire
     }
 
     init(from decoder: Decoder) throws {
@@ -282,21 +594,38 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .lineChanges
         )
+        // A malformed or misplaced recap is dropped; the step itself still
+        // renders as an ordinary activity line.
+        if kind == .tool, toolName == AidenQuestionnaireRecap.toolName, status == .completed {
+            questionnaire = try? aidenDecodeOptionalNonNull(
+                AidenQuestionnaireRecap.self,
+                from: values,
+                forKey: .questionnaire
+            )
+        } else {
+            questionnaire = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire
     }
 
     var isActive: Bool {
         kind == .thinking ? finishedAt == nil : status?.isActive == true
     }
+
+    /// A settled questionnaire reads as its recap, not as an activity line, so
+    /// it leaves activity groups and their tool-call tally.
+    var isQuestionnaire: Bool {
+        questionnaire != nil
+    }
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -304,7 +633,15 @@ struct AidenChronologicalRow: Identifiable, Equatable {
 }
 
 enum AidenChronologicalProjection {
-    static func rows(text: String, reasoning: String, timeline: AidenGenerationTimeline?) -> [AidenChronologicalRow]? {
+    /// `visuals` come only from a committed message: each follows the tool row
+    /// whose step drew it, and any whose step is missing trail the reply. The
+    /// live stream passes none, since snapshots exist only after commit.
+    static func rows(
+        text: String,
+        reasoning: String,
+        timeline: AidenGenerationTimeline?,
+        visuals: [AidenChatVisual] = []
+    ) -> [AidenChronologicalRow]? {
         guard let timeline, timeline.version == 3,
               timeline.steps.allSatisfy({ $0.contentOffset != nil }),
               timeline.isRendererSafe(contentLength: text.utf16.count, reasoningLength: reasoning.utf16.count)
@@ -326,6 +663,8 @@ enum AidenChronologicalProjection {
               reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         let steps = timeline.steps
+        let visualToolCalls = Set(visuals.compactMap(\.toolCallId))
+        var placedVisuals = Set<Int>()
         var result: [AidenChronologicalRow] = []
         var cursor = 0
         var index = 0
@@ -344,13 +683,27 @@ enum AidenChronologicalProjection {
                 let slice = start.map { reasoningValue.substring(with: NSRange(location: $0, length: end - $0)) } ?? ""
                 result.append(.init(id: "reasoning-\(step.id)", kind: .reasoning, text: slice, steps: [step]))
                 index += 1
+            } else if step.isQuestionnaire {
+                result.append(.init(id: "questionnaire-\(step.id)", kind: .questionnaire, text: "", steps: [step]))
+                index += 1
             } else {
                 var group: [AidenAgentStep] = []
-                while index < steps.count && steps[index].kind == .tool && steps[index].contentOffset == offset {
-                    group.append(steps[index])
+                while index < steps.count && steps[index].kind == .tool && !steps[index].isQuestionnaire
+                        && steps[index].contentOffset == offset {
+                    let groupedStep = steps[index]
+                    group.append(groupedStep)
                     index += 1
+                    // A step that drew a visual closes its group so the visual
+                    // sits directly beneath it.
+                    if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+                let groupCalls = Set(group.compactMap(\.toolCallId))
+                for (visualIndex, visual) in visuals.enumerated()
+                where !placedVisuals.contains(visualIndex) && visual.toolCallId.map(groupCalls.contains) == true {
+                    placedVisuals.insert(visualIndex)
+                    result.append(visualRow(visual, at: visualIndex))
+                }
             }
             cursor = offset
         }
@@ -360,7 +713,14 @@ enum AidenChronologicalProjection {
                 result.append(.init(id: "text-\(cursor)", kind: .text, text: slice, steps: []))
             }
         }
+        for (visualIndex, visual) in visuals.enumerated() where !placedVisuals.contains(visualIndex) {
+            result.append(visualRow(visual, at: visualIndex))
+        }
         return result
+    }
+
+    private static func visualRow(_ visual: AidenChatVisual, at index: Int) -> AidenChronologicalRow {
+        .init(id: "visual-\(index)-\(visual.id)", kind: .visual(visual), text: "", steps: [])
     }
 }
 
@@ -590,8 +950,20 @@ enum AidenAgentActivityPresentation {
         "browser_wait_for": ("Waiting for page", "Waited for page"),
         "browser_recording_start": ("Starting browser recording", "Started browser recording"),
         "browser_recording_stop": ("Stopping browser recording", "Stopped browser recording"),
+        "device_list": ("Listing simulators", "Listed simulators"),
+        "device_open": ("Opening simulator", "Opened simulator"),
+        "device_screenshot": ("Taking simulator screenshot", "Took simulator screenshot"),
+        "device_close": ("Closing simulator", "Closed simulator"),
         "vcc_recall": ("Recalling chat history", "Recalled chat history"),
         "compact_context": ("Compacting context", "Compacted context"),
+        "generate_image": ("Generating image", "Generated image"),
+        // Activity an ACP agent (for example, Google Antigravity) ran itself.
+        "delete_file": ("Deleting", "Deleted"),
+        "move_file": ("Moving", "Moved"),
+        "web_fetch": ("Fetching web page", "Fetched web page"),
+        "agent_subagents": ("Running subagents", "Ran subagents"),
+        "agent_tool": ("Using an agent tool", "Used an agent tool"),
+        "agent_context_rebuilt": ("Starting a fresh agent session", "Started a fresh agent session"),
     ]
 
     /// Exactly one compaction: its line carries every metric. Repeated compactions
@@ -645,7 +1017,29 @@ enum AidenAgentActivityPresentation {
         _ timeline: AidenGenerationTimeline,
         reasoningVisible: Bool
     ) -> [AidenAgentStep] {
-        reasoningVisible ? timeline.steps.filter { $0.kind == .tool } : timeline.steps
+        timeline.steps.filter { step in
+            !step.isQuestionnaire && (!reasoningVisible || step.kind == .tool)
+        }
+    }
+
+    /// Settled questionnaires, in timeline order, for transcripts that show
+    /// their recap after the activity feed instead of in chronological rows.
+    static func questionnaireSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter(\.isQuestionnaire) ?? []
+    }
+
+    /// Whether a fallback transcript lists the stream's live tool rows. Once
+    /// the timeline has a tool step, the activity feed or a recap card already
+    /// shows each call, so the live rows would only repeat them.
+    static func showsLiveToolRows(
+        _ tools: [AidenLiveTool],
+        timeline: AidenGenerationTimeline?,
+        reasoningVisible: Bool
+    ) -> Bool {
+        guard !tools.isEmpty else { return false }
+        guard let timeline else { return true }
+        return activitySteps(timeline, reasoningVisible: reasoningVisible).isEmpty
+            && questionnaireSteps(timeline).isEmpty
     }
 
     static func line(for step: AidenAgentStep) -> String {
@@ -684,7 +1078,7 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool }
+        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
         guard !tools.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }
@@ -970,6 +1364,231 @@ enum AidenAttachmentUpload: Encodable, Equatable, Sendable {
     }
 }
 
+/// Where a fork cuts the source transcript (contract revision 21). `after`
+/// keeps the chosen settled reply; `before` keeps everything strictly before
+/// the chosen prompt so it can be edited and resent in the fork.
+enum AidenChatForkPosition: String, Codable, Equatable, Sendable {
+    case after
+    case before
+}
+
+enum AidenChatForkSummaryState: String, Codable, Equatable, Sendable {
+    case pending
+    case ready
+    case failed
+}
+
+/// "Fork with summary": what happened in the source chat after the cut,
+/// summarized for the fork's model context. Decoding is exact-shape and
+/// throws on any violation so the lineage can drop a damaged summary alone.
+/// File paths the summary touched stay on the Mac, and `error` is a short
+/// phrase in Aiden's own words rather than a provider error.
+struct AidenChatForkSummary: Codable, Equatable, Sendable {
+    static let maximumFocusLength = 1_000
+    static let maximumTextLength = 32_000
+    static let maximumErrorLength = 1_000
+
+    let state: AidenChatForkSummaryState
+    let afterMessageId: String
+    /// The user's own "Focus the summary on…" text, kept so Retry asks the
+    /// same thing.
+    let focus: String?
+    let text: String?
+    let error: String?
+
+    init(
+        state: AidenChatForkSummaryState,
+        afterMessageId: String,
+        focus: String? = nil,
+        text: String? = nil,
+        error: String? = nil
+    ) {
+        self.state = state
+        self.afterMessageId = afterMessageId
+        self.focus = focus
+        self.text = text
+        self.error = error
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let allKeys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        guard allKeys.allSatisfy({ CodingKeys(stringValue: $0.stringValue) != nil }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: values,
+                debugDescription: "Fork summaries carry no additional properties."
+            )
+        }
+        state = try values.decode(AidenChatForkSummaryState.self, forKey: .state)
+        afterMessageId = try values.decode(String.self, forKey: .afterMessageId)
+        focus = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .focus)
+        text = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .text)
+        error = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .error)
+
+        let afterIdScalars = afterMessageId.unicodeScalars
+        guard !afterIdScalars.isEmpty,
+              afterIdScalars.count <= 160,
+              afterIdScalars.allSatisfy(Self.isSummaryIdentifierScalar),
+              Self.isBounded(focus, maximum: Self.maximumFocusLength),
+              Self.isBounded(text, maximum: Self.maximumTextLength),
+              Self.isBounded(error, maximum: Self.maximumErrorLength) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .afterMessageId,
+                in: values,
+                debugDescription: "Fork summary fields are out of bounds."
+            )
+        }
+    }
+
+    private static func isBounded(_ value: String?, maximum: Int) -> Bool {
+        guard let value else { return true }
+        return !value.isEmpty && value.unicodeScalars.count <= maximum
+    }
+
+    private static func isSummaryIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 45, 48...57, 65...90, 95, 97...122:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state, afterMessageId, focus, text, error
+    }
+}
+
+/// Provenance recorded on a chat created by Fork. The source chat may since
+/// have been deleted. Chat rows carry it without the summary.
+struct AidenChatForkLineage: Codable, Equatable, Sendable {
+    let chatId: String
+    let messageId: String
+    let position: AidenChatForkPosition
+    let at: Date
+    let summary: AidenChatForkSummary?
+
+    init(
+        chatId: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        at: Date,
+        summary: AidenChatForkSummary? = nil
+    ) {
+        self.chatId = chatId
+        self.messageId = messageId
+        self.position = position
+        self.at = at
+        self.summary = summary
+    }
+
+    /// The row projection: rows never carry the summary.
+    var withoutSummary: Self {
+        Self(chatId: chatId, messageId: messageId, position: position, at: at)
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        messageId = try values.decode(String.self, forKey: .messageId)
+        position = try values.decode(AidenChatForkPosition.self, forKey: .position)
+        // Wire payloads use strict RFC 3339 strings; the local cache encodes
+        // through its ISO 8601 strategy, which is also a strict RFC 3339 string.
+        at = try values.decode(AidenRemoteTimestamp.self, forKey: .at).date
+        // A damaged summary is dropped on its own: the fork stays a plain fork.
+        summary = try? values.decodeIfPresent(AidenChatForkSummary.self, forKey: .summary)
+        guard Self.isLineageIdentifier(chatId), Self.isLineageIdentifier(messageId) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .chatId,
+                in: values,
+                debugDescription: "Fork lineage identifiers must be bounded opaque identifiers."
+            )
+        }
+    }
+
+    private static func isLineageIdentifier(_ value: String) -> Bool {
+        let scalars = value.unicodeScalars
+        return !scalars.isEmpty
+            && scalars.count <= AidenRemoteProtocol.maxIdentifierLength
+            && scalars.allSatisfy { scalar in
+                switch scalar.value {
+                case 45, 46, 48...58, 65...90, 95, 97...122:
+                    return true
+                default:
+                    return false
+                }
+            }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatId, messageId, position, at, summary
+    }
+}
+
+private struct AidenChatForkAnyKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
+/// Only for `before` forks: the chosen prompt to edit and resend in the fork.
+struct AidenChatForkPrefill: Decodable, Equatable, Sendable {
+    static let maximumTextLength = 200_000
+    static let maximumAttachments = 10
+
+    let text: String
+    let attachments: [AidenAttachmentReference]
+
+    init(text: String, attachments: [AidenAttachmentReference] = []) {
+        self.text = text
+        self.attachments = attachments
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        text = try values.decode(String.self, forKey: .text)
+        attachments = try aidenDecodeOptionalNonNull(
+            [AidenAttachmentReference].self,
+            from: values,
+            forKey: .attachments
+        ) ?? []
+        guard text.unicodeScalars.count <= Self.maximumTextLength,
+              attachments.count <= Self.maximumAttachments else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .text,
+                in: values,
+                debugDescription: "Fork prefill exceeds its wire bounds."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, attachments
+    }
+}
+
+struct AidenChatForkResult: Decodable, Equatable, Sendable {
+    let chat: AidenChat
+    let prefill: AidenChatForkPrefill?
+
+    init(chat: AidenChat, prefill: AidenChatForkPrefill? = nil) {
+        self.chat = chat
+        self.prefill = prefill
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chat = try values.decode(AidenChat.self, forKey: .chat)
+        prefill = try aidenDecodeOptionalNonNull(AidenChatForkPrefill.self, from: values, forKey: .prefill)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chat, prefill
+    }
+}
+
 struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var workspaceId: String
@@ -982,6 +1601,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var updatedAt: Date
     var revision: String
     var titlePending: Bool? = nil
+    /// Additive in contract revision 21: present on a chat created by Fork.
+    var forkedFrom: AidenChatForkLineage? = nil
 
     // Presentation-only receipt overlay; excluded from the canonical wire/cache encoding.
     var localTitleOverride: String? = nil
@@ -1001,7 +1622,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         revision: String,
-        titlePending: Bool? = nil
+        titlePending: Bool? = nil,
+        forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1014,6 +1636,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.revision = revision
         self.titlePending = titlePending
+        self.forkedFrom = forkedFrom
     }
 
     init(from decoder: Decoder) throws {
@@ -1035,6 +1658,9 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         updatedAt = updatedTimestamp.date
         revision = try values.decode(String.self, forKey: .revision)
         titlePending = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .titlePending)
+        // Additive lineage: absent on older Macs; an invalid value is dropped
+        // rather than rejecting the chat.
+        forkedFrom = try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom)
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1150,7 +1776,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         }
     }
 
-    private static func isPathSafeOpaqueIdentifier(_ value: String) -> Bool {
+    static func isPathSafeOpaqueIdentifier(_ value: String) -> Bool {
         value.unicodeScalars.allSatisfy { scalar in
             switch scalar.value {
             case 48...57, 65...90, 97...122, 45, 46, 58, 95:
@@ -1163,7 +1789,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, botId, title, providerId, modelId, messages
-        case createdAt, updatedAt, revision, titlePending
+        case createdAt, updatedAt, revision, titlePending, forkedFrom
     }
 }
 
@@ -1188,6 +1814,31 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
         case .idle: "Idle"
         }
     }
+
+    /// Triage rank used to order chat lists, most urgent first. Mirrors the
+    /// desktop Needs attention tiers: a chat blocked on the user outranks one
+    /// that is merely working, and everything else keeps its existing order.
+    var attentionRank: Int {
+        switch self {
+        case .needsApproval: 0
+        case .needsInput: 1
+        case .working: 2
+        case .idle: 3
+        }
+    }
+}
+
+/// Moves chats that need the user, then working chats, ahead of idle ones.
+/// Ties keep the incoming (recency) order, so rows do not jitter between
+/// refreshes.
+func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
+    chats.enumerated()
+        .sorted { left, right in
+            let leftRank = left.element.displayRowState.attentionRank
+            let rightRank = right.element.displayRowState.attentionRank
+            return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
+        }
+        .map(\.element)
 }
 
 struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
@@ -1203,6 +1854,9 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     var rowState: AidenChatRowState?
     /// True only when assistant output arrived after the chat was last viewed.
     var unread: Bool
+    /// Additive in contract revision 21: lineage for the fork glyph. Rows
+    /// never carry the summary.
+    var forkedFrom: AidenChatForkLineage?
 
     init(
         id: String,
@@ -1214,7 +1868,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         revision: String,
         activity: AidenChatSummaryActivity,
         rowState: AidenChatRowState? = nil,
-        unread: Bool = false
+        unread: Bool = false,
+        forkedFrom: AidenChatForkLineage? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1226,6 +1881,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.activity = activity
         self.rowState = rowState
         self.unread = unread
+        self.forkedFrom = forkedFrom?.withoutSummary
     }
 
     /// The row state to render. The local activity signal is authoritative for
@@ -1248,7 +1904,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
             createdAt: chat.createdAt,
             updatedAt: chat.updatedAt,
             revision: chat.revision,
-            activity: activity
+            activity: activity,
+            forkedFrom: chat.forkedFrom
         )
     }
 
@@ -1269,6 +1926,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         rowState = try values.decodeIfPresent(String.self, forKey: .rowState)
             .flatMap(AidenChatRowState.init(rawValue:))
         unread = try values.decodeIfPresent(Bool.self, forKey: .unread) ?? false
+        forkedFrom = (try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom))?
+            .withoutSummary
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -1356,7 +2015,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
-        case rowState, unread
+        case rowState, unread, forkedFrom
     }
 }
 
@@ -1631,7 +2290,7 @@ struct AidenUsageSummary: Codable, Equatable, Sendable {
     let models: [AidenUsageModel]
 }
 
-struct AidenTurnStart: Encodable, Equatable, Sendable {
+struct AidenTurnStart: Codable, Equatable, Sendable {
     let text: String
     let providerId: String?
     let modelId: String?
@@ -1714,6 +2373,33 @@ enum AidenStreamInputMode: String, Codable, Sendable {
     case queue
 }
 
+/// Busy-composer copy, shared with the desktop and Android send pill.
+extension AidenStreamInputMode {
+    /// Menu order.
+    static let busyModes: [AidenStreamInputMode] = [.steer, .queue]
+
+    var busyLabel: String {
+        switch self {
+        case .steer: String(localized: "Steer")
+        case .queue: String(localized: "Queue")
+        }
+    }
+
+    var busyDetail: String {
+        switch self {
+        case .steer: String(localized: "Add guidance without stopping")
+        case .queue: String(localized: "Run after this response")
+        }
+    }
+
+    var busyActionLabel: String {
+        switch self {
+        case .steer: String(localized: "Steer response")
+        case .queue: String(localized: "Queue message")
+        }
+    }
+}
+
 struct AidenStreamInputRequest: Codable, Equatable, Sendable {
     let mode: AidenStreamInputMode
     let text: String
@@ -1748,9 +2434,9 @@ enum AidenStreamInputStatus: String, Codable, Sendable {
     case rejected
 }
 
-/// Remote Slice 2 busy-composer presentation rules. A run input may only be
-/// offered while the displayed stream is controllable, the server negotiated
-/// `chat-run-input-v1`, and the composer holds text. Drafts are consumed only
+/// Remote Slice 2 busy-composer presentation rules. The Steer/Queue control is
+/// offered while the displayed stream is controllable and the server negotiated
+/// `chat-run-input-v1`; it submits only when the composer holds text. Drafts are consumed only
 /// when the Mac durably committed the message (admitted or committed
 /// rejection); every other outcome keeps the draft untouched so a busy→idle
 /// race can never become an implicit Send.
@@ -1765,10 +2451,9 @@ enum AidenRunInputPresentation {
     static func offersRunInput(
         isStreaming: Bool,
         canControl: Bool,
-        supports: Bool,
-        hasDraft: Bool
+        supports: Bool
     ) -> Bool {
-        isStreaming && canControl && supports && hasDraft
+        isStreaming && canControl && supports
     }
 
     static func consumesDraft(_ result: AidenStreamInputResult) -> Bool {
@@ -2024,6 +2709,31 @@ enum AidenPendingQuestionResolution {
     }
 }
 
+/// Owns all question drafts while the composer displays one page at a time.
+struct AidenQuestionComposerDraft {
+    private(set) var activeIndex = 0
+    var selections: [Int: Set<String>] = [:]
+    var customAnswers: [Int: String] = [:]
+    var customOpen: Set<Int> = []
+
+    mutating func move(to index: Int, questions: [AidenRemoteQuestion]) {
+        guard questions.indices.contains(index) else { return }
+        activeIndex = index
+    }
+
+    mutating func toggle(_ label: String, questions: [AidenRemoteQuestion]) {
+        guard questions.indices.contains(activeIndex) else { return }
+        selections = AidenQuestionAnswerDraft.toggled(
+            selections: selections, questionIndex: activeIndex, label: label,
+            multiSelect: questions[activeIndex].multiSelect
+        )
+    }
+
+    func answers(for questions: [AidenRemoteQuestion]) -> [AidenQuestionAnswer] {
+        AidenQuestionAnswerDraft.answers(for: questions, selections: selections, customAnswers: customAnswers)
+    }
+}
+
 /// Builds the wire answers from the card's selection state. A non-empty custom
 /// draft wins over option selections for that question; questions left
 /// unaddressed are omitted so the host records them as skipped.
@@ -2108,6 +2818,269 @@ enum AidenQuietOpenChat {
     }
 }
 
+// MARK: - Contract revision 24: foreign runs
+
+/// How a prompt on a foreign run was resolved by another surface (the Mac,
+/// Telegram, or another device) before this phone answered it.
+struct AidenForeignRunResolution: Equatable, Sendable {
+    enum Prompt: Equatable, Sendable {
+        case approval(AidenApprovalDecision?)
+        case question(String?)
+    }
+
+    let prompt: Prompt
+    let resolvedAt: Date?
+
+    /// The transient caption the losing phone shows under the composer.
+    var notice: String {
+        switch prompt {
+        case .approval(.allow?):
+            String(localized: "Answered on Mac: allowed")
+        case .approval(.deny?):
+            String(localized: "Answered on Mac: denied")
+        case .question("expired"):
+            String(localized: "Question expired on Mac")
+        case .approval(nil), .question:
+            String(localized: "Answered on Mac")
+        }
+    }
+
+    /// A first-responder-wins loser envelope (`409 approval_resolved` or
+    /// `409 question_already_resolved`), or nil for any other failure.
+    static func loser(from error: Error) -> Self? {
+        guard case let .server(statusCode, body) = error as? AidenRemoteClientError,
+              statusCode == 409 else { return nil }
+        switch body.code.rawValue {
+        case "approval_resolved":
+            return Self(
+                prompt: .approval(body.details?.decision.flatMap(AidenApprovalDecision.init(rawValue:))),
+                resolvedAt: body.details?.resolvedAt
+            )
+        case "question_already_resolved":
+            return Self(prompt: .question(body.details?.outcome), resolvedAt: body.details?.resolvedAt)
+        default:
+            return nil
+        }
+    }
+}
+
+/// Contract revision 24: the phone's live projection of a run it did not
+/// start (on the Mac, in Telegram or from the scheduler). It is a pure reducer
+/// over `AidenRemoteRunEvent`, so attaching mid-run, gap snapshots, and
+/// first-responder-wins resolutions are testable without a network.
+struct AidenForeignRunProjection: Equatable, Sendable {
+    enum Effect: Equatable, Sendable {
+        case textAppended(String)
+        case reasoning
+        case toolStarted(String)
+        case toolFinished
+        case approvalRequired(String)
+        case questionRequired(String)
+        case answeredElsewhere(AidenForeignRunResolution)
+        /// The transcript must be re-read from the chat (gap or reset).
+        case reconcile
+        case ended(AidenRemoteRunEndState)
+    }
+
+    let runId: String
+    private(set) var lastSequence = 0
+    private(set) var liveText = ""
+    private(set) var reasoning = ""
+    private(set) var tools: [AidenLiveTool] = []
+    private(set) var state: AidenStreamState = .running
+    private(set) var approvals: [AidenRemoteRunApproval] = []
+    private(set) var questions: [AidenRemoteRunQuestion] = []
+    private(set) var endState: AidenRemoteRunEndState?
+    private var locallyAnswered: Set<String> = []
+
+    init(runId: String) {
+        self.runId = runId
+    }
+
+    var isEnded: Bool { endState != nil }
+    var pendingApproval: AidenRemoteRunApproval? { approvals.first }
+    var pendingQuestion: AidenRemoteRunQuestion? { questions.first }
+
+    /// This phone answered `promptId`; its later resolution is not "elsewhere".
+    mutating func markAnsweredLocally(_ promptId: String) {
+        locallyAnswered.insert(promptId)
+        approvals.removeAll { $0.approvalId == promptId }
+        questions.removeAll { $0.promptId == promptId }
+        refreshWaitingState()
+    }
+
+    /// This phone's answer to `promptId` was not confirmed. Nothing is resent,
+    /// but a later authoritative snapshot that still lists the prompt restores it.
+    mutating func answerUnconfirmed(_ promptId: String) {
+        locallyAnswered.remove(promptId)
+    }
+
+    /// Drops a prompt another surface resolved first (a 409 loser).
+    mutating func dropPrompt(_ promptId: String) {
+        approvals.removeAll { $0.approvalId == promptId }
+        questions.removeAll { $0.promptId == promptId }
+        refreshWaitingState()
+    }
+
+    mutating func apply(_ event: AidenRemoteRunEvent) -> [Effect] {
+        guard event.runId == runId, !isEnded else { return [] }
+        if case .snapshot = event.kind {
+            // A gap snapshot rewinds the cursor to nextSequence - 1.
+        } else if case .ended = event.kind {
+            guard event.sequence >= lastSequence else { return [] }
+        } else {
+            guard event.sequence > lastSequence else { return [] }
+        }
+        lastSequence = event.sequence
+        switch event.kind {
+        case .started:
+            state = .running
+            return []
+        case let .content(content):
+            return applyContent(content)
+        case let .approvalRequired(approval):
+            guard !approvals.contains(where: { $0.approvalId == approval.approvalId }) else { return [] }
+            approvals.append(approval)
+            state = .waitingForApproval
+            return [.approvalRequired(approval.approvalId)]
+        case let .approvalResolved(approvalId, decision):
+            let wasPending = approvals.contains { $0.approvalId == approvalId }
+            approvals.removeAll { $0.approvalId == approvalId }
+            refreshWaitingState()
+            guard wasPending, !locallyAnswered.contains(approvalId) else { return [] }
+            return [.answeredElsewhere(.init(prompt: .approval(decision), resolvedAt: event.timestamp))]
+        case let .questionRequired(question):
+            guard !questions.contains(where: { $0.promptId == question.promptId }) else { return [] }
+            questions.append(question)
+            state = .waitingForApproval
+            return [.questionRequired(question.promptId)]
+        case let .questionResolved(promptId, outcome):
+            let wasPending = questions.contains { $0.promptId == promptId }
+            questions.removeAll { $0.promptId == promptId }
+            refreshWaitingState()
+            guard wasPending, !locallyAnswered.contains(promptId) else { return [] }
+            return [.answeredElsewhere(.init(prompt: .question(outcome), resolvedAt: event.timestamp))]
+        case let .snapshot(snapshot):
+            liveText = ""
+            reasoning = ""
+            tools = []
+            approvals = snapshot.approvals.filter { !locallyAnswered.contains($0.approvalId) }
+            questions = snapshot.questions.filter { !locallyAnswered.contains($0.promptId) }
+            state = .reconciling
+            refreshWaitingState()
+            return [.reconcile]
+        case let .ended(_, endState):
+            self.endState = endState
+            approvals = []
+            questions = []
+            state = switch endState {
+            case .done: .done
+            case .failed: .error
+            case .cancelled: .cancelled
+            }
+            return [.ended(endState)]
+        }
+    }
+
+    private mutating func applyContent(_ event: AidenRemoteStreamEvent) -> [Effect] {
+        guard event.shouldApply, let payload = event.payload else { return [] }
+        switch event.type {
+        case .status:
+            if let raw = payload.state, let next = AidenStreamState(rawValue: raw), !next.isTerminal {
+                state = next == .waitingForApproval || approvals.isEmpty && questions.isEmpty
+                    ? next : .waitingForApproval
+            }
+            return []
+        case .textDelta:
+            let text = payload.text ?? ""
+            liveText += text
+            if approvals.isEmpty, questions.isEmpty { state = .running }
+            return [.textAppended(text)]
+        case .reasoningDelta:
+            reasoning += payload.text ?? ""
+            return [.reasoning]
+        case .toolStarted:
+            guard let id = payload.toolId, let name = payload.name else { return [] }
+            tools.append(AidenLiveTool(id: id, name: name, status: nil))
+            return [.toolStarted(name)]
+        case .toolFinished:
+            if let id = payload.toolId, let index = tools.firstIndex(where: { $0.id == id }) {
+                tools[index].status = payload.status
+            }
+            return [.toolFinished]
+        case .done, .error, .cancelled:
+            // `run.ended` follows with the same sequence and closes the run;
+            // the content terminal only settles the visible state early.
+            approvals = []
+            questions = []
+            state = event.type == .done ? .done : event.type == .cancelled ? .cancelled : .error
+            return []
+        default:
+            return []
+        }
+    }
+
+    private mutating func refreshWaitingState() {
+        if !approvals.isEmpty || !questions.isEmpty {
+            state = .waitingForApproval
+        } else if state == .waitingForApproval {
+            state = .running
+        }
+    }
+}
+
+/// Client-side transcript windowing over `chat-messages-window-v1`. The chat
+/// screen holds the newest page plus any earlier pages the reader asked for;
+/// these rules decide how a fetched page combines with what is on screen.
+enum AidenTranscriptWindowing {
+    static let pageSize = AidenChatMessagesWindow.defaultLimit
+
+    struct Presentation: Equatable {
+        var messages: [AidenChatMessage]
+        var hasOlder: Bool
+    }
+
+    /// Replace the transcript with the newest window, as on open or after a
+    /// `revision_conflict`.
+    static func latest(_ window: AidenChatMessagesWindow) -> Presentation {
+        Presentation(messages: window.messages, hasOlder: window.hasOlder)
+    }
+
+    /// Fold a refreshed newest window into the transcript on screen. When the
+    /// window overlaps it, earlier pages the reader already loaded are kept in
+    /// front of it; otherwise the window replaces the transcript. Optimistic
+    /// and stale messages after the overlap point give way to the window.
+    static func mergingLatest(
+        _ window: AidenChatMessagesWindow,
+        into current: [AidenChatMessage],
+        currentHasOlder: Bool
+    ) -> Presentation {
+        guard window.hasOlder, let first = window.messages.first,
+              let overlap = current.firstIndex(where: { $0.id == first.id }),
+              overlap > 0 else {
+            return latest(window)
+        }
+        let windowIDs = Set(window.messages.map(\.id))
+        let earlier = current[..<overlap].filter { !windowIDs.contains($0.id) }
+        return Presentation(messages: earlier + window.messages, hasOlder: currentHasOlder)
+    }
+
+    /// Put an earlier page in front of the transcript on screen.
+    static func prepending(
+        _ page: AidenChatMessagesWindow,
+        to current: [AidenChatMessage]
+    ) -> Presentation {
+        let presentIDs = Set(current.map(\.id))
+        let earlier = page.messages.filter { !presentIDs.contains($0.id) }
+        return Presentation(messages: earlier + current, hasOlder: page.hasOlder)
+    }
+
+    /// The cursor for the next earlier page: the oldest message the Mac
+    /// issued. Optimistic local messages never reach the server.
+    static func earlierCursor(in messages: [AidenChatMessage]) -> String? {
+        messages.first { !$0.id.hasPrefix("local-") }?.id
+    }
+}
 // Inert descriptors share the desktop vocabulary. No model-authored view tree,
 // URLs, credentials or action callbacks are interpreted by native clients.
 private let aidenControlIDs: Set<String> = ["appearance.mode", "appearance.chatWidth", "appearance.reduceMotion", "appearance.terminalTheme", "memory.enabled", "memory.workspace", "webSearch.enabled", "skills.enabled"]

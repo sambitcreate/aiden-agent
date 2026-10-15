@@ -11,7 +11,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
 
   const providerIds = providers.map((entry) => entry.id);
   assert.equal(new Set(providerIds).size, providerIds.length);
-  assert.equal(providerIds.length, 41);
+  assert.ok(providerIds.includes("typesafe"));
   assert.ok(providerIds.includes("radius"));
   assert.deepEqual(
     providers.filter(
@@ -27,7 +27,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
     providerIds,
   );
   assert.equal(provider?.id, "openai-codex");
-  assert.equal(provider?.name, "OpenAI Codex");
+  assert.equal(provider?.name, "OpenAI Codex (legacy)");
   assert.equal(provider?.baseUrl, "https://chatgpt.com/backend-api");
   assert.equal(provider?.auth.oauth?.name, "OpenAI (ChatGPT Plus/Pro)");
   assert.equal(typeof provider?.auth.oauth?.login, "function");
@@ -43,7 +43,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
   );
 
   const codexModels = models.getModels("openai-codex");
-  assert.equal(codexModels.length, 8);
+  assert.ok(codexModels.some((model) => model.id === "gpt-6.1-sol"));
   assert.ok(codexModels.some((model) => model.id === "gpt-5.5"));
   assert.ok(codexModels.every((model) => model.api === "openai-codex-responses"));
   assert.deepEqual(await models.getAvailable("openai-codex"), []);

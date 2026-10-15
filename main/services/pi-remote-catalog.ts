@@ -1,5 +1,7 @@
+import { parseSamplingParamsByThinkingLevel } from "../../renderer/shared/custom-model-options.js";
 import type { Api, Model, ModelsStoreEntry, Provider } from "@earendil-works/pi-ai";
 import { GOOGLE_PROVIDER_ID, isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+import { readBoundedBody } from "../shared/bounded-body.js";
 
 const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
 const MAX_CATALOG_BYTES = 5 * 1024 * 1024;
@@ -12,8 +14,8 @@ const UNKNOWN_COST_SENTINEL = -1_000_000;
 const MAX_CATALOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /** Keep synchronized with the deliberately pinned @earendil-works/pi-ai dependency. */
-export const AIDEN_PI_CATALOG_VERSION = "0.87.1";
-export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-09-22T19:31:44.346Z");
+export const AIDEN_PI_CATALOG_VERSION = "1.2.0";
+export const AIDEN_PI_CATALOG_GENERATED_AT = Date.parse("2026-10-12T22:50:30.032Z");
 export const AIDEN_PI_CATALOG_USER_AGENT = `Aiden-Agent pi-ai/${AIDEN_PI_CATALOG_VERSION}`;
 export const PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -170,6 +172,7 @@ function normalizeModel(providerId: string, value: unknown, policy: CatalogPolic
     baseUrl: model.baseUrl,
     reasoning: model.reasoning,
     ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: structuredClone(model.thinkingLevelMap) }),
+    ...(model.samplingParamsByThinkingLevel === undefined ? {} : { samplingParamsByThinkingLevel: parseSamplingParamsByThinkingLevel(model.samplingParamsByThinkingLevel) }),
     input: [...input],
     cost: structuredClone(model.cost),
     contextWindow: model.contextWindow,
@@ -187,6 +190,11 @@ export function parsePiRemoteCatalog(providerId: string, value: unknown, policy:
   const models: Model<Api>[] = [];
   const ids = new Set<string>();
   for (const entry of entries) {
+    // Pi 1.0 catalogs can contain multiple operations for the same upstream ID.
+    // This endpoint is exclusively a chat inventory: never reinterpret another
+    // operation as a chat model, even when it happens to carry chat-like fields.
+    const type = record(entry)?.type;
+    if (type !== undefined && type !== "chat") continue;
     const model = normalizeModel(providerId, entry, policy);
     if (!model || ids.has(model.id)) {
       throw new Error(`Invalid model catalog entry for provider "${providerId}".`);
@@ -225,35 +233,13 @@ export function catalogVersionSupported(minimum: string | null): boolean {
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_CATALOG_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error("Model catalog response is too large.");
-  }
-  if (!response.body) throw new Error("Model catalog response is empty.");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_CATALOG_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("Model catalog response is too large.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const bytes = await readBoundedBody(response, {
+    maxBytes: MAX_CATALOG_BYTES,
+    errors: {
+      tooLarge: () => new Error("Model catalog response is too large."),
+      missingBody: () => new Error("Model catalog response is empty."),
+    },
+  });
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   } catch {

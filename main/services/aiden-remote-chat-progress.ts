@@ -80,6 +80,17 @@ export class AidenRemoteChatProgressService {
     ServerResponse,
     { deviceId: string; close(): void }
   >();
+  /**
+   * Snapshot revisions each recent event's stream had delivered, keyed by the
+   * process-wide event sequence. A reconnect that presents one of these
+   * cursors (`after` / `Last-Event-ID`) for the same device and chat resumes
+   * without resending snapshots it already received. Unknown cursors (another
+   * process, evicted, or a different device/chat) keep the full-snapshot path.
+   */
+  private readonly cursors = new Map<
+    number,
+    { deviceId: string; chatId: string; sent: ReadonlyMap<string, number> }
+  >();
   private readonly now: () => number;
 
   constructor(private readonly ports: ProgressPorts) {
@@ -392,8 +403,9 @@ export class AidenRemoteChatProgressService {
     deviceId: string,
     chatId: string,
     grants: ReadonlySet<AidenRemoteCapability>,
-    _after: number,
+    after: number,
     response: ServerResponse,
+    epoch?: string,
   ): Promise<void> {
     let observesControls = Boolean(grants.has("app-controls:read") && this.ports.appControlsEnabled);
     if (observesControls) {
@@ -433,7 +445,13 @@ export class AidenRemoteChatProgressService {
     let unsubscribe = () => {};
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let scheduled: ReturnType<typeof setTimeout> | undefined;
-    const sent = new Map<string, number>();
+    const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
+    const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
+    const sent = new Map<string, number>(
+      isResumed
+        ? resumed.sent
+        : [],
+    );
     const close = () => {
       if (closed) return;
       closed = true;
@@ -461,6 +479,9 @@ export class AidenRemoteChatProgressService {
       response.write(
         `id: ${event.sequence}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`,
       );
+      if (this.cursors.size >= 1024)
+        this.cursors.delete(this.cursors.keys().next().value!);
+      this.cursors.set(event.sequence, { deviceId, chatId, sent: new Map(sent) });
       // A single bounded snapshot can exceed the socket high-water mark. Allow
       // that write to drain; close only genuinely slow consumers with >1 MiB queued.
       if (response.writableLength > 1_048_576) close();
@@ -509,6 +530,7 @@ export class AidenRemoteChatProgressService {
       "Cache-Control": "no-cache, no-store",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      "Aiden-Progress-Resumed": String(isResumed),
     });
     response.flushHeaders();
     await refresh();
@@ -526,10 +548,13 @@ export class AidenRemoteChatProgressService {
   revokeDevice(deviceId: string): void {
     for (const entry of this.subscribers.values())
       if (entry.deviceId === deviceId) entry.close();
+    for (const [sequence, cursor] of this.cursors)
+      if (cursor.deviceId === deviceId) this.cursors.delete(sequence);
   }
 
   close(): void {
     for (const entry of this.subscribers.values()) entry.close();
     this.versions.clear();
+    this.cursors.clear();
   }
 }

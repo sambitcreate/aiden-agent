@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { createConnection, createServer, type Socket } from "node:net";
 import * as fs from "node:fs/promises";
@@ -23,6 +24,11 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity, AidenRemoteTlsEndpointError } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
+import {
+  generatePairingRequestKeyPair,
+  pairingRequestMatchCode,
+} from "./aiden-remote-sealed-envelope.js";
+import { openPeerPairingRequestGrant } from "./peer-pairing.js";
 
 test("Remote discovery selects the Node Bonjour backend on Linux", () => {
   assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
@@ -141,6 +147,10 @@ interface FixtureOptions {
   }) => Promise<void>;
   connectFailsWith?: string;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
+  beforeTailscaleInspection?: () => Promise<void>;
+  now?: () => number;
+  /** Wire the persisted "Accept connection requests" setting (in memory). */
+  pairingRequests?: { accept?: boolean };
 }
 
 async function fixture(
@@ -165,7 +175,7 @@ async function fixture(
   const bonjour: {
     starts: number;
     stops: number;
-    inputs: Array<{ instanceId: string; displayName: string; port: number }>;
+    inputs: Array<{ instanceId: string; displayName: string; port: number; hostname?: string }>;
     failure?: (error: Error) => void;
     start(
       input: { instanceId: string; displayName: string; port: number },
@@ -274,15 +284,19 @@ async function fixture(
     ...(options.tailscaleInspection
       ? { inspectRoute: async () => {
           tailscale.inspectionCalls += 1;
+          await options.beforeTailscaleInspection?.();
           return options.tailscaleInspection!;
         } }
       : {}),
   };
   let identityLoads = 0;
+  let acceptPairingRequests = options.pairingRequests?.accept ?? true;
+  let pairingRequestNotifications = 0;
   const service = new AidenRemoteService({
     state,
     appVersion: "0.30.0",
     hostname: "Aiden-Test",
+    ...(options.now ? { now: options.now } : {}),
     bonjour,
     tailscale,
     resolveTlsEndpointPin: options.resolveTlsEndpointPin
@@ -300,8 +314,23 @@ async function fixture(
     ...(options.afterListenerBound === undefined
       ? {}
       : { afterListenerBound: options.afterListenerBound }),
+    ...(options.pairingRequests
+      ? {
+          pairingRequestSettings: {
+            load: async () => acceptPairingRequests,
+            save: async (accept: boolean) => {
+              acceptPairingRequests = accept;
+            },
+          },
+          notifyPairingRequestsChanged: () => {
+            pairingRequestNotifications += 1;
+          },
+        }
+      : {}),
   });
   return {
+    acceptPairingRequests: () => acceptPairingRequests,
+    pairingRequestNotifications: () => pairingRequestNotifications,
     service,
     state,
     bonjour,
@@ -445,6 +474,7 @@ test("a fresh profile moves to the next complete port pair and advertises only t
     assert.equal(app.persisted().lanPort, fallbackPort);
     assert.equal(app.persisted().lanPortCommitted, true);
     assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [fallbackPort]);
+    assert.equal(app.bonjour.inputs[0]?.hostname, "aiden-test.local", "discovery carries the certificate hostname, never an IP substitute");
     assert.deepEqual(await insecureHealth(fallbackPort), {
       status: 200,
       body: { ok: true, protocolVersion: 1 },
@@ -1923,3 +1953,359 @@ test("guided Tailscale TLS failure stays classified while rolling back the new r
     assert.equal(f.tailscale.disconnects, 1);
   } finally { await f.cleanup(); }
 });
+
+async function plainJson<T>(
+  port: number,
+  requestPath: string,
+  options: { method?: string; headers?: Record<string, string>; body?: unknown } = {},
+): Promise<{ status: number; body: T }> {
+  const encodedBody = options.body === undefined
+    ? undefined
+    : Buffer.from(JSON.stringify(options.body));
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port,
+      path: requestPath,
+      method: options.method ?? "GET",
+      timeout: 3_000,
+      headers: {
+        ...options.headers,
+        ...(encodedBody === undefined ? {} : {
+          "content-type": "application/json",
+          "content-length": String(encodedBody.length),
+        }),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        try {
+          resolve({
+            status: response.statusCode ?? 0,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as T,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.once("error", reject);
+    if (encodedBody !== undefined) request.write(encodedBody);
+    request.end();
+  });
+}
+
+interface CreatedPairingRequest {
+  requestId: string;
+  pollSecret: string;
+  expiresAt: string;
+  hostCommitment: string;
+}
+
+async function requestConnection(
+  send: typeof insecureJson,
+  port: number,
+  deviceName: string,
+): Promise<{
+  created: CreatedPairingRequest;
+  keys: ReturnType<typeof generatePairingRequestKeyPair>;
+  requesterNonce: Buffer;
+  hostNonce: string;
+  secret: Record<string, string>;
+}> {
+  const keys = generatePairingRequestKeyPair();
+  const created = await send<CreatedPairingRequest>(port, "/api/aiden/v1/pairing/requests", {
+    method: "POST",
+    body: { deviceName, deviceType: "mac", publicKey: keys.publicKey },
+  });
+  assert.equal(created.status, 201);
+  const secret = { "aiden-pairing-secret": created.body.pollSecret };
+  const requesterNonce = randomBytes(32);
+  const revealed = await send<{ hostNonce: string }>(
+    port,
+    `/api/aiden/v1/pairing/requests/${created.body.requestId}/reveal`,
+    { method: "POST", headers: secret, body: { requesterNonce: requesterNonce.toString("base64url") } },
+  );
+  assert.equal(revealed.status, 200);
+  return { created: created.body, keys, requesterNonce, hostNonce: revealed.body.hostNonce, secret };
+}
+
+test("an approved LAN connection request seals a pinned credential that authenticates /server", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    assert.equal((await app.service.status()).acceptPairingRequests, true);
+    const port = app.persisted().lanPort;
+    const identity = await loadOrCreateAidenRemoteTlsIdentity({
+      directory: path.join(app.directory, "identity"),
+      hostnames: ["aiden-test", "aiden-test.local"],
+    });
+    const request = await requestConnection(insecureJson, port, "Travel MacBook");
+    const [prompt] = app.service.listPairingRequests();
+    assert.equal(prompt?.deviceName, "Travel MacBook");
+    assert.equal(prompt?.transport, "lan");
+    // The requester derives the same code from the certificate it observed.
+    assert.equal(
+      prompt?.matchCode,
+      pairingRequestMatchCode({
+        requesterPublicKey: request.keys.publicKey,
+        serverSpkiSha256: identity.serverSpkiSha256,
+        requestId: request.created.requestId,
+        requesterNonce: request.requesterNonce,
+        hostNonce: request.hostNonce,
+      }),
+    );
+    assert.ok(app.pairingRequestNotifications() > 0);
+
+    assert.equal(
+      (await app.service.respondPairingRequest(request.created.requestId, "allow"))?.state,
+      "approved",
+    );
+    const polled = await insecureJson<{ state: string; envelope: unknown }>(
+      port,
+      `/api/aiden/v1/pairing/requests/${request.created.requestId}`,
+      { headers: request.secret },
+    );
+    assert.equal(polled.body.state, "approved");
+    const grant = openPeerPairingRequestGrant(polled.body.envelope, {
+      requestId: request.created.requestId,
+      publicKey: request.keys.publicKey,
+      privateKey: request.keys.privateKey,
+      endpoint: `https://aiden-test.local:${port}/api/aiden/v1`,
+      serverSpkiSha256: identity.serverSpkiSha256,
+    });
+    assert.equal(grant.instanceId, app.persisted().instanceId);
+    assert.equal(
+      grant.caCertificateDerBase64,
+      new X509Certificate(identity.caCertificate).raw.toString("base64"),
+    );
+    const server = await insecureJson<{ instanceId: string; features?: string[] }>(
+      port,
+      "/api/aiden/v1/server",
+      { headers: { authorization: `Bearer ${grant.credential}`, "aiden-protocol-version": "1" } },
+    );
+    assert.equal(server.status, 200);
+    assert.equal(server.body.instanceId, app.persisted().instanceId);
+    assert.ok(server.body.features?.includes("pairing-requests-v1"));
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("turning connection requests off persists, cancels open requests and refuses new ones", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const port = app.persisted().lanPort;
+    const open = await requestConnection(insecureJson, port, "Desk Mac");
+    assert.equal(app.service.listPairingRequests().length, 1);
+
+    await app.service.setAcceptPairingRequests(false);
+    assert.equal(app.acceptPairingRequests(), false);
+    assert.equal((await app.service.status()).acceptPairingRequests, false);
+    assert.deepEqual(app.service.listPairingRequests(), []);
+    const cancelled = await insecureJson<{ state: string }>(
+      port,
+      `/api/aiden/v1/pairing/requests/${open.created.requestId}`,
+      { headers: open.secret },
+    );
+    assert.equal(cancelled.body.state, "cancelled");
+    const refused = await insecureJson<{ error: { code: string } }>(port, "/api/aiden/v1/pairing/requests", {
+      method: "POST",
+      body: { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+    });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error.code, "pairing_closed");
+    const health = await insecureJson<{ pairingRequests: boolean }>(port, "/api/aiden/v1/health?detail=host");
+    assert.equal(health.body.pairingRequests, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("a persisted off setting is honoured from the first request after startup", async () => {
+  const app = await fixture({ pairingRequests: { accept: false } });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const refused = await insecureJson<{ error: { code: string } }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/pairing/requests",
+      {
+        method: "POST",
+        body: { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      },
+    );
+    assert.equal(refused.body.error.code, "pairing_closed");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("turning Remote access off revokes an approval nobody collected", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const request = await requestConnection(insecureJson, app.persisted().lanPort, "Desk Mac");
+    await app.service.respondPairingRequest(request.created.requestId, "allow");
+    const [issued] = await app.state.listDevices();
+    assert.equal(issued?.revokedAt, undefined);
+    await app.service.setEnabled(false);
+    const [after] = await app.state.listDevices();
+    assert.equal(after?.id, issued?.id);
+    assert.equal(typeof after?.revokedAt, "number");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Tailscale connection requests seal the Serve identity and reuse a recent pin probe", async () => {
+  let probes = 0;
+  const pin = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
+  const app = await fixture({
+    mode: "both",
+    pairingRequests: {},
+    tailscaleAssessment: { state: "owned" },
+    resolveTlsEndpointPin: async () => {
+      probes += 1;
+      return pin;
+    },
+    initial: (state) => {
+      state.tailscaleOwnership = {
+        path: "/api/aiden/v1",
+        target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1`,
+      };
+    },
+  });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const loopback = app.persisted().lanPort + 1;
+    const first = await requestConnection(plainJson, loopback, "Travel MacBook");
+    await requestConnection(plainJson, loopback, "Travel MacBook");
+    assert.equal(probes, 1);
+    assert.deepEqual(
+      app.service.listPairingRequests().map((prompt) => prompt.transport),
+      ["tailscale", "tailscale"],
+    );
+    await app.service.respondPairingRequest(first.created.requestId, "allow");
+    const polled = await plainJson<{ envelope: unknown }>(
+      loopback,
+      `/api/aiden/v1/pairing/requests/${first.created.requestId}`,
+      { headers: first.secret },
+    );
+    const grant = openPeerPairingRequestGrant(polled.body.envelope, {
+      requestId: first.created.requestId,
+      publicKey: first.keys.publicKey,
+      privateKey: first.keys.privateKey,
+      endpoint: "https://aiden.tailnet.ts.net/api/aiden/v1",
+      serverSpkiSha256: pin,
+    });
+    assert.equal(grant.caCertificateDerBase64, undefined);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+
+for (const stalledStage of ["inspection", "pin"] as const) {
+  test(`identity reads and healthy LAN wake do not await optional Tailscale ${stalledStage}`, async () => {
+    const { PeerHostRegistry } = await import("./peer-host-registry.js");
+    const { PeerHostManager, PEER_WAKE_COALESCE_MS } = await import("./peer-host-manager.js");
+    const { PeerTransport } = await import("./peer-transport.js");
+    let release!: () => void;
+    let gate = new Promise<void>((resolve) => { release = resolve; });
+    let hold = true;
+    let now = Date.now();
+    let pinReads = 0;
+    const app = await fixture({
+      mode: "both", now: () => now,
+      tailscaleInspection: { connectionStatus: { installed: true, dnsName: "aiden.tailnet.ts.net", httpsAvailable: true }, assessment: { state: "owned" } },
+      beforeTailscaleInspection: async () => { if (hold && stalledStage === "inspection") await gate; },
+      resolveTlsEndpointPin: async () => { pinReads++; if (hold && stalledStage === "pin") await gate; return `sha256/${Buffer.alloc(32, 4).toString("base64")}`; },
+      initial: (state) => { state.tailscaleOwnership = { path: "/api/aiden/v1", target: `http://127.0.0.1:${state.lanPort + 1}/api/aiden/v1` }; },
+    });
+    let registry: InstanceType<typeof PeerHostRegistry> | undefined;
+    let manager: InstanceType<typeof PeerHostManager> | undefined;
+    const until = async (check: () => boolean) => within((async () => {
+      while (!check()) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    })());
+    try {
+      await app.service.initialize();
+      await app.service.setEnabled(true);
+      const issued = await app.state.issueDevice({ name: "Viewer", type: "mac", clientVersion: "1" });
+      const headers = { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1" };
+      type Projection = { instanceId: string; peerRoutes: { endpoint: string }[] };
+      const readLan = () => insecureJson<Projection>(app.persisted().lanPort, "/api/aiden/v1/server", { headers });
+      const first = await within(readLan());
+      assert.equal(first.status, 200);
+      assert.equal(first.body.instanceId, app.persisted().instanceId);
+      assert.equal(first.body.peerRoutes.length, 1);
+      assert.match(first.body.peerRoutes[0]!.endpoint, /aiden-test\.local/u);
+      const throughTailnet = await within(plainJson<Projection>(app.persisted().lanPort + 1, "/api/aiden/v1/server", { headers }));
+      assert.equal(throughTailnet.status, 200, "the same identity handler stays responsive through the Serve listener");
+      assert.equal(throughTailnet.body.peerRoutes.length, 1);
+      assert.equal(app.tailscale.inspectionCalls, 1, "concurrent identity reads share one optional refresh");
+
+      const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: path.join(app.directory, "identity"), hostnames: ["aiden-test", "aiden-test.local"] });
+      registry = new PeerHostRegistry({
+        storage: { load: async () => [{ id: app.persisted().instanceId, name: "Host", enabled: true, deviceId: issued.device.id, credential: issued.credential, capabilities: [...issued.device.capabilities], features: [], endpoint: `https://aiden-test.local:${app.persisted().lanPort}/api/aiden/v1`, serverSpkiSha256: identity.serverSpkiSha256, caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64") }], save: async () => {} },
+        localInstanceId: async () => "viewer", clientVersion: "1", deviceName: "Viewer", platform: "mac",
+        client: (trust) => new PeerTransport(trust, { lookup: (_hostname, options, callback) => { if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]); else callback(null, "127.0.0.1", 4); } }),
+      });
+      let wake: (() => void) | undefined;
+      let discover: (() => void) | undefined;
+      manager = new PeerHostManager({ registry, broadcast: () => {}, timers: { set: (callback, ms) => { if (ms === PEER_WAKE_COALESCE_MS) wake = callback; if (ms === 25_000) discover = callback; return callback; }, clear: () => {} } });
+      await manager.whenReady();
+      await until(() => manager!.statuses()[0]?.state.kind === "connected");
+      const generation = manager.statuses()[0]!.generation;
+      const originalProbe = registry.probe.bind(registry);
+      let probed = false;
+      registry.probe = async (...args) => { await originalProbe(...args); probed = true; };
+      manager.wake();
+      wake!();
+      await until(() => probed);
+      assert.equal(manager.statuses()[0]!.state.kind, "connected");
+      assert.equal(manager.statuses()[0]!.generation, generation, "optional discovery cannot retire a healthy LAN connection");
+      assert.equal(app.tailscale.inspectionCalls, 1);
+
+      hold = false;
+      release();
+      await until(() => pinReads === 1);
+      let learned = await readLan();
+      await within((async () => { while (learned.body.peerRoutes.length !== 2) { await new Promise<void>((resolve) => setTimeout(resolve, 5)); learned = await readLan(); } })());
+      assert.match(learned.body.peerRoutes[1]!.endpoint, /aiden\.tailnet\.ts\.net/u);
+      if (stalledStage === "inspection") {
+        hold = true;
+        gate = new Promise<void>((resolve) => { release = resolve; });
+        now += 30_001;
+        const expired = await within(readLan());
+        assert.equal(expired.body.peerRoutes.length, 2, "delayed clients can consume the last validated observation while revalidation is held");
+        assert.equal(app.tailscale.inspectionCalls, 2);
+      }
+      discover!();
+      await within((async () => {
+        while (!(await registry!.list())[0]!.routes?.some((route) => route.kind === "tailscale")) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        }
+      })());
+      assert.equal(manager.statuses()[0]!.generation, generation, "follow-up discovery preserves the live LAN generation, including after cache expiry");
+      await app.state.setTailscaleOwnership(undefined);
+      assert.equal((await within(readLan())).body.peerRoutes.length, 1, "ownership changes invalidate the retained alternate immediately");
+      hold = false;
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal((await within(readLan())).body.peerRoutes.length, 1, "an older pending refresh cannot restore another ownership key");
+    } finally {
+      hold = false;
+      release();
+      manager?.close();
+      registry?.close();
+      await app.cleanup();
+    }
+  });
+}

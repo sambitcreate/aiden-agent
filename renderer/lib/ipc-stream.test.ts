@@ -158,6 +158,77 @@ test("lifecycle detachment releases subscriptions and notifies main exactly once
   }
 });
 
+test("lifecycle detachment carries reasoning, timeline, artifacts and subagents into the detached chat", () => {
+  const { bridge, restore } = installFakeBridge();
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-projection",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onArtifactEvent: () => undefined, onSubagents: () => undefined },
+      "turn-projection",
+    );
+    const streamId = handle.streamId;
+    const emit = (channel: string, payload: unknown) => {
+      for (const listener of bridge.listeners.get(channel) ?? []) listener(payload);
+    };
+    emit("chat:reasoning-delta", { streamId, delta: "Weighing two layouts" });
+    emit("chat:timeline", {
+      streamId,
+      timeline: { version: 3, generationId: streamId, status: "running", startedAt: 1, steps: [] },
+    });
+    emit("chat:artifact", {
+      streamId,
+      event: {
+        version: 1,
+        operation: "present",
+        artifact: {
+          version: 1,
+          kind: "image",
+          attachment: { id: "att-1", name: "preview.png", mimeType: "image/png", kind: "image", size: 1, data: "AA==" },
+        },
+      },
+    });
+    emit("chat:subagents", {
+      streamId,
+      snapshot: {
+        version: 1,
+        runId: "run-1",
+        groupId: "group-1",
+        generationId: streamId,
+        childId: "child-1",
+        chatId: "chat-projection",
+        workspaceId: "workspace-1",
+        revision: 1,
+        role: "reviewer",
+        label: "Review",
+        taskPreview: "Review the layout.",
+        state: "running",
+        activity: "Reading workspace files",
+        startedAt: 1_000,
+        updatedAt: 2_000,
+        modelId: "test-model",
+        turns: 1,
+        tools: 0,
+        tokens: 10,
+        warnings: [],
+      },
+    });
+
+    handle.cancel("lifecycle");
+    const projection = detachedLifecycleChatProjection("chat-projection", "workspace-1");
+    assert.equal(projection?.reasoning, "Weighing two layouts");
+    assert.equal(projection?.timeline?.generationId, streamId);
+    assert.deepEqual(projection?.artifacts.map((artifact) => artifact.kind), ["image"]);
+    assert.deepEqual(projection?.subagents.map((snapshot) => snapshot.runId), ["run-1"]);
+  } finally {
+    restore();
+  }
+});
+
 test("generation exposes a non-rejecting authoritative start result", async () => {
   const accepted = installFakeBridge();
   try {
@@ -755,6 +826,65 @@ test("PR linking sends source in the handler input object", async () => {
         ],
       },
     ]);
+  } finally {
+    restore();
+  }
+});
+
+test("IPC failures reach callers without Electron's remote-method wrapper", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      aidenAPI: {
+        ipc: {
+          invoke: async (channel: string) => {
+            throw new Error(
+              `Error invoking remote method '${channel}': Error: Pull request is no longer linked.`,
+            );
+          },
+          onNotification: () => () => undefined,
+        },
+      },
+    },
+  });
+  try {
+    await assert.rejects(pullRequestsApi.list("chat-1"), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Pull request is no longer linked.");
+      return true;
+    });
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "window", descriptor);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("approval prompts keep the allow scopes main offered, and drop unknown ones", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const generation = startGeneration(
+      { chatId: "chat-approval", workspaceId: "workspace-1", providerId: "provider-1", model: "model-1" },
+      { ...callbacks(), onApproval: (prompt) => received.push(prompt) },
+      "turn-approval",
+    );
+    for (const handler of bridge.listeners.get("chat:approval") ?? []) {
+      handler({
+        streamId: generation.streamId,
+        approvalId: "a-1",
+        toolCallId: "call-1",
+        toolName: "run_command",
+        summary: "npm test",
+        scopes: ["once", "chat", "forever"],
+      });
+      handler({ streamId: generation.streamId, approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit" });
+    }
+    assert.deepEqual(received, [
+      { approvalId: "a-1", toolCallId: "call-1", toolName: "run_command", summary: "npm test", details: undefined, scopes: ["once", "chat"] },
+      { approvalId: "a-2", toolCallId: "call-2", toolName: "edit_file", summary: "Edit", details: undefined },
+    ]);
+    generation.cancel("lifecycle");
   } finally {
     restore();
   }

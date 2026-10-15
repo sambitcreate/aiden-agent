@@ -15,6 +15,9 @@ export function BrowserAnnotationEditor({ snapshot, initial, pending, onCancel, 
   onSubmit: (annotation: BrowserAnnotation) => void;
   onPreview?: (changes: BrowserStylePreview[]) => Promise<BrowserCommandResult | null>;
 }) {
+  const sectionRef = React.useRef<HTMLElement>(null);
+  // Move keyboard focus into the editor when it opens so Escape and the controls are reachable.
+  React.useEffect(() => { sectionRef.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus(); }, []);
   const [mode, setMode] = React.useState<"element" | "region" | "draw" | "erase">("element");
   const [elements, setElements] = React.useState<BrowserElement[]>(initial?.elements ?? []);
   const [regions, setRegions] = React.useState<BrowserBounds[]>(initial?.regions ?? []);
@@ -79,7 +82,7 @@ export function BrowserAnnotationEditor({ snapshot, initial, pending, onCancel, 
   const previewReady = !onPreview || (!previewPending && !previewError && previewKey === completedPreviewRef.current);
   const canSubmit = !pending && previewReady && Boolean(elements.length || regions.length || strokes.length || comment.trim());
   const submit = () => { if (canSubmit) onSubmit({ ...initial, url: snapshot.tab.url, elements: selectedElements, regions, strokes, comment, elementStyleChanges, image }); };
-  return <section className="browser-annotation" aria-label="Annotate browser" onKeyDown={(event) => {
+  return <section ref={sectionRef} className="browser-annotation" aria-label="Annotate browser" onKeyDown={(event) => {
     if (event.key === "Escape") { event.stopPropagation(); onCancel(); }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.stopPropagation(); submit(); }
   }}>

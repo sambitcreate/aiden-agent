@@ -1,3 +1,4 @@
+import { readCachedAppearance } from "../lib/appearance-runtime";
 import { compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
@@ -10,10 +11,6 @@ import {
   AlertDialog,
   Button,
   Dialog,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
   Input,
   Textarea,
   Text,
@@ -22,7 +19,6 @@ import {
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
-  ChevronDown,
   FileText,
   Folder,
   ListPlus,
@@ -30,14 +26,15 @@ import {
   Lock,
   Mic,
   Monitor,
-  MousePointer2,
   OctagonAlert,
+  Paperclip,
   Plus,
   ShieldQuestion,
   Square,
   X,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
+import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { ComposerContextBar } from "./composer-context-bar";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
@@ -55,12 +52,7 @@ import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
-import {
-  dismissComputerUseNotice,
-  shouldShowComputerUseNotice,
-  useComputerUseNoticeDismissed,
-} from "../lib/computer-use-notice";
+import { composerSubmissionAllowed } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
   acceptComposerAttachments,
@@ -69,18 +61,22 @@ import { composerPlaceholder } from "../lib/composer-placeholder";
 import { useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
+  completeSlashCommandToken,
   deriveSlashSession,
   failedSendAttachments,
   failedSendDraft,
   moveSlashSelectionId,
   pageSlashSelectionId,
+  parseSubmittedSlashCommand,
   rankSlashResults,
   slashActionCommitIsCurrent,
   slashActionDraftCommitIsCurrent,
+  slashCommandTakesArgument,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
   type SelectedSkillInvocation,
   type SlashResult,
+  type SlashSession,
   type SlashSessionTracker,
   selectedSkillComposerReducer,
   selectedSkillStatus,
@@ -98,6 +94,8 @@ import {
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
+  subscribeStagedComposerText,
+  takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
   COMPOSER_SLASH_PALETTE_ID,
@@ -106,15 +104,18 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
-import type { SkillInvocationV1, SkillSource } from "../shared/slash-commands";
-import { filterForkTurnChoices, forkTurnEligibility } from "../lib/chat-copy-view";
-import { MAX_FORK_QUERY_CODE_UNITS } from "../shared/chat-copy-contract";
+import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import { filterForkTurnChoices, forkSummaryRows, forkTurnEligibility } from "../lib/chat-copy-view";
+import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
   attachmentInlineBytesRemaining,
   attachmentSlotsRemaining,
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
+import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
+import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
+import { escapeStopsGeneration } from "../lib/composer-type-focus";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -132,13 +133,16 @@ interface ComposerProps {
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
-  readinessSettingsSection?: SettingsSection;
+  /** Offer a Connect provider action beside the readiness message. */
+  readinessSettingsSection?: "providers";
   /** True once this chat has a persisted message. */
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
   /** Initial text for an explicitly seeded renderer-only chat draft. */
   initialText?: string;
+  /** Overrides the prompt hint while the composer is ready (a Bot's "Ask {name}"). */
+  placeholder?: string;
   onSend: (
     text: string,
     attachments: Attachment[],
@@ -147,15 +151,16 @@ interface ComposerProps {
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
-  onRedirect?: ComposerProps["onSend"];
   queuedMessages?: React.ReactNode;
   hasQueuedMessages?: boolean;
   /** Queue-owned compaction hold, retained across Composer remounts. */
   compactionHeld?: boolean;
+  /** This fork's summary is pending or failed; sends queue until it settles. */
+  forkSummaryHold?: "pending" | "failed";
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
-  /** Stop has been requested; no busy Queue/Steer/Redirect may be admitted until it settles. */
+  /** Stop has been requested; no busy Queue or Steer may be admitted until it settles. */
   stoppingGeneration?: boolean;
   /** Blocks both click and Enter submission while a model-scoped option is being saved. */
   configurationBusy?: boolean;
@@ -191,15 +196,6 @@ interface ComposerProps {
   contextMeter?: React.ReactNode;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
   onDraftChange?: (text: string, attachments: Attachment[]) => void;
-  /** Global-beta readiness plus this chat's local Computer Use opt-in. */
-  computerUse?: {
-    enabled: boolean;
-    ready: boolean;
-    checking: boolean;
-    saving: boolean;
-    detail: string;
-  };
-  onChangeComputerUse?: (enabled: boolean) => void | Promise<void>;
   currentChatTitle?: string;
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
@@ -211,7 +207,10 @@ interface ComposerProps {
   sessionChat?: Chat;
   authenticatedProviders?: Array<{ id: string; label: string; detail: string }>;
   onCloneChat?: () => Promise<void>;
-  onForkChat?: (throughAssistantMessageId: string) => Promise<void>;
+  /** `after` keeps the reply; `before` cuts ahead of a prompt and pre-fills it for editing. */
+  onForkChat?: (messageId: string, position: ChatForkPosition) => Promise<void>;
+  /** Open the pane's "Fork with summary" confirmation for a turn. */
+  onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   onExportChat?: () => Promise<"saved" | "cancelled">;
   onCompactChat?: (engine?: CompactionEngine) => Promise<
     | {
@@ -238,6 +237,28 @@ interface ComposerProps {
   onLogoutProvider?: (providerId: string) => Promise<{ remainingAuthenticated: boolean | null }>;
   slashPaletteBlocked?: boolean;
   slashActionBusy?: boolean;
+  /** Affordances that act on this Mac; a remote chat turns them off. */
+  surfaces?: ComposerSurfaces;
+  /**
+   * A remote chat's skills, read from its host. When set, `$` offers this
+   * catalog instead of this Mac's, even while the slash palette is off.
+   */
+  hostSkills?: ComposerSkillCatalog;
+  /** Replaces the "Local" label: which Mac a new chat will run on. */
+  machinePicker?: React.ReactNode;
+  /** The context bar for a chat whose project lives on another Mac. */
+  remoteContext?: React.ReactNode;
+}
+
+/** A skill catalog the composer offers after `$`, scoped to one chat or project. */
+export interface ComposerSkillCatalog {
+  /** A selected skill stays valid only while this scope is unchanged. */
+  scopeId: string;
+  data?: SkillCatalogEntry[];
+  isError: boolean;
+  isFetching: boolean;
+  isLoading: boolean;
+  refetch(): unknown;
 }
 const PERMISSION_META: Record<
   WorkspacePermission,
@@ -306,14 +327,15 @@ export function Composer({
   hasMessages,
   chatId,
   initialText = "",
+  placeholder,
   onSend,
   onStop,
   onQueue,
   onSteer,
-  onRedirect,
   queuedMessages,
   hasQueuedMessages = false,
   compactionHeld = false,
+  forkSummaryHold,
   isGenerating,
   canStopGeneration = isGenerating,
   stoppingGeneration = false,
@@ -338,8 +360,6 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
-  computerUse,
-  onChangeComputerUse,
   modelPicker,
   thinkingControl,
   contextMeter,
@@ -356,12 +376,17 @@ export function Composer({
   authenticatedProviders = [],
   onCloneChat,
   onForkChat,
+  onForkWithSummary,
   onExportChat,
   onCompactChat,
   onCancelCompact,
   onLogoutProvider,
   slashPaletteBlocked = false,
   slashActionBusy = false,
+  surfaces = LOCAL_COMPOSER_SURFACES,
+  hostSkills,
+  machinePicker,
+  remoteContext,
 }: ComposerProps) {
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
@@ -372,13 +397,9 @@ export function Composer({
     slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
-  const [busyMode, setBusyMode] = React.useState<"steer" | "queue" | "redirect">("queue");
-  const [confirmRedirect, setConfirmRedirect] = React.useState(false);
+  const [busyMode, setBusyMode] = React.useState<BusySendMode>("queue");
   React.useEffect(() => {
-    if (!isGenerating) {
-      setBusyMode("queue");
-      setConfirmRedirect(false);
-    }
+    if (!isGenerating) setBusyMode("queue");
   }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
@@ -408,6 +429,14 @@ export function Composer({
   }, [chatId]);
   React.useEffect(
     () =>
+      subscribeStagedComposerText(chatId, (staged) => {
+        setText((current) => mergeRestoredGuidance(current, [staged]));
+        toast.info("A visual added a follow-up to your draft.");
+      }),
+    [chatId, setText],
+  );
+  React.useEffect(
+    () =>
       subscribeGuidanceRestore(chatId, (guidance) => {
         setText((current) => mergeRestoredGuidance(current, guidance));
         toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
@@ -425,6 +454,10 @@ export function Composer({
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  React.useEffect(() => {
+    const seed = takeComposerAttachmentSeed(chatId);
+    if (seed) updateAttachments(seed);
+  }, [chatId, updateAttachments]);
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
   React.useLayoutEffect(() => {
@@ -438,8 +471,20 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
+  // A blocked send explains itself beside the composer, not in a toast, and the
+  // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
+  const [blockedSend, setBlockedSend] = React.useState<{
+    reason: string;
+    text: string;
+    attachments: Attachment[];
+    skill: typeof selectedSkill;
+    busyMode: typeof busyMode;
+    generating: boolean;
+    busy: boolean;
+  } | null>(null);
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  const [fileDragActive, setFileDragActive] = React.useState(false);
   React.useLayoutEffect(() => {
     if (!workspace?.id) return;
     const available = () => {
@@ -477,6 +522,7 @@ export function Composer({
     return () => operation.cancel();
   }, []);
   const attachmentDescriptionId = React.useId();
+  const sendBlockedId = React.useId();
   const [sending, setSending] = React.useState(false);
   const sendPendingRef = React.useRef(false);
   const firstSendPending = firstMessageSaving || (freezeWhileSending && sending);
@@ -506,6 +552,8 @@ export function Composer({
   // Manual compaction keeps the draft editable when the chat can queue:
   // submissions wait behind compaction instead of locking the composer.
   const queueDuringCompaction = compactionActive && Boolean(onQueue);
+  // A fork's sends wait for its summary the same way, in the queue.
+  const queueForForkSummary = Boolean(forkSummaryHold) && Boolean(onQueue);
   const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
@@ -525,19 +573,12 @@ export function Composer({
     [],
   );
   const commandSystem = useCommandSystem();
-  const computerUseDescriptionId = React.useId();
-  const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
-  const showComputerUseNotice = shouldShowComputerUseNotice(
-    computerUse?.enabled === true,
-    computerUseNoticeDismissed,
-  );
   const submissionAllowed =
     composerSubmissionAllowed({
       ready,
       isGenerating: isGenerating && !onQueue,
       sending,
       permissionSaving,
-      computerUseSaving: computerUse?.saving === true,
       gitOperationBusy,
       attaching,
     }) &&
@@ -549,13 +590,17 @@ export function Composer({
   // Read at transcript time so dictionary edits apply to an in-flight recording.
   const dictationDictionaryRef = React.useRef<unknown>(undefined);
   dictationDictionaryRef.current = settings.data?.dictationDictionary;
-  const skillCatalog = useDiscoveredSkills(workspace?.id);
+  // A remote chat's skills come from its host; this Mac's catalog is never read for it.
+  const localSkillCatalog = useDiscoveredSkills(hostSkills ? undefined : workspace?.id);
+  const skillCatalog: ComposerSkillCatalog | typeof localSkillCatalog = hostSkills ?? localSkillCatalog;
+  const skillScopeId = hostSkills ? hostSkills.scopeId : workspace?.id;
+  const skillsOffered = surfaces.slashCommands || Boolean(hostSkills);
   const selectedSkillState = React.useMemo(
     () =>
       selectedSkill
         ? selectedSkillStatus(
             selectedSkill,
-            workspace?.id,
+            skillScopeId,
             skillCatalog.data,
             skillCatalog.isError ? "error" : skillCatalog.isFetching ? "loading" : "ready",
           )
@@ -565,7 +610,7 @@ export function Composer({
       skillCatalog.data,
       skillCatalog.isError,
       skillCatalog.isFetching,
-      workspace?.id,
+      skillScopeId,
     ],
   );
   const canSend =
@@ -581,11 +626,7 @@ export function Composer({
       );
       if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
     },
-    {
-      provider: settings.data?.voiceProvider ?? "openai",
-      localModel: settings.data?.localVoiceModel,
-      model: settings.data?.voiceModel,
-    },
+    { model: settings.data?.voiceModel },
   );
 
   React.useLayoutEffect(() => {
@@ -595,15 +636,21 @@ export function Composer({
 
   const forkEligibility = React.useMemo(() => {
     if (!sessionChat) return { turns: [], cloneBlocked: false };
-    return forkTurnEligibility(sessionChat.messages);
+    // A Bot has one canonical chat, so its forks may only keep a reply.
+    return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  const forkSummaryTurnIds = React.useMemo(
+    () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
+    [onForkWithSummary, sessionChat],
+  );
   const visibleForkTurns = React.useMemo(() => {
     return filterForkTurnChoices(completedForkTurns, forkQuery);
   }, [completedForkTurns, forkQuery]);
 
-  const slashSession = React.useMemo(
-    () =>
+  const slashSession = React.useMemo(() => {
+    const session =
+      !skillsOffered ||
       slashPaletteBlocked ||
       confirmFullAccess ||
       renameDialogOpen ||
@@ -619,8 +666,12 @@ export function Composer({
             selectionEnd: selection.end,
             composing,
             tracker: slashTracker,
-          }),
-    [
+          });
+    // Without this Mac's palette only `$` skills from the chat's host remain.
+    return session && !surfaces.slashCommands && session.kind !== "skill" ? null : session;
+  }, [
+      skillsOffered,
+      surfaces.slashCommands,
       composing,
       confirmFullAccess,
       forkDialogOpen,
@@ -653,7 +704,7 @@ export function Composer({
       hasLatestAssistantResponse: Boolean(latestAssistantResponse),
       hasAuthenticatedProvider: authenticatedProviders.length > 0,
       hasWorkspace: Boolean(workspace),
-      hasWorkspaceArtifactAccess: workspace?.permission !== "none",
+      inlineVisualsOff: readCachedAppearance()?.inlineVisuals === "off",
       hasManagedWorktreeFlow: Boolean(
         workspace?.folderPath && gitBranch && onCreateGitWorktree && !gitUnborn,
       ),
@@ -862,14 +913,14 @@ export function Composer({
   );
 
   const forkFromTurn = React.useCallback(
-    async (messageId: string) => {
+    async (messageId: string, position: ChatForkPosition = "after") => {
       if (!onForkChat || sessionCommandBusy) return;
       sessionCommandBusyRef.current = true;
       setSessionCommandStatus("Forking chat…");
       try {
-        await onForkChat(messageId);
+        await onForkChat(messageId, position);
         setForkDialogOpen(false);
-        toast.success("Chat forked");
+        toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
       } finally {
@@ -914,8 +965,9 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
-      mode?: "steer" | "queue" | "redirect";
+      mode?: BusySendMode;
       afterCompaction?: boolean;
+      afterForkSummary?: boolean;
     }): Promise<boolean> => {
       // React state does not close the same-tick Enter + click window. Claim
       // the send synchronously before making any optimistic UI changes.
@@ -948,9 +1000,6 @@ export function Composer({
         if (payload.mode === "steer") {
           if (!onSteer) throw new Error("Steer is unavailable for this response.");
           submit = onSteer;
-        } else if (payload.mode === "redirect") {
-          if (!onRedirect) throw new Error("Redirect is unavailable for this response.");
-          submit = onRedirect;
         } else if (payload.mode === "queue") {
           if (!onQueue) throw new Error("Queue is unavailable for this response.");
           submit = onQueue;
@@ -972,10 +1021,11 @@ export function Composer({
           toast.info(
             payload.afterCompaction
               ? "Follow-up queued. It will send after compaction finishes."
-              : "Follow-up queued. It will run after the current response.",
+              : payload.afterForkSummary
+                ? "Message queued. It will send once the fork's summary is ready."
+                : "Follow-up queued. It will run after the current response.",
           );
         }
-        if (payload.mode === "redirect") toast.info("Redirect accepted. Aiden is stopping the current response.");
         settleComposerSubmission(chatId, true, draftRef.current.text);
         return true;
       } catch (error) {
@@ -1016,28 +1066,30 @@ export function Composer({
         setSending(false);
       }
     },
-    [chatId, onSend, onQueue, onSteer, onRedirect, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
   const selectSlashResult = React.useCallback(
-    async (result: SlashResult) => {
+    async (result: SlashResult, submittedSession?: SlashSession) => {
+      // A palette pick uses the live slash session; Send passes the command it parsed.
+      const session = submittedSession ?? slashSession;
       if (
         firstSendPendingRef.current ||
         slashActionPendingRef.current ||
-        !slashSession ||
-        result.kind !== slashSession.kind ||
+        !session ||
+        result.kind !== session.kind ||
         !slashResultSelectable(result)
       ) {
         return;
       }
       if (result.kind === "skill") {
-        if (!workspace?.id) return;
-        const nextText = consumeSlashToken(text, slashSession);
-        const nextCaret = slashSession.tokenStart;
+        if (!skillScopeId) return;
+        const nextText = consumeSlashToken(text, session);
+        const nextCaret = session.tokenStart;
         dispatchSkillSelection({
           type: "select",
           selected: {
-            workspaceId: workspace.id,
+            workspaceId: skillScopeId,
             invocation: {
               version: 1,
               invocationId: result.skill.invocationId,
@@ -1058,16 +1110,36 @@ export function Composer({
         });
         return;
       }
-      const argument = validateSlashCommandArgument(result.command, slashSession.argument);
+      const argument = validateSlashCommandArgument(result.command, session.argument);
       if (!argument.valid) {
         toast.info(argument.reason ?? "That command argument is invalid.");
         return;
       }
+      if (
+        !submittedSession &&
+        slashCommandTakesArgument(result.command) &&
+        !session.argument.trim()
+      ) {
+        // Picking a command that reads text after it fills in "/name " and waits;
+        // Send runs it with whatever follows.
+        const completion = completeSlashCommandToken(text, session, result.command);
+        setText(completion.text);
+        setSelection({ start: completion.caret, end: completion.caret });
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(completion.caret, completion.caret);
+        });
+        return;
+      }
       const nextText =
         result.command.argument !== "none"
-          ? text.slice(0, slashSession.tokenStart)
-          : consumeSlashToken(text, slashSession);
-      const nextCaret = slashSession.tokenStart;
+          ? text.slice(0, session.tokenStart)
+          : consumeSlashToken(text, session);
+      const nextCaret = session.tokenStart;
       const expectedCommit = {
         draft: text,
         epoch: slashTracker.epoch,
@@ -1099,7 +1171,7 @@ export function Composer({
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
         submitComposerInstruction: async (instruction, prompt) => {
-          const nextPrompt = prompt.trim() || consumeSlashToken(text, slashSession).trim();
+          const nextPrompt = prompt.trim() || consumeSlashToken(text, session).trim();
           const missingPromptMessage =
             instruction === "btw"
               ? "Add a question after /btw, then send."
@@ -1180,7 +1252,10 @@ export function Composer({
         return;
       }
       if (!attempt.handled) {
-        toast.info("That app action is unavailable right now.");
+        // Composer instructions already explained why they did not send.
+        if (result.command.action.kind !== "composer-instruction") {
+          toast.info("That app action is unavailable right now.");
+        }
         return;
       }
       // Composer instructions own their optimistic clear and guarded rollback.
@@ -1239,7 +1314,7 @@ export function Composer({
       slashResultSelectable,
       slashSession,
       text,
-      workspace?.id,
+      skillScopeId,
     ],
   );
 
@@ -1459,6 +1534,8 @@ export function Composer({
   );
 
   const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+    setFileDragActive(false);
+    if (!surfaces.attachments) return;
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -1466,11 +1543,25 @@ export function Composer({
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+    // Not accepting the drag leaves the drop to the system, so nothing is read from this Mac.
+    if (!surfaces.attachments) return;
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setFileDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    // Moving between children fires dragleave on the shell; only clear when the
+    // pointer actually leaves it.
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setFileDragActive(false);
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    // Without attachments, a paste is plain text only.
+    if (!surfaces.attachments) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
         return [];
@@ -1502,53 +1593,80 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  const submit = async (redirectConfirmed = false) => {
-    if (redirectConfirmed && !isGenerating) {
-      toast.info("The previous response has finished. Send your message normally.");
-      return;
-    }
+  const sendBlockedReason =
+    blockedSend &&
+    blockedSend.text === text &&
+    blockedSend.attachments === attachments &&
+    blockedSend.skill === selectedSkill &&
+    blockedSend.busyMode === busyMode &&
+    blockedSend.generating === isGenerating &&
+    blockedSend.busy === (gitOperationBusy || attaching)
+      ? blockedSend.reason
+      : null;
+  const blockSend = (reason: string) =>
+    setBlockedSend({
+      reason,
+      text,
+      attachments,
+      skill: selectedSkill,
+      busyMode,
+      generating: isGenerating,
+      busy: gitOperationBusy || attaching,
+    });
+
+  const submit = async (busyModeOverride?: BusySendMode) => {
     if (sendPendingRef.current || composing) return;
     if (attachmentOperationRef.current.isBusy || attaching) {
-      toast.info("Wait for the selected attachments to finish loading before sending.");
+      blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
     }
     if (gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before sending.");
+      blockSend("Wait for the current Git operation to finish before sending.");
       return;
     }
     const trimmed = text.trim();
     if (new TextEncoder().encode(trimmed).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
-      toast.info("Message text exceeds the 1 MB limit.");
+      blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
+    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text) : null;
+    if (submittedCommand) {
+      const availability = slashCommandAvailability(submittedCommand.command, slashActionContext);
+      if (!availability.available) {
+        blockSend(availability.reason ?? "That command is unavailable right now.");
+        return;
+      }
+      await selectSlashResult(
+        {
+          kind: "command",
+          id: `slash-option-command-${submittedCommand.command.name}`,
+          command: submittedCommand.command,
+          score: 0,
+        },
+        submittedCommand.session,
+      );
+      return;
+    }
     const mode = isGenerating
-      ? busyMode
-      : hasQueuedMessages || queueDuringCompaction
+      ? (busyModeOverride ?? busyMode)
+      : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
     if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
-      toast.info("Steer accepts text only. Remove attachments and the selected skill first.");
+      blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
       return;
     }
-    if (mode === "redirect" && !redirectConfirmed) {
-      if (attachments.length > 0 || selectedSkill) {
-        toast.info("Redirect accepts text only. Remove attachments and the selected skill first.");
-        return;
-      }
-      setConfirmRedirect(true);
-      return;
-    }
-    if (mode === "redirect" && !isGenerating) return;
     if (selectedSkillState && selectedSkillState.state !== "valid") {
-      toast.info(selectedSkillState.reason);
+      blockSend(selectedSkillState.reason);
       return;
     }
     if (
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
     ) {
-      toast.info("Switch to a vision-capable model before sending these images.");
+      blockSend("Switch to a vision-capable model before sending these images.");
       return;
     }
     try {
@@ -1560,6 +1678,7 @@ export function Composer({
         skillRevision: skillSelection.revision,
         mode,
         afterCompaction: !isGenerating && queueDuringCompaction,
+        afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
@@ -1630,6 +1749,21 @@ export function Composer({
         }
       }
     }
+    if (
+      escapeStopsGeneration({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        isComposing: event.nativeEvent.isComposing,
+        repeat: event.repeat,
+        canStop: isGenerating && canStopGeneration,
+        draftEmpty: !text.trim() && attachments.length === 0 && !selectedSkill,
+      })
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onStop();
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void submit();
@@ -1641,11 +1775,6 @@ export function Composer({
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
-  const computerUseControl = computerUseControlState({
-    enabled: computerUse?.enabled ?? false,
-    ready: computerUse?.ready ?? false,
-    busy: computerUse?.saving === true || isGenerating || sending || gitOperationBusy,
-  });
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
     if (workspaceChangeBlockedReason) {
@@ -1725,48 +1854,9 @@ export function Composer({
               />
             ) : null}
           </ComposerSlashPalettePresence>
-          {computerUse ? (
-            <span id={computerUseDescriptionId} className="sr-only">
-              Computer Use may send screenshots and accessibility text to the selected model. Every
-              input action asks for approval.
-            </span>
-          ) : null}
-          {showComputerUseNotice ? (
-            <aside
-              aria-label="Computer Use privacy notice"
-              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5"
-            >
-              <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
-              <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
-                <span className="font-medium text-primary">Computer Use is on.</span> Screen details
-                may go to your model; actions still ask.
-              </Text>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="transparent"
-                    size="small"
-                    className="h-6 shrink-0 gap-1 px-1.5 text-secondary"
-                    aria-label="Hide Computer Use privacy notice"
-                  >
-                    Hide
-                    <ChevronDown aria-hidden="true" className="size-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("session")}>
-                    Hide for this session
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("permanent")}>
-                    Don’t show again
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </aside>
-          ) : null}
           {queuedMessages}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
+          {surfaces.localContext ? (
           <ComposerContextBar hasUserMessages={sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages} inputRef={inputRef}>
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
@@ -1812,14 +1902,16 @@ export function Composer({
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
-            {/* Execution location — Pi runs locally on this host. */}
-            <span
-              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
-              title="The agent runs locally on this device"
-            >
-              <Monitor className="size-4 shrink-0" />
-              Local
-            </span>
+            {/* Execution location — Pi runs locally on this host, unless a new chat picks another Mac. */}
+            {machinePicker ?? (
+              <span
+                className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+                title="The agent runs locally on this device"
+              >
+                <Monitor className="size-4 shrink-0" />
+                Local
+              </span>
+            )}
             {gitBranch && workspace?.folderPath ? (
               <GitBranchPicker
                 key={`git-branch-picker-${worktreeRequest}`}
@@ -1845,15 +1937,38 @@ export function Composer({
             <ChatPullRequestsChip chatId={chatId} />
           </div>
           </ComposerContextBar>
+          ) : remoteContext ? (
+            <ComposerContextBar hasUserMessages={hasMessages} inputRef={inputRef}>
+              <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+                {remoteContext}
+              </div>
+            </ComposerContextBar>
+          ) : null}
           <div
             className="composer-shell relative z-10 -mt-1 bg-popover p-2.5 shadow-composer"
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            <span id={attachmentDescriptionId} className="sr-only">
-              Drag files here or paste an image to attach it. Use Attach files or images to choose
-              files with the keyboard.
-            </span>
+            {surfaces.attachments && fileDragActive ? (
+              <div
+                aria-hidden="true"
+                data-composer-drop-target
+                className="composer-drop-overlay pointer-events-none absolute inset-0 z-30 grid place-items-center bg-popover"
+              >
+                <span className="composer-drop-overlay absolute inset-0 bg-status-accent-surface" />
+                <span className="relative flex items-center gap-2 text-small-strong font-medium text-accent">
+                  <Paperclip className="size-4" aria-hidden="true" />
+                  Drop to attach
+                </span>
+              </div>
+            ) : null}
+            {surfaces.attachments ? (
+              <span id={attachmentDescriptionId} className="sr-only">
+                Drag files here or paste an image to attach it. Use Attach files or images to choose
+                files with the keyboard.
+              </span>
+            ) : null}
             {selectedSkill ? (
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
@@ -1976,15 +2091,23 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
-              aria-describedby={attachmentDescriptionId}
+              aria-describedby={
+                [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
-              placeholder={composerPlaceholder({
-                ready,
-                readinessMessage,
-                hasMessages,
-                chatId,
-              })}
+              placeholder={
+                ready && placeholder
+                  ? placeholder
+                  : composerPlaceholder({
+                      ready,
+                      readinessMessage,
+                      hasMessages,
+                      chatId,
+                    })
+              }
               className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
@@ -2005,7 +2128,31 @@ export function Composer({
                   </Button>
                 ) : null}
               </div>
+            ) : forkSummaryHold ? (
+              <Text
+                as="p"
+                role="status"
+                aria-live="polite"
+                variant="small"
+                color="tertiary"
+                className="px-1.5 pb-1"
+              >
+                {forkSummaryHold === "pending"
+                  ? "Summarizing the original chat…"
+                  : "The fork's summary didn't finish. Retry it or continue without it."}
+                {queueForForkSummary ? " Messages you send now wait until it's settled." : null}
+              </Text>
             ) : null}
+            <Text
+              as="p"
+              id={sendBlockedId}
+              role="status"
+              variant="small"
+              color="secondary"
+              className={sendBlockedReason ? "px-1.5 pb-1" : "sr-only"}
+            >
+              {sendBlockedReason}
+            </Text>
             {voice.lastError ? (
               <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
                 <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
@@ -2016,11 +2163,13 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{readinessSettingsSection === "providers" ? "Connect your AI" : "Review permissions"}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{CONNECT_PROVIDER_ACTION}</Button> : null}
               </Text>
             ) : null}
-            <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-1.5 gap-y-1">
+            <div className="composer-footer-row mt-1.5 flex min-w-0 flex-nowrap items-center justify-between gap-x-1.5 gap-y-1">
               <div className="flex shrink-0 items-center gap-1">
+                {surfaces.attachments ? (
+                <>
                 <Button
                   variant="transparent"
                   size="small"
@@ -2040,8 +2189,11 @@ export function Composer({
                 <span className="sr-only" role="status" aria-live="polite">
                   {attachmentStatus}
                 </span>
+                </>
+                ) : null}
+                {surfaces.localContext ? (
                 <div
-                  className="composer-permission-control group/access relative h-8 w-34 shrink-0 max-[520px]:w-8"
+                  className="composer-permission-control group/access relative h-8 w-34 shrink-0"
                   data-open={permissionMenuOpen || undefined}
                   onPointerEnter={() => {
                     dismissSlash();
@@ -2075,12 +2227,12 @@ export function Composer({
                       setPermissionMenuOpen(true);
                       requestAnimationFrame(() => permissionControlRef.current?.focus());
                     }}
-                    className="absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out max-[520px]:justify-center max-[520px]:px-0"
+                    className="composer-permission-trigger absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out"
                   >
                     <PermissionIcon
                       className={cn("size-4 shrink-0", PERMISSION_META[permission].className)}
                     />
-                    <span className="truncate max-[520px]:sr-only">
+                    <span className="composer-permission-label truncate">
                       {permissionSaving ? "Updating…" : PERMISSION_META[permission].label}
                     </span>
                   </button>
@@ -2173,51 +2325,9 @@ export function Composer({
                     })}
                   </div>
                 </div>
-                {computerUse && onChangeComputerUse ? (
-                  <Button
-                    variant={computerUse.enabled ? "muted" : "transparent"}
-                    size="small"
-                    className={cn(
-                      "h-7 gap-1.5 px-2 aria-disabled:opacity-45",
-                      computerUse.enabled ? "text-accent" : "text-secondary",
-                    )}
-                    disabled={computerUseControl.disabled}
-                    aria-disabled={computerUseControl.ariaDisabled || undefined}
-                    aria-describedby={computerUseDescriptionId}
-                    onClick={() => {
-                      if (computerUseControl.ariaDisabled) {
-                        toast.info(computerUse.detail);
-                        return;
-                      }
-                      void onChangeComputerUse(!computerUse.enabled);
-                    }}
-                    aria-pressed={computerUse.enabled}
-                    aria-label={
-                      computerUse.enabled
-                        ? "Turn off Computer Use for this chat"
-                        : `Turn on Computer Use for this chat. ${computerUse.detail}`
-                    }
-                    title={
-                      computerUse.ready || computerUse.enabled
-                        ? "Computer Use (Beta) · every input action asks for approval"
-                        : computerUse.detail
-                    }
-                  >
-                    {computerUse.checking || computerUse.saving ? (
-                      <Loader2 className="animate-spin" />
-                    ) : (
-                      <MousePointer2 />
-                    )}
-                    Computer
-                  </Button>
                 ) : null}
               </div>
-              <div
-                className={cn(
-                  "ml-auto flex min-w-0 items-center justify-end gap-1.5",
-                  thinkingControl && "composer-action-row max-[520px]:w-full",
-                )}
-              >
+              <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
                 {voice.recording &&
                 (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
                   <span
@@ -2228,6 +2338,14 @@ export function Composer({
                   >
                     <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
                     <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
+                  </span>
+                ) : voice.transcribing && voice.loadingModel ? (
+                  <span
+                    className="max-w-56 truncate text-small text-secondary"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    Loading model…
                   </span>
                 ) : null}
                 {contextMeter}
@@ -2248,31 +2366,13 @@ export function Composer({
                   )}
                 </Button>
                 {onQueue && isGenerating ? (
-                  <>
-                    <Button variant="accent" size="small" disabled={!canSend}
-                      onClick={() => void submit()} aria-label={busyMode === "queue" ? "Queue message" : busyMode === "steer" ? "Steer response" : "Redirect response"}>
-                      {busyMode === "queue" ? <ListPlus /> : <ArrowUp />}
-                      {busyMode === "queue" ? "Queue" : busyMode === "steer" ? "Steer" : "Redirect"}
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="transparent" size="small" iconOnly aria-label="Choose message action">
-                          <ChevronDown aria-hidden="true" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem disabled={!onSteer || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("steer")}>
-                          Steer · Add guidance without stopping
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => setBusyMode("queue")}>
-                          Queue · Run after this response
-                        </DropdownMenuItem>
-                        <DropdownMenuItem disabled={!onRedirect || attachments.length > 0 || Boolean(selectedSkill)} onSelect={() => setBusyMode("redirect")}>
-                          Redirect · Stop and change direction
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </>
+                  <BusySendButton
+                    mode={busyMode}
+                    canSubmit={canSend}
+                    steerAvailable={Boolean(onSteer) && attachments.length === 0 && !selectedSkill}
+                    onModeChange={setBusyMode}
+                    onSubmit={(mode) => void submit(mode)}
+                  />
                 ) : null}
                 {isGenerating ? (
                   <Button
@@ -2282,6 +2382,8 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
+                    aria-keyshortcuts="Escape"
+                    title="Stop generating (Esc from an empty message)"
                   >
                     <Square className="fill-current" />
                   </Button>
@@ -2292,9 +2394,17 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label={hasQueuedMessages || queueDuringCompaction ? "Queue message" : "Send message"}
+                    aria-label={
+                      hasQueuedMessages || queueDuringCompaction || queueForForkSummary
+                        ? "Queue message"
+                        : "Send message"
+                    }
                   >
-                    {hasQueuedMessages || queueDuringCompaction ? <ListPlus /> : <ArrowUp />}
+                    {hasQueuedMessages || queueDuringCompaction || queueForForkSummary ? (
+                      <ListPlus />
+                    ) : (
+                      <ArrowUp />
+                    )}
                   </Button>
                 )}
               </div>
@@ -2302,18 +2412,6 @@ export function Composer({
           </div>
         </div>
       </div>
-      <AlertDialog
-        open={confirmRedirect}
-        onOpenChange={setConfirmRedirect}
-        title="Redirect this response?"
-        description="Aiden will stop the current response and run your new direction next. Queued follow-ups will be cleared."
-        confirmLabel="Redirect"
-        returnFocus={() => inputRef?.current ?? null}
-        onConfirm={() => {
-          setConfirmRedirect(false);
-          void submit(true);
-        }}
-      />
       <AlertDialog
         open={voice.awaitingRecordedRetryConsent}
         onOpenChange={(open) => {
@@ -2371,7 +2469,11 @@ export function Composer({
           if (!open) setForkQuery("");
         }}
         title="Fork from a completed turn"
-        description="The new chat copies visible messages and attachments through the selected response. Private reasoning, tool state, and subagent runtime records are omitted."
+        description={`Fork keeps visible messages and attachments through the selected response.${
+          sessionChat?.botId
+            ? ""
+            : " Edit in fork keeps everything before that turn's prompt and puts the prompt in the composer."
+        } Private reasoning, tool state, and subagent runtime records are omitted.`}
         confirmHidden
         busy={sessionCommandBusy}
         returnFocus={() => inputRef?.current ?? null}
@@ -2398,10 +2500,10 @@ export function Composer({
         <ul className="flex flex-col gap-1" aria-label="Completed turns">
           {visibleForkTurns.length > 0 ? (
             visibleForkTurns.map((turn) => (
-              <li key={turn.id}>
+              <li key={turn.id} className="flex items-center gap-1">
                 <Button
                   variant="transparent"
-                  className="h-auto min-h-11 w-full justify-start px-3 py-2 text-left"
+                  className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-2 text-left"
                   disabled={sessionCommandBusy}
                   onClick={() => void forkFromTurn(turn.id)}
                 >
@@ -2414,6 +2516,34 @@ export function Composer({
                     </span>
                   </span>
                 </Button>
+                {turn.userMessageId ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Edit turn ${turn.turnNumber} prompt in a fork`}
+                    onClick={() => void forkFromTurn(turn.userMessageId!, "before")}
+                  >
+                    Edit in fork
+                  </Button>
+                ) : null}
+                {forkSummaryTurnIds?.has(turn.id) ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0"
+                    disabled={sessionCommandBusy}
+                    aria-label={`Fork from turn ${turn.turnNumber} with a summary of what followed`}
+                    onClick={() => {
+                      setForkDialogOpen(false);
+                      setForkQuery("");
+                      onForkWithSummary?.(turn.id, "after");
+                    }}
+                  >
+                    With summary…
+                  </Button>
+                ) : null}
               </li>
             ))
           ) : (

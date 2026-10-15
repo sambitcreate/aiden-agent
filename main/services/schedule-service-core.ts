@@ -6,8 +6,20 @@ import type {
   ScheduledTaskInput,
 } from "./types.js";
 
+/**
+ * What started a run. An automatic run carries the exact scheduled fire time it
+ * claimed, so downstream submissions can derive a stable idempotency key
+ * (`routine:<taskId>:<fireTime>`); a manual run carries its own unique key.
+ * A catch-up re-runs one fire a paused Bot skipped: it names that skipped
+ * run, so repeating the catch-up reuses the same idempotency key.
+ */
+export type ScheduledRunTrigger =
+  | { kind: "automatic"; fireTime: number }
+  | { kind: "manual"; key: string }
+  | { kind: "catch_up"; missedRunId: string; missedAt: number };
+
 interface ScheduleExecutionLike {
-  run(task: ScheduledTask, runId?: string): Promise<ScheduledRun>;
+  run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
   cancel(taskId: string): boolean;
   cancelAll(): void;
 }
@@ -24,12 +36,111 @@ interface RunningTask {
 
 type DispatchOptions = { runId?: string; expectedUpdatedAt?: number } & (
   | { automatic: true; isCurrent: () => boolean }
-  | { automatic: false }
+  | { automatic: false; catchUp?: Extract<ScheduledRunTrigger, { kind: "catch_up" }> }
 );
 
 type DispatchResult =
   | { kind: "skipped"; reason: "already-running" }
   | { kind: "dispatched"; completion: Promise<ScheduledRun> };
+
+export interface CatchUpQueueOptions {
+  /** Missed runs allowed to execute at once. */
+  concurrency?: number;
+  /** Minimum spacing between catch-up starts. */
+  staggerMs?: number;
+  /** True while catch-up should wait, for example while the screen is locked. */
+  shouldDefer?: () => boolean;
+}
+
+export const CATCH_UP_CONCURRENCY = 2;
+export const CATCH_UP_STAGGER_MS = 3_000;
+
+/**
+ * Bounded, staggered admission for missed scheduled runs, so a restart after
+ * a long sleep does not start every overdue automation at once. Deferred work
+ * waits for `reevaluate()`; entries that stop being current are dropped.
+ */
+export function createCatchUpQueue(options: CatchUpQueueOptions = {}) {
+  const concurrency = Math.max(1, options.concurrency ?? CATCH_UP_CONCURRENCY);
+  const staggerMs = Math.max(0, options.staggerMs ?? CATCH_UP_STAGGER_MS);
+  let shouldDefer = options.shouldDefer ?? (() => false);
+  const pending: Array<{ run: () => Promise<unknown> | undefined; isCurrent: () => boolean }> = [];
+  let active = 0;
+  let generation = 0;
+  let lastStartAt = Number.NEGATIVE_INFINITY;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deferred = () => {
+    try {
+      return shouldDefer();
+    } catch {
+      return false;
+    }
+  };
+
+  function pump(): void {
+    if (timer !== undefined) return;
+    while (pending.length > 0 && !pending[0].isCurrent()) pending.shift();
+    if (pending.length === 0 || active >= concurrency || deferred()) return;
+    const wait = lastStartAt + staggerMs - Date.now();
+    if (wait > 0) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        pump();
+      }, wait);
+      timer.unref?.();
+      return;
+    }
+    const next = pending.shift()!;
+    lastStartAt = Date.now();
+    active += 1;
+    const startedIn = generation;
+    let completion: Promise<unknown> | undefined;
+    try {
+      completion = next.run();
+    } catch {
+      completion = undefined;
+    }
+    void Promise.resolve(completion)
+      .catch(() => undefined)
+      .finally(() => {
+        if (startedIn !== generation) return;
+        active -= 1;
+        pump();
+      });
+    pump();
+  }
+
+  return {
+    enqueue(run: () => Promise<unknown> | undefined, isCurrent: () => boolean): void {
+      pending.push({ run, isCurrent });
+      pump();
+    },
+    /** Retry deferred or waiting work, for example after resume or unlock. */
+    reevaluate(): void {
+      pump();
+    },
+    setDeferPolicy(policy: () => boolean): void {
+      shouldDefer = policy;
+      pump();
+    },
+    /** Drop queued work; runs already started are being cancelled and stop counting. */
+    clear(): void {
+      generation += 1;
+      active = 0;
+      lastStartAt = Number.NEGATIVE_INFINITY;
+      pending.length = 0;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+    get active(): number {
+      return active;
+    },
+    get pending(): number {
+      return pending.length;
+    },
+  };
+}
 
 export interface ScheduleServiceDependencies {
   store: ScheduleStore;
@@ -38,6 +149,7 @@ export interface ScheduleServiceDependencies {
   broadcast(payload: Record<string, unknown>): void;
   warn(message: string): void;
   error(message: string, cause: unknown): void;
+  catchUp?: CatchUpQueueOptions;
 }
 
 export function createScheduleServiceCore(
@@ -51,6 +163,8 @@ export function createScheduleServiceCore(
   let started = false;
   let globallyEnabled = true;
   let startupRevision = 0;
+  let manualRunSequence = 0;
+  const catchUp = createCatchUpQueue(dependencies.catchUp);
 
   const throwIfAborted = (signal: AbortSignal | undefined, action: string) => {
     if (signal?.aborted)
@@ -86,6 +200,11 @@ export function createScheduleServiceCore(
     task: ScheduledTask,
     isCurrent: () => boolean,
   ): Promise<ScheduledTask> {
+    // A one-off routine is spent by the claim itself, so cron (which has no
+    // year field) can never repeat it on the same date next year.
+    if (task.routineSchedule?.kind === "once") {
+      return store.updateRuntime(task.id, { enabled: false, nextRunAt: undefined }, isCurrent);
+    }
     return store.updateRuntime(task.id, {
       nextRunAt: task.enabled
         ? nextScheduledRun(task.cron, task.timezone, new Date(Date.now() + 1))
@@ -173,7 +292,7 @@ export function createScheduleServiceCore(
           );
         }
         if (
-          options.automatic &&
+          (options.automatic || options.catchUp !== undefined) &&
           (!started || !globallyEnabled || !task.enabled)
         ) {
           throw new Error("This scheduled task is paused.");
@@ -183,8 +302,15 @@ export function createScheduleServiceCore(
         const claimed = options.automatic ? await advanceBeforeRun(task, isCurrent) : task;
         if (!isCurrent())
           throw new Error("This scheduled task was cancelled.");
+        if (options.automatic && !claimed.enabled) {
+          stopJob(task.id);
+          dependencies.broadcast({ taskId: task.id });
+        }
         state.executionStarted = true;
-        return execution.run(claimed, options.runId);
+        const trigger: ScheduledRunTrigger = options.automatic
+          ? { kind: "automatic", fireTime: task.nextRunAt ?? Date.now() }
+          : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
+        return execution.run(claimed, options.runId, trigger);
       } finally {
         if (!workspaceResolved) {
           workspaceResolved = true;
@@ -348,12 +474,13 @@ export function createScheduleServiceCore(
             const job = jobs.get(latest.id);
             if (!job) continue;
             const ownsCatchup = () => isCurrent() && jobs.get(latest.id) === job;
-            const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
-            if (result.kind === "dispatched") {
-              void result.completion.catch((error) =>
+            catchUp.enqueue(() => {
+              const result = dispatch(latest.id, { automatic: true, isCurrent: ownsCatchup });
+              if (result.kind !== "dispatched") return undefined;
+              return result.completion.catch((error) =>
                 recordUnexpectedFailure(latest, error, ownsCatchup),
               );
-            }
+            }, ownsCatchup);
           }
         }
       } catch (error) {
@@ -368,6 +495,7 @@ export function createScheduleServiceCore(
     stop(): void {
       startupRevision += 1;
       started = false;
+      catchUp.clear();
       for (const job of jobs.values()) job.stop();
       jobs.clear();
       for (const state of runningTasks.values()) state.cancelRequested = true;
@@ -558,6 +686,23 @@ export function createScheduleServiceCore(
       );
     },
 
+    /**
+     * Run one missed fire again (a Bot routine skipped while its Bot was
+     * paused). Unlike `runNow` it honours the same gates as an automatic run
+     * (scheduler started, globally enabled, task enabled) and never advances
+     * the schedule. `undefined` when the task is already running.
+     */
+    catchUp(
+      id: string,
+      missed: { runId: string; at: number },
+    ): Promise<ScheduledRun> | undefined {
+      const result = dispatch(id, {
+        automatic: false,
+        catchUp: { kind: "catch_up", missedRunId: missed.runId, missedAt: missed.at },
+      });
+      return result.kind === "dispatched" ? result.completion : undefined;
+    },
+
     async setGlobalEnabled(enabled: boolean): Promise<void> {
       // Explicit settings changes own scheduling from this point onward;
       // pending startup reads must not restore old settings or dispatch catch-up.
@@ -571,6 +716,15 @@ export function createScheduleServiceCore(
         await rescheduleAll();
       }
       dependencies.broadcast({ globallyEnabled: enabled });
+    },
+
+    /** Re-check deferred catch-up, for example after resume or unlock. */
+    reevaluateCatchUp(): void {
+      catchUp.reevaluate();
+    },
+
+    setCatchUpDeferPolicy(policy: () => boolean): void {
+      catchUp.setDeferPolicy(policy);
     },
 
     isRunning(id: string): boolean {

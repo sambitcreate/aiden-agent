@@ -13,6 +13,10 @@ import { agentCommandEnvironment } from "./agent-command-environment.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
+/** Pty chunks arriving within this window reach the renderer as one message. */
+const OUTPUT_COALESCE_MS = 8;
+/** Pending output that forces delivery without waiting for the window. */
+const OUTPUT_COALESCE_MAX_CHARS = 64_000;
 const MAX_SESSIONS_PER_WEB_CONTENTS = 8;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
@@ -44,9 +48,13 @@ interface TerminalSession extends TerminalSessionInfo {
   ownerDocumentId: string;
   owner: RendererDocumentOwner;
   removeOwnerInvalidation: () => void;
+  /** Replay tail; may exceed MAX_BUFFER_CHARS until compaction. */
   buffer: string;
   sequence: number;
   historyWorkspaceId: string;
+  /** Output already in `buffer` but not yet delivered to the renderer. */
+  pendingOutput: string;
+  outputTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface TerminalServiceOptions {
@@ -330,6 +338,7 @@ export class TerminalService {
       buffer: restoredHistory ?? "",
       sequence: restoredHistory ? 1 : 0,
       historyWorkspaceId: workspaceId,
+      pendingOutput: "",
     };
     this.sessions.set(id, session);
     const removeOwnerInvalidation = owner.onInvalidated(() => {
@@ -349,20 +358,30 @@ export class TerminalService {
     pty.onData((data) => {
       const current = this.sessions.get(id);
       if (!current) return;
-      current.buffer = `${current.buffer}${data}`.slice(-MAX_BUFFER_CHARS);
-      current.sequence += 1;
+      // Appending is amortized O(1); the tail is trimmed only once it doubles.
+      current.buffer += data;
+      if (current.buffer.length > MAX_BUFFER_CHARS * 2) {
+        current.buffer = current.buffer.slice(-MAX_BUFFER_CHARS);
+      }
       // Persist new output (the store sanitizes and debounces the disk write).
       this.historyStore?.append(workspaceId, data);
       try { this.outputObserver?.(workspaceId, data); } catch { /* Browser suggestions cannot interrupt terminal output. */ }
-      try {
-        owner.send("terminal:data", { sessionId: id, sequence: current.sequence, data });
-      } catch {
-        this.terminate(id, current);
+      current.pendingOutput += data;
+      if (current.pendingOutput.length >= OUTPUT_COALESCE_MAX_CHARS) {
+        this.flushOutput(id, current);
+      } else if (!current.outputTimer) {
+        current.outputTimer = setTimeout(() => {
+          current.outputTimer = undefined;
+          if (this.sessions.get(id) === current) this.flushOutput(id, current);
+        }, OUTPUT_COALESCE_MS);
+        current.outputTimer.unref?.();
       }
     });
     pty.onExit(({ exitCode, signal }) => {
       const current = this.sessions.get(id);
       if (current !== session) return;
+      // Deliver the final output before the exit notification.
+      this.flushOutput(id, current);
       this.sessions.delete(id);
       current.removeOwnerInvalidation();
       // Flush the final chunk before the session goes away.
@@ -379,7 +398,13 @@ export class TerminalService {
 
   snapshot(id: string, owner: RendererDocumentOwner): TerminalSnapshot {
     const session = this.getOwned(id, owner);
-    return { buffer: session.buffer, sequence: session.sequence };
+    // Deliver pending output first so the snapshot's sequence covers its buffer.
+    this.flushOutput(id, session);
+    const buffer =
+      session.buffer.length > MAX_BUFFER_CHARS
+        ? session.buffer.slice(-MAX_BUFFER_CHARS)
+        : session.buffer;
+    return { buffer, sequence: session.sequence };
   }
 
   write(id: string, data: unknown, owner: RendererDocumentOwner): void {
@@ -433,7 +458,27 @@ export class TerminalService {
     return session;
   }
 
+  /** Send buffered pty output as one `terminal:data` message with the next sequence. */
+  private flushOutput(id: string, session: TerminalSession): void {
+    if (session.outputTimer) {
+      clearTimeout(session.outputTimer);
+      session.outputTimer = undefined;
+    }
+    const data = session.pendingOutput;
+    if (!data) return;
+    session.pendingOutput = "";
+    session.sequence += 1;
+    try {
+      session.owner.send("terminal:data", { sessionId: id, sequence: session.sequence, data });
+    } catch {
+      if (this.sessions.get(id) === session) this.terminate(id, session);
+    }
+  }
+
   private terminate(id: string, session: TerminalSession): void {
+    if (session.outputTimer) clearTimeout(session.outputTimer);
+    session.outputTimer = undefined;
+    session.pendingOutput = "";
     this.sessions.delete(id);
     session.removeOwnerInvalidation();
     this.terminatePty(session.pty);

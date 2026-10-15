@@ -1,5 +1,6 @@
 // In-app full-screen settings: left nav + section content, with "Back to app".
 
+import { HistoryNavButtons } from "../components/history-nav";
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Button, ScrollArea, Sidebar, SplitView } from "../components/ui";
@@ -10,8 +11,10 @@ import {
   Plug,
   Wand2,
   Globe,
+  Image as ImageIcon,
   Mic,
   Keyboard,
+  Link2,
   ListFilter,
   Search,
   MousePointer2,
@@ -30,20 +33,23 @@ import { AppearanceSettings } from "../components/settings/appearance-settings";
 import { SkillsSettings } from "../components/settings/skills-settings";
 import { McpSettings } from "../components/settings/mcp-settings";
 import { WebSearchSettings } from "../components/settings/web-search-settings";
+import { ImageGenerationSettings } from "../components/settings/image-generation-settings";
 import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
+import { LinksSettings } from "../components/settings/links-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
-import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
-import { SimulatorSettings } from "../components/settings/simulator-settings";
+import { ConnectionsSettings } from "../components/settings/connections-settings";
+import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import {
   availableSettingsDestinations,
+  matchesSettingsSearch,
   SETTINGS_DESTINATIONS,
   type SettingsSection,
 } from "../lib/settings-section";
@@ -70,6 +76,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   telegram: <Send className="size-5" />,
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
+  imageGeneration: <ImageIcon className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   geminiLive: <AudioWaveform className="size-5" />,
   approvals: <ShieldCheck className="size-5" />,
@@ -78,6 +85,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   tts: <Volume2 className="size-5" />,
+  links: <Link2 className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
   about: <Info className="size-5" />,
@@ -96,17 +104,19 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   modelData: ModelDataSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
-  remoteAccess: RemoteAccessSettings,
+  remoteAccess: ConnectionsSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
+  imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
   computerUse: ComputerUseSettings,
-  simulator: SimulatorSettings,
+  simulator: SimulatorSettingsPage,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
   geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
   tts: TtsSettings,
+  links: LinksSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
@@ -118,8 +128,9 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",
-  remoteAccess: "Pair your devices to use Aiden on the go.",
+  remoteAccess: "Use Aiden from your phone or another computer, or control your other computers from here.",
   websearch: "Choose how Aiden searches and reads the web.",
+  imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
@@ -128,6 +139,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
   tts: "Read Aiden’s latest response aloud with Google Gemini.",
+  links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
   about: "App information, updates, and diagnostics.",
@@ -149,9 +161,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   );
   const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
   const filteredNav = query
-    ? availableNav.filter((item) =>
-        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
-      )
+    ? availableNav.filter((item) => matchesSettingsSearch(item, query, DESCRIPTIONS[item.id]))
     : availableNav;
   const ActiveSection = CONTENT[section];
 
@@ -160,7 +170,11 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       storageKey="aiden-agent"
       sidebarSize={{ default: 272, min: 236, max: 340 }}
       sidebar={
-        <Sidebar actions={<SplitView.SidebarToggle />}>
+        <Sidebar actions={
+          <SplitView.SidebarToggle>
+            <HistoryNavButtons />
+          </SplitView.SidebarToggle>
+        }>
           <div className="flex min-h-full flex-col px-3 pb-4">
             <Button
               variant="transparent"

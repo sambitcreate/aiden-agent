@@ -32,11 +32,13 @@ import type {
   BrowserStylePreview,
   BrowserState,
   BrowserTab,
+  BrowserLinkOpening,
 } from "../../../renderer/shared/browser.js";
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_SETTINGS,
   resolveBrowserAgentAccess,
+  isBrowserLinkOpening,
 } from "../../../renderer/shared/browser.js";
 import {
   browserAbort,
@@ -53,6 +55,8 @@ import {
   browserLocalServers,
   BrowserActionQueue,
   BROWSER_MAX_TABS,
+  savedLinkOpening,
+  sameBrowserPage,
 } from "./core.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
@@ -60,6 +64,9 @@ import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReser
 import type { BrowserApprovalTarget } from "./approval.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
+import { writeFileAtomic } from "../durable-fs.js";
+import { projectDiagnosticError } from "../diagnostics-contract.js";
+import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 
 type CommandContext = {
   owner?: RendererDocumentOwner;
@@ -221,8 +228,14 @@ export class BrowserService {
           )
             this.profiles.push({ id: p.id, name: profileName(p.name), kind: "persistent" });
         }
-      if (saved.defaults && typeof saved.defaults === "object")
-        this.defaults = this.validDefaults(saved.defaults);
+      if (saved.defaults && typeof saved.defaults === "object") {
+        const legacy = saved.defaults as Record<string, unknown>;
+        const { linkTarget: _legacyTarget, ...current } = legacy;
+        this.defaults = this.validDefaults({
+          ...(current as Partial<BrowserDefaults>),
+          linkOpening: savedLinkOpening(legacy),
+        });
+      }
       if (saved.workspaceAccess && typeof saved.workspaceAccess === "object")
         for (const [id, access] of Object.entries(saved.workspaceAccess).slice(0, 1000)) {
           if (id.length > 0 && id.length <= 200 && (access === "allow" || access === "off"))
@@ -242,12 +255,21 @@ export class BrowserService {
     this.persistence = this.persistence
       .catch(() => {})
       .then(async () => {
-        await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-        const temporary = `${target}.${randomUUID()}.tmp`;
-        await fs.writeFile(temporary, json, { mode: 0o600 });
-        await fs.rename(temporary, target);
+        await writeFileAtomic(target, json, { mode: 0o600, mkdirMode: 0o700 });
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        // Preferences stay in memory and the next change retries the save,
+        // but the failure is recorded instead of vanishing.
+        const projected = projectDiagnosticError(error);
+        writeDiagnosticEvent({
+          level: "warn",
+          area: "persistence",
+          event: "store-write-failed",
+          outcome: "degraded",
+          code: projected.code,
+          fields: { store: "browser-preferences", errorType: projected.errorType },
+        });
+      });
   }
   private workspace(id: string): WorkspaceBrowser {
     this.load();
@@ -286,6 +308,36 @@ export class BrowserService {
     workspace.removeOwner?.();
     workspace.owner = owner;
     workspace.removeOwner = owner.onInvalidated(() => this.closeForWebContents(owner.id));
+  }
+  linkOpening(): BrowserLinkOpening {
+    this.load();
+    return this.defaults.linkOpening;
+  }
+  setLinkOpening(value: unknown): BrowserLinkOpening {
+    this.load();
+    if (!isBrowserLinkOpening(value)) throw new Error("Invalid link opening preference.");
+    this.defaults = { ...this.defaults, linkOpening: value };
+    this.save();
+    this.emitAll();
+    // emitAll() only reaches windows whose workspace already has an owner
+    // (attachOwner has run). A window that owns no workspace yet — e.g. a
+    // bare Settings window, or any window before its first browser-surface
+    // mount — would otherwise miss this change until it next re-reads or
+    // relaunches. Broadcast directly to every live window so all of them
+    // learn the new preference immediately, regardless of workspace state.
+    this.broadcastLinkOpening(value);
+    return value;
+  }
+  private broadcastLinkOpening(linkOpening: BrowserLinkOpening): void {
+    const event: BrowserEvent = { type: "link-preference", linkOpening };
+    for (const window of BrowserWindow.getAllWindows()) {
+      try {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+        window.webContents.send("browser:event", redactBrowserData(event));
+      } catch {
+        /* Document invalidation revokes delivery. */
+      }
+    }
   }
   getState(workspaceId: string): BrowserState {
     const workspace = this.workspace(workspaceId);
@@ -330,6 +382,9 @@ export class BrowserService {
     this.terminalTails.set(workspaceId, tail);
     if (this.terminalTails.size > 100)
       this.terminalTails.delete(this.terminalTails.keys().next().value!);
+    // Only output near a URL scheme can announce a server; skip the regex scan
+    // for the ordinary build and log chunks that dominate terminal traffic.
+    if (!tail.slice(-(data.length + 256)).includes("://")) return;
     const servers = browserLocalServers(tail);
     if (!servers.length) return;
     const workspace = this.workspace(workspaceId);
@@ -487,7 +542,9 @@ export class BrowserService {
     const publish = () => {
       if (tab.closing || wc.isDestroyed()) return;
       Object.assign(tab.state, {
-        url: browserDisplayUrl(wc.getURL() || "about:blank"),
+        // Before the first navigation commits `getURL()` is empty; keep the requested URL so a
+        // repeat link click during that load still finds and reuses this tab.
+        url: wc.getURL() ? browserDisplayUrl(wc.getURL()) : tab.state.url,
         title: wc.getTitle() || "New tab",
         loading: wc.isLoading(),
         canGoBack: wc.navigationHistory.canGoBack(),
@@ -727,11 +784,16 @@ export class BrowserService {
             },
           },
         };
-      if (this.defaults.linkTarget === "external") void shell.openExternal(url);
-      else {
+      if (this.defaults.linkOpening === "external") {
+        void shell.openExternal(url);
+        return { action: "deny" };
+      }
+      const workspaceId = tab.state.workspaceId;
+      void this.create(workspaceId, url, tab.state.profileId, true).catch(() => {
+        // At the tab limit (or with no owner window) load it in place, as before.
         tab.navigationCommand = undefined;
         void wc.loadURL(url).catch(() => {});
-      }
+      });
       return { action: "deny" };
     });
     wc.on("did-create-window", (window, details) => {
@@ -1396,8 +1458,9 @@ export class BrowserService {
     this.profile(result.profileId);
     if (!["system", "light", "dark"].includes(result.appearance))
       throw new Error("Invalid browser appearance.");
-    if (!["browser", "external"].includes(result.linkTarget))
-      throw new Error("Invalid browser link target.");
+    if (!isBrowserLinkOpening(result.linkOpening))
+      throw new Error("Invalid link opening preference.");
+    delete (result as { linkTarget?: unknown }).linkTarget;
     if (!["off", "allow"].includes(result.agentAccess))
       throw new Error("Invalid browser agent access.");
     if (typeof result.autoShow !== "boolean")
@@ -1489,15 +1552,22 @@ export class BrowserService {
     }
     if (!current()) return;
     let pending = false;
+    let lastFrame = "";
     const frame = async () => {
       if (pending || !current()) return;
+      // A hidden or minimized preview has no viewer; skip the capture.
+      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
       pending = true;
       try {
         const image = await this.capture(tab);
-        if (current())
+        const source = `data:${image.mimeType};base64,${image.data}`;
+        // A static page re-encodes to the same frame; skip the repaint.
+        if (current() && source !== lastFrame) {
           await pip.webContents.executeJavaScript(
-            `document.querySelector('img').src=${JSON.stringify(`data:${image.mimeType};base64,${image.data}`)}`,
+            `document.querySelector('img').src=${JSON.stringify(source)}`,
           );
+          lastFrame = source;
+        }
       } catch {
         /* A cold or navigating page retries on the next frame. */
       } finally {
@@ -1909,9 +1979,18 @@ export class BrowserService {
       }
       case "open_link": {
         const url = browserUrl(command.url);
-        if (command.alternateTarget || this.defaults.linkTarget === "external")
-          await shell.openExternal(url);
-        else {
+        const existing = this.workspace(workspaceId).state.tabs.find((candidate) =>
+          sameBrowserPage(candidate.url, url),
+        );
+        const live = existing ? this.tabs.get(existing.id) : undefined;
+        if (live) {
+          this.activateTab(live);
+          this.emit(workspaceId);
+          // `select` only emits `show` for agents; a user's link click must bring the panel forward.
+          if (!live.state.floating)
+            this.emit(workspaceId, { type: "show", workspaceId, tabId: live.state.id });
+          result.tabId = live.state.id;
+        } else {
           const created = await this.create(workspaceId, url, undefined, true);
           result.tabId = created.state.id;
         }

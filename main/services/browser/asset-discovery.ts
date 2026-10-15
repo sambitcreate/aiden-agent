@@ -1,7 +1,4 @@
-import { parse as parseHtml, type DefaultTreeAdapterTypes } from "parse5";
-import { parse as parseModule } from "acorn";
-import postcss from "postcss";
-import valueParser from "postcss-value-parser";
+import type { DefaultTreeAdapterTypes } from "parse5";
 
 export const BROWSER_DISCOVERY_LIMITS = Object.freeze({ files: 64, sourceBytes: 1024 * 1024, totalSourceBytes: 4 * 1024 * 1024, depth: 8, references: 512, warnings: 20 });
 export type BrowserAssetSourceKind = "html" | "css" | "module";
@@ -20,8 +17,28 @@ function cssUnescape(value: string): string {
   });
 }
 
+// The HTML, CSS and module parsers load on the first preview asset discovery
+// instead of on the main-process startup path.
+let parsersLoading: Promise<{
+  parseHtml: typeof import("parse5").parse;
+  parseModule: typeof import("acorn").parse;
+  postcss: typeof import("postcss").default;
+  valueParser: typeof import("postcss-value-parser");
+}> | null = null;
+function assetParsers() {
+  parsersLoading ??= Promise.all([import("parse5"), import("acorn"), import("postcss"), import("postcss-value-parser")]).then(
+    ([parse5, acorn, { default: postcss }, { default: valueParser }]) => ({ parseHtml: parse5.parse, parseModule: acorn.parse, postcss, valueParser }),
+    (error: unknown) => {
+      parsersLoading = null;
+      throw error;
+    },
+  );
+  return parsersLoading;
+}
+
 /** Parses references only. No source is evaluated, transformed, or fetched. */
-export function browserAssetReferences(source: string, kind: BrowserAssetSourceKind): BrowserAssetReferences {
+export async function browserAssetReferences(source: string, kind: BrowserAssetSourceKind): Promise<BrowserAssetReferences> {
+  const { parseHtml, parseModule, postcss, valueParser } = await assetParsers();
   const result: BrowserAssetReferences = { urls: [], incomplete: false };
   const seen = new Set<string>();
   const add = (url: string | undefined) => {

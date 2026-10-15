@@ -37,6 +37,16 @@ test("settings availability publication fences active Bot work", () => {
   );
 });
 
+test("turning off Computer Use Always allow fences active Bot work", () => {
+  expectPublicationAbort((invalidate) =>
+    invalidateChangedBotSettingsAuthority(
+      { settings: { computerUseEnabled: true, computerUseAlwaysAllow: true } },
+      { settings: { computerUseEnabled: true, computerUseAlwaysAllow: false } },
+      invalidate,
+    ),
+  );
+});
+
 test("every normalized Web Search route mutation fences active Bot work", () => {
   const previous = { settings: { webSearch: freshWebSearchSettings() } };
   expectPublicationAbort((invalidate) =>

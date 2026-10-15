@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderIcon } from "../components/provider-icon.js";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
@@ -8,9 +11,21 @@ import {
   getOnboardingMoreProviders,
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
+  onboardingChatGptSelection,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
+
+test("ChatGPT onboarding resumes current OpenAI without reconnecting or switching to legacy", () => {
+  const openai = { hasKey: true, models: ["current", "preferred"], defaultModel: "preferred" };
+  const legacy = { configured: true, needsAttention: false, models: [{ id: "legacy" }] };
+  assert.deepEqual(onboardingChatGptSelection(openai, undefined), { providerId: "openai", model: "preferred" });
+  assert.deepEqual(onboardingChatGptSelection(openai, legacy), { providerId: "openai", model: "preferred" });
+  assert.deepEqual(onboardingChatGptSelection({ ...openai, defaultModel: "removed" }, legacy), { providerId: "openai", model: "current" });
+  assert.deepEqual(onboardingChatGptSelection({ ...openai, hasKey: false }, legacy), { providerId: "openai-codex", model: "legacy" });
+  assert.equal(onboardingChatGptSelection({ ...openai, models: [] }, undefined), undefined);
+  assert.equal(onboardingChatGptSelection(undefined, { ...legacy, needsAttention: true }), undefined);
+});
 
 function occurrences(source: string, value: string): number {
   return source.split(value).length - 1;
@@ -136,6 +151,8 @@ test("onboarding distinguishes ready providers from unavailable setup methods", 
 
 test("resolves provider logos without branding unknown custom or future providers", () => {
   assert.equal(resolveProviderIconSlug("openai"), "openai");
+  // Agent-backed providers get their own mark, not the generic Google one.
+  assert.equal(resolveProviderIconSlug("antigravity"), "antigravity");
   assert.equal(resolveProviderIconSlug("concentrate"), "concentrate");
   assert.equal(resolveProviderIconSlug("together"), "together");
   assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");
@@ -207,10 +224,10 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     new URL("../components/provider-icon.tsx", import.meta.url),
     "utf8",
   );
-  const providersSettingsSource = readFileSync(
-    new URL("../components/settings/providers-settings.tsx", import.meta.url),
-    "utf8",
-  );
+  // The built-in provider row lives in the shared ProviderSetupRow.
+  const providersSettingsSource = ["providers-settings.tsx", "provider-setup-row.tsx"]
+    .map((file) => readFileSync(new URL(`../components/settings/${file}`, import.meta.url), "utf8"))
+    .join("\n");
   const codexProviderSettingsSource = readFileSync(
     new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
     "utf8",
@@ -222,7 +239,12 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.ok(multicolorProviderSlugs);
   assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
   assert.match(multicolorProviderSlugs, /"fireworks"/u);
-  assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  const monoMark = renderToStaticMarkup(
+    createElement(ProviderIcon, { providerId: "openai", providerLabel: "OpenAI" }),
+  );
+  assert.match(monoMark, /data-provider-icon="openai"/u);
+  assert.match(monoMark, /background-color:currentColor/u);
+  assert.match(monoMark, /mask-image:url\(&quot;[^"]*openai\.svg&quot;\)/u);
   assert.match(providerIconSource, /if \(!slug \|\| !iconUrl\) \{/u);
   assert.match(
     providerIconSource,
@@ -252,4 +274,9 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     occurrences(providersSettingsSource, "group-data-[highlighted]:text-accent-foreground"),
     6,
   );
+});
+
+ test("Azure retains its provider artwork after the Pi identity rename", () => {
+  assert.equal(resolveProviderIconSlug("azure"), "azure-openai-responses");
+  assert.equal(resolveProviderIconSlug("azure-openai-responses"), "azure-openai-responses");
 });

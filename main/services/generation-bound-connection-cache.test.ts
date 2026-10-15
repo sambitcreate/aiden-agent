@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import {
   closeAgainAfterSettled,
   GenerationBoundConnectionAttempts,
@@ -44,11 +45,14 @@ test("disconnect invalidates an in-flight connection before it can populate the 
     },
     close,
   );
-  await cache.disconnect("server");
+  const staleRejected = assert.rejects(stale, /superseded/u);
+  const disconnected = cache.disconnect("server");
   releaseConnect();
-  await assert.rejects(stale, /superseded/u);
-  assert.equal(created, 1);
+  await disconnected;
+  // Disconnect waits for the cancelled attempt's own teardown to finish.
   assert.equal(staleValue?.closedAfterReady, true);
+  await staleRejected;
+  assert.equal(created, 1);
 
   const current = await cache.getOrConnect(
     "server",
@@ -160,9 +164,11 @@ test("invalidation during auth resolution prevents a late transport start", asyn
   );
 
   await started;
-  await cache.disconnect("server");
+  const rejected = assert.rejects(pending, /superseded/u);
+  const disconnected = cache.disconnect("server");
   releaseAuth();
-  await assert.rejects(pending, /superseded/u);
+  await disconnected;
+  await rejected;
   assert.equal(transportStarted, false);
 });
 
@@ -203,9 +209,11 @@ test("one-shot attempts close again after a cancelled connect becomes ready", as
   );
 
   await started;
-  await attempts.disconnect("server");
+  const rejected = assert.rejects(pending, /superseded/u);
+  const disconnected = attempts.disconnect("server");
   releaseConnect();
-  await assert.rejects(pending, /superseded/u);
+  await disconnected;
+  await rejected;
   assert.equal(used, false);
   assert.equal(createdValue?.closedAfterReady, true);
 });
@@ -349,4 +357,140 @@ test("real SDK server closure allows the next discovery to establish a fresh ses
   assert.notEqual(second, first);
   assert.equal((await second.listTools()).tools[0].name, "session_2");
   assert.equal(servers.length, 2);
+});
+
+
+test("settled Settings attempts revoke their transport predicate before asynchronous close", async () => {
+  const attempts = new GenerationBoundConnectionAttempts<object>();
+  let current!: () => boolean;
+  let checkedDuringClose = false;
+  await attempts.run("settings", attempts.generation("settings"), () => ({}), async (_value, isCurrent) => { current = isCurrent; },
+    async () => "status", async () => { checkedDuringClose = true; assert.equal(current(), false); });
+  assert.equal(checkedDuringClose, true);
+  assert.equal(current(), false);
+});
+
+test("idle close drops the connection but lets holders of the same generation reconnect", async () => {
+  const cache = new GenerationBoundConnectionCache<{ id: number; closed: boolean }>();
+  let created = 0;
+  const connect = () =>
+    cache.getOrConnect(
+      "server",
+      () => ({ id: ++created, closed: false }),
+      async () => undefined,
+      async (value) => {
+        value.closed = true;
+      },
+      generation,
+    );
+  const generation = cache.generation("server");
+  const first = await connect();
+  assert.equal(await cache.closeIdle("server"), true);
+  assert.equal(first.closed, true);
+  assert.equal(cache.isConnected("server", first), false);
+  assert.equal(cache.generation("server"), generation);
+
+  const reconnected = await connect();
+  assert.equal(reconnected.id, 2);
+  assert.equal(cache.isConnected("server", reconnected), true);
+  assert.equal(await cache.closeIdle("missing"), false);
+});
+
+test("forgetting a removed server prunes its bookkeeping without reviving stale generations", async () => {
+  const cache = new GenerationBoundConnectionCache<{ closed: boolean }>();
+  const attempts = new GenerationBoundConnectionAttempts<{ closed: boolean }>();
+  const stale = cache.generation("removed");
+  const staleAttempt = attempts.generation("removed");
+  await cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async (value) => {
+    value.closed = true;
+  });
+  cache.generation("kept");
+  attempts.generation("kept");
+
+  await cache.forget("removed");
+  await attempts.forget("removed");
+  assert.equal(cache.trackedIdCount(), 1);
+  assert.equal(attempts.trackedIdCount(), 1);
+  assert.deepEqual(cache.ids(), []);
+
+  // A caller admitted before removal must not connect the removed server.
+  await assert.rejects(
+    cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async () => undefined, stale),
+    /superseded/u,
+  );
+  await assert.rejects(
+    attempts.run("removed", staleAttempt, () => ({ closed: false }), async () => undefined, async () => "used", async () => undefined),
+    /superseded/u,
+  );
+});
+
+test("an SSE endpoint that never arrives times out the whole connect and drops the pending attempt", { timeout: 10_000 }, async () => {
+  const cache = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: 100 });
+  const streams: AbortSignal[] = [];
+  let created = 0;
+  // The receive stream opens but never sends the `endpoint` event, so the SDK's
+  // SSE start() (and with it Client.connect) would wait forever.
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    streams.push(init!.signal!);
+    return new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { "content-type": "text/event-stream" } });
+  };
+  const acquire = () => cache.getOrConnect(
+    "server",
+    () => { created += 1; return new Client({ name: "stalled", version: "1" }); },
+    async (client, isCurrent, onClosed) => {
+      client.onclose = onClosed;
+      await client.connect(createMcpRemoteTransport({ transport: "sse", serviceUrl: "https://stalled.example/sse", fetch, isCurrent, onTerminalFailure: onClosed }));
+    },
+    async (client) => client.close(),
+  );
+  const started = Date.now();
+  await assert.rejects(acquire(), { name: "TimeoutError" });
+  assert.ok(Date.now() - started < 2_000);
+  assert.deepEqual(cache.ids(), [], "the timed-out attempt is not handed to later callers");
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].aborted, true, "the stalled receive stream was cancelled");
+  await assert.rejects(acquire(), { name: "TimeoutError" });
+  assert.equal(created, 2, "a later caller starts a fresh attempt");
+  await cache.disconnect("server");
+});
+
+test("disconnect waits for an in-flight attempt only up to its bound", async () => {
+  for (const kind of ["cache", "attempts"] as const) {
+    const closed: number[] = [];
+    const never = new Promise<void>(() => {});
+    const started = Date.now();
+    if (kind === "cache") {
+      const cache = new GenerationBoundConnectionCache<number>({ disconnectWaitMs: 50 });
+      const pending = cache.getOrConnect("server", () => 1, () => never, async (value) => { closed.push(value); });
+      void pending.catch(() => undefined);
+      await Promise.resolve();
+      await cache.disconnect("server");
+    } else {
+      const attempts = new GenerationBoundConnectionAttempts<number>({ disconnectWaitMs: 50 });
+      const pending = attempts.run("server", attempts.generation("server"), () => 1, () => never, async () => 0, async (value) => { closed.push(value); });
+      void pending.catch(() => undefined);
+      await Promise.resolve();
+      await attempts.disconnect("server");
+    }
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= 40 && elapsed < 1_000, `${kind}: waited ${elapsed} ms`);
+    assert.ok(closed.length >= 1, `${kind}: the attempt was closed`);
+  }
+});
+
+test("after shutdown no connection or Settings attempt can start", async () => {
+  const cache = new GenerationBoundConnectionCache<number>();
+  const attempts = new GenerationBoundConnectionAttempts<number>();
+  let releaseConnect!: () => void;
+  const racing = cache.getOrConnect("server", () => 1, () => new Promise<void>((resolve) => { releaseConnect = resolve; }), async () => {});
+  const raced = assert.rejects(racing, /superseded/u);
+  await Promise.resolve();
+  const shuttingDown = cache.shutdown();
+  releaseConnect();
+  await Promise.all([shuttingDown, attempts.shutdown(), raced]);
+  let created = 0;
+  await assert.rejects(cache.getOrConnect("server", () => ++created, async () => {}, async () => {}), /shut down/u);
+  await assert.rejects(attempts.run("server", attempts.generation("server"), () => ++created, async () => {}, async () => 0, async () => {}), /shut down/u);
+  assert.equal(created, 0);
+  assert.deepEqual(cache.ids(), []);
 });

@@ -262,3 +262,18 @@ test("production startup installs and flushes persisted terminal history", async
   );
   assert.match(main, /terminalService\.flushHistory\(\)/u);
 });
+
+test("TerminalHistoryStore keeps reads and the persisted log within the line cap", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-"));
+  const store = new TerminalHistoryStore({ logsDir: dir, debounceMs: 60_000, maxLines: 3 });
+  try {
+    for (let index = 0; index < 50; index += 1) store.append("ws-1", `line ${index}\n`);
+    assert.equal(await store.read("ws-1"), "line 47\nline 48\nline 49\n");
+    store.append("ws-1", "line 50\n");
+    await store.flush("ws-1");
+    const persisted = await readFile(path.join(dir, `${safeId("ws-1")}.log`), "utf8");
+    assert.equal(persisted, "line 48\nline 49\nline 50\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

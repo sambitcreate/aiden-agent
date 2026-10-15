@@ -164,6 +164,64 @@ data class AidenChatAgentRoster(
     val agents: List<AidenChatAgent>
 )
 
+/** Saved with the path; IDs cannot cross turns, hosts or replacement pairings. */
+@Serializable
+data class AidenAgentNavigationScope(
+    val instanceId: String,
+    val deviceId: String,
+    val chatId: String,
+    val epoch: String,
+    val turnId: String?
+)
+
+/** Public roster navigation only; this never resolves a private child transcript. */
+@Serializable
+data class AidenAgentNavigation(
+    val scope: AidenAgentNavigationScope,
+    val path: List<String> = emptyList()
+) {
+    fun open(agentId: String, agents: List<AidenChatAgent>): AidenAgentNavigation {
+        val next = ancestorPath(agentId, agents)
+        return if (next.isEmpty()) this else copy(path = next)
+    }
+
+    /** Null at the roster means the sheet owner should dismiss. */
+    fun back(): AidenAgentNavigation? = if (path.isEmpty()) null else copy(path = path.dropLast(1))
+
+    fun reconcile(nextScope: AidenAgentNavigationScope, agents: List<AidenChatAgent>): AidenAgentNavigation {
+        if (scope != nextScope) return AidenAgentNavigation(nextScope)
+        val ids = agents.map { it.agentId }.toSet()
+        val target = path.takeWhile { it in ids }.lastOrNull()
+        return copy(path = target?.let { ancestorPath(it, agents) }.orEmpty())
+    }
+
+    companion object {
+        /** Every entry point builds ancestry, including children in the flat roster. */
+        fun ancestorPath(agentId: String, agents: List<AidenChatAgent>): List<String> {
+            val byId = agents.associateBy { it.agentId }
+            if (agentId !in byId) return emptyList()
+            val result = mutableListOf<String>()
+            val visited = mutableSetOf<String>()
+            var cursor: String? = agentId
+            while (cursor != null) {
+                val agent = byId[cursor] ?: break
+                // Do not manufacture a parent stack from a cycle.
+                if (!visited.add(cursor)) return listOf(agentId)
+                result.add(cursor)
+                cursor = agent.parentAgentId
+            }
+            // Keep the requested detail and nearest ancestors, bounded
+            // independently of the server's depth claim.
+            return result.take(16).reversed()
+        }
+
+        fun children(agentId: String, agents: List<AidenChatAgent>): List<AidenChatAgent> {
+            if (agents.none { it.agentId == agentId }) return emptyList()
+            return agents.filter { it.parentAgentId == agentId && it.agentId != agentId }
+        }
+    }
+}
+
 /**
  * Revision fences shared by task and roster reconciliation. Revisions order
  * within one epoch; a new epoch always resets the fence.

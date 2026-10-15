@@ -12,6 +12,10 @@ import {
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_HOST_CAPABILITIES,
+  AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
+  AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -30,7 +34,7 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
 export const MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS = 80;
 const FALLBACK_AIDEN_REMOTE_DISPLAY_NAME = "Aiden Agent";
 
-export type AidenRemoteDeviceType = "iphone" | "ipad" | "mac" | "linux";
+export type AidenRemoteDeviceType = "iphone" | "ipad" | "android" | "mac" | "linux";
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
 
 interface StoredAidenRemoteDevice {
@@ -217,9 +221,60 @@ function isSimulatorCapability(
   );
 }
 
+function isHostCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+function isPhoneRunCapability(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Host authority a device type may hold: desktops hold the full host
+ * vocabulary; phones only the phone-scoped run subset (contract revision 24).
+ */
+function mayHoldHostCapability(type: unknown, capability: unknown): boolean {
+  return type === "mac" || type === "linux" || isPhoneRunCapability(capability);
+}
+
 /** Simulator control is a desktop-to-desktop grant; phones and tablets never hold it. */
 export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boolean {
   return type === "mac" || type === "linux";
+}
+
+function isMobileSimulatorCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/** Revision 27/30 opt-ins (`bot:cards`, `bot:activity`): no authority, any device type. */
+function isBotOptInCapability(
+  value: unknown,
+): value is (typeof AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES)[number] {
+  return (
+    typeof value === "string" &&
+    (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The phone simulator viewer grant (contract revision 26) belongs to phones
+ * and tablets only (`android` since revision 31); desktops use `simulators:control`.
+ */
+export function mayHoldMobileSimulatorCapabilities(type: unknown): boolean {
+  return type === "iphone" || type === "ipad" || type === "android";
 }
 
 function parsePersistedCapabilities(
@@ -236,7 +291,9 @@ function parsePersistedCapabilities(
         (capability) =>
           (acceptsBotCapabilities || !isBotCapability(capability)) &&
           (acceptsProgressCapabilities || !isProgressCapability(capability)) &&
-          (desktop || !isSimulatorCapability(capability)),
+          (desktop || !isSimulatorCapability(capability)) &&
+          (!isMobileSimulatorCapability(capability) || mayHoldMobileSimulatorCapabilities(type)) &&
+          (!isHostCapability(capability) || mayHoldHostCapability(type, capability)),
       )
     : value;
   return parseCapabilities(negotiatedValue);
@@ -276,7 +333,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   if (
     !boundedString(record.id, 128) ||
     !boundedString(record.name, 80) ||
-    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "mac" && record.type !== "linux") ||
+    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "android" && record.type !== "mac" && record.type !== "linux") ||
     !boundedString(record.clientVersion, 40) ||
     !digestString(record.lookupDigest) ||
     !digestString(record.credentialSalt) ||
@@ -730,8 +787,8 @@ export class AidenRemoteStateRegistry {
 
   /**
    * Additive post-pairing capability negotiation. Only members of the
-   * progress vocabulary are upgradable; legacy and Bot grants remain
-   * pairing-bound. Negotiating any progress capability marks the device as
+   * progress, simulator and host vocabularies are upgradable (the latter two
+   * on desktops only); legacy and Bot grants remain pairing-bound. Negotiating any progress capability marks the device as
    * progress-aware so new projections may be delivered to it.
    */
   async upgradeDeviceCapabilities(
@@ -744,7 +801,12 @@ export class AidenRemoteStateRegistry {
       accepts.length < 1 ||
       accepts.length > AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.length ||
       new Set(accepts).size !== accepts.length ||
-      accepts.some((capability) => !isProgressCapability(capability) && !isSimulatorCapability(capability))
+      accepts.some((capability) =>
+        !isProgressCapability(capability) &&
+        !isSimulatorCapability(capability) &&
+        !isMobileSimulatorCapability(capability) &&
+        !isHostCapability(capability) &&
+        !isBotOptInCapability(capability))
     ) {
       return null;
     }
@@ -753,14 +815,28 @@ export class AidenRemoteStateRegistry {
       if (!device || device.revokedAt !== undefined) {
         return { changed: false, value: null };
       }
-      // Callers check the device type first; a phone can never be granted simulator control.
-      if (accepts.some(isSimulatorCapability) && !mayHoldSimulatorCapabilities(device.type)) {
+      // Callers check the device type first; a phone can never be granted
+      // simulator control or the host feed, only the phone-scoped run subset.
+      if (
+        (accepts.some(isSimulatorCapability) &&
+          !mayHoldSimulatorCapabilities(device.type)) ||
+        (accepts.some(isMobileSimulatorCapability) &&
+          !mayHoldMobileSimulatorCapabilities(device.type)) ||
+        accepts.some(
+          (capability) =>
+            isHostCapability(capability) && !mayHoldHostCapability(device.type, capability),
+        )
+      ) {
         return { changed: false, value: null };
       }
       const granted = new Set(device.capabilities);
       const additions = accepts.filter(
         (capability): capability is AidenRemoteCapability =>
-          (isProgressCapability(capability) || isSimulatorCapability(capability)) &&
+          (isProgressCapability(capability) ||
+            isSimulatorCapability(capability) ||
+            isMobileSimulatorCapability(capability) ||
+            isHostCapability(capability) ||
+            isBotOptInCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);
@@ -786,7 +862,7 @@ export class AidenRemoteStateRegistry {
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
-      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "mac" && input.type !== "linux") ||
+      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "android" && input.type !== "mac" && input.type !== "linux") ||
       !boundedString(input.clientVersion, 40) ||
       (input.acceptsBotCapabilities !== undefined &&
         typeof input.acceptsBotCapabilities !== "boolean") ||
@@ -803,6 +879,10 @@ export class AidenRemoteStateRegistry {
       (input.acceptsBotCapabilities !== true && capabilities.some(isBotCapability)) ||
       (input.acceptsProgressCapabilities !== true &&
         capabilities.some(isProgressCapability)) ||
+      (!mayHoldSimulatorCapabilities(input.type) &&
+        (capabilities.some(isSimulatorCapability) || capabilities.some(isHostCapability))) ||
+      // The phone simulator grant is negotiated after pairing, never issued by it.
+      capabilities.some(isMobileSimulatorCapability) ||
       (!this.hostPolicy.botCapabilitiesSupported() &&
         (input.acceptsBotCapabilities === true || capabilities.some(isBotCapability)))
     ) {

@@ -300,6 +300,54 @@ export function deriveSlashSession(input: SlashTriggerInput): SlashSession | nul
   };
 }
 
+/** Commands that read the text after their name wait for it when picked, and run on send. */
+export function slashCommandTakesArgument(command: SlashCommandDefinition): boolean {
+  return command.argument !== "none";
+}
+
+/** Replace the typed token with the command's full name and a space, ready for its argument. */
+export function completeSlashCommandToken(
+  draft: string,
+  session: Pick<SlashSession, "tokenStart">,
+  command: SlashCommandDefinition,
+): { text: string; caret: number } {
+  const completed = `${draft.slice(0, session.tokenStart)}/${command.name} `;
+  return { text: completed, caret: completed.length };
+}
+
+/**
+ * A sent draft that starts with an argument-taking command, such as "/visualize chart sales".
+ * The palette closes once the caret leaves the token, so these run from Send instead.
+ */
+export function parseSubmittedSlashCommand(
+  draft: string,
+  commands: readonly SlashCommandDefinition[] = SLASH_COMMANDS,
+): { command: SlashCommandDefinition; session: SlashSession } | null {
+  const parsed = firstToken(draft);
+  if (!parsed || parsed.trigger !== "/") return null;
+  const name = normalized(parsed.token.slice(1));
+  const command = commands.find(
+    (candidate) =>
+      slashCommandTakesArgument(candidate) &&
+      (normalized(candidate.name) === name ||
+        candidate.aliases.some((alias) => normalized(alias) === name)),
+  );
+  if (!command) return null;
+  return {
+    command,
+    session: {
+      kind: "command",
+      trigger: "/",
+      tokenStart: parsed.start,
+      tokenEnd: parsed.end,
+      token: parsed.token,
+      query: parsed.token.slice(1),
+      argument: draft.slice(parsed.end),
+      sessionKey: slashSessionKey(0, parsed.token),
+    },
+  };
+}
+
 /** Remove exactly the trigger token; whitespace and message formatting remain byte-for-byte intact. */
 export function consumeSlashToken(draft: string, session: SlashSession): string {
   if (draft.slice(session.tokenStart, session.tokenEnd) !== session.token) return draft;

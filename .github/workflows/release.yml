@@ -7,7 +7,10 @@ on:
     paths-ignore:
       - "**/*.md"
       - "docs/**"
+      - "marketing/**"
       - ".github/workflows/release.yml"
+      # models.dev refresh bot commits change only the bundled catalog.
+      - "resources/model-capabilities.json"
   workflow_dispatch:
 
 permissions:
@@ -71,6 +74,9 @@ jobs:
 
       - name: Verify TypeScript
         if: ${{ steps.version.outputs.publish == 'true' }}
+        # The macos-26 runner's default V8 heap (~2 GB) is below what tsc needs.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run type-check
 
       - name: Verify lint
@@ -140,6 +146,20 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
+
+      # Source maps are excluded from app.asar; keep them for symbolication.
+      # The name must not match the publish job's release-* download pattern.
+      - name: Keep source maps for crash symbolication
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: symbols-macos-${{ github.run_id }}
+          path: |
+            build/main/*.map
+            build/preload/*.map
+            build/renderer/**/*.map
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Verify reboot-safe subagent migration in the signed app
         if: ${{ steps.version.outputs.publish == 'true' }}

@@ -21,12 +21,20 @@ import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
   distanceFromScrollBottom,
-  isAtScrollBottom,
+  followIgnoresWheel,
+  followNeedsSnap,
+  followReducer,
+  FOLLOW_REARM_DISTANCE_PX,
+  INITIAL_FOLLOW_STATE,
+  isAwayScrollKey,
   isUserScrollKey,
-  resolveProgrammaticFollowLatch,
-  SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX,
+  JUMP_BUTTON_SHOW_DELAY_MS,
+  shouldOfferJumpToBottom,
+  type FollowEvent,
+  type FollowState,
 } from "../lib/scroll-follow";
 import { cn } from "../lib/ui-utils";
+import { dialogEnterTarget, shouldSubmitDialogOnEnter } from "../lib/dialog-enter";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
   compactSidebarAutoFocusIntent,
@@ -48,6 +56,7 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     | "transparent"
     | "glass"
     | "toolbar"
+    | "bar"
     | "glassAccent"
     | "accent"
     | "destructive";
@@ -77,12 +86,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       type={asChild ? undefined : type}
       data-slot="button"
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale,translate] duration-(--motion-duration) ease-standard focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
         "rounded-button",
-        size === "small" && "h-7 gap-1.5 px-2",
-        size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
-        size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
+        size === "small" && "h-7 gap-1.5 px-3",
+        size === "medium" && "h-8 gap-1.5 px-4 [&_svg:not([class*='size-'])]:size-4.5",
+        size === "large" && "h-9 gap-2 px-5 [&_svg:not([class*='size-'])]:size-5",
         iconOnly && "aspect-square px-0",
         variant === "filled" &&
           "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
@@ -94,6 +103,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
           "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
         variant === "toolbar" &&
           "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        // Quiet top-bar action: no fill at rest, a soft fill on hover, and the
+        // list selection fill while its surface is open (aria-pressed/expanded).
+        variant === "bar" &&
+          "bg-transparent text-toolbar-icon hover:bg-list-hover hover:text-primary active:bg-list-selection aria-pressed:bg-list-selection aria-pressed:text-primary aria-expanded:bg-list-selection aria-expanded:text-primary focus-visible:bg-list-hover",
         variant === "glassAccent" &&
           "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
         variant === "accent" &&
@@ -115,7 +128,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
+        "h-8 w-full rounded-control border border-field bg-input px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-(--motion-duration) ease-standard placeholder:text-secondary hover:border-primary/30 focus:bg-control disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         className,
       )}
       {...props}
@@ -135,7 +148,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
     <textarea
       ref={ref}
       className={cn(
-        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-input px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-(--motion-duration) ease-standard placeholder:text-secondary hover:border-primary/30 focus:bg-control disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:bg-status-red-surface",
         density === "compact" ? "min-h-7" : "min-h-16",
         className,
       )}
@@ -186,13 +199,18 @@ export function InlineMetadata({ className, ...props }: React.HTMLAttributes<HTM
   return <span className={cn("text-mini text-tertiary", className)} {...props} />;
 }
 
+export type BadgeColor = "gray" | "green" | "red" | "blue" | "warning";
+
 export function Badge({
   color = "gray",
   icon,
   className,
   children,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { color?: string; icon?: React.ReactNode }) {
+}: Omit<React.HTMLAttributes<HTMLSpanElement>, "color"> & {
+  color?: BadgeColor;
+  icon?: React.ReactNode;
+}) {
   return (
     <span
       className={cn(
@@ -215,12 +233,15 @@ export function Callout({
   color,
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { color?: string }) {
+}: React.HTMLAttributes<HTMLDivElement> & { color?: "gray" | "green" | "red" | "blue" | "warning" | (string & {}) }) {
   return (
     <div
       className={cn(
         "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
         color === "red" && "bg-status-red-surface text-status-red [&_.text-red]:text-status-red [&_.text-support-red]:text-status-red",
+        color === "green" && "bg-status-green-surface text-status-green",
+        color === "blue" && "bg-status-accent-surface text-status-accent",
+        color === "warning" && "bg-status-warning-surface text-status-warning",
         className,
       )}
       {...props}
@@ -231,16 +252,23 @@ export function Callout({
 export function EmptyState({
   title,
   description,
+  action,
   placement,
+  role,
   className,
 }: {
   title: React.ReactNode;
   description?: React.ReactNode;
+  /** Next step for the user, usually a single shared `Button`. */
+  action?: React.ReactNode;
   placement?: "inline";
+  /** `alert` for failure states that should be announced when they appear. */
+  role?: "alert" | "status";
   className?: string;
 }) {
   return (
     <div
+      role={role}
       className={cn(
         "flex flex-col items-center justify-center px-6 py-10 text-center",
         placement === "inline" && "py-6",
@@ -253,6 +281,7 @@ export function EmptyState({
           {description}
         </Text>
       ) : null}
+      {action ? <div className="mt-4 flex items-center justify-center gap-2">{action}</div> : null}
     </div>
   );
 }
@@ -265,7 +294,7 @@ export function Status({
   return (
     <span
       className={cn(
-        "rounded-pill border border-field bg-popover px-2 py-1 text-small-strong",
+        "rounded-pill bg-control px-2 py-1 text-small-strong",
         variant === "error" && "text-red",
         className,
       )}
@@ -345,6 +374,7 @@ export function Field({
         className,
       )}
     >
+      {label || description || orientation === "horizontal" ? (
       <div className="min-w-0">
         {label ? (
           <div id={labelId} className="text-strong text-primary">
@@ -357,6 +387,7 @@ export function Field({
           </div>
         ) : null}
       </div>
+      ) : null}
       <div className="settings-field-control min-w-0">{children}</div>
     </div>
   );
@@ -375,6 +406,18 @@ const SplitContext = React.createContext<{
   toggle: () => void;
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
+
+/**
+ * Left padding that keeps a full-width header clear of the window controls and
+ * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
+ * The cluster starts at 90px and holds up to three 28px actions.
+ */
+export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
+
+/** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
+export function useSplitViewCollapsed(): boolean {
+  return React.useContext(SplitContext)?.collapsed === true;
+}
 
 type SplitViewProps = React.PropsWithChildren<{
   sidebar: React.ReactNode;
@@ -558,8 +601,13 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const splitContext = React.useMemo(
+    () => ({ collapsed, toggle, leadingAnchor }),
+    [collapsed, toggle, leadingAnchor],
+  );
+
   return (
-    <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
+    <SplitContext.Provider value={splitContext}>
       <div
         data-compact-sidebar-open={compactOpen ? "true" : "false"}
         className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary"
@@ -578,7 +626,7 @@ function SplitViewRoot({
           inert={collapsed || contentModalOpen ? true : undefined}
           aria-hidden={collapsed || contentModalOpen ? true : undefined}
           className={cn(
-            "absolute inset-y-0 left-0 z-10 h-full overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out motion-reduce:transition-none",
+            "absolute inset-y-0 left-0 z-10 h-full overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-emphasized motion-reduce:transition-none",
             compact && !collapsed && "z-30 shadow-dialog",
           )}
           style={{
@@ -596,7 +644,7 @@ function SplitViewRoot({
         </aside>
         <div
           aria-hidden="true"
-          className="h-full shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none"
+          className="h-full shrink-0 transition-[width] duration-300 ease-emphasized motion-reduce:transition-none"
           style={{ width: reservedSidebarWidth }}
         />
         <div
@@ -626,7 +674,7 @@ function SplitViewRoot({
           inert={contentModalOpen ? true : undefined}
           aria-hidden={contentModalOpen ? true : undefined}
           className={cn(
-            "absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center",
+            "absolute left-[90px] top-0 z-40 flex h-13 items-center gap-0.5",
             contentModalOpen && "pointer-events-none",
           )}
         />
@@ -635,27 +683,36 @@ function SplitViewRoot({
   );
 }
 
-function SidebarToggle() {
+/**
+ * The sidebar toggle, portaled beside the window controls so it stays put
+ * whether the sidebar is open or collapsed. `children` follow it in the same
+ * cluster (history navigation).
+ */
+function SidebarToggle({ children }: { children?: React.ReactNode }) {
   const context = React.useContext(SplitContext);
   const shortcut = useShortcutLabel("sidebar.toggle");
   const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
-  const button = (
-    <Button
-      iconOnly
-      size={context.collapsed ? "large" : "small"}
-      variant={context.collapsed ? "toolbar" : "transparent"}
-      onClick={context.toggle}
-      aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
-      aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-      aria-pressed={!context.collapsed}
-      title={`Toggle sidebar (${shortcut})`}
-      className="no-drag transition-[width,height,background-color] duration-300 motion-reduce:transition-none"
-    >
-      <PanelLeft />
-    </Button>
+  const cluster = (
+    <>
+      <Button
+        iconOnly
+        size="small"
+        variant="bar"
+        onClick={context.toggle}
+        aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
+        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+        aria-pressed={!context.collapsed}
+        title={`Toggle sidebar (${shortcut})`}
+        // The open sidebar is its own state cue; keep the toggle quiet.
+        className="no-drag aria-pressed:bg-transparent aria-pressed:text-toolbar-icon aria-pressed:hover:bg-list-hover aria-pressed:hover:text-primary"
+      >
+        <PanelLeft />
+      </Button>
+      {children}
+    </>
   );
-  return context.leadingAnchor ? createPortal(button, context.leadingAnchor) : null;
+  return context.leadingAnchor ? createPortal(cluster, context.leadingAnchor) : null;
 }
 
 export const SplitView = Object.assign(SplitViewRoot, { SidebarToggle });
@@ -718,7 +775,7 @@ export function Sidebar({
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
       {searchable ? (
         <div className="px-3 pb-3">
-          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:bg-control">
+          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-(--motion-duration) ease-standard hover:bg-control/70 focus-within:bg-control">
             <Search className="size-4 shrink-0 text-tertiary" />
             <input
               type="search"
@@ -797,7 +854,7 @@ export function SidebarListItem({
       type="button"
       aria-current={selected ? "page" : undefined}
       className={cn(
-        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-regular text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-regular text-primary outline-none transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
         selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
         className,
       )}
@@ -810,14 +867,75 @@ export function SidebarListItem({
       ) : null}
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {trailing !== undefined && trailing !== null ? (
-        <span className="flex shrink-0 items-center">{trailing}</span>
+        // Hidden when every trailing child renders nothing, so no stray gap.
+        <span className="flex shrink-0 items-center gap-1 empty:hidden">{trailing}</span>
       ) : null}
     </button>
   );
 }
 
+/**
+ * Whether a vertical wheel over `target` would scroll some nested scroller
+ * inside `viewport` rather than the viewport itself.
+ */
+function nestedScrollerConsumesWheel(target: EventTarget | null, viewport: HTMLElement, deltaY: number): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== viewport) {
+    if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        if (deltaY < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) {
+          return true;
+        }
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Whether a reading key is consumed by a nested scroller in the direction the key specifies.
+ * If a nested element can scroll in that direction, the transcript follow latch is not affected.
+ */
+const SPACE_ACTIVATED_CONTROLS =
+  'button, summary, [role="button"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="option"], [role="tab"], [role="radio"]';
+
+function nestedScrollerConsumesKey(
+  target: EventTarget | null,
+  viewport: HTMLElement,
+  key: string,
+  shiftKey: boolean,
+): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== viewport) {
+    if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") {
+        // Determine if the key scrolls up (negative direction) or down (positive direction).
+        // Shift+Space scrolls up; Space scrolls down. Other keys follow their semantic direction.
+        const scrollsUp =
+          key === "ArrowUp" || key === "PageUp" || key === "Home" || (key === " " && shiftKey);
+        const scrollsDown =
+          key === "ArrowDown" || key === "PageDown" || key === "End" || (key === " " && !shiftKey);
+        if (scrollsUp && node.scrollTop > 0) return true;
+        if (scrollsDown && node.scrollTop + node.clientHeight < node.scrollHeight - 1) return true;
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * The follow-enabled scrollport the reader last pressed in. Reading keys typed
+ * with focus on the page body scroll that pane, so only it may stop following.
+ */
+let lastPressedFollowViewport: HTMLElement | null = null;
+
 export function ScrollArea({
   title,
+  titleAccessory,
   leading,
   actions,
   toolbar,
@@ -827,12 +945,22 @@ export function ScrollArea({
   autoScrollDeps = [],
   autoScrollResetKey,
   showScrollToBottomButton,
+  streaming = false,
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
+  scrollRestorationId,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Names this scrollport for the router's scroll restoration, so a page never
+   * inherits another page's offset just because their scrollports sit at the
+   * same place in the tree.
+   */
+  scrollRestorationId?: string;
   title?: React.ReactNode;
+  /** Sits right after the title (outside the heading), such as a workspace chip. */
+  titleAccessory?: React.ReactNode;
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
@@ -844,6 +972,12 @@ export function ScrollArea({
   /** Changing this identity re-arms follow and pins to the latest content. */
   autoScrollResetKey?: unknown;
   showScrollToBottomButton?: boolean;
+  /**
+   * A reply is streaming in. The jump button then waits for a larger distance,
+   * and jumping snaps instead of animating, since the next tick would cut an
+   * animated scroll short.
+   */
+  streaming?: boolean;
   scrollToBottomButtonOffset?: number;
   scrollContentBottomOffset?: number;
   className?: string;
@@ -856,68 +990,215 @@ export function ScrollArea({
   const [footerHeight, setFooterHeight] = React.useState(0);
   const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   const footerHeightRef = React.useRef(0);
-  const [atBottom, setAtBottom] = React.useState(true);
+  const [following, setFollowing] = React.useState(true);
+  const [offerJump, setOfferJump] = React.useState(false);
   const [atScrollEnd, setAtScrollEnd] = React.useState(true);
   const [atTop, setAtTop] = React.useState(true);
-  const atBottomRef = React.useRef(true);
+  // The follow latch lives in a ref so scroll, wheel, and resize handlers read
+  // the latest decision synchronously; React state only mirrors it for paint.
+  const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
   const followFrameRef = React.useRef(0);
-  const programmaticPinPendingRef = React.useRef(false);
+  const offerJumpTimerRef = React.useRef(0);
+  const jumpSettleTimerRef = React.useRef(0);
   const autoScrollRef = React.useRef(autoScrollToBottom);
+  const streamingRef = React.useRef(streaming);
   const split = React.useContext(SplitContext);
 
   autoScrollRef.current = autoScrollToBottom;
+  streamingRef.current = streaming;
 
-  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
-    const element = viewport.current;
-    if (!element) return;
-    programmaticPinPendingRef.current = behavior === "smooth";
-    element.scrollTo({ top: element.scrollHeight, behavior });
-    atBottomRef.current = true;
-    setAtBottom(true);
-    setAtScrollEnd(true);
-    setAtTop(element.scrollHeight <= element.clientHeight);
+  const syncJumpOffer = React.useCallback(() => {
+    if (!shouldOfferJumpToBottom(followRef.current, streamingRef.current)) {
+      // Hiding is immediate; only showing waits.
+      window.clearTimeout(offerJumpTimerRef.current);
+      offerJumpTimerRef.current = 0;
+      setOfferJump(false);
+      return;
+    }
+    if (offerJumpTimerRef.current) return;
+    offerJumpTimerRef.current = window.setTimeout(() => {
+      offerJumpTimerRef.current = 0;
+      setOfferJump(shouldOfferJumpToBottom(followRef.current, streamingRef.current));
+    }, JUMP_BUTTON_SHOW_DELAY_MS);
   }, []);
 
-  const updateScrollEdges = React.useCallback((element = viewport.current, terminated = false) => {
-    if (!element) return;
+  const dispatchFollow = React.useCallback((event: FollowEvent) => {
+    const next = followReducer(followRef.current, event);
+    followRef.current = next;
+    setFollowing(next.following);
+    syncJumpOffer();
+    return next;
+  }, [syncJumpOffer]);
+
+  React.useEffect(() => syncJumpOffer(), [streaming, syncJumpOffer]);
+  React.useEffect(
+    () => () => {
+      window.clearTimeout(offerJumpTimerRef.current);
+      window.clearTimeout(jumpSettleTimerRef.current);
+    },
+    [],
+  );
+
+  const measureDistance = React.useCallback((element: HTMLElement) => {
     setAtTop(element.scrollTop < 2);
     const remaining = distanceFromScrollBottom(
       element.scrollHeight,
       element.clientHeight,
       element.scrollTop,
     );
-    const atBottom = isAtScrollBottom(remaining, SCROLL_FOLLOW_BOTTOM_THRESHOLD_PX);
-    const next = resolveProgrammaticFollowLatch(
-      programmaticPinPendingRef.current,
-      atBottom,
-      terminated,
-    );
-    programmaticPinPendingRef.current = next.pending;
-    atBottomRef.current = next.followLatest;
-    setAtBottom(atBottomRef.current);
     setAtScrollEnd(remaining < 2);
+    return remaining;
   }, []);
 
-  // A smooth jump can be aborted by the reader or can end short of the live
-  // edge; either way the pending latch must yield to the real position.
-  const releaseProgrammaticPin = React.useCallback(() => {
-    if (!programmaticPinPendingRef.current) return;
-    updateScrollEdges(viewport.current, true);
-  }, [updateScrollEdges]);
+  /** Pins a following viewport to its true bottom and records where it landed. */
+  const snapIfFollowing = React.useCallback((element: HTMLElement) => {
+    const state = followRef.current;
+    if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
+      element.scrollTop = element.scrollHeight;
+    }
+    dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
+  }, [dispatchFollow, measureDistance]);
+
+  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
+    const element = viewport.current;
+    if (!element) return;
+    const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
+    // Streaming ticks cut animated scrolls short, and a smooth scroll that
+    // has nowhere to go never fires scrollend, so both snap instead, as does
+    // Reduce Motion (CSS scroll-behavior does not reach a scripted scroll).
+    const smooth =
+      behavior === "smooth" &&
+      !streamingRef.current &&
+      distance > 1 &&
+      document.documentElement.dataset.reduceMotion !== "true";
+    dispatchFollow({ type: "jump", smooth });
+    window.clearTimeout(jumpSettleTimerRef.current);
+    if (smooth) {
+      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+      // scrollend normally lands the jump; this only covers an animation the
+      // engine dropped without one.
+      jumpSettleTimerRef.current = window.setTimeout(() => {
+        if (!followRef.current.jumpPending || !viewport.current) return;
+        dispatchFollow({
+          type: "settle",
+          distance: measureDistance(viewport.current),
+          scrollTop: viewport.current.scrollTop,
+          ended: true,
+        });
+        snapIfFollowing(viewport.current);
+      }, 1000);
+    } else {
+      snapIfFollowing(element);
+    }
+    // Re-check once layout settles: late images, fonts, and the jump button's
+    // own removal can all move the bottom after this frame.
+    requestAnimationFrame(() => {
+      const current = viewport.current;
+      if (current && followNeedsSnap(followRef.current)) snapIfFollowing(current);
+    });
+  }, [dispatchFollow, measureDistance, snapIfFollowing]);
 
   React.useEffect(() => {
     const element = viewport.current;
-    if (!element) return;
-    element.addEventListener("scrollend", releaseProgrammaticPin);
-    return () => element.removeEventListener("scrollend", releaseProgrammaticPin);
-  }, [releaseProgrammaticPin]);
+    if (!element || !autoScrollToBottom) return;
+    const overflows = () => element.scrollHeight > element.clientHeight + 1;
+    const onScrollEnd = () => {
+      const wasPending = followRef.current.jumpPending;
+      const next = dispatchFollow({
+        type: "settle",
+        distance: measureDistance(element),
+        scrollTop: element.scrollTop,
+        ended: true,
+      });
+      if (wasPending && followNeedsSnap(next)) snapIfFollowing(element);
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.deltaY >= 0) return;
+      // A sideways trackpad pan over a wide code block or table is not reading back.
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (nestedScrollerConsumesWheel(event.target, element, event.deltaY)) return;
+      const at = event.timeStamp;
+      if (followIgnoresWheel(followRef.current, at)) {
+        // Momentum from a gesture that began before the jump: it must neither
+        // break follow nor drag the freshly pinned view away.
+        event.preventDefault();
+      }
+      dispatchFollow({ type: "userIntent", intent: "wheelUp", at, canScrollUp: overflows() });
+    };
+    const onTouchStart = () => {
+      // Touching the viewport ends a smooth jump without breaking follow.
+      dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: false });
+    };
+    const onTouchMove = () => {
+      // Touch direction is not observable here, so a drag breaks follow only
+      // once it has carried the viewport out of the re-arm band.
+      const distance = distanceFromScrollBottom(element.scrollHeight, element.clientHeight, element.scrollTop);
+      if (distance > FOLLOW_REARM_DISTANCE_PX) {
+        dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      lastPressedFollowViewport = element;
+      // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
+      // The press itself keeps follow: only where the thumb settles counts.
+      if (event.target !== element) return;
+      dispatchFollow({ type: "scrollbarHold" });
+    };
+    const onPointerUp = () => {
+      if (!followRef.current.scrollbarHeld) return;
+      const next = dispatchFollow({ type: "scrollbarRelease", distance: measureDistance(element) });
+      // If still following after release (unmoved hold, or released near the end),
+      // snap to the new bottom to settle any growth that was deferred while held.
+      if (followNeedsSnap(next)) snapIfFollowing(element);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      // Clicking transcript text can leave focus on body; its scrolling keys
+      // still move the pane that was pressed last, and only that one.
+      if (!element.contains(target)) {
+        if (target !== document.body) return;
+        if (lastPressedFollowViewport && lastPressedFollowViewport !== element) return;
+      }
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+      if (!isUserScrollKey(event.key)) return;
+      // Space on a focused control presses it rather than scrolling.
+      if (event.key === " " && target.closest(SPACE_ACTIVATED_CONTROLS)) return;
+      // A nested scrollable element in the direction this key moves leaves follow alone.
+      if (nestedScrollerConsumesKey(event.target, element, event.key, event.shiftKey)) return;
+      dispatchFollow({
+        type: "userIntent",
+        intent: "key",
+        at: performance.now(),
+        canScrollUp: isAwayScrollKey(event.key, event.shiftKey) && overflows(),
+      });
+    };
+    element.addEventListener("scrollend", onScrollEnd);
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("touchstart", onTouchStart, { passive: true });
+    element.addEventListener("touchmove", onTouchMove, { passive: true });
+    element.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      element.removeEventListener("scrollend", onScrollEnd);
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("touchstart", onTouchStart);
+      element.removeEventListener("touchmove", onTouchMove);
+      element.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      document.removeEventListener("keydown", onKeyDown);
+      if (lastPressedFollowViewport === element) lastPressedFollowViewport = null;
+    };
+  }, [autoScrollToBottom, dispatchFollow, measureDistance, snapIfFollowing]);
 
   const followBottomNow = React.useCallback(() => {
     const element = viewport.current;
-    if (!element) return;
-    if (autoScrollRef.current && atBottomRef.current) scrollToBottom("auto");
-    else updateScrollEdges(element);
-  }, [scrollToBottom, updateScrollEdges]);
+    if (element) snapIfFollowing(element);
+  }, [snapIfFollowing]);
 
   const scheduleFollowBottom = React.useCallback(() => {
     followBottomNow();
@@ -928,9 +1209,12 @@ export function ScrollArea({
     });
   }, [followBottomNow]);
 
+  const hasToolbar = Boolean(toolbar ?? (title || leading || actions));
+  const hasFooter = Boolean(footer);
   React.useLayoutEffect(() => {
     const measure = () => {
-      setToolbarHeight(toolbarRef.current?.getBoundingClientRect().height ?? 0);
+      const nextToolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      setToolbarHeight((current) => current === nextToolbarHeight ? current : nextToolbarHeight);
       const nextFooterHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
       if (alignFooterToScrollContent) {
         const scrollViewport = viewport.current;
@@ -951,7 +1235,9 @@ export function ScrollArea({
     if (toolbarRef.current) observer.observe(toolbarRef.current);
     if (footerRef.current) observer.observe(footerRef.current);
     return () => observer.disconnect();
-  }, [alignFooterToScrollContent, toolbar, footer, title, leading, actions, scheduleFollowBottom]);
+    // Content changes inside the toolbar/footer surface through the observer;
+    // only their presence decides which elements are observed.
+  }, [alignFooterToScrollContent, hasToolbar, hasFooter, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     scheduleFollowBottom();
@@ -959,11 +1245,9 @@ export function ScrollArea({
 
   React.useLayoutEffect(() => {
     if (autoScrollResetKey === undefined) return;
-    atBottomRef.current = true;
-    setAtBottom(true);
-    setAtScrollEnd(true);
-    if (autoScrollToBottom) scrollToBottom("auto");
-  }, [autoScrollResetKey, autoScrollToBottom, scrollToBottom]);
+    dispatchFollow({ type: "reset" });
+    if (autoScrollToBottom) scheduleFollowBottom();
+  }, [autoScrollResetKey, autoScrollToBottom, dispatchFollow, scheduleFollowBottom]);
 
   React.useLayoutEffect(() => {
     const element = viewport.current;
@@ -972,8 +1256,7 @@ export function ScrollArea({
     const update = scheduleFollowBottom;
     // Settle synchronously first so the viewport never paints at scrollTop 0 and
     // then jumps; the frame after still catches late layout (fonts, images).
-    if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
-    else updateScrollEdges(element);
+    snapIfFollowing(element);
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
@@ -984,18 +1267,24 @@ export function ScrollArea({
       followFrameRef.current = 0;
       resizeObserver.disconnect();
     };
-  }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges]);
+  }, [autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, snapIfFollowing]);
 
   const resolvedToolbar =
     toolbar ??
     (title || leading || actions ? (
       <header
         data-toolbar
-        className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-out motion-reduce:transition-none"
-        style={{ paddingLeft: split?.collapsed ? 142 : undefined }}
+        className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-emphasized motion-reduce:transition-none"
+        style={{ paddingLeft: split?.collapsed ? SPLIT_VIEW_COLLAPSED_HEADER_INSET : undefined }}
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
-        <h1 className="min-w-0 flex-1 truncate text-strong text-primary">{title}</h1>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* With an accessory beside it, the title keeps a readable minimum. */}
+          <h1 className={cn("min-w-0 truncate text-strong text-primary", titleAccessory && "min-w-24")}>
+            {title}
+          </h1>
+          {titleAccessory}
+        </div>
         <div className="no-drag flex items-center gap-2">{actions}</div>
       </header>
     ) : null);
@@ -1014,33 +1303,33 @@ export function ScrollArea({
       ) : null}
       <div
         ref={viewport}
+        data-scroll-restoration-id={scrollRestorationId}
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
+        data-follow={autoScrollToBottom ? following : undefined}
         className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
         style={{
           paddingTop: toolbarHeight,
           paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+          // While following, the latch owns the bottom edge; browser scroll
+          // anchoring would fight it by holding a mid-transcript node still.
+          // A reader who has scrolled away keeps anchoring, so content changing
+          // above their place does not shift what they are reading.
+          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
-          updateScrollEdges(event.currentTarget);
-        }}
-        onWheel={releaseProgrammaticPin}
-        onTouchStart={releaseProgrammaticPin}
-        onPointerDown={(event) => {
-          // Only the viewport's own box (its scrollbar) starts a user scroll.
-          if (event.target === event.currentTarget) releaseProgrammaticPin();
-        }}
-        onKeyDown={(event) => {
-          const target = event.target as HTMLElement;
-          if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
-          if (isUserScrollKey(event.key)) releaseProgrammaticPin();
+          dispatchFollow({
+            type: "settle",
+            distance: measureDistance(event.currentTarget),
+            scrollTop: event.currentTarget.scrollTop,
+          });
         }}
       >
         <div ref={content} data-scroll-content className="min-h-full">
           {children}
         </div>
       </div>
-      {showScrollToBottomButton && !atBottom ? (
+      {showScrollToBottomButton && offerJump ? (
         <Button
           iconOnly
           size="medium"
@@ -1081,13 +1370,24 @@ type DialogProps = React.PropsWithChildren<{
   cancelDisabled?: boolean;
   cancelLabel?: string;
   onCancel?: () => void | Promise<void>;
+  /**
+   * The cancel button runs `onCancel` without closing the dialog, for a step
+   * back inside a multi-step dialog. Escape and outside clicks still close it.
+   */
+  cancelKeepsOpen?: boolean;
   allowCancelWhileBusy?: boolean;
   actionClassName?: string;
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
-  size?: "large";
+  /** "full" fills the window (an image's full view). */
+  size?: "large" | "full";
   layer?: DialogLayer;
+  /**
+   * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
+   * dialog, while confirm is visible, enabled, and not busy.
+   */
+  submitOnEnter?: boolean;
 }>;
 
 export function Dialog({
@@ -1103,6 +1403,7 @@ export function Dialog({
   cancelDisabled,
   cancelLabel,
   onCancel,
+  cancelKeepsOpen = false,
   allowCancelWhileBusy,
   actionClassName,
   busy,
@@ -1110,6 +1411,7 @@ export function Dialog({
   returnFocus,
   size,
   layer = "default",
+  submitOnEnter = false,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1140,10 +1442,33 @@ export function Dialog({
           }}
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
+          onKeyDown={
+            submitOnEnter
+              ? (event) => {
+                  if (confirmHidden || confirmDisabled || busy || !onConfirm) return;
+                  const target = event.target;
+                  // React events bubble through portals; ignore keys from nested popovers or dialogs.
+                  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+                  const key = {
+                    key: event.key,
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                    isComposing: event.nativeEvent.isComposing,
+                    defaultPrevented: event.defaultPrevented,
+                  };
+                  if (!shouldSubmitDialogOnEnter(key, dialogEnterTarget(target))) return;
+                  event.preventDefault();
+                  void onConfirm();
+                }
+              : undefined
+          }
           className={cn(
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
+            size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >
           <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
@@ -1154,9 +1479,9 @@ export function Dialog({
               <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
             </DialogPrimitive.Description>
           ) : null}
-          <div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div>
+          <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
           <div className="mt-5 flex shrink-0 justify-end gap-2">
-            <DialogPrimitive.Close asChild>
+            {cancelKeepsOpen ? (
               <Button
                 ref={cancelRef}
                 variant="filled"
@@ -1166,7 +1491,19 @@ export function Dialog({
               >
                 {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
               </Button>
-            </DialogPrimitive.Close>
+            ) : (
+              <DialogPrimitive.Close asChild>
+                <Button
+                  ref={cancelRef}
+                  variant="filled"
+                  className={actionClassName}
+                  disabled={dismissBlocked}
+                  onClick={() => void onCancel?.()}
+                >
+                  {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
+                </Button>
+              </DialogPrimitive.Close>
+            )}
             {confirmHidden ? null : (
               <Button
                 variant="accent"
@@ -1213,6 +1550,13 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  // Remember what had focus when the dialog opened so closing can return there.
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, [open]);
   const confirm = (
     <Button
       variant={confirmVariant === "destructive" ? "destructive" : "accent"}
@@ -1238,8 +1582,12 @@ export function AlertDialog({
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
+            const opener = openerRef.current?.isConnected ? openerRef.current : null;
+            openerRef.current = null;
             const target =
-              returnFocus?.() ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+              returnFocus?.() ??
+              opener ??
+              document.querySelector<HTMLElement>("[data-app-focus-root]");
             if (target?.isConnected) {
               event.preventDefault();
               target.focus();
@@ -1280,7 +1628,7 @@ export function AlertDialog({
 const menuContentClass =
   "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
 const menuItemClass =
-  "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+  "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -1359,6 +1707,27 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
         ) : null}
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
+  );
+});
+export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
+/** Single-choice menu row; the check mark and `aria-checked` carry selection. */
+export const DropdownMenuRadioItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>
+>(function RadioItem({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      ref={ref}
+      className={cn(menuItemClass, "group pl-7", className)}
+      {...props}
+    >
+      <span className="absolute left-2">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check className="size-3.5" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
   );
 });
 
@@ -1477,7 +1846,7 @@ export const SelectTrigger = React.forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       className={cn(
-        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
+        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-input px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:border-primary/30 focus:bg-control disabled:cursor-not-allowed disabled:opacity-45",
         size === "small" ? "h-7 rounded-lg px-2" : "h-8",
         className,
       )}
@@ -1536,12 +1905,12 @@ export const Switch = React.forwardRef<
     <SwitchPrimitive.Root
       ref={ref}
       className={cn(
-        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
+        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-(--motion-duration) ease-standard data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
     </SwitchPrimitive.Root>
   );
 });
@@ -1567,7 +1936,7 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-150 hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
@@ -1640,6 +2009,22 @@ export const CommandEmpty = ({
     {...props}
   />
 );
+/** A labelled run of command items; the heading names the group for assistive tech. */
+export const CommandGroup = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive.Group>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>
+>(function CommandGroup({ className, ...props }, ref) {
+  return (
+    <CommandPrimitive.Group
+      ref={ref}
+      className={cn(
+        "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-small-strong [&_[cmdk-group-heading]]:text-tertiary",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 export const CommandItem = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
@@ -1648,7 +2033,7 @@ export const CommandItem = React.forwardRef<
     <CommandPrimitive.Item
       ref={ref}
       className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45",
+        "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45",
         className,
       )}
       {...props}

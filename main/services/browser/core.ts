@@ -1,10 +1,43 @@
 import { createHash } from "node:crypto";
+import { isBrowserLinkOpening, type BrowserLinkOpening } from "../../../renderer/shared/browser.js";
 
 export const BROWSER_MAX_TABS = 24;
 export const BROWSER_MAX_RESULT_BYTES = 256_000;
-export const BROWSER_ZOOM_LEVELS = [
-  0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5,
-];
+
+/** Reads the saved link preference, migrating the pre-"ask" `linkTarget`. */
+export function savedLinkOpening(saved: Record<string, unknown>): BrowserLinkOpening {
+  if (isBrowserLinkOpening(saved.linkOpening)) return saved.linkOpening;
+  return saved.linkTarget === "external" ? "external" : "ask";
+}
+
+/** Validates a URL the user asked to open in the system browser. */
+export function externalUrl(value: unknown): string {
+  const refuse = () => new Error("This link can't be opened outside Aiden.");
+  if (typeof value !== "string" || !value || value.length > 8_192) throw refuse();
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw refuse();
+  }
+  if (url.protocol === "mailto:") return url.href;
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !url.hostname ||
+    url.username ||
+    url.password
+  )
+    throw refuse();
+  return url.href;
+}
+
+export function sameBrowserPage(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return false;
+  }
+}
 
 export function browserUrl(value: unknown): string {
   if (typeof value !== "string" || value.length > 8_192)

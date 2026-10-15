@@ -1,0 +1,14 @@
+# Create Images (CI-1) memory
+
+- Flag: `AIDEN_EXPERIMENTAL_CREATE_IMAGES=1 npm run dev`. Default off; no store, ledger, IPC or route body without it.
+- Caps: 1 provider request per Generate node; at most 4 per run; concurrency default 2, max 4.
+- Modules: `main/services/create-images/` (run-ledger on node:sqlite, scheduler-core, run-executor, run-coordinator, consent-core, runtime, image-port); IPC in `main/handlers/create-images/`; UI in `renderer/images/`.
+- Ledger: `run-ledger.ts`, restart sweep marks queued/running work interrupted and never resubmits. Retention keeps 100 runs. Perf lane: `npm run test:create-images:perf` (not in CI, per P1).
+- Consent: single-use, bound to the document, expires after 5 minutes, digest re-checked at start.
+- Retry: "Retry from here" (from-node) and "Retry this node only" (node-only), each with a fresh consent and its own request count.
+- Delete: confirmation says "N images" (generated plus imported, ruling P2). Busy workflows are refused. Images are collected after the 1 h grace.
+- IPC: 12 invoke channels plus 1 notification.
+- E2E: `tests/e2e/create-images.spec.ts` uses `fakeOpenRouter: true`. That sets `OPENROUTER_API_KEY` by env (the only allowed credential for that spec) and `AIDEN_E2E_OPENROUTER_REDIRECT_ORIGIN`. The bootstrap redirects the whole `https://openrouter.ai` origin to the loopback fake, which serves image generation only (everything else 503).
+- Fixed in CI-1.9: canvas nodes stayed `visibility: hidden` because React Flow's measured sizes were not handed back (`measured` now passed through the flow adapter). The refusal message for a busy delete was cleared by the reload that followed it.
+- Audit fixes (#383): node deletion is one undo step (React Flow `onDelete` -> `deletionOp`; change streams no longer emit removes). Leaving the editor saves first; a failed save blocks the route (`leave-guard.tsx`, TanStack `useBlocker`) with a destructive Discard choice, and the close guard is released only after a successful save. A conflict offers Keep My Version (re-read revision, save over) or Discard and Reload (confirmed). Main runs `window.__aidenFlushPendingSaves` (registered via `registerLifecycleFlush` in `renderer/lib/lifecycle-guard.ts`, bounded 3 s) before reading the close guard, so a quit inside the 800 ms debounce saves instead of prompting. Record lookups keyed by document ids use `ownValue` (own keys only). The run headline is the only `role="status"` in the editor. The E2E fake records `abortedRequests`, returns a distinct PNG per request, and `otherRequests` must stay empty (afterEach).
+- Follow-ups (CI-2): Cmd/Ctrl+Z undo and redo (CI-1 has toolbar buttons only), Download and Reveal, lightbox, chat bridge, Settings → Images, and close-guard copy for an unsaved workflow (reuses the existing wording until CI-4).

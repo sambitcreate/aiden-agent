@@ -14,13 +14,51 @@ import {
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
+import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
+import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
+import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
+import {
+  BOT_CHAT_ACTIVITY_LEVELS,
+  BOT_CHAT_ACTIVITY_WORDINGS,
+  type BotChatActivityLevel,
+  type BotChatActivityWording,
+} from "../../renderer/shared/bots.js";
+import {
+  MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
+  MAX_FORK_SUMMARY_TEXT_CHARS,
+} from "../../renderer/shared/chat-copy-contract.js";
 import type {
+  AidenRemoteChatForkLineageProjection,
+  AidenRemoteChatForkSummaryProjection,
+  AidenRemoteChatForkResult,
   AidenRemoteChatProjection,
   AidenRemoteChatSummaryPage,
   AidenRemoteChatSummaryProjection,
 } from "./aiden-remote-chats.js";
 
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
+/**
+ * Contract revision of the v1 wire contract. Additive revisions keep protocol
+ * version 1; the revision is published on `/health` and in the shared fixture.
+ *
+ * Contract revision 29: completed `ask_user_question` tool steps on a version 3
+ * generation timeline may carry a display-only `questionnaire` recap of the
+ * questions and what the owner chose; older clients ignore it.
+ *
+ * Contract revision 30 (provisional; re-claim the next revision after `main`'s
+ * at merge): Bot chat activity on phones (`bot-activity-v1`, `bot:activity`).
+ *
+ * Contract revision 31: connection reliability. Desktop-only `peer-routes-v1`
+ * route advertisements with route-specific trust, and the `android` pairing
+ * device type.
+ *
+ * Contract revision 32: conversation app controls. Assistant messages may carry
+ * inert `appPanels` (`chat-ui-panels-v1`); owner-enabled hosts also advertise
+ * `chat-ui-panels-enabled-v1`, `GET`/`POST /chats/{chatId}/controls/{panelId}`
+ * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
+ * the `app_controls_changed` progress event and the `builtin` skill source.
+ */
+export const AIDEN_REMOTE_CONTRACT_REVISION = 32 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -37,7 +75,33 @@ export const AIDEN_REMOTE_CHAT_SUMMARY_FEATURE = "chat-summaries-v1" as const;
 export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as const;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
-export const AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION = "bot-full-access-v1" as const;
+/**
+ * Bots rework feature tokens (contract revision 25). `bot-delete-v1` marks
+ * `DELETE /bots/{botId}` as a permanent erase; the others gate the durable
+ * Bot session, routines, connection requests and starter presets.
+ */
+export const AIDEN_REMOTE_BOT_DELETE_FEATURE = "bot-delete-v1" as const;
+export const AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE = "bot-durable-session-v1" as const;
+export const AIDEN_REMOTE_BOT_ROUTINES_FEATURE = "bot-routines-v1" as const;
+export const AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE = "bot-connection-requests-v1" as const;
+export const AIDEN_REMOTE_BOT_PRESETS_FEATURE = "bot-presets-v1" as const;
+/**
+ * Bot memory, soul and proactivity (contract revision 27). `bot-memory-v1`
+ * gates `GET /bots/{botId}/memory` and `POST /bots/{botId}/memory/edits`;
+ * `bot-proactive-v1` gates routine proposal answers, routine suggestions and
+ * the Bot routine notification feed. The session cards themselves are gated
+ * per device by the negotiated `bot:cards` capability.
+ */
+export const AIDEN_REMOTE_BOT_MEMORY_FEATURE = "bot-memory-v1" as const;
+export const AIDEN_REMOTE_BOT_PROACTIVE_FEATURE = "bot-proactive-v1" as const;
+/**
+ * Bot chat activity (contract revision 30). Announced only while the host
+ * projects the session `activity` and `queued` frames, accepts `whenBusy` on
+ * `POST /bots/{botId}/messages`, and serves `chatActivity` on Bot detail and
+ * `PATCH /bots/{botId}`. A device opts into the frames and the detail field
+ * with the negotiable `bot:activity`.
+ */
+export const AIDEN_REMOTE_BOT_ACTIVITY_FEATURE = "bot-activity-v1" as const;
 
 const AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH = 128;
 const AIDEN_REMOTE_MAX_ENDPOINT_UTF8_BYTES = 2_048;
@@ -90,10 +154,86 @@ export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
 export type AidenRemoteSimulatorCapability =
   (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
 
+/**
+ * Phone-only opt-in (contract revision 25): watching and touching the serving
+ * Mac's shared iOS Simulators from Aiden On The Go. Only `iphone`, `ipad` and
+ * (since contract revision 31) `android` device records may hold it, it is negotiated post-pairing while the server
+ * advertises `mobile-simulators-v1`, and the serving owner's "Share with Aiden
+ * On The Go" consent must also be on. It reaches a narrower route set than
+ * `simulators:control`: list, open, shut down, the MJPEG stream and the input
+ * socket. Settings, device actions and every other hub route stay desktop-only.
+ */
+export const AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES = [
+  "simulators:mobile",
+] as const;
+
+export type AidenRemoteMobileSimulatorCapability =
+  (typeof AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES)[number];
+
+/**
+ * Desktop-only host-wide authority for multi-host control (contract revision
+ * 19). `host:events` reads the host feed, `runs:observe` streams any run in a
+ * visible chat whatever started it, and `runs:control` stops runs, answers
+ * their approvals and questions, and steers them. Only `mac` and `linux`
+ * device records may hold these grants; phones keep device-scoped access.
+ */
+export const AIDEN_REMOTE_HOST_CAPABILITIES = [
+  "host:events",
+  "runs:observe",
+  "runs:control",
+] as const;
+
+export type AidenRemoteHostCapability =
+  (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number];
+
+/**
+ * Phone-scoped subset of the host run authority (contract revision 24). A
+ * phone (`iphone`/`ipad`) may negotiate these through
+ * `POST /device/capabilities` only while the server advertises
+ * `phone-run-control-v1`. Unlike a desktop, a phone's run grants never widen
+ * chat visibility: every run route still applies the phone's own per-chat
+ * checks (`chat:read`/`chat:write`, `bot:read`/`bot:write` for Bot chats,
+ * `approval:respond`, `questions:respond`), and the phone receives the
+ * observer projection (no approval details, tool arguments or results).
+ * `host:events` stays desktop-only.
+ */
+export const AIDEN_REMOTE_PHONE_RUN_CAPABILITIES = [
+  "runs:observe",
+  "runs:control",
+] as const satisfies readonly AidenRemoteHostCapability[];
+
+/**
+ * Contract revision 27: a device that negotiates `bot:cards` can render the
+ * `memory_update` and `routine_proposal` Bot session entries. Devices without
+ * it never receive them. It grants no authority; any device type may hold it.
+ */
+export const AIDEN_REMOTE_BOT_CARD_CAPABILITIES = [
+  "bot:cards",
+] as const;
+
+export type AidenRemoteBotCardCapability = (typeof AIDEN_REMOTE_BOT_CARD_CAPABILITIES)[number];
+
+/**
+ * Contract revision 30: a device holding `bot:activity` receives the session
+ * `activity` and `queued` frames and Bot detail `chatActivity`. Like
+ * `bot:cards` it grants no authority; any device type may hold it.
+ */
+export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
+
+/** Opt-ins that change what a device is sent, never what it may do. */
+export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+] as const;
+
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
+  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -104,6 +244,10 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_HOST_CAPABILITIES,
+  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -153,6 +297,138 @@ export const AIDEN_REMOTE_CHAT_SKILLS_FEATURE = "chat-skills-v1" as const;
  * servers omit the token and clients must keep the roster read-only.
  */
 export const AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1" as const;
+
+/**
+ * Server feature token for `GET /chats/{chatId}/messages?before=&limit=`, a
+ * bounded (at most 1 MiB) window of a chat's newest messages with a truthful
+ * `hasOlder` flag. `GET /chats/{chatId}` is unchanged for older clients.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1" as const;
+/**
+ * Server feature token (contract revision 23): every messages window also
+ * carries the chat's mutable metadata (`workspaceId`, `botId?`, `title`,
+ * `providerId?`/`modelId?`, `createdAt`, `updatedAt`, `titlePending?`), so a
+ * phone can refresh through windows alone and still learn renames and model
+ * changes. Hosts without it serve message-only windows.
+ */
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1" as const;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_DEFAULT_LIMIT = 50;
+export const AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT = 200;
+
+/** Server feature token for the `GET /host/events` host feed (`host:events`). */
+export const AIDEN_REMOTE_HOST_EVENTS_FEATURE = "host-events-v1" as const;
+/** Server feature token for the `/runs/{runId}/events` run streams (`runs:observe`). */
+export const AIDEN_REMOTE_RUN_STREAMS_FEATURE = "run-streams-v1" as const;
+/** Server feature token for the `/runs/{runId}/*` control routes (`runs:control`). */
+export const AIDEN_REMOTE_RUN_CONTROL_FEATURE = "run-control-v1" as const;
+/**
+ * Server feature token for phone observation and control of runs started
+ * elsewhere (desktop, Telegram, scheduler), contract revision 24. Advertised
+ * to phones only, and only while the host run registry is wired; it gates the
+ * phone-scoped `runs:observe`/`runs:control` negotiation.
+ */
+export const AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE = "phone-run-control-v1" as const;
+/**
+ * Server feature token for the phone simulator viewer (contract revision 26).
+ * Advertised to `iphone`/`ipad` devices only, and only while this Mac has the
+ * simulator feature; it gates negotiating `simulators:mobile`. It says nothing
+ * about the owner's sharing consent, which `GET /simulators` reports.
+ */
+export const AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE = "mobile-simulators-v1" as const;
+/**
+ * Server feature token for unauthenticated desktop connection requests
+ * (`/pairing/requests*`, contract revision 20). A requester without a
+ * credential discovers support through `/health?detail=host` `pairingRequests`
+ * instead.
+ */
+export const AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE = "pairing-requests-v1" as const;
+/**
+ * Server feature token for `POST /chats/{chatId}/fork` and the `forkedFrom`
+ * lineage on chats and list rows (contract revision 21).
+ */
+export const AIDEN_REMOTE_CHAT_FORK_FEATURE = "chat-fork-v1" as const;
+/**
+ * Server feature token for Fork with summary: the fork request's `summary`
+ * and the `/chats/{chatId}/fork-summary/{retry,skip,cancel}` routes
+ * (contract revision 21). Advertised only by a host that can summarize.
+ */
+export const AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE = "chat-fork-summary-v1" as const;
+/**
+ * Server feature token for inline visuals on chat messages (contract revision
+ * 28): each message's `visuals` list, with a snapshot image attachment and
+ * fallback text for clients that cannot draw the visual itself.
+ */
+export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
+
+/** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
+export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
+export const AIDEN_REMOTE_HOST_FEED_MAX_BYTES = 8 * 1_048_576;
+/**
+ * Item budget of one host-feed `snapshot` frame. A larger host projection is
+ * split into `partial` frames so every frame stays well inside the 1 MiB SSE
+ * frame limit.
+ */
+export const AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES = 256 * 1_024;
+export const AIDEN_REMOTE_SSE_HEARTBEAT_MS = 15_000;
+
+/** Host platforms published by the opt-in `GET /health?detail=host` descriptor. */
+export const AIDEN_REMOTE_HOST_PLATFORMS = ["mac", "linux", "windows"] as const;
+export type AidenRemoteHostPlatform = (typeof AIDEN_REMOTE_HOST_PLATFORMS)[number];
+
+export function aidenRemoteHostPlatform(platform: NodeJS.Platform): AidenRemoteHostPlatform | undefined {
+  if (platform === "darwin") return "mac";
+  if (platform === "linux") return "linux";
+  if (platform === "win32") return "windows";
+  return undefined;
+}
+
+/** Event types on `GET /host/events`. */
+export const AIDEN_REMOTE_HOST_FEED_EVENT_TYPES = [
+  "snapshot",
+  "chat.upsert",
+  "chat.remove",
+  "workspace.upsert",
+  "workspace.remove",
+  "bot.upsert",
+  "bot.remove",
+  "run.state",
+] as const;
+export type AidenRemoteHostFeedEventType = (typeof AIDEN_REMOTE_HOST_FEED_EVENT_TYPES)[number];
+
+/**
+ * Event types on the run streams. Content events share the vocabulary of
+ * `/streams/{streamId}/events`; `run.started`, `run.ended` and the two
+ * resolution events exist only on run streams.
+ */
+export const AIDEN_REMOTE_RUN_EVENT_TYPES = [
+  "snapshot",
+  "run.started",
+  "status",
+  "text_delta",
+  "reasoning_delta",
+  "tool_started",
+  "tool_finished",
+  "timeline",
+  "approval_required",
+  "approval_resolved",
+  "question_required",
+  "question_resolved",
+  "done",
+  "error",
+  "cancelled",
+  "run.ended",
+] as const;
+export type AidenRemoteRunEventType = (typeof AIDEN_REMOTE_RUN_EVENT_TYPES)[number];
+
+export const AIDEN_REMOTE_RUN_STATES = [
+  "working",
+  "needs_approval",
+  "needs_input",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+export type AidenRemoteRunState = (typeof AIDEN_REMOTE_RUN_STATES)[number];
 
 export const AIDEN_REMOTE_RUN_INPUT_MODES = ["steer", "queue"] as const;
 export type AidenRemoteRunInputMode = ChatRunInputMode;
@@ -210,7 +486,9 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "handle_capacity",
   "turn_already_active",
   "stream_gone",
+  "run_gone",
   "approval_already_resolved",
+  "approval_resolved",
   "approval_expired",
   "question_already_resolved",
   "question_expired",
@@ -222,6 +500,11 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "schedule_run_in_progress",
   "server_interrupted",
   "internal_error",
+  // Contract revision 27.
+  "memory_entry_not_found",
+  "memory_over_budget",
+  "memory_blocked",
+  "routine_proposal_not_found",
 ] as const;
 
 export type AidenRemoteErrorCode = (typeof AIDEN_REMOTE_ERROR_CODES)[number];
@@ -239,9 +522,18 @@ export interface AidenRemoteErrorEnvelope {
       minimumClientVersion?: string;
       limit?: number;
       field?: string;
+      /** The winning decision on `approval_resolved` (run control only). */
+      decision?: AidenRemoteResolvedApprovalDecision;
+      /** The winning outcome on a run-control `question_already_resolved`. */
+      outcome?: AidenRemoteResolvedQuestionOutcome;
+      /** When the winning resolution was committed, on either of the above. */
+      resolvedAt?: string;
     };
   };
 }
+
+export type AidenRemoteResolvedApprovalDecision = "allow" | "deny" | "expired" | "cancelled";
+export type AidenRemoteResolvedQuestionOutcome = "answered" | "expired" | "cancelled";
 
 export interface AidenRemoteStreamEvent {
   protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
@@ -462,34 +754,46 @@ export const AIDEN_REMOTE_BOT_HEALTH_STATES = [
   "ready",
   "degraded",
   "unavailable",
-  "archived",
+] as const;
+
+/**
+ * Durable Bot session state (contract revision 25, `bot-durable-session-v1`).
+ * `interrupted` is a paused turn waiting for Resume or Dismiss.
+ */
+export const AIDEN_REMOTE_BOT_SESSION_STATES = [
+  "idle",
+  "running",
+  "interrupted",
+  "needs_model",
+  "unavailable",
+] as const;
+
+export type AidenRemoteBotSessionStateKind = (typeof AIDEN_REMOTE_BOT_SESSION_STATES)[number];
+
+export const AIDEN_REMOTE_BOT_SESSION_BLOCKED_REASONS = ["access_changed", "bot_missing"] as const;
+
+export type AidenRemoteBotSessionBlockedReason =
+  (typeof AIDEN_REMOTE_BOT_SESSION_BLOCKED_REASONS)[number];
+
+export const AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES = [
+  "lilac", "sky", "mint", "sun", "periwinkle", "coral", "peach", "aqua",
+  "rose", "lime", "plum", "graphite",
 ] as const;
 
 export type AidenRemoteBotHealth = (typeof AIDEN_REMOTE_BOT_HEALTH_STATES)[number];
 
-export const AIDEN_REMOTE_BOT_LEGACY_AVATARS = [
-  "spark",
-  "orbit",
-  "leaf",
-  "prism",
-  "wave",
-  "ember",
-] as const;
-
-export type AidenRemoteBotLegacyAvatar =
-  (typeof AIDEN_REMOTE_BOT_LEGACY_AVATARS)[number];
-
+/**
+ * Colour plus shape (contract revision 25). Clients may still send the retired
+ * `eyes`/`detail` axes; the host accepts and ignores them and never emits them.
+ */
 export interface AidenRemoteBotAvatarRecipe {
   version: 1;
   shape: "wisp" | "orb" | "drop" | "hex" | "cloud" | "peak" | "squircle" | "capsule";
-  color: "lilac" | "sky" | "mint" | "sun" | "periwinkle" | "coral" | "peach" | "aqua";
-  eyes: "dots" | "wide" | "happy" | "sleepy" | "focus" | "wink";
-  detail: "none" | "halo" | "orbit" | "sparkles" | "antenna" | "bolts";
+  color: (typeof AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES)[number];
 }
 
-export type AidenRemoteBotSemanticAvatar =
-  | AidenRemoteBotLegacyAvatar
-  | AidenRemoteBotAvatarRecipe;
+/** Legacy string avatar ids were retired in contract revision 25. */
+export type AidenRemoteBotSemanticAvatar = AidenRemoteBotAvatarRecipe;
 
 export interface AidenRemoteBotAvatarAsset {
   assetRevision: string;
@@ -514,10 +818,11 @@ export interface AidenRemoteBotSummaryBase {
   revision: string;
 }
 
-export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & (
-  | { health: "archived"; archivedAt: string }
-  | { health: "ready" | "degraded" | "unavailable"; archivedAt?: never }
-);
+export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & {
+  health: AidenRemoteBotHealth;
+  /** Present when the host advertises `bot-durable-session-v1`. */
+  sessionState?: AidenRemoteBotSessionStateKind;
+};
 
 export interface AidenRemoteBotCustomSelection {
   fileScopeIds: string[];
@@ -546,13 +851,20 @@ export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
   access: AidenRemoteBotAccessView;
   modelSelection?: { providerId: string; modelId: string };
   visionModelSelection?: { providerId: string; modelId: string };
-  openingGreeting?: string;
+  /** Contract revision 30, only for devices holding `bot:activity`. */
+  chatActivity?: AidenRemoteBotChatActivity;
 };
+
+/**
+ * Retired in contract revision 27: the host never emits `openingGreeting`,
+ * and accepts and ignores it in `POST /bots` and `PATCH /bots/{botId}` bodies
+ * because older phones send it with every Advanced save.
+ */
+export const AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS = ["openingGreeting"] as const;
 
 export interface AidenRemoteBotList {
   bots: AidenRemoteBotSummary[];
   maxBots: number;
-  favorites: AidenRemoteBotFavoritesView;
 }
 
 export interface AidenRemoteBotCreateRequest {
@@ -560,8 +872,8 @@ export interface AidenRemoteBotCreateRequest {
   purpose: string;
   instructions: string;
   avatar: AidenRemoteBotSemanticAvatar;
-  access: AidenRemoteBotAccessUpdateRequest;
-  openingGreeting?: string;
+  /** Omitted means Full access (contract revision 25 dropped the notice wall). */
+  access?: AidenRemoteBotAccessUpdateRequest;
 }
 
 export interface AidenRemoteBotIdentityPatchRequest {
@@ -569,8 +881,8 @@ export interface AidenRemoteBotIdentityPatchRequest {
   purpose?: string;
   instructions?: string;
   avatar?: AidenRemoteBotSemanticAvatar;
-  /** An empty string explicitly clears the greeting. JSON null is invalid. */
-  openingGreeting?: string;
+  /** Contract revision 30, only on hosts announcing `bot-activity-v1`. Absent keeps the saved choice. */
+  chatActivity?: AidenRemoteBotChatActivity;
 }
 
 export interface AidenRemoteBotConversationItemBase {
@@ -635,25 +947,6 @@ export interface AidenRemoteBotProviderOption {
   models: AidenRemoteBotModelOption[];
 }
 
-export type AidenRemoteBotNoticeDecision = "continue_full" | "customize_first";
-
-export interface AidenRemoteBotAccessNoticeStatusBase {
-  version: typeof AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION;
-}
-
-export type AidenRemoteBotAccessNoticeStatus = AidenRemoteBotAccessNoticeStatusBase & (
-  | {
-      requiresAcknowledgement: true;
-      acceptedAt?: never;
-      acceptedDecision?: never;
-    }
-  | {
-      requiresAcknowledgement: false;
-      acceptedAt: string;
-      acceptedDecision: AidenRemoteBotNoticeDecision;
-    }
-);
-
 export interface AidenRemoteBotCapabilityCatalog {
   revision: string;
   providers: AidenRemoteBotProviderOption[];
@@ -664,7 +957,6 @@ export interface AidenRemoteBotCapabilityCatalog {
   /** Legacy omission means enabled; false temporarily suppresses saved grants. */
   skillsEnabled?: boolean;
   otherCapabilities: AidenRemoteBotCapabilityOption[];
-  notice: AidenRemoteBotAccessNoticeStatus;
 }
 
 export type AidenRemoteBotAccessUpdateRequest =
@@ -682,47 +974,6 @@ export type AidenRemoteBotAccessUpdateRequest =
       custom: AidenRemoteBotCustomSelection;
       visionModel?: { providerId: string; modelId: string } | null;
     };
-
-export interface AidenRemoteBotChatAccessViewBase {
-  chatId: string;
-  botId: string;
-  revision: string;
-  botPolicyRevision: string;
-  summary: string;
-}
-
-export type AidenRemoteBotChatAccessView = AidenRemoteBotChatAccessViewBase & (
-  | { mode: "inherit"; custom?: never }
-  | { mode: "custom"; custom: AidenRemoteBotCustomSelection }
-);
-
-export type AidenRemoteBotChatAccessUpdateRequest =
-  | {
-      mode: "inherit";
-      catalogRevision: string;
-      expectedBotPolicyRevision: string;
-    }
-  | {
-      mode: "custom";
-      catalogRevision: string;
-      expectedBotPolicyRevision: string;
-      custom: AidenRemoteBotCustomSelection;
-    };
-
-export interface AidenRemoteBotFavoritesView {
-  botIds: string[];
-  revision: string;
-}
-
-export interface AidenRemoteBotFavoritesUpdateRequest {
-  botIds: string[];
-}
-
-export interface AidenRemoteBotNoticeAcknowledgementRequest {
-  version: typeof AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION;
-  decision: AidenRemoteBotNoticeDecision;
-  confirmedForeground: true;
-}
 
 export interface AidenRemoteBotAvatarUploadRequest {
   mimeType: "image/png" | "image/jpeg";
@@ -749,24 +1000,431 @@ export interface AidenRemoteBotPolicyUpdateFixture {
   response: AidenRemoteBotAccessView;
 }
 
-export interface AidenRemoteBotChatSubsetUpdateFixture {
-  request: AidenRemoteBotChatAccessUpdateRequest;
-  response: AidenRemoteBotChatAccessView;
-}
-
-export interface AidenRemoteBotFavoritesUpdateFixture {
-  request: AidenRemoteBotFavoritesUpdateRequest;
-  response: AidenRemoteBotFavoritesView;
-}
-
-export interface AidenRemoteBotNoticeAcknowledgementFixture {
-  request: AidenRemoteBotNoticeAcknowledgementRequest;
-  response: AidenRemoteBotAccessNoticeStatus;
-}
-
 export interface AidenRemoteBotAvatarUploadFixture {
   request: AidenRemoteBotAvatarUploadRequest;
   response: AidenRemoteBotAvatarAsset;
+}
+
+// --- Contract revision 25: durable Bot sessions, routines, connections, presets.
+
+export const AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES = 200;
+export const AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS = 100_000;
+export const AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS = 32_000;
+export const AIDEN_REMOTE_BOT_ROUTINES_MAX = 64;
+export const AIDEN_REMOTE_BOT_PRESETS_MAX = 8;
+export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
+  "snapshot",
+  "partial",
+  "entry",
+  "state",
+  "question",
+  "approval",
+  "activity",
+  "queued",
+  "closed",
+] as const;
+export type AidenRemoteBotSessionEventType = (typeof AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES)[number];
+
+export type AidenRemoteConnectCardStatus = "pending" | "connected" | "dismissed";
+
+export type AidenRemoteBotSessionEntry =
+  | {
+      type: "message";
+      id: string;
+      role: "user" | "assistant";
+      text: string;
+      createdAt?: string;
+      /** Routine name shown above a routine's turn. */
+      label?: string;
+      /** An assistant answer that was cut off. */
+      interrupted?: true;
+      /**
+       * Contract revision 30, only for devices holding `bot:activity`: the
+       * submission this person's own message was sent as (the send receipt's
+       * and the queued list's `submissionId`), so a phone settles its
+       * optimistic bubble exactly. Never on a routine's input or a question
+       * answer, and omitted when the Mac no longer knows it.
+       */
+      submissionId?: string;
+    }
+  | {
+      type: "connect_card";
+      id: string;
+      pluginId: string;
+      name: string;
+      iconId: string;
+      reason: string;
+      status: AidenRemoteConnectCardStatus;
+    }
+  | { type: "notice"; id: string; notice: "session_reset" }
+  /**
+   * A reply that failed. Clients show "I couldn't finish that reply."; on the
+   * newest entry, Retry posts `retryText` as a new message with a new key.
+   * `retryText` is omitted when there is nothing to resend.
+   */
+  | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
+  /**
+   * Contract revision 27, only for devices holding `bot:cards`: the Bot saved
+   * something to its memory. Clients show a quiet "Memory updated" line.
+   */
+  | { type: "memory_update"; id: string; createdAt?: string }
+  /**
+   * Contract revision 27, only for devices holding `bot:cards`: a routine the
+   * Bot suggested. A pending card is answered through
+   * `POST /bots/{botId}/routine-proposals/{proposalId}/respond`.
+   */
+  | {
+      type: "routine_proposal";
+      id: string;
+      proposalId: string;
+      name: string;
+      prompt: string;
+      label: string;
+      status: AidenRemoteBotRoutineProposalStatus;
+      routineId?: string;
+      createdAt?: string;
+    };
+
+export const AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES = ["pending", "accepted", "dismissed"] as const;
+export type AidenRemoteBotRoutineProposalStatus = (typeof AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES)[number];
+/** Session entry types that only `bot:cards` devices receive. */
+export const AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES = ["memory_update", "routine_proposal"] as const;
+
+// --- Contract revision 27: Bot memory and proactivity.
+
+// The host store enforces the same bounds on write and read (`BOT_MEMORY_LIMITS`),
+// so every memory view a host can load is representable here and on phones.
+export const AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS = BOT_MEMORY_LIMITS.entryChars;
+export const AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES = BOT_MEMORY_LIMITS.maxEntries;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX = 100;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS = 160;
+
+export interface AidenRemoteBotMemoryEntry {
+  /** Content-addressed: first 16 hex of sha256(target + "\0" + text). */
+  id: string;
+  text: string;
+}
+
+export interface AidenRemoteBotMemoryStore {
+  entries: AidenRemoteBotMemoryEntry[];
+  usedChars: number;
+  limitChars: number;
+  overBudget: boolean;
+}
+
+/** `GET /bots/{botId}/memory`: what the Bot remembers (`bot:read` + `chat:read`). */
+export interface AidenRemoteBotMemory {
+  botId: string;
+  revision: string;
+  /** False when a memory file could not be read; only `clear` is offered. */
+  readable: boolean;
+  /** The Bot's own notes (MEMORY.md). */
+  memory: AidenRemoteBotMemoryStore;
+  /** What it knows about the person (USER.md). */
+  user: AidenRemoteBotMemoryStore;
+  /** Newest write, or null when nothing was ever saved. */
+  updatedAt: string | null;
+}
+
+export type AidenRemoteBotMemoryTarget = "memory" | "user";
+
+export type AidenRemoteBotMemoryEdit =
+  | { kind: "replace"; target: AidenRemoteBotMemoryTarget; entryId: string; text: string }
+  | { kind: "remove"; target: AidenRemoteBotMemoryTarget; entryId: string }
+  | { kind: "clear" };
+
+/** `POST /bots/{botId}/memory/edits` body (`Idempotency-Key` required). */
+export interface AidenRemoteBotMemoryEditRequest {
+  edit: AidenRemoteBotMemoryEdit;
+}
+
+export interface AidenRemoteBotMemoryEditResponse {
+  ok: true;
+  view: AidenRemoteBotMemory;
+}
+
+/** Error codes of `POST /bots/{botId}/memory/edits`. */
+export const AIDEN_REMOTE_BOT_MEMORY_EDIT_ERRORS = [
+  { status: 404, code: "memory_entry_not_found" },
+  { status: 422, code: "memory_over_budget" },
+  { status: 422, code: "memory_blocked" },
+] as const;
+
+/** `POST /bots/{botId}/routine-proposals/{proposalId}/respond` body. */
+export interface AidenRemoteBotRoutineProposalRespondRequest {
+  decision: "accept" | "dismiss";
+}
+
+/** The settled answer; the same on every repeat, from any device. */
+export interface AidenRemoteBotRoutineProposalRespondResult {
+  status: Exclude<AidenRemoteBotRoutineProposalStatus, "pending">;
+  routineId?: string;
+}
+
+export interface AidenRemoteBotRoutineSuggestion {
+  id: "daily-check-in";
+  name: string;
+  prompt: string;
+  schedule: AidenRemoteBotRoutineSchedule;
+  /** Host-formatted friendly schedule. */
+  label: string;
+}
+
+/** `GET /bots/{botId}/routine-suggestions`: empty once the Bot has any routine. */
+export interface AidenRemoteBotRoutineSuggestionList {
+  suggestions: AidenRemoteBotRoutineSuggestion[];
+}
+
+export interface AidenRemoteBotRoutineNotification {
+  /** The routine run id; clients post `aiden.bot-routine.<id>` once. */
+  id: string;
+  botId: string;
+  botName: string;
+  routineId: string;
+  routineName: string;
+  status: "succeeded" | "failed";
+  finishedAt: string;
+  /** First 160 characters of the reply (redacted), or a fixed failure line. */
+  preview: string;
+}
+
+/** `GET /bots/routine-notifications?since=`: newest first, at most 100. */
+export interface AidenRemoteBotRoutineNotificationList {
+  notifications: AidenRemoteBotRoutineNotification[];
+  /** Host time; pass it as the next `since`. */
+  now: string;
+}
+
+// --- Contract revision 30: Bot chat activity.
+
+export const AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS = 40;
+export const AIDEN_REMOTE_BOT_QUEUED_MAX = 20;
+export const AIDEN_REMOTE_BOT_WHEN_BUSY_MODES = ["steer", "queue"] as const;
+export type AidenRemoteBotWhenBusy = (typeof AIDEN_REMOTE_BOT_WHEN_BUSY_MODES)[number];
+const AIDEN_REMOTE_BOT_ACTIVITY_PHASE = /^[a-z][a-z_]{0,31}$/u;
+const AIDEN_REMOTE_BOT_SUBMISSION_ID = /^[A-Za-z0-9._:-]{1,64}$/u;
+
+/** What a Bot in a running turn is doing (spec §5). Exactly these keys cross the wire (§11). */
+export interface AidenRemoteBotSessionActivity {
+  /** A §5 phase id. Clients render an id they do not know as `working`. */
+  phase: string;
+  /** The connection's label for `app`, at most 40 code points. */
+  app?: string;
+  /** When the turn started: the Mac's clock, milliseconds since 1970. */
+  startedAt: number;
+}
+
+/** A message waiting for the running turn: `steer` joins it, `queue` runs after it. */
+export interface AidenRemoteBotQueuedMessage {
+  submissionId: string;
+  mode: AidenRemoteBotWhenBusy;
+  text: string;
+}
+
+/** A Bot's Chat activity choice (spec §7). */
+export interface AidenRemoteBotChatActivity {
+  level: BotChatActivityLevel;
+  wording: BotChatActivityWording;
+}
+
+/** State of a Bot's one durable conversation. */
+export interface AidenRemoteBotSessionStateView {
+  state: AidenRemoteBotSessionStateKind;
+  /** True exactly when `state` is `interrupted`. */
+  interrupted: boolean;
+  /** Only while interrupted: why Resume is refused. */
+  blocked?: AidenRemoteBotSessionBlockedReason;
+}
+
+/** One option of an A–E quick-reply question. */
+export interface AidenRemoteBotQuestionOption {
+  label: string;
+  description: string;
+}
+
+/** One question of a Bot's quick-reply card (the legacy `ask_user_question` shape). */
+export interface AidenRemoteBotQuestionItem {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: AidenRemoteBotQuestionOption[];
+}
+
+/** A question the Bot is waiting on. Answered by `waitId`, once. */
+export interface AidenRemoteBotQuestion {
+  waitId: string;
+  toolCallId: string;
+  questions: AidenRemoteBotQuestionItem[];
+}
+
+/**
+ * A tool call the Bot is waiting to have approved. Answered once, by `waitId`,
+ * through `POST /approvals/{waitId}/respond` (`approval:respond` plus
+ * `bot:read` and `bot:write`). `canAllow` false: a phone may only deny it
+ * (Computer Use is allowed on the Mac).
+ */
+export interface AidenRemoteBotApproval {
+  waitId: string;
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  canAllow: boolean;
+}
+
+/**
+ * `POST /bots/{botId}/questions/{waitId}/answer`: the same body as a workspace
+ * chat's question response. The `Idempotency-Key` header is the request UUID.
+ */
+export type AidenRemoteBotQuestionAnswerRequest = AidenRemoteQuestionRespondRequest;
+
+/** The same receipt on every repeat of one request UUID. */
+export interface AidenRemoteBotQuestionAnswerReceipt {
+  waitId: string;
+}
+
+/** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
+export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
+  botId: string;
+  /** Changes whenever the Bot's session is reopened on the host. */
+  epoch: string;
+  /** Last event sequence folded into this snapshot, within `epoch`. */
+  seq: number;
+  /** In-flight assistant text of the running (or paused) turn. */
+  partial?: string;
+  entries: AidenRemoteBotSessionEntry[];
+  hasOlder: boolean;
+  /** The question the Bot is waiting on, or null. */
+  question: AidenRemoteBotQuestion | null;
+  /** The oldest tool approval the Bot is waiting on, or null. */
+  approval: AidenRemoteBotApproval | null;
+  /** Revision 30, only for `bot:activity` devices: what the running turn is doing, or null. */
+  activity?: AidenRemoteBotSessionActivity | null;
+  /** Revision 30, only for `bot:activity` devices: the person's messages waiting for the turn. */
+  queued?: AidenRemoteBotQueuedMessage[];
+}
+
+export type AidenRemoteBotSessionEventPayload =
+  | { type: "snapshot"; payload: { session: AidenRemoteBotSession } }
+  | { type: "partial"; payload: { text: string } }
+  | { type: "entry"; payload: { entry: AidenRemoteBotSessionEntry } }
+  | { type: "state"; payload: AidenRemoteBotSessionStateView }
+  | { type: "question"; payload: { question: AidenRemoteBotQuestion | null } }
+  | { type: "approval"; payload: { approval: AidenRemoteBotApproval | null } }
+  | { type: "activity"; payload: { activity: AidenRemoteBotSessionActivity | null } }
+  | { type: "queued"; payload: { queued: AidenRemoteBotQueuedMessage[] } }
+  | { type: "closed"; payload: Record<string, never> };
+
+/** One frame of `GET /bots/{botId}/session/events`. */
+export type AidenRemoteBotSessionEvent = {
+  protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
+  botId: string;
+  epoch: string;
+  seq: number;
+} & AidenRemoteBotSessionEventPayload;
+
+export interface AidenRemoteBotMessageRequest {
+  text: string;
+  /** Revision 30, only on hosts announcing `bot-activity-v1`. Absent queues, as before. */
+  whenBusy?: AidenRemoteBotWhenBusy;
+}
+
+export interface AidenRemoteBotMessageReceipt extends AidenRemoteBotSessionStateView {
+  submissionId: string;
+  deduped: boolean;
+}
+
+export type AidenRemoteBotRoutineSchedule =
+  | { kind: "once"; date: string; time: string }
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "weekly"; days: number[]; time: string }
+  | { kind: "monthly"; day: number; time: string };
+
+export const AIDEN_REMOTE_BOT_ROUTINE_RESULTS = [
+  "success",
+  "error",
+  "silent",
+  "blocked",
+  "skipped",
+] as const;
+
+export interface AidenRemoteBotRoutine {
+  id: string;
+  botId: string;
+  name: string;
+  /** "What should it do?" */
+  message: string;
+  /** Null only for a stored routine whose schedule became unreadable. */
+  schedule: AidenRemoteBotRoutineSchedule | null;
+  timezone: string;
+  /** Host-formatted friendly schedule, e.g. "Weekdays at 8:00 AM". */
+  label: string;
+  enabled: boolean;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastResult?: (typeof AIDEN_REMOTE_BOT_ROUTINE_RESULTS)[number];
+  lastError?: string;
+  updatedAt: string;
+  /** `If-Match` token for PATCH and DELETE. */
+  revision: string;
+}
+
+export interface AidenRemoteBotRoutineList {
+  routines: AidenRemoteBotRoutine[];
+}
+
+export interface AidenRemoteBotRoutineCreateRequest {
+  name: string;
+  schedule: AidenRemoteBotRoutineSchedule;
+  message: string;
+  timezone?: string;
+}
+
+export interface AidenRemoteBotRoutineUpdateRequest {
+  name?: string;
+  schedule?: AidenRemoteBotRoutineSchedule;
+  message?: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+
+export interface AidenRemoteBotConnectionRequest {
+  pluginId: string;
+}
+
+export interface AidenRemoteBotConnectionRequestReceipt {
+  pluginId: string;
+  name: string;
+  status: "sent";
+}
+
+export interface AidenRemoteBotConnectionChip {
+  pluginId: string;
+  name: string;
+  iconId: string;
+}
+
+export interface AidenRemoteBotPreset {
+  id: string;
+  name: string;
+  subtitle: string;
+  avatar: AidenRemoteBotAvatarRecipe;
+  suggestedConnections: AidenRemoteBotConnectionChip[];
+  suggestedRoutine?: { name: string; label: string };
+}
+
+export interface AidenRemoteBotPresetList {
+  presets: AidenRemoteBotPreset[];
+}
+
+export interface AidenRemoteBotPresetCreateRequest {
+  presetId: string;
+}
+
+export interface AidenRemoteBotPresetCreateResult {
+  /** True only for the request that made the Bot. */
+  created: boolean;
+  bot: AidenRemoteBotSummary;
 }
 
 /** Revision 16: one child stop and the refreshed current-turn roster it returns. */
@@ -874,8 +1532,6 @@ export interface AidenRemoteContractFixture {
   botAvatar: AidenRemoteBotAvatarView;
   botCreate: AidenRemoteBotCreateFixture;
   botIdentity: AidenRemoteBotIdentityFixture;
-  botArchive: AidenRemoteBotDetail;
-  botRestore: AidenRemoteBotDetail;
   botConversation: AidenRemoteBotConversationItem;
   botConversations: AidenRemoteBotConversationPage;
   botConversationQuery: AidenRemoteBotConversationQuery;
@@ -883,14 +1539,46 @@ export interface AidenRemoteContractFixture {
   botCapabilityCatalog: AidenRemoteBotCapabilityCatalog;
   botPolicy: AidenRemoteBotAccessView;
   botPolicyUpdate: AidenRemoteBotPolicyUpdateFixture;
-  botChatSubset: AidenRemoteBotChatAccessView;
-  botChatSubsetUpdate: AidenRemoteBotChatSubsetUpdateFixture;
-  botFavorites: AidenRemoteBotFavoritesView;
-  botFavoritesUpdate: AidenRemoteBotFavoritesUpdateFixture;
-  botNotice: AidenRemoteBotAccessNoticeStatus;
-  botNoticeAcknowledgement: AidenRemoteBotNoticeAcknowledgementFixture;
   botAvatarUpload: AidenRemoteBotAvatarUploadFixture;
   botAvatarMetadata: AidenRemoteBotAvatarAsset;
+  botSession: AidenRemoteBotSession;
+  botSessionNeedsModel: AidenRemoteBotSession;
+  botSessionEvents: AidenRemoteBotSessionEvent[];
+  botSessionSend: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
+  botSessionResume: { request: Record<string, never>; response: AidenRemoteBotSessionStateView };
+  botSessionDismiss: { request: Record<string, never>; response: AidenRemoteBotSessionStateView };
+  botSessionQuestionAnswer: {
+    request: AidenRemoteBotQuestionAnswerRequest;
+    response: AidenRemoteBotQuestionAnswerReceipt;
+  };
+  botRoutines: AidenRemoteBotRoutineList;
+  botRoutineCreate: { request: AidenRemoteBotRoutineCreateRequest; response: AidenRemoteBotRoutine };
+  botRoutineUpdate: { request: AidenRemoteBotRoutineUpdateRequest; response: AidenRemoteBotRoutine };
+  botConnectionRequest: {
+    request: AidenRemoteBotConnectionRequest;
+    response: AidenRemoteBotConnectionRequestReceipt;
+  };
+  botPresets: AidenRemoteBotPresetList;
+  botPresetCreate: { request: AidenRemoteBotPresetCreateRequest; response: AidenRemoteBotPresetCreateResult };
+  /** Revision 27: `GET /bots/{botId}/memory`. */
+  botMemory: AidenRemoteBotMemory;
+  /** Revision 27: one memory edit and the route's error codes. */
+  botMemoryEdit: {
+    request: AidenRemoteBotMemoryEditRequest;
+    response: AidenRemoteBotMemoryEditResponse;
+    errors: Array<{ status: number; code: string }>;
+  };
+  /** Revision 27: answering a routine proposal. */
+  botRoutineProposalRespond: {
+    request: AidenRemoteBotRoutineProposalRespondRequest;
+    response: AidenRemoteBotRoutineProposalRespondResult;
+  };
+  botRoutineSuggestions: AidenRemoteBotRoutineSuggestionList;
+  botRoutineNotifications: AidenRemoteBotRoutineNotificationList;
+  /** Revision 27: a session as a `bot:cards` device sees it. */
+  botSessionCards: AidenRemoteBotSession;
+  /** Revision 30: activity sessions, frames, Chat activity and the phase table every client draws. */
+  botActivity?: AidenRemoteBotActivityFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -898,6 +1586,148 @@ export interface AidenRemoteContractFixture {
   chatProgressEvents: AidenRemoteStreamEvent[];
   legacyNonNegotiating: AidenRemoteLegacyNonNegotiatingFixture;
   error: AidenRemoteErrorEnvelope;
+  /** Revision 19: `GET /health?detail=host`. */
+  hostHealth?: AidenRemoteHostHealth;
+  /** Revision 19: a `GET /host/events` sequence opening with its snapshot. */
+  hostFeedEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /** Revision 19: one complete run stream, ending with `run.ended`. */
+  runEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /**
+   * Revision 19: one `GET /chats/{chatId}/messages` page. Since revision 23
+   * it also carries the chat metadata (`chat-messages-window-metadata-v1`).
+   */
+  messagesWindow?: {
+    chatId: string;
+    revision: string;
+    messages: unknown[];
+    hasOlder: boolean;
+    workspaceId?: string;
+    botId?: string;
+    title?: string;
+    providerId?: string;
+    modelId?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    titlePending?: true;
+  };
+  /** Revision 19: a run-control loser's `409 approval_resolved`. */
+  runControlError?: AidenRemoteErrorEnvelope;
+  /** Revision 20, `pairing-requests-v1`: desktop connection request shapes and match-code vectors. */
+  pairingRequests?: AidenRemotePairingRequestsFixture;
+  /**
+   * Revision 24, `phone-run-control-v1`: a foreign run as a phone holding the
+   * phone-scoped run subset sees it (phone approval projection, no details).
+   */
+  phoneRunEvents?: AidenRemoteHostFeedFixtureEvent[];
+  /** Revision 21, `chat-fork-v1` and `chat-fork-summary-v1`: fork requests, responses and a summary cancel. */
+  chatFork?: AidenRemoteChatForkFixture;
+  /** Revision 26, `mobile-simulators-v1`: listing shapes, input vectors and an MJPEG sample for phones. */
+  mobileSimulators?: AidenRemoteMobileSimulatorsFixture;
+}
+
+/** One shared input vector: a viewer command, the last screen config, and the packet it sends. */
+export interface AidenRemoteMobileSimulatorInputVector {
+  command: Record<string, unknown>;
+  screen?: { width: number; height: number; orientation: string };
+  tag: number;
+  payload: Record<string, unknown>;
+}
+
+export interface AidenRemoteMobileSimulatorsFixture {
+  feature: typeof AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE;
+  capability: AidenRemoteMobileSimulatorCapability;
+  listing: Record<string, unknown>;
+  sharingOff: Record<string, unknown>;
+  openResponse: { device: Record<string, unknown> };
+  shutdownResponse: { ok: true };
+  hubRoutes: { mjpeg: string; config: string; input: string };
+  inputMessages: AidenRemoteMobileSimulatorInputVector[];
+  screenConfigs: Array<{ tag: number; payload: Record<string, unknown>; screen: Record<string, unknown> | null }>;
+  mjpeg: {
+    contentType: string;
+    streamBase64: string;
+    framesBase64: string[];
+    unlengthedStreamBase64: string;
+    unlengthedFramesBase64: string[];
+  };
+  refusal: AidenRemoteErrorEnvelope;
+}
+
+export interface AidenRemoteChatForkFixtureExchange {
+  request: { messageId: string; position: "after" | "before"; summary?: { focus?: string } };
+  response: AidenRemoteChatForkResult;
+}
+
+export interface AidenRemoteChatForkFixture {
+  features: string[];
+  /** A fork after a reply that asks for a summary. */
+  fork: AidenRemoteChatForkFixtureExchange;
+  /** A fork before a prompt, whose response returns the prompt to edit. */
+  editFork: AidenRemoteChatForkFixtureExchange;
+  /** Settled summaries a Chat read can carry. */
+  summaryStates: AidenRemoteChatForkSummaryProjection[];
+  summaryCancel: { cancelled: boolean };
+}
+
+/** One status poll answer; only `approved` carries the sealed grant envelope. */
+export interface AidenRemotePairingRequestStatusFixture {
+  requestId: string;
+  state: "pending" | "approved" | "denied" | "expired" | "cancelled";
+  expiresAt: string;
+  envelope?: {
+    kind: "aiden-pairing-request-v1";
+    protocolVersion: 1;
+    requestId: string;
+    expiresAt: string;
+    hostPublicKey: string;
+    salt: string;
+    nonce: string;
+    ciphertext: string;
+    tag: string;
+  };
+}
+
+/** Contract fixture section for `/pairing/requests*` (feature `pairing-requests-v1`). */
+export interface AidenRemotePairingRequestsFixture {
+  feature: typeof AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE;
+  create: {
+    request: { deviceName: string; deviceType: "mac" | "linux"; publicKey: string; clientVersion?: string };
+    response: { requestId: string; pollSecret: string; expiresAt: string; hostCommitment: string };
+  };
+  reveal: { request: { requesterNonce: string }; response: { hostNonce: string } };
+  status: AidenRemotePairingRequestStatusFixture[];
+  error: AidenRemoteErrorEnvelope;
+  matchCodeVectors: {
+    requesterPublicKey: string;
+    serverSpkiSha256: string;
+    requestId: string;
+    requesterNonce: string;
+    hostNonce: string;
+    hostCommitment: string;
+    matchCode: string;
+  }[];
+}
+
+/** `GET /health?detail=host`: non-secret host identity for desktop controllers. */
+export interface AidenRemoteHostHealth {
+  ok: true;
+  protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
+  instanceId: string;
+  displayName: string;
+  platform?: AidenRemoteHostPlatform;
+  contractRevision: number;
+  pairingRequests: boolean;
+}
+
+/** Envelope shared by the host feed and run streams in fixtures. */
+export interface AidenRemoteHostFeedFixtureEvent {
+  protocolVersion: typeof AIDEN_REMOTE_PROTOCOL_VERSION;
+  streamId: string;
+  sequence: number;
+  timestamp: string;
+  type: string;
+  terminal: boolean;
+  payload: Record<string, unknown>;
 }
 
 export const AIDEN_REMOTE_FORBIDDEN_WIRE_KEYS = new Set([
@@ -1082,8 +1912,6 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "botAvatar",
   "botCreate",
   "botIdentity",
-  "botArchive",
-  "botRestore",
   "botConversation",
   "botConversations",
   "botConversationQuery",
@@ -1091,12 +1919,16 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "botCapabilityCatalog",
   "botPolicy",
   "botPolicyUpdate",
-  "botChatSubset",
-  "botChatSubsetUpdate",
-  "botFavorites",
-  "botFavoritesUpdate",
-  "botNotice",
-  "botNoticeAcknowledgement",
+  "botSession",
+  "botSessionNeedsModel",
+  "botSessionEvents",
+  "botSessionSend",
+  "botPresets",
+  "botPresetCreate",
+  "botMemory",
+  "botMemoryEdit",
+  "botRoutineProposalRespond",
+  "botRoutineNotifications",
   "botAvatarUpload",
   "botAvatarMetadata",
   "taskProgress",
@@ -1145,14 +1977,24 @@ function isPrivateChildProjectionKey(key: string): boolean {
 
 function isAllowedBotIdentityField(root: string, path: readonly string[]): boolean {
   const key = path[path.length - 1];
-  if (key !== "instructions" && key !== "openingGreeting") return false;
-  if (["botDetail", "botArchive", "botRestore"].includes(root)) {
+  // `openingGreeting` was retired in revision 27 and is never on the wire.
+  if (key !== "instructions") return false;
+  if (root === "botDetail") {
     return path.length === 1;
   }
   if (root === "botCreate" || root === "botIdentity") {
     return path.length === 2 && (path[0] === "request" || path[0] === "response");
   }
   return false;
+}
+
+/**
+ * A waiting question's `header` is the card's short user-facing label, not an
+ * HTTP header. Only that path inside a Bot session may carry the name.
+ */
+function isAllowedBotQuestionHeader(root: string, path: readonly string[]): boolean {
+  const SESSION_ROOTS = new Set(["botSession", "botSessionNeedsModel", "botSessionEvents"]);
+  return SESSION_ROOTS.has(root) && path.slice(-4).join(".") === "question.questions.[].header";
 }
 
 function assertNoPrivateBotWireFields(value: unknown): void {
@@ -1167,7 +2009,8 @@ function assertNoPrivateBotWireFields(value: unknown): void {
       const childPath = [...path, key];
       if (
         isPrivateBotWireKey(key) &&
-        !isAllowedBotIdentityField(root, childPath)
+        !isAllowedBotIdentityField(root, childPath) &&
+        !isAllowedBotQuestionHeader(root, childPath)
       ) {
         throw new Error(`Forbidden private Bot wire key ${key} at ${root}.${childPath.join(".")}.`);
       }
@@ -1516,7 +2359,6 @@ function compareStrictRfc3339(
 }
 
 const AIDEN_REMOTE_BOT_MAX_COUNT = 256;
-const AIDEN_REMOTE_BOT_MAX_FAVORITES = 20;
 const AIDEN_REMOTE_BOT_MAX_CONVERSATIONS = 50;
 const AIDEN_REMOTE_BOT_MAX_CATALOG_MODELS = 512;
 const AIDEN_REMOTE_BOT_MAX_AVATAR_BYTES = 4 * 1_048_576;
@@ -1525,15 +2367,7 @@ const AIDEN_REMOTE_BOT_ID = /^[A-Za-z0-9._:-]+$/u;
 const AIDEN_REMOTE_BOT_AVATAR_SHAPES = [
   "wisp", "orb", "drop", "hex", "cloud", "peak", "squircle", "capsule",
 ] as const;
-const AIDEN_REMOTE_BOT_AVATAR_COLORS = [
-  "lilac", "sky", "mint", "sun", "periwinkle", "coral", "peach", "aqua",
-] as const;
-const AIDEN_REMOTE_BOT_AVATAR_EYES = [
-  "dots", "wide", "happy", "sleepy", "focus", "wink",
-] as const;
-const AIDEN_REMOTE_BOT_AVATAR_DETAILS = [
-  "none", "halo", "orbit", "sparkles", "antenna", "bolts",
-] as const;
+const AIDEN_REMOTE_BOT_AVATAR_COLORS = AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES;
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -1625,27 +2459,24 @@ function parseBotSemanticAvatar(
   value: unknown,
   exactRequest: boolean,
 ): AidenRemoteBotSemanticAvatar {
-  if (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_BOT_LEGACY_AVATARS as readonly string[]).includes(value)
-  ) {
-    return value as AidenRemoteBotLegacyAvatar;
-  }
   if (!isRecord(value)) throw new Error("Bot semantic avatar is invalid.");
   if (exactRequest) {
+    // `eyes` and `detail` are retired (contract revision 25): accepted from
+    // older senders and ignored.
     assertExactKeys(
       value,
       ["version", "shape", "color", "eyes", "detail"],
       "Bot semantic avatar",
     );
   }
+  for (const retired of ["eyes", "detail"] as const) {
+    if (hasOwn(value, retired)) boundedText(value[retired], `Bot avatar ${retired}`, 32);
+  }
   if (value.version !== 1) throw new Error("Bot semantic avatar version must be 1.");
   return {
     version: 1,
     shape: enumMember(value.shape, AIDEN_REMOTE_BOT_AVATAR_SHAPES, "Bot avatar shape"),
     color: enumMember(value.color, AIDEN_REMOTE_BOT_AVATAR_COLORS, "Bot avatar color"),
-    eyes: enumMember(value.eyes, AIDEN_REMOTE_BOT_AVATAR_EYES, "Bot avatar eyes"),
-    detail: enumMember(value.detail, AIDEN_REMOTE_BOT_AVATAR_DETAILS, "Bot avatar detail"),
   };
 }
 
@@ -1701,11 +2532,7 @@ export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummar
   ) {
     throw new Error("Bot updatedAt must not precede createdAt.");
   }
-  const archivedAt = optionalBoundedText(value, "archivedAt", "Bot archivedAt", 80);
-  if (archivedAt !== undefined) parseStrictRfc3339(archivedAt, "Bot archivedAt");
-  if ((health === "archived") !== (archivedAt !== undefined)) {
-    throw new Error("Bot archived health and archivedAt must agree.");
-  }
+  if (hasOwn(value, "archivedAt")) throw new Error("Bot summaries no longer carry archivedAt.");
   const base: AidenRemoteBotSummaryBase = {
     id: boundedBotId(value.id, "Bot id"),
     name: boundedText(value.name, "Bot name", 80),
@@ -1715,29 +2542,18 @@ export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummar
     updatedAt,
     revision: boundedRevision(value.revision, "Bot revision"),
   };
-  return health === "archived"
-    ? { ...base, health, archivedAt: archivedAt! }
-    : { ...base, health };
-}
-
-function parseUniqueBotIds(
-  value: unknown,
-  label: string,
-  maximum: number,
-): string[] {
-  if (!Array.isArray(value) || value.length > maximum) {
-    throw new Error(`${label} must contain at most ${maximum} Bot ids.`);
-  }
-  const ids = value.map((entry) => boundedBotId(entry, `${label} item`));
-  if (new Set(ids).size !== ids.length) throw new Error(`${label} must be unique.`);
-  return ids;
-}
-
-export function parseAidenRemoteBotFavoritesView(value: unknown): AidenRemoteBotFavoritesView {
-  if (!isRecord(value)) throw new Error("Bot favorites view must be an object.");
   return {
-    botIds: parseUniqueBotIds(value.botIds, "Bot favorites", AIDEN_REMOTE_BOT_MAX_FAVORITES),
-    revision: boundedRevision(value.revision, "Bot favorites revision"),
+    ...base,
+    health,
+    ...(hasOwn(value, "sessionState")
+      ? {
+          sessionState: enumMember(
+            value.sessionState,
+            AIDEN_REMOTE_BOT_SESSION_STATES,
+            "Bot sessionState",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -1754,54 +2570,67 @@ export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
   const bots = value.bots.map(parseAidenRemoteBotSummary);
   const botIds = new Set(bots.map((bot) => bot.id));
   if (botIds.size !== bots.length) throw new Error("Bot list ids must be unique.");
-  const favorites = parseAidenRemoteBotFavoritesView(value.favorites);
-  if (favorites.botIds.some((botId) => !botIds.has(botId))) {
-    throw new Error("Bot favorites must refer to Bots in the list fixture.");
-  }
-  const archivedBotIds = new Set(
-    bots.filter((bot) => bot.health === "archived").map((bot) => bot.id),
-  );
-  if (favorites.botIds.some((botId) => archivedBotIds.has(botId))) {
-    throw new Error("Archived Bots cannot remain in favorites.");
-  }
-  return { bots, maxBots: AIDEN_REMOTE_BOT_MAX_COUNT, favorites };
+  assertExactKeys(value, ["bots", "maxBots"], "Bot list");
+  return { bots, maxBots: AIDEN_REMOTE_BOT_MAX_COUNT };
 }
 
 export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
   if (!isRecord(value)) throw new Error("Bot create request must be an object.");
   assertExactKeys(
     value,
-    ["name", "purpose", "openingGreeting", "instructions", "avatar", "access"],
+    ["name", "purpose", ...AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS, "instructions", "avatar", "access"],
     "Bot create request",
   );
+  ignoreRetiredBotGreeting(value, "Bot create");
   return {
     name: boundedText(value.name, "Bot create name", 80),
     purpose: boundedText(value.purpose, "Bot create purpose", 280, true),
     instructions: boundedText(value.instructions, "Bot create instructions", 32_000),
     avatar: parseBotSemanticAvatar(value.avatar, true),
-    access: parseAidenRemoteBotAccessUpdateRequest(value.access),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot create openingGreeting",
-            2_000,
-            true,
-          ),
-        }
+    ...(hasOwn(value, "access")
+      ? { access: parseAidenRemoteBotAccessUpdateRequest(value.access) }
       : {}),
+  };
+}
+
+/**
+ * An older phone's `openingGreeting` must still be a bounded string (so a
+ * malformed body keeps failing), but it is dropped: the greeting is retired.
+ */
+function ignoreRetiredBotGreeting(value: Record<string, unknown>, label: string): void {
+  if (hasOwn(value, "openingGreeting")) boundedText(value.openingGreeting, `${label} openingGreeting`, 2_000, true);
+}
+
+/** A Chat activity choice: exact keys, known values. */
+export function parseAidenRemoteBotChatActivity(value: unknown): AidenRemoteBotChatActivity {
+  if (!isRecord(value)) throw new Error("Bot chat activity must be an object.");
+  assertExactKeys(value, ["level", "wording"], "Bot chat activity");
+  return {
+    level: enumMember(value.level, BOT_CHAT_ACTIVITY_LEVELS, "Bot chat activity level"),
+    wording: enumMember(value.wording, BOT_CHAT_ACTIVITY_WORDINGS, "Bot chat activity wording"),
   };
 }
 
 export function parseAidenRemoteBotIdentityPatchRequest(
   value: unknown,
+  options: { allowChatActivity?: boolean } = {},
 ): AidenRemoteBotIdentityPatchRequest {
   if (!isRecord(value)) throw new Error("Bot identity patch must be an object.");
-  const allowed = ["name", "purpose", "openingGreeting", "instructions", "avatar"] as const;
+  const allowed = [
+    "name",
+    "purpose",
+    ...AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS,
+    "instructions",
+    "avatar",
+    // Revision 30: older hosts reject the key, so phones send it only where it is announced.
+    ...(options.allowChatActivity === true ? ["chatActivity"] : []),
+  ];
   assertExactKeys(value, allowed, "Bot identity patch");
   if (Object.keys(value).length === 0) {
     throw new Error("Bot identity patch must change at least one field.");
   }
+  // A patch carrying only the retired greeting is a valid no-op.
+  ignoreRetiredBotGreeting(value, "Bot identity");
   return {
     ...(hasOwn(value, "name")
       ? { name: boundedText(value.name, "Bot identity name", 80) }
@@ -1809,21 +2638,14 @@ export function parseAidenRemoteBotIdentityPatchRequest(
     ...(hasOwn(value, "purpose")
       ? { purpose: boundedText(value.purpose, "Bot identity purpose", 280, true) }
       : {}),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot identity openingGreeting",
-            2_000,
-            true,
-          ),
-        }
-      : {}),
     ...(hasOwn(value, "instructions")
       ? { instructions: boundedText(value.instructions, "Bot identity instructions", 32_000) }
       : {}),
     ...(hasOwn(value, "avatar")
       ? { avatar: parseBotSemanticAvatar(value.avatar, true) }
+      : {}),
+    ...(hasOwn(value, "chatActivity")
+      ? { chatActivity: parseAidenRemoteBotChatActivity(value.chatActivity) }
       : {}),
   };
 }
@@ -1957,6 +2779,47 @@ function parseChatHtmlArtifactsProjection(
   });
 }
 
+const CHAT_VISUAL_KEYS = new Set(["id", "kind", "title", "toolCallId", "fallbackText", "snapshotAttachmentId", "layout"]);
+
+/**
+ * Additive in contract revision 28. Lenient per entry, like every client:
+ * one malformed visual is dropped rather than failing the whole chat.
+ */
+function parseChatVisualsProjection(
+  value: unknown,
+  label: string,
+  attachments: readonly { id: string }[] | undefined,
+): NonNullable<AidenRemoteChatProjection["messages"][number]["visuals"]> {
+  if (!Array.isArray(value) || value.length > 40) {
+    throw new Error(`${label} visuals must contain at most 40 items.`);
+  }
+  const attachmentIds = new Set((attachments ?? []).map((attachment) => attachment.id));
+  const ids = new Set<string>();
+  const visuals: NonNullable<AidenRemoteChatProjection["messages"][number]["visuals"]> = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !CHAT_VISUAL_KEYS.has(key))) continue;
+    const { id, kind, title, toolCallId, fallbackText, snapshotAttachmentId, layout } = entry;
+    if (typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/u.test(id) || ids.has(id)) continue;
+    if (kind !== "ui" && kind !== "html") continue;
+    if (typeof title !== "string" || !title || title.trim() !== title || characterLength(title) > 120) continue;
+    if (toolCallId !== undefined && (typeof toolCallId !== "string" || !/^call-[1-9]\d*$/u.test(toolCallId))) continue;
+    if (fallbackText !== undefined && (typeof fallbackText !== "string" || !fallbackText || characterLength(fallbackText) > 4_000)) continue;
+    if (snapshotAttachmentId !== undefined && (typeof snapshotAttachmentId !== "string" || !attachmentIds.has(snapshotAttachmentId))) continue;
+    if (layout !== undefined && layout !== "wide") continue;
+    ids.add(id);
+    visuals.push({
+      id,
+      kind,
+      title,
+      ...(toolCallId !== undefined ? { toolCallId } : {}),
+      ...(fallbackText !== undefined ? { fallbackText } : {}),
+      ...(snapshotAttachmentId !== undefined ? { snapshotAttachmentId } : {}),
+      ...(layout !== undefined ? { layout } : {}),
+    });
+  }
+  return visuals;
+}
+
 function parseChatMessageAttachments(
   value: unknown,
   label: string,
@@ -2057,6 +2920,102 @@ function parseChatMessageOutcome(
   };
 }
 
+const REMOTE_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+
+function parseChatForkLineageProjection(
+  value: unknown,
+  label: string,
+  allowSummary: boolean,
+): AidenRemoteChatForkLineageProjection {
+  if (!isRecord(value)) throw new Error(`${label} forkedFrom must be an object.`);
+  assertExactKeys(
+    value,
+    allowSummary ? ["chatId", "messageId", "position", "at", "summary"] : ["chatId", "messageId", "position", "at"],
+    `${label} forkedFrom`,
+  );
+  const chatId = boundedText(value.chatId, `${label} forkedFrom chatId`, 128);
+  const messageId = boundedText(value.messageId, `${label} forkedFrom messageId`, 128);
+  if (!REMOTE_SAFE_ID.test(chatId) || !REMOTE_SAFE_ID.test(messageId)) {
+    throw new Error(`${label} forkedFrom identifiers are invalid.`);
+  }
+  const summary = hasOwn(value, "summary")
+    ? parseChatForkSummaryProjection(value.summary, `${label} forkedFrom summary`)
+    : undefined;
+  return {
+    chatId,
+    messageId,
+    position: enumMember(value.position, ["after", "before"] as const, `${label} forkedFrom position`),
+    at: dateTimeValue(value.at, `${label} forkedFrom at`),
+    ...(summary ? { summary } : {}),
+  };
+}
+
+function parseChatForkSummaryProjection(value: unknown, label: string): AidenRemoteChatForkSummaryProjection {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["state", "afterMessageId", "focus", "text", "error"], label);
+  const afterMessageId = boundedText(value.afterMessageId, `${label} afterMessageId`, 160);
+  if (!/^[A-Za-z0-9_-]+$/u.test(afterMessageId)) throw new Error(`${label} afterMessageId is invalid.`);
+  const state = enumMember(value.state, ["pending", "ready", "failed"] as const, `${label} state`);
+  if (state === "ready" && !hasOwn(value, "text")) throw new Error(`${label} must carry text when ready.`);
+  if (state !== "failed" && hasOwn(value, "error")) throw new Error(`${label} error belongs to a failed summary.`);
+  return {
+    state,
+    afterMessageId,
+    ...(hasOwn(value, "focus")
+      ? { focus: boundedText(value.focus, `${label} focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
+    ...(hasOwn(value, "text") ? { text: boundedText(value.text, `${label} text`, MAX_FORK_SUMMARY_TEXT_CHARS) } : {}),
+    ...(hasOwn(value, "error")
+      ? { error: boundedText(value.error, `${label} error`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) }
+      : {}),
+  };
+}
+
+/** `POST /chats/{chatId}/fork` response (`chat-fork-v1`). */
+export function parseAidenRemoteChatForkResult(
+  value: unknown,
+  label = "Chat fork response",
+): AidenRemoteChatForkResult {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["chat", "prefill"], label);
+  const chat = parseAidenRemoteChatProjection(value.chat, `${label} chat`);
+  if (!chat.forkedFrom) throw new Error(`${label} chat must carry forkedFrom.`);
+  if (!hasOwn(value, "prefill")) return { chat };
+  if (chat.forkedFrom.position !== "before") {
+    throw new Error(`${label} prefill belongs to a fork before a prompt.`);
+  }
+  const prefill = value.prefill;
+  if (!isRecord(prefill)) throw new Error(`${label} prefill must be an object.`);
+  assertExactKeys(prefill, ["text", "attachments"], `${label} prefill`);
+  // A prefill is resent as one turn, which holds at most ten attachments.
+  if (hasOwn(prefill, "attachments") && (!Array.isArray(prefill.attachments) || prefill.attachments.length > 10)) {
+    throw new Error(`${label} prefill attachments must contain at most 10 items.`);
+  }
+  return {
+    chat,
+    prefill: {
+      text: boundedText(prefill.text, `${label} prefill text`, 200_000, true),
+      ...(hasOwn(prefill, "attachments")
+        ? {
+            attachments: parseChatMessageAttachments(prefill.attachments, `${label} prefill`).map(
+              (attachment, index) => {
+                const entry = (prefill.attachments as Record<string, unknown>[])[index]!;
+                // A restaged attachment is sent back by ID with the fork's next turn.
+                if (!/^att_[A-Za-z0-9_-]{43}$/u.test(attachment.id)) {
+                  throw new Error(`${label} prefill attachment ${index} id must be an uploaded attachment ID.`);
+                }
+                return {
+                  ...attachment,
+                  expiresAt: dateTimeValue(entry.expiresAt, `${label} prefill attachment ${index} expiresAt`),
+                };
+              },
+            ),
+          }
+        : {}),
+    },
+  };
+}
+
 export function parseAidenRemoteChatProjection(
   value: unknown,
   label = "Chat response",
@@ -2128,6 +3087,15 @@ export function parseAidenRemoteChatProjection(
               ),
             }
           : {}),
+        ...(hasOwn(entry, "visuals")
+          ? {
+              visuals: parseChatVisualsProjection(
+                entry.visuals,
+                `${label} message ${index}`,
+                Array.isArray(entry.attachments) ? entry.attachments.filter(isRecord) as { id: string }[] : undefined,
+              ),
+            }
+          : {}),
         ...(hasOwn(entry, "outcome")
           ? {
               outcome: parseChatMessageOutcome(
@@ -2185,6 +3153,10 @@ export function parseAidenRemoteChatProjection(
       ? value.titlePending === true
         ? { titlePending: true as const }
         : (() => { throw new Error(`${label} titlePending may only be true.`); })()
+      : {}),
+    // Additive in contract revision 21.
+    ...(hasOwn(value, "forkedFrom")
+      ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, true) }
       : {}),
   };
 }
@@ -2247,6 +3219,10 @@ export function parseAidenRemoteChatSummaryProjection(
       ? typeof value.unread === "boolean"
         ? { unread: value.unread }
         : (() => { throw new Error(`${label} unread must be a boolean.`); })()
+      : {}),
+    // Additive in contract revision 21; rows never carry the summary.
+    ...(hasOwn(value, "forkedFrom")
+      ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, false) }
       : {}),
   };
 }
@@ -2343,46 +3319,6 @@ function parseBotProviderOption(value: unknown): AidenRemoteBotProviderOption {
   };
 }
 
-function parseBotNoticeDecision(value: unknown, label: string): AidenRemoteBotNoticeDecision {
-  return enumMember(
-    value,
-    ["continue_full", "customize_first"] as const,
-    label,
-  );
-}
-
-function parseBotAccessNoticeStatus(value: unknown): AidenRemoteBotAccessNoticeStatus {
-  if (!isRecord(value)) throw new Error("Bot access notice status must be an object.");
-  const version = boundedText(value.version, "Bot access notice version", 80);
-  if (version !== AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION) {
-    throw new Error("Bot access notice version is unsupported by this contract.");
-  }
-  const requiresAcknowledgement = requiredBooleanValue(
-    value.requiresAcknowledgement,
-    "Bot access notice requiresAcknowledgement",
-  );
-  const hasAcceptedAt = hasOwn(value, "acceptedAt");
-  const hasAcceptedDecision = hasOwn(value, "acceptedDecision");
-  if (requiresAcknowledgement) {
-    if (hasAcceptedAt || hasAcceptedDecision) {
-      throw new Error("A pending Bot access notice cannot contain an acceptance.");
-    }
-    return { version, requiresAcknowledgement: true };
-  }
-  if (!hasAcceptedAt || !hasAcceptedDecision) {
-    throw new Error("An acknowledged Bot access notice requires its time and decision.");
-  }
-  return {
-    version,
-    requiresAcknowledgement: false,
-    acceptedAt: dateTimeValue(value.acceptedAt, "Bot access notice acceptedAt"),
-    acceptedDecision: parseBotNoticeDecision(
-      value.acceptedDecision,
-      "Bot access notice acceptedDecision",
-    ),
-  };
-}
-
 function assertUniqueOptionIds(
   options: readonly { id: string }[],
   label: string,
@@ -2441,7 +3377,6 @@ export function parseAidenRemoteBotCapabilityCatalog(
       skillsEnabled: requiredBooleanValue(value.skillsEnabled, "Bot catalog skillsEnabled"),
     }),
     otherCapabilities,
-    notice: parseBotAccessNoticeStatus(value.notice),
   };
 }
 
@@ -2634,49 +3569,10 @@ function botSummaryFieldsEqual(
     left.purpose === right.purpose &&
     JSON.stringify(left.avatar) === JSON.stringify(right.avatar) &&
     left.health === right.health &&
-    left.archivedAt === right.archivedAt &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.revision === right.revision
   );
-}
-
-function botIdentityFieldsEqual(
-  left: AidenRemoteBotDetail,
-  right: AidenRemoteBotDetail,
-): boolean {
-  return (
-    left.id === right.id &&
-    left.name === right.name &&
-    left.purpose === right.purpose &&
-    left.instructions === right.instructions &&
-    left.openingGreeting === right.openingGreeting &&
-    JSON.stringify(left.avatar) === JSON.stringify(right.avatar) &&
-    left.createdAt === right.createdAt
-  );
-}
-
-function validateBotChatSelectionAgainstPolicy(
-  selection: AidenRemoteBotCustomSelection,
-  policy: AidenRemoteBotAccessView,
-  label: string,
-): void {
-  if (policy.accessMode === "full") return;
-  const isSubset = (candidate: readonly string[], ceiling: readonly string[]) => {
-    const allowed = new Set(ceiling);
-    return candidate.every((id) => allowed.has(id));
-  };
-  if (
-    selection.providerId !== policy.custom.providerId ||
-    selection.modelId !== policy.custom.modelId ||
-    (selection.shellEnabled && !policy.custom.shellEnabled) ||
-    !isSubset(selection.fileScopeIds, policy.custom.fileScopeIds) ||
-    !isSubset(selection.connectionIds, policy.custom.connectionIds) ||
-    !isSubset(selection.skillIds, policy.custom.skillIds) ||
-    !isSubset(selection.otherCapabilityIds, policy.custom.otherCapabilityIds)
-  ) {
-    throw new Error(`${label} exceeds the authoritative Bot access ceiling.`);
-  }
 }
 
 export function parseAidenRemoteBotAccessView(value: unknown): AidenRemoteBotAccessView {
@@ -2750,15 +3646,8 @@ export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail 
           })(),
         }
       : {}),
-    ...(hasOwn(value, "openingGreeting")
-      ? {
-          openingGreeting: boundedText(
-            value.openingGreeting,
-            "Bot openingGreeting",
-            2_000,
-            true,
-          ),
-        }
+    ...(hasOwn(value, "chatActivity")
+      ? { chatActivity: parseAidenRemoteBotChatActivity(value.chatActivity) }
       : {}),
   };
 }
@@ -2822,118 +3711,6 @@ export function parseAidenRemoteBotAccessUpdateRequest(
     };
   }
   throw new Error("Bot access update mode is invalid.");
-}
-
-export function parseAidenRemoteBotChatAccessView(
-  value: unknown,
-): AidenRemoteBotChatAccessView {
-  if (!isRecord(value)) throw new Error("Bot chat access view must be an object.");
-  const mode = enumMember(value.mode, ["inherit", "custom"] as const, "Bot chat access mode");
-  const custom = value.custom === undefined
-    ? undefined
-    : parseBotCustomSelection(value.custom, false);
-  if ((mode === "custom") !== (custom !== undefined)) {
-    throw new Error("Bot chat Custom mode and custom selection must agree.");
-  }
-  const base: AidenRemoteBotChatAccessViewBase = {
-    chatId: boundedText(value.chatId, "Bot chat access chatId", 128),
-    botId: boundedBotId(value.botId, "Bot chat access botId"),
-    revision: boundedRevision(value.revision, "Bot chat access revision"),
-    botPolicyRevision: boundedRevision(
-      value.botPolicyRevision,
-      "Bot chat access botPolicyRevision",
-    ),
-    summary: boundedText(value.summary, "Bot chat access summary", 280),
-  };
-  return mode === "custom"
-    ? { ...base, mode, custom: custom! }
-    : { ...base, mode };
-}
-
-export function parseAidenRemoteBotChatAccessUpdateRequest(
-  value: unknown,
-): AidenRemoteBotChatAccessUpdateRequest {
-  if (!isRecord(value)) throw new Error("Bot chat access update request must be an object.");
-  if (value.mode === "inherit") {
-    assertExactKeys(
-      value,
-      ["mode", "catalogRevision", "expectedBotPolicyRevision"],
-      "Inherited Bot chat access update",
-    );
-    return {
-      mode: "inherit",
-      catalogRevision: boundedRevision(
-        value.catalogRevision,
-        "Inherited Bot chat access catalogRevision",
-      ),
-      expectedBotPolicyRevision: boundedRevision(
-        value.expectedBotPolicyRevision,
-        "Inherited Bot chat access expectedBotPolicyRevision",
-      ),
-    };
-  }
-  if (value.mode === "custom") {
-    assertExactKeys(
-      value,
-      ["mode", "catalogRevision", "expectedBotPolicyRevision", "custom"],
-      "Custom Bot chat access update",
-    );
-    return {
-      mode: "custom",
-      catalogRevision: boundedRevision(
-        value.catalogRevision,
-        "Custom Bot chat access catalogRevision",
-      ),
-      expectedBotPolicyRevision: boundedRevision(
-        value.expectedBotPolicyRevision,
-        "Custom Bot chat access expectedBotPolicyRevision",
-      ),
-      custom: parseBotCustomSelection(value.custom, true),
-    };
-  }
-  throw new Error("Bot chat access update mode is invalid.");
-}
-
-export function parseAidenRemoteBotFavoritesUpdateRequest(
-  value: unknown,
-): AidenRemoteBotFavoritesUpdateRequest {
-  if (!isRecord(value)) throw new Error("Bot favorites update request must be an object.");
-  assertExactKeys(value, ["botIds"], "Bot favorites update request");
-  return {
-    botIds: parseUniqueBotIds(value.botIds, "Bot favorites update", AIDEN_REMOTE_BOT_MAX_FAVORITES),
-  };
-}
-
-function parseBotNoticeAcknowledgementRequest(
-  value: unknown,
-): AidenRemoteBotNoticeAcknowledgementRequest {
-  if (!isRecord(value)) throw new Error("Bot notice acknowledgement must be an object.");
-  assertExactKeys(
-    value,
-    ["version", "decision", "confirmedForeground"],
-    "Bot notice acknowledgement",
-  );
-  if (value.confirmedForeground !== true) {
-    throw new Error("Bot notice acknowledgement requires foreground confirmation.");
-  }
-  return {
-    version: (() => {
-      const version = boundedText(
-        value.version,
-        "Bot notice acknowledgement version",
-        80,
-      );
-      if (version !== AIDEN_REMOTE_BOT_ACCESS_NOTICE_VERSION) {
-        throw new Error("Bot notice acknowledgement version is unsupported.");
-      }
-      return version;
-    })(),
-    decision: parseBotNoticeDecision(
-      value.decision,
-      "Bot notice acknowledgement decision",
-    ),
-    confirmedForeground: true,
-  };
 }
 
 export function parseAidenRemoteBotAvatarUploadRequest(
@@ -4211,6 +4988,801 @@ export function assertOrderedAidenRemoteEvents(events: readonly AidenRemoteStrea
   }
 }
 
+
+// --- Contract revision 25 parsers -------------------------------------------
+
+function parseBotSessionStateView(
+  value: Record<string, unknown>,
+  label: string,
+): AidenRemoteBotSessionStateView {
+  const state = enumMember(value.state, AIDEN_REMOTE_BOT_SESSION_STATES, `${label} state`);
+  const interrupted = requiredBooleanValue(value.interrupted, `${label} interrupted`);
+  if (interrupted !== (state === "interrupted")) {
+    throw new Error(`${label} interrupted must agree with its state.`);
+  }
+  if (hasOwn(value, "blocked") && !interrupted) {
+    throw new Error(`${label} blocked is only valid while interrupted.`);
+  }
+  return {
+    state,
+    interrupted,
+    ...(hasOwn(value, "blocked")
+      ? {
+          blocked: enumMember(
+            value.blocked,
+            AIDEN_REMOTE_BOT_SESSION_BLOCKED_REASONS,
+            `${label} blocked`,
+          ),
+        }
+      : {}),
+  };
+}
+
+export function parseAidenRemoteBotSessionStateView(value: unknown): AidenRemoteBotSessionStateView {
+  if (!isRecord(value)) throw new Error("Bot session state must be an object.");
+  assertExactKeys(value, ["state", "interrupted", "blocked"], "Bot session state");
+  return parseBotSessionStateView(value, "Bot session");
+}
+
+const BOT_SESSION_ENTRY_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+
+export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotSessionEntry {
+  if (!isRecord(value)) throw new Error("Bot session entry must be an object.");
+  const id = boundedText(value.id, "Bot session entry id", 128);
+  if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
+  switch (value.type) {
+    case "message": {
+      assertExactKeys(
+        value,
+        ["type", "id", "role", "text", "createdAt", "label", "interrupted", "submissionId"],
+        "Bot session message",
+      );
+      const role = enumMember(value.role, ["user", "assistant"] as const, "Bot session message role");
+      if (hasOwn(value, "interrupted") && (value.interrupted !== true || role !== "assistant")) {
+        throw new Error("Only an assistant message can be marked interrupted.");
+      }
+      // A routine's input (it has a label) is never the person's message.
+      if (hasOwn(value, "submissionId") && (role !== "user" || hasOwn(value, "label"))) {
+        throw new Error("Only the person's message can carry a submissionId.");
+      }
+      const submissionId = hasOwn(value, "submissionId")
+        ? boundedText(value.submissionId, "Bot session message submissionId", 64)
+        : undefined;
+      if (submissionId !== undefined && !AIDEN_REMOTE_BOT_SUBMISSION_ID.test(submissionId)) {
+        throw new Error("Bot session message submissionId is invalid.");
+      }
+      return {
+        type: "message",
+        id,
+        role,
+        text: boundedText(value.text, "Bot session message text", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS, true),
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot session message createdAt") }
+          : {}),
+        ...(hasOwn(value, "label")
+          ? { label: boundedText(value.label, "Bot session message label", 120) }
+          : {}),
+        ...(hasOwn(value, "interrupted") ? { interrupted: true as const } : {}),
+        ...(submissionId !== undefined ? { submissionId } : {}),
+      };
+    }
+    case "connect_card":
+      assertExactKeys(
+        value,
+        ["type", "id", "pluginId", "name", "iconId", "reason", "status"],
+        "Bot connect card",
+      );
+      return {
+        type: "connect_card",
+        id,
+        pluginId: boundedPluginId(value.pluginId, "Bot connect card pluginId"),
+        name: boundedText(value.name, "Bot connect card name", 120),
+        iconId: boundedPluginId(value.iconId, "Bot connect card iconId"),
+        reason: boundedText(value.reason, "Bot connect card reason", 280),
+        status: enumMember(
+          value.status,
+          ["pending", "connected", "dismissed"] as const,
+          "Bot connect card status",
+        ),
+      };
+    case "notice":
+      assertExactKeys(value, ["type", "id", "notice"], "Bot session notice");
+      return {
+        type: "notice",
+        id,
+        notice: enumMember(value.notice, ["session_reset"] as const, "Bot session notice"),
+      };
+    case "failed_turn":
+      assertExactKeys(value, ["type", "id", "createdAt", "retryText"], "Bot failed turn");
+      return {
+        type: "failed_turn",
+        id,
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot failed turn createdAt") }
+          : {}),
+        ...(hasOwn(value, "retryText")
+          ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
+          : {}),
+      };
+    case "memory_update":
+      assertExactKeys(value, ["type", "id", "createdAt"], "Bot memory update");
+      return {
+        type: "memory_update",
+        id,
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot memory update createdAt") }
+          : {}),
+      };
+    case "routine_proposal": {
+      assertExactKeys(
+        value,
+        ["type", "id", "proposalId", "name", "prompt", "label", "status", "routineId", "createdAt"],
+        "Bot routine proposal",
+      );
+      const status = enumMember(value.status, AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES, "Bot routine proposal status");
+      if (hasOwn(value, "routineId") && status !== "accepted") {
+        throw new Error("Only an accepted routine proposal names its routine.");
+      }
+      return {
+        type: "routine_proposal",
+        id,
+        proposalId: parseAidenRemoteBotRoutineProposalId(value.proposalId),
+        name: boundedText(value.name, "Bot routine proposal name", 120),
+        prompt: boundedText(value.prompt, "Bot routine proposal prompt", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS),
+        label: boundedText(value.label, "Bot routine proposal label", 120),
+        status,
+        ...(hasOwn(value, "routineId")
+          ? { routineId: boundedText(value.routineId, "Bot routine proposal routineId", 160) }
+          : {}),
+        ...(hasOwn(value, "createdAt")
+          ? { createdAt: dateTimeValue(value.createdAt, "Bot routine proposal createdAt") }
+          : {}),
+      };
+    }
+    default:
+      throw new Error("Bot session entry type is invalid.");
+  }
+}
+
+const BOT_ROUTINE_PROPOSAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const BOT_MEMORY_ID = /^[0-9a-f]{16}$/u;
+
+/** A proposal id: a lowercase UUID minted by the host. */
+export function parseAidenRemoteBotRoutineProposalId(value: unknown): string {
+  if (typeof value !== "string" || !BOT_ROUTINE_PROPOSAL_ID.test(value)) {
+    throw new Error("Bot routine proposal id is invalid.");
+  }
+  return value;
+}
+
+function parseBotMemoryTarget(value: unknown, label: string): AidenRemoteBotMemoryTarget {
+  return enumMember(value, ["memory", "user"] as const, label);
+}
+
+function parseBotMemoryEntryId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !BOT_MEMORY_ID.test(value)) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+function parseBotMemoryStore(value: unknown, label: string): AidenRemoteBotMemoryStore {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["entries", "usedChars", "limitChars", "overBudget"], label);
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES) {
+    throw new Error(`${label} entries must contain at most ${AIDEN_REMOTE_BOT_MEMORY_STORE_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map((entry) => {
+    if (!isRecord(entry)) throw new Error(`${label} entry must be an object.`);
+    assertExactKeys(entry, ["id", "text"], `${label} entry`);
+    return {
+      id: parseBotMemoryEntryId(entry.id, `${label} entry id`),
+      text: boundedText(entry.text, `${label} entry text`, AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS),
+    };
+  });
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error(`${label} entry ids must be unique.`);
+  }
+  return {
+    entries,
+    usedChars: boundedIntegerValue(value.usedChars, `${label} usedChars`, 0, 1_000_000),
+    limitChars: boundedIntegerValue(value.limitChars, `${label} limitChars`, 1, 1_000_000),
+    overBudget: requiredBooleanValue(value.overBudget, `${label} overBudget`),
+  };
+}
+
+export function parseAidenRemoteBotMemory(value: unknown): AidenRemoteBotMemory {
+  if (!isRecord(value)) throw new Error("Bot memory must be an object.");
+  assertExactKeys(value, ["botId", "revision", "readable", "memory", "user", "updatedAt"], "Bot memory");
+  if (!hasOwn(value, "updatedAt")) throw new Error("Bot memory updatedAt is required.");
+  const revision = boundedText(value.revision, "Bot memory revision", 64);
+  if (!/^[0-9a-f]{16}$/u.test(revision)) throw new Error("Bot memory revision is invalid.");
+  return {
+    botId: boundedBotId(value.botId, "Bot memory botId"),
+    revision,
+    readable: requiredBooleanValue(value.readable, "Bot memory readable"),
+    memory: parseBotMemoryStore(value.memory, "Bot memory notes"),
+    user: parseBotMemoryStore(value.user, "Bot memory about the person"),
+    updatedAt: value.updatedAt === null ? null : dateTimeValue(value.updatedAt, "Bot memory updatedAt"),
+  };
+}
+
+export function parseAidenRemoteBotMemoryEditRequest(value: unknown): AidenRemoteBotMemoryEditRequest {
+  if (!isRecord(value)) throw new Error("Bot memory edit request must be an object.");
+  assertExactKeys(value, ["edit"], "Bot memory edit request");
+  const edit = value.edit;
+  if (!isRecord(edit)) throw new Error("Bot memory edit must be an object.");
+  switch (edit.kind) {
+    case "replace":
+      assertExactKeys(edit, ["kind", "target", "entryId", "text"], "Bot memory replace");
+      return {
+        edit: {
+          kind: "replace",
+          target: parseBotMemoryTarget(edit.target, "Bot memory replace target"),
+          entryId: parseBotMemoryEntryId(edit.entryId, "Bot memory replace entryId"),
+          text: boundedText(edit.text, "Bot memory replace text", AIDEN_REMOTE_BOT_MEMORY_ENTRY_MAX_CHARS),
+        },
+      };
+    case "remove":
+      assertExactKeys(edit, ["kind", "target", "entryId"], "Bot memory remove");
+      return {
+        edit: {
+          kind: "remove",
+          target: parseBotMemoryTarget(edit.target, "Bot memory remove target"),
+          entryId: parseBotMemoryEntryId(edit.entryId, "Bot memory remove entryId"),
+        },
+      };
+    case "clear":
+      assertExactKeys(edit, ["kind"], "Bot memory clear");
+      return { edit: { kind: "clear" } };
+    default:
+      throw new Error("Bot memory edit kind is invalid.");
+  }
+}
+
+export function parseAidenRemoteBotMemoryEditResponse(value: unknown): AidenRemoteBotMemoryEditResponse {
+  if (!isRecord(value)) throw new Error("Bot memory edit response must be an object.");
+  assertExactKeys(value, ["ok", "view"], "Bot memory edit response");
+  if (value.ok !== true) throw new Error("Bot memory edit response must be ok.");
+  return { ok: true, view: parseAidenRemoteBotMemory(value.view) };
+}
+
+export function parseAidenRemoteBotRoutineProposalRespondRequest(
+  value: unknown,
+): AidenRemoteBotRoutineProposalRespondRequest {
+  if (!isRecord(value)) throw new Error("Bot routine proposal response must be an object.");
+  assertExactKeys(value, ["decision"], "Bot routine proposal response");
+  return { decision: enumMember(value.decision, ["accept", "dismiss"] as const, "Bot routine proposal decision") };
+}
+
+export function parseAidenRemoteBotRoutineProposalRespondResult(
+  value: unknown,
+): AidenRemoteBotRoutineProposalRespondResult {
+  if (!isRecord(value)) throw new Error("Bot routine proposal result must be an object.");
+  assertExactKeys(value, ["status", "routineId"], "Bot routine proposal result");
+  const status = enumMember(value.status, ["accepted", "dismissed"] as const, "Bot routine proposal result status");
+  if (hasOwn(value, "routineId") !== (status === "accepted")) {
+    throw new Error("An accepted routine proposal, and only one, names its routine.");
+  }
+  return {
+    status,
+    ...(hasOwn(value, "routineId")
+      ? { routineId: boundedText(value.routineId, "Bot routine proposal routineId", 160) }
+      : {}),
+  };
+}
+
+export function parseAidenRemoteBotRoutineSuggestionList(value: unknown): AidenRemoteBotRoutineSuggestionList {
+  if (!isRecord(value)) throw new Error("Bot routine suggestions must be an object.");
+  assertExactKeys(value, ["suggestions"], "Bot routine suggestions");
+  if (!Array.isArray(value.suggestions) || value.suggestions.length > 8) {
+    throw new Error("Bot routine suggestions must contain at most 8 items.");
+  }
+  return {
+    suggestions: value.suggestions.map((suggestion) => {
+      if (!isRecord(suggestion)) throw new Error("Bot routine suggestion must be an object.");
+      assertExactKeys(suggestion, ["id", "name", "prompt", "schedule", "label"], "Bot routine suggestion");
+      return {
+        id: enumMember(suggestion.id, ["daily-check-in"] as const, "Bot routine suggestion id"),
+        name: boundedText(suggestion.name, "Bot routine suggestion name", 120),
+        prompt: boundedText(suggestion.prompt, "Bot routine suggestion prompt", 32_000),
+        schedule: parseAidenRemoteBotRoutineSchedule(suggestion.schedule),
+        label: boundedText(suggestion.label, "Bot routine suggestion label", 120),
+      };
+    }),
+  };
+}
+
+export function parseAidenRemoteBotRoutineNotificationList(value: unknown): AidenRemoteBotRoutineNotificationList {
+  if (!isRecord(value)) throw new Error("Bot routine notifications must be an object.");
+  assertExactKeys(value, ["notifications", "now"], "Bot routine notifications");
+  if (!Array.isArray(value.notifications) || value.notifications.length > AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX) {
+    throw new Error(`Bot routine notifications must contain at most ${AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX} items.`);
+  }
+  const notifications = value.notifications.map((notification) => {
+    if (!isRecord(notification)) throw new Error("Bot routine notification must be an object.");
+    assertExactKeys(
+      notification,
+      ["id", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview"],
+      "Bot routine notification",
+    );
+    return {
+      id: boundedText(notification.id, "Bot routine notification id", 160),
+      botId: boundedBotId(notification.botId, "Bot routine notification botId"),
+      botName: boundedText(notification.botName, "Bot routine notification botName", 80),
+      routineId: boundedText(notification.routineId, "Bot routine notification routineId", 160),
+      routineName: boundedText(notification.routineName, "Bot routine notification routineName", 120),
+      status: enumMember(notification.status, ["succeeded", "failed"] as const, "Bot routine notification status"),
+      finishedAt: dateTimeValue(notification.finishedAt, "Bot routine notification finishedAt"),
+      preview: boundedText(
+        notification.preview,
+        "Bot routine notification preview",
+        AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS,
+      ),
+    };
+  });
+  if (new Set(notifications.map((notification) => notification.id)).size !== notifications.length) {
+    throw new Error("Bot routine notification ids must be unique.");
+  }
+  return { notifications, now: dateTimeValue(value.now, "Bot routine notifications now") };
+}
+
+function boundedPluginId(value: unknown, label: string): string {
+  const id = boundedText(value, label, 80);
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new Error(`${label} is invalid.`);
+  return id;
+}
+
+function boundedEpoch(value: unknown, label: string): string {
+  const epoch = boundedText(value, label, 64);
+  if (!/^[A-Za-z0-9_-]+$/u.test(epoch)) throw new Error(`${label} is invalid.`);
+  return epoch;
+}
+
+/** The §11 allow-list: phase, app and startedAt, and nothing from the step. */
+export function parseAidenRemoteBotSessionActivity(value: unknown): AidenRemoteBotSessionActivity {
+  if (!isRecord(value)) throw new Error("Bot session activity must be an object.");
+  assertExactKeys(value, ["phase", "app", "startedAt"], "Bot session activity");
+  const phase = boundedText(value.phase, "Bot session activity phase", 32);
+  if (!AIDEN_REMOTE_BOT_ACTIVITY_PHASE.test(phase)) throw new Error("Bot session activity phase is invalid.");
+  return {
+    phase,
+    ...(hasOwn(value, "app")
+      ? { app: boundedText(value.app, "Bot session activity app", AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS) }
+      : {}),
+    startedAt: boundedIntegerValue(value.startedAt, "Bot session activity startedAt", 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+export function parseAidenRemoteBotQueuedMessage(value: unknown): AidenRemoteBotQueuedMessage {
+  if (!isRecord(value)) throw new Error("Bot queued message must be an object.");
+  assertExactKeys(value, ["submissionId", "mode", "text"], "Bot queued message");
+  const submissionId = boundedText(value.submissionId, "Bot queued message submissionId", 64);
+  if (!AIDEN_REMOTE_BOT_SUBMISSION_ID.test(submissionId)) throw new Error("Bot queued message submissionId is invalid.");
+  return {
+    submissionId,
+    mode: enumMember(value.mode, AIDEN_REMOTE_BOT_WHEN_BUSY_MODES, "Bot queued message mode"),
+    text: boundedText(value.text, "Bot queued message text", AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS),
+  };
+}
+
+function parseBotQueuedList(value: unknown): AidenRemoteBotQueuedMessage[] {
+  if (!Array.isArray(value)) throw new Error("Bot queued messages must be an array.");
+  if (value.length > AIDEN_REMOTE_BOT_QUEUED_MAX) {
+    throw new Error(`Bot queued messages must contain at most ${AIDEN_REMOTE_BOT_QUEUED_MAX} items.`);
+  }
+  const queued = value.map(parseAidenRemoteBotQueuedMessage);
+  if (new Set(queued.map((message) => message.submissionId)).size !== queued.length) {
+    throw new Error("Bot queued message ids must be unique.");
+  }
+  return queued;
+}
+
+export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSession {
+  if (!isRecord(value)) throw new Error("Bot session must be an object.");
+  assertExactKeys(
+    value,
+    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued"],
+    "Bot session",
+  );
+  if (!hasOwn(value, "question")) throw new Error("Bot session question is required.");
+  if (!hasOwn(value, "approval")) throw new Error("Bot session approval is required.");
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+    throw new Error(`Bot session entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map(parseAidenRemoteBotSessionEntry);
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error("Bot session entry ids must be unique.");
+  }
+  return {
+    botId: boundedBotId(value.botId, "Bot session botId"),
+    epoch: boundedEpoch(value.epoch, "Bot session epoch"),
+    seq: boundedIntegerValue(value.seq, "Bot session seq", 0, Number.MAX_SAFE_INTEGER),
+    ...parseBotSessionStateView(value, "Bot session"),
+    ...(hasOwn(value, "partial")
+      ? { partial: boundedText(value.partial, "Bot session partial", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS, true) }
+      : {}),
+    entries,
+    hasOlder: requiredBooleanValue(value.hasOlder, "Bot session hasOlder"),
+    question: value.question === null ? null : parseAidenRemoteBotQuestion(value.question),
+    approval: value.approval === null ? null : parseAidenRemoteBotApproval(value.approval),
+    ...(hasOwn(value, "activity")
+      ? { activity: value.activity === null ? null : parseAidenRemoteBotSessionActivity(value.activity) }
+      : {}),
+    ...(hasOwn(value, "queued") ? { queued: parseBotQueuedList(value.queued) } : {}),
+  };
+}
+
+export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotSessionEvent {
+  if (!isRecord(value)) throw new Error("Bot session event must be an object.");
+  assertExactKeys(value, ["protocolVersion", "botId", "epoch", "seq", "type", "payload"], "Bot session event");
+  if (value.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION) {
+    throw new Error("Bot session event protocolVersion must be 1.");
+  }
+  const base = {
+    protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
+    botId: boundedBotId(value.botId, "Bot session event botId"),
+    epoch: boundedEpoch(value.epoch, "Bot session event epoch"),
+    seq: boundedIntegerValue(value.seq, "Bot session event seq", 0, Number.MAX_SAFE_INTEGER),
+  };
+  const payload = value.payload;
+  if (!isRecord(payload)) throw new Error("Bot session event payload must be an object.");
+  const type = enumMember(value.type, AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES, "Bot session event type");
+  switch (type) {
+    case "snapshot": {
+      assertExactKeys(payload, ["session"], "Bot session snapshot event");
+      const session = parseAidenRemoteBotSession(payload.session);
+      if (session.botId !== base.botId || session.epoch !== base.epoch || session.seq !== base.seq) {
+        throw new Error("Bot session snapshot event must match its session.");
+      }
+      return { ...base, type, payload: { session } };
+    }
+    case "partial":
+      assertExactKeys(payload, ["text"], "Bot session partial event");
+      return {
+        ...base,
+        type,
+        payload: { text: boundedText(payload.text, "Bot session partial", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS, true) },
+      };
+    case "entry":
+      assertExactKeys(payload, ["entry"], "Bot session entry event");
+      return { ...base, type, payload: { entry: parseAidenRemoteBotSessionEntry(payload.entry) } };
+    case "state":
+      return { ...base, type, payload: parseAidenRemoteBotSessionStateView(payload) };
+    case "question":
+      assertExactKeys(payload, ["question"], "Bot session question event");
+      return {
+        ...base,
+        type,
+        payload: { question: payload.question === null ? null : parseAidenRemoteBotQuestion(payload.question) },
+      };
+    case "approval":
+      assertExactKeys(payload, ["approval"], "Bot session approval event");
+      return {
+        ...base,
+        type,
+        payload: { approval: payload.approval === null ? null : parseAidenRemoteBotApproval(payload.approval) },
+      };
+    case "activity":
+      assertExactKeys(payload, ["activity"], "Bot session activity event");
+      if (!hasOwn(payload, "activity")) throw new Error("Bot session activity event activity is required.");
+      return {
+        ...base,
+        type,
+        payload: { activity: payload.activity === null ? null : parseAidenRemoteBotSessionActivity(payload.activity) },
+      };
+    case "queued":
+      assertExactKeys(payload, ["queued"], "Bot session queued event");
+      return { ...base, type, payload: { queued: parseBotQueuedList(payload.queued) } };
+    case "closed":
+      assertExactKeys(payload, [], "Bot session closed event");
+      return { ...base, type, payload: {} };
+  }
+}
+
+export function parseAidenRemoteBotMessageRequest(
+  value: unknown,
+  options: { allowWhenBusy?: boolean } = {},
+): AidenRemoteBotMessageRequest {
+  if (!isRecord(value)) throw new Error("Bot message request must be an object.");
+  assertExactKeys(value, options.allowWhenBusy === true ? ["text", "whenBusy"] : ["text"], "Bot message request");
+  const text = boundedText(value.text, "Bot message text", AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS);
+  if (text.trim().length === 0) throw new Error("Bot message text must not be blank.");
+  return {
+    text,
+    ...(hasOwn(value, "whenBusy")
+      ? { whenBusy: enumMember(value.whenBusy, AIDEN_REMOTE_BOT_WHEN_BUSY_MODES, "Bot message whenBusy") }
+      : {}),
+  };
+}
+
+const BOT_QUESTION_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+
+function parseBotQuestionWaitId(value: unknown, label: string): string {
+  const waitId = boundedText(value, label, 64);
+  if (!BOT_QUESTION_WAIT_ID.test(waitId)) throw new Error(`${label} is invalid.`);
+  return waitId;
+}
+
+/** A Bot's waiting question. `null` in a session means nothing is waiting. */
+export function parseAidenRemoteBotQuestion(value: unknown): AidenRemoteBotQuestion {
+  if (!isRecord(value)) throw new Error("Bot question must be an object.");
+  assertExactKeys(value, ["waitId", "toolCallId", "questions"], "Bot question");
+  const questions = parseAskUserQuestions(value.questions);
+  if (!questions) throw new Error("Bot question questions are invalid.");
+  return {
+    waitId: parseBotQuestionWaitId(value.waitId, "Bot question waitId"),
+    toolCallId: boundedText(value.toolCallId, "Bot question toolCallId", 128),
+    questions,
+  };
+}
+
+/** A tool approval a Bot is waiting on. `null` in a session means nothing is waiting. */
+export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
+  if (!isRecord(value)) throw new Error("Bot approval must be an object.");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow"], "Bot approval");
+  return {
+    waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
+    toolCallId: boundedText(value.toolCallId, "Bot approval toolCallId", 128),
+    toolName: boundedText(value.toolName, "Bot approval toolName", 120),
+    summary: boundedText(value.summary, "Bot approval summary", 2_000),
+    canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
+  };
+}
+
+/** Structural only; answers are checked against the waiting question when it settles. */
+export function parseAidenRemoteBotQuestionAnswerRequest(value: unknown): AidenRemoteBotQuestionAnswerRequest {
+  return parseAidenRemoteQuestionRespondRequest(value);
+}
+
+export function parseAidenRemoteBotQuestionAnswerReceipt(value: unknown): AidenRemoteBotQuestionAnswerReceipt {
+  if (!isRecord(value)) throw new Error("Bot question answer receipt must be an object.");
+  assertExactKeys(value, ["waitId"], "Bot question answer receipt");
+  return { waitId: parseBotQuestionWaitId(value.waitId, "Bot question answer receipt waitId") };
+}
+
+export function parseAidenRemoteBotMessageReceipt(value: unknown): AidenRemoteBotMessageReceipt {
+  if (!isRecord(value)) throw new Error("Bot message receipt must be an object.");
+  assertExactKeys(value, ["submissionId", "deduped", "state", "interrupted", "blocked"], "Bot message receipt");
+  return {
+    submissionId: boundedText(value.submissionId, "Bot message submissionId", 64),
+    deduped: requiredBooleanValue(value.deduped, "Bot message deduped"),
+    ...parseBotSessionStateView(value, "Bot message receipt"),
+  };
+}
+
+export function parseAidenRemoteEmptyRequest(value: unknown, label: string): Record<string, never> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, [], label);
+  return {};
+}
+
+export function parseAidenRemoteBotRoutineSchedule(value: unknown): AidenRemoteBotRoutineSchedule {
+  return parseBotRoutineSchedule(value);
+}
+
+function routineTimezone(value: unknown, label: string): string {
+  const zone = boundedText(value, label, 120);
+  if (zone.trim() !== zone) throw new Error(`${label} is invalid.`);
+  return zone;
+}
+
+export function parseAidenRemoteBotRoutine(value: unknown): AidenRemoteBotRoutine {
+  if (!isRecord(value)) throw new Error("Bot routine must be an object.");
+  assertExactKeys(
+    value,
+    [
+      "id", "botId", "name", "message", "schedule", "timezone", "label", "enabled",
+      "nextRunAt", "lastRunAt", "lastResult", "lastError", "updatedAt", "revision",
+    ],
+    "Bot routine",
+  );
+  if (!hasOwn(value, "schedule")) throw new Error("Bot routine schedule is required.");
+  const id = boundedText(value.id, "Bot routine id", 160);
+  if (!/^[A-Za-z0-9._:-]+$/u.test(id)) throw new Error("Bot routine id is invalid.");
+  return {
+    id,
+    botId: boundedBotId(value.botId, "Bot routine botId"),
+    name: boundedText(value.name, "Bot routine name", 120),
+    message: boundedText(value.message, "Bot routine message", 32_768, true),
+    schedule: value.schedule === null ? null : parseBotRoutineSchedule(value.schedule),
+    timezone: routineTimezone(value.timezone, "Bot routine timezone"),
+    label: boundedText(value.label, "Bot routine label", 200),
+    enabled: requiredBooleanValue(value.enabled, "Bot routine enabled"),
+    ...(hasOwn(value, "nextRunAt") ? { nextRunAt: dateTimeValue(value.nextRunAt, "Bot routine nextRunAt") } : {}),
+    ...(hasOwn(value, "lastRunAt") ? { lastRunAt: dateTimeValue(value.lastRunAt, "Bot routine lastRunAt") } : {}),
+    ...(hasOwn(value, "lastResult")
+      ? { lastResult: enumMember(value.lastResult, AIDEN_REMOTE_BOT_ROUTINE_RESULTS, "Bot routine lastResult") }
+      : {}),
+    ...(hasOwn(value, "lastError") ? { lastError: boundedText(value.lastError, "Bot routine lastError", 500) } : {}),
+    updatedAt: dateTimeValue(value.updatedAt, "Bot routine updatedAt"),
+    revision: boundedRevision(value.revision, "Bot routine revision"),
+  };
+}
+
+export function parseAidenRemoteBotRoutineList(value: unknown): AidenRemoteBotRoutineList {
+  if (!isRecord(value)) throw new Error("Bot routine list must be an object.");
+  assertExactKeys(value, ["routines"], "Bot routine list");
+  if (!Array.isArray(value.routines) || value.routines.length > AIDEN_REMOTE_BOT_ROUTINES_MAX) {
+    throw new Error(`Bot routine list must contain at most ${AIDEN_REMOTE_BOT_ROUTINES_MAX} routines.`);
+  }
+  const routines = value.routines.map(parseAidenRemoteBotRoutine);
+  if (new Set(routines.map((routine) => routine.id)).size !== routines.length) {
+    throw new Error("Bot routine ids must be unique.");
+  }
+  return { routines };
+}
+
+export function parseAidenRemoteBotRoutineCreateRequest(value: unknown): AidenRemoteBotRoutineCreateRequest {
+  if (!isRecord(value)) throw new Error("Bot routine create request must be an object.");
+  assertExactKeys(value, ["name", "schedule", "message", "timezone"], "Bot routine create request");
+  const message = boundedText(value.message, "Bot routine message", 32_768);
+  const name = boundedText(value.name, "Bot routine name", 120);
+  if (!name.trim() || !message.trim()) throw new Error("Bot routine name and message must not be blank.");
+  return {
+    name,
+    schedule: parseBotRoutineSchedule(value.schedule),
+    message,
+    ...(hasOwn(value, "timezone") ? { timezone: routineTimezone(value.timezone, "Bot routine timezone") } : {}),
+  };
+}
+
+export function parseAidenRemoteBotRoutineUpdateRequest(value: unknown): AidenRemoteBotRoutineUpdateRequest {
+  if (!isRecord(value)) throw new Error("Bot routine update request must be an object.");
+  assertExactKeys(value, ["name", "schedule", "message", "timezone", "enabled"], "Bot routine update request");
+  if (Object.keys(value).length === 0) throw new Error("Bot routine update must change at least one field.");
+  const name = hasOwn(value, "name") ? boundedText(value.name, "Bot routine name", 120) : undefined;
+  const message = hasOwn(value, "message") ? boundedText(value.message, "Bot routine message", 32_768) : undefined;
+  if ((name !== undefined && !name.trim()) || (message !== undefined && !message.trim())) {
+    throw new Error("Bot routine name and message must not be blank.");
+  }
+  return {
+    ...(name !== undefined ? { name } : {}),
+    ...(hasOwn(value, "schedule") ? { schedule: parseBotRoutineSchedule(value.schedule) } : {}),
+    ...(message !== undefined ? { message } : {}),
+    ...(hasOwn(value, "timezone") ? { timezone: routineTimezone(value.timezone, "Bot routine timezone") } : {}),
+    ...(hasOwn(value, "enabled") ? { enabled: requiredBooleanValue(value.enabled, "Bot routine enabled") } : {}),
+  };
+}
+
+export function parseAidenRemoteBotConnectionRequest(value: unknown): AidenRemoteBotConnectionRequest {
+  if (!isRecord(value)) throw new Error("Bot connection request must be an object.");
+  assertExactKeys(value, ["pluginId"], "Bot connection request");
+  return { pluginId: boundedPluginId(value.pluginId, "Bot connection pluginId") };
+}
+
+export function parseAidenRemoteBotConnectionRequestReceipt(
+  value: unknown,
+): AidenRemoteBotConnectionRequestReceipt {
+  if (!isRecord(value)) throw new Error("Bot connection receipt must be an object.");
+  assertExactKeys(value, ["pluginId", "name", "status"], "Bot connection receipt");
+  if (value.status !== "sent") throw new Error("Bot connection receipt status must be sent.");
+  return {
+    pluginId: boundedPluginId(value.pluginId, "Bot connection receipt pluginId"),
+    name: boundedText(value.name, "Bot connection receipt name", 120),
+    status: "sent",
+  };
+}
+
+function parseBotConnectionChip(value: unknown): AidenRemoteBotConnectionChip {
+  if (!isRecord(value)) throw new Error("Bot connection chip must be an object.");
+  assertExactKeys(value, ["pluginId", "name", "iconId"], "Bot connection chip");
+  return {
+    pluginId: boundedPluginId(value.pluginId, "Bot connection chip pluginId"),
+    name: boundedText(value.name, "Bot connection chip name", 120),
+    iconId: boundedPluginId(value.iconId, "Bot connection chip iconId"),
+  };
+}
+
+export function parseAidenRemoteBotPresetList(value: unknown): AidenRemoteBotPresetList {
+  if (!isRecord(value)) throw new Error("Bot preset list must be an object.");
+  assertExactKeys(value, ["presets"], "Bot preset list");
+  if (!Array.isArray(value.presets) || value.presets.length > AIDEN_REMOTE_BOT_PRESETS_MAX) {
+    throw new Error(`Bot preset list must contain at most ${AIDEN_REMOTE_BOT_PRESETS_MAX} presets.`);
+  }
+  const presets = value.presets.map((preset): AidenRemoteBotPreset => {
+    if (!isRecord(preset)) throw new Error("Bot preset must be an object.");
+    assertExactKeys(
+      preset,
+      ["id", "name", "subtitle", "avatar", "suggestedConnections", "suggestedRoutine"],
+      "Bot preset",
+    );
+    const avatar = parseBotSemanticAvatar(preset.avatar, true);
+    if (!Array.isArray(preset.suggestedConnections) || preset.suggestedConnections.length > 8) {
+      throw new Error("Bot preset suggestedConnections must contain at most 8 items.");
+    }
+    let suggestedRoutine: AidenRemoteBotPreset["suggestedRoutine"];
+    if (hasOwn(preset, "suggestedRoutine")) {
+      const routine = preset.suggestedRoutine;
+      if (!isRecord(routine)) throw new Error("Bot preset routine must be an object.");
+      assertExactKeys(routine, ["name", "label"], "Bot preset routine");
+      suggestedRoutine = {
+        name: boundedText(routine.name, "Bot preset routine name", 120),
+        label: boundedText(routine.label, "Bot preset routine label", 200),
+      };
+    }
+    return {
+      id: boundedPluginId(preset.id, "Bot preset id"),
+      name: boundedText(preset.name, "Bot preset name", 80),
+      subtitle: boundedText(preset.subtitle, "Bot preset subtitle", 280),
+      avatar,
+      suggestedConnections: preset.suggestedConnections.map(parseBotConnectionChip),
+      ...(suggestedRoutine ? { suggestedRoutine } : {}),
+    };
+  });
+  if (new Set(presets.map((preset) => preset.id)).size !== presets.length) {
+    throw new Error("Bot preset ids must be unique.");
+  }
+  return { presets };
+}
+
+export function parseAidenRemoteBotPresetCreateRequest(value: unknown): AidenRemoteBotPresetCreateRequest {
+  if (!isRecord(value)) throw new Error("Bot preset create request must be an object.");
+  assertExactKeys(value, ["presetId"], "Bot preset create request");
+  return { presetId: boundedPluginId(value.presetId, "Bot preset id") };
+}
+
+export function parseAidenRemoteBotPresetCreateResult(value: unknown): AidenRemoteBotPresetCreateResult {
+  if (!isRecord(value)) throw new Error("Bot preset create result must be an object.");
+  assertExactKeys(value, ["created", "bot"], "Bot preset create result");
+  return {
+    created: requiredBooleanValue(value.created, "Bot preset create result created"),
+    bot: parseAidenRemoteBotSummary(value.bot),
+  };
+}
+
+function requestResponseRecord(value: unknown, label: string): { request: unknown; response: unknown } {
+  if (!isRecord(value)) throw new Error(`${label} fixture must be an object.`);
+  assertExactKeys(value, ["request", "response"], `${label} fixture`);
+  return { request: value.request, response: value.response };
+}
+
+export interface AidenRemoteBotActivityFixture {
+  /** §5 in order: every phase id with its word and mark. */
+  phases: Array<{ id: string; word: string; mark: string }>;
+  /** Phases that keep their word under Always "Thinking". */
+  thinkingKeeps: string[];
+  /** "Using {app}" with a sample label. */
+  app: { app: string; word: string };
+  /** Elapsed labels, including a phone whose clock is behind the Mac's. */
+  elapsed: Array<{ startedAt: number; now: number; label: string | null }>;
+  session: AidenRemoteBotSession;
+  events: AidenRemoteBotSessionEvent[];
+  /** A queued message placed in the turn: its bubble carries the same `submissionId`. */
+  entryEvent: AidenRemoteBotSessionEvent;
+  detail: AidenRemoteBotDetail;
+  identityPatch: { request: AidenRemoteBotIdentityPatchRequest; response: AidenRemoteBotDetail };
+  send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
+}
+
+function parseBotActivityFixture(value: unknown): AidenRemoteBotActivityFixture {
+  if (!isRecord(value)) throw new Error("Bot activity fixture must be an object.");
+  assertExactKeys(
+    value,
+    ["phases", "thinkingKeeps", "app", "elapsed", "session", "events", "entryEvent", "detail", "identityPatch", "send"],
+    "Bot activity fixture",
+  );
+  if (!Array.isArray(value.events)) throw new Error("Bot activity fixture events must be an array.");
+  const identity = requestResponseRecord(value.identityPatch, "Bot activity identity patch");
+  const send = requestResponseRecord(value.send, "Bot activity send");
+  return {
+    phases: value.phases as AidenRemoteBotActivityFixture["phases"],
+    thinkingKeeps: value.thinkingKeeps as string[],
+    app: value.app as AidenRemoteBotActivityFixture["app"],
+    elapsed: value.elapsed as AidenRemoteBotActivityFixture["elapsed"],
+    session: parseAidenRemoteBotSession(value.session),
+    events: value.events.map(parseAidenRemoteBotSessionEvent),
+    entryEvent: parseAidenRemoteBotSessionEvent(value.entryEvent),
+    detail: parseAidenRemoteBotDetail(value.detail),
+    identityPatch: {
+      request: parseAidenRemoteBotIdentityPatchRequest(identity.request, { allowChatActivity: true }),
+      response: parseAidenRemoteBotDetail(identity.response),
+    },
+    send: {
+      request: parseAidenRemoteBotMessageRequest(send.request, { allowWhenBusy: true }),
+      response: parseAidenRemoteBotMessageReceipt(send.response),
+    },
+  };
+}
+
 export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteContractFixture {
   if (!isRecord(value)) throw new Error("Aiden Remote contract fixture must be an object.");
   assertNoPrivateBotWireFields(value);
@@ -4386,8 +5958,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     request: parseAidenRemoteBotIdentityPatchRequest(botIdentityRecord.request),
     response: parseAidenRemoteBotDetail(botIdentityRecord.response),
   };
-  const botArchive = parseAidenRemoteBotDetail(value.botArchive);
-  const botRestore = parseAidenRemoteBotDetail(value.botRestore);
   const botConversation = parseBotConversationItem(value.botConversation);
   const botConversations = parseAidenRemoteBotConversationPage(value.botConversations);
   const botConversationQuery = parseAidenRemoteBotConversationQuery(value.botConversationQuery);
@@ -4420,56 +5990,104 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     request: parseAidenRemoteBotAccessUpdateRequest(botPolicyUpdateRecord.request),
     response: parseAidenRemoteBotAccessView(botPolicyUpdateRecord.response),
   };
-  const botChatSubset = parseAidenRemoteBotChatAccessView(value.botChatSubset);
-  const botChatSubsetUpdateRecord = isRecord(value.botChatSubsetUpdate)
-    ? value.botChatSubsetUpdate
-    : null;
-  if (!botChatSubsetUpdateRecord) {
-    throw new Error("Bot chat subset update fixture must be an object.");
+
+  const botSession = parseAidenRemoteBotSession(value.botSession);
+  const botSessionNeedsModel = parseAidenRemoteBotSession(value.botSessionNeedsModel);
+  if (botSessionNeedsModel.state !== "needs_model") {
+    throw new Error("Bot needs-model session fixture must report needs_model.");
   }
-  assertExactKeys(
-    botChatSubsetUpdateRecord,
-    ["request", "response"],
-    "Bot chat subset update fixture",
-  );
-  const botChatSubsetUpdate: AidenRemoteBotChatSubsetUpdateFixture = {
-    request: parseAidenRemoteBotChatAccessUpdateRequest(botChatSubsetUpdateRecord.request),
-    response: parseAidenRemoteBotChatAccessView(botChatSubsetUpdateRecord.response),
+  if (!Array.isArray(value.botSessionEvents)) throw new Error("Bot session events fixture must be an array.");
+  const botSessionEvents = value.botSessionEvents.map(parseAidenRemoteBotSessionEvent);
+  const sendRecord = requestResponseRecord(value.botSessionSend, "Bot session send");
+  const botSessionSend = {
+    request: parseAidenRemoteBotMessageRequest(sendRecord.request),
+    response: parseAidenRemoteBotMessageReceipt(sendRecord.response),
   };
-  const botFavorites = parseAidenRemoteBotFavoritesView(value.botFavorites);
-  const botFavoritesUpdateRecord = isRecord(value.botFavoritesUpdate)
-    ? value.botFavoritesUpdate
-    : null;
-  if (!botFavoritesUpdateRecord) {
-    throw new Error("Bot favorites update fixture must be an object.");
+  const resumeRecord = requestResponseRecord(value.botSessionResume, "Bot session resume");
+  const botSessionResume = {
+    request: parseAidenRemoteEmptyRequest(resumeRecord.request, "Bot resume request"),
+    response: parseAidenRemoteBotSessionStateView(resumeRecord.response),
+  };
+  const dismissRecord = requestResponseRecord(value.botSessionDismiss, "Bot session dismiss");
+  const botSessionDismiss = {
+    request: parseAidenRemoteEmptyRequest(dismissRecord.request, "Bot dismiss request"),
+    response: parseAidenRemoteBotSessionStateView(dismissRecord.response),
+  };
+  const questionAnswerRecord = requestResponseRecord(value.botSessionQuestionAnswer, "Bot question answer");
+  const botSessionQuestionAnswer = {
+    request: parseAidenRemoteBotQuestionAnswerRequest(questionAnswerRecord.request),
+    response: parseAidenRemoteBotQuestionAnswerReceipt(questionAnswerRecord.response),
+  };
+  const botRoutines = parseAidenRemoteBotRoutineList(value.botRoutines);
+  const routineCreateRecord = requestResponseRecord(value.botRoutineCreate, "Bot routine create");
+  const botRoutineCreate = {
+    request: parseAidenRemoteBotRoutineCreateRequest(routineCreateRecord.request),
+    response: parseAidenRemoteBotRoutine(routineCreateRecord.response),
+  };
+  const routineUpdateRecord = requestResponseRecord(value.botRoutineUpdate, "Bot routine update");
+  const botRoutineUpdate = {
+    request: parseAidenRemoteBotRoutineUpdateRequest(routineUpdateRecord.request),
+    response: parseAidenRemoteBotRoutine(routineUpdateRecord.response),
+  };
+  const connectionRecord = requestResponseRecord(value.botConnectionRequest, "Bot connection request");
+  const botConnectionRequest = {
+    request: parseAidenRemoteBotConnectionRequest(connectionRecord.request),
+    response: parseAidenRemoteBotConnectionRequestReceipt(connectionRecord.response),
+  };
+  const botPresets = parseAidenRemoteBotPresetList(value.botPresets);
+  const presetCreateRecord = requestResponseRecord(value.botPresetCreate, "Bot preset create");
+  const botPresetCreate = {
+    request: parseAidenRemoteBotPresetCreateRequest(presetCreateRecord.request),
+    response: parseAidenRemoteBotPresetCreateResult(presetCreateRecord.response),
+  };
+  if (
+    botConnectionRequest.request.pluginId !== botConnectionRequest.response.pluginId ||
+    !botPresets.presets.some((preset) => preset.id === botPresetCreate.request.presetId) ||
+    !botRoutines.routines.some((routine) => routine.id === botRoutineCreate.response.id) ||
+    botRoutineUpdate.request.enabled !== undefined &&
+      botRoutineUpdate.response.enabled !== botRoutineUpdate.request.enabled
+  ) {
+    throw new Error("Canonical Bot rev-26 fixtures do not agree.");
   }
-  assertExactKeys(
-    botFavoritesUpdateRecord,
-    ["request", "response"],
-    "Bot favorites update fixture",
-  );
-  const botFavoritesUpdate: AidenRemoteBotFavoritesUpdateFixture = {
-    request: parseAidenRemoteBotFavoritesUpdateRequest(botFavoritesUpdateRecord.request),
-    response: parseAidenRemoteBotFavoritesView(botFavoritesUpdateRecord.response),
+  const botMemory = parseAidenRemoteBotMemory(value.botMemory);
+  if (!isRecord(value.botMemoryEdit)) throw new Error("Bot memory edit fixture must be an object.");
+  assertExactKeys(value.botMemoryEdit, ["request", "response", "errors"], "Bot memory edit fixture");
+  if (!Array.isArray(value.botMemoryEdit.errors)) throw new Error("Bot memory edit fixture errors must be an array.");
+  const botMemoryEdit = {
+    request: parseAidenRemoteBotMemoryEditRequest(value.botMemoryEdit.request),
+    response: parseAidenRemoteBotMemoryEditResponse(value.botMemoryEdit.response),
+    errors: value.botMemoryEdit.errors.map((error) => {
+      if (!isRecord(error)) throw new Error("Bot memory edit fixture error must be an object.");
+      assertExactKeys(error, ["status", "code"], "Bot memory edit fixture error");
+      const known = AIDEN_REMOTE_BOT_MEMORY_EDIT_ERRORS.find(
+        (candidate) => candidate.code === error.code && candidate.status === error.status,
+      );
+      if (!known) throw new Error("Bot memory edit fixture error is not a documented error.");
+      return { status: known.status as number, code: known.code as string };
+    }),
   };
-  const botNotice = parseBotAccessNoticeStatus(value.botNotice);
-  const botNoticeAcknowledgementRecord = isRecord(value.botNoticeAcknowledgement)
-    ? value.botNoticeAcknowledgement
-    : null;
-  if (!botNoticeAcknowledgementRecord) {
-    throw new Error("Bot notice acknowledgement fixture must be an object.");
+  const proposalRespondRecord = requestResponseRecord(value.botRoutineProposalRespond, "Bot routine proposal respond");
+  const botRoutineProposalRespond = {
+    request: parseAidenRemoteBotRoutineProposalRespondRequest(proposalRespondRecord.request),
+    response: parseAidenRemoteBotRoutineProposalRespondResult(proposalRespondRecord.response),
+  };
+  const botRoutineSuggestions = parseAidenRemoteBotRoutineSuggestionList(value.botRoutineSuggestions);
+  const botRoutineNotifications = parseAidenRemoteBotRoutineNotificationList(value.botRoutineNotifications);
+  const botSessionCards = parseAidenRemoteBotSession(value.botSessionCards);
+  if (
+    botMemoryEdit.request.edit.kind === "replace" &&
+    !botMemoryEdit.response.view[botMemoryEdit.request.edit.target].entries.some(
+      (entry) => botMemoryEdit.request.edit.kind === "replace" && entry.text === botMemoryEdit.request.edit.text,
+    )
+  ) {
+    throw new Error("Bot memory edit response does not apply the requested edit.");
   }
-  assertExactKeys(
-    botNoticeAcknowledgementRecord,
-    ["request", "response"],
-    "Bot notice acknowledgement fixture",
-  );
-  const botNoticeAcknowledgement: AidenRemoteBotNoticeAcknowledgementFixture = {
-    request: parseBotNoticeAcknowledgementRequest(
-      botNoticeAcknowledgementRecord.request,
-    ),
-    response: parseBotAccessNoticeStatus(botNoticeAcknowledgementRecord.response),
-  };
+  if (
+    (botRoutineProposalRespond.request.decision === "accept") !==
+    (botRoutineProposalRespond.response.status === "accepted")
+  ) {
+    throw new Error("Bot routine proposal response does not apply the requested decision.");
+  }
   const botAvatarUploadRecord = isRecord(value.botAvatarUpload)
     ? value.botAvatarUpload
     : null;
@@ -4571,8 +6189,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botDetail,
     botCreate.response,
     botIdentity.response,
-    botArchive,
-    botRestore,
   ];
   if (
     canonicalDetails.some((detail) => detail.id !== canonicalBotId) ||
@@ -4608,7 +6224,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botCreate.response.name !== botCreate.request.name ||
     botCreate.response.purpose !== botCreate.request.purpose ||
     botCreate.response.instructions !== botCreate.request.instructions ||
-    botCreate.response.openingGreeting !== botCreate.request.openingGreeting ||
     JSON.stringify(botCreate.response.avatar.semantic) !==
       JSON.stringify(botCreate.request.avatar)
   ) {
@@ -4623,25 +6238,9 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       botIdentity.response.instructions !== botIdentity.request.instructions) ||
     (botIdentity.request.avatar !== undefined &&
       JSON.stringify(botIdentity.response.avatar.semantic) !==
-        JSON.stringify(botIdentity.request.avatar)) ||
-    (botIdentity.request.openingGreeting !== undefined &&
-      (botIdentity.request.openingGreeting === ""
-        ? botIdentity.response.openingGreeting !== undefined
-        : botIdentity.response.openingGreeting !==
-          botIdentity.request.openingGreeting))
+        JSON.stringify(botIdentity.request.avatar))
   ) {
     throw new Error("Bot identity response does not apply the exact requested patch.");
-  }
-  if (
-    !botIdentityFieldsEqual(botIdentity.response, botArchive) ||
-    !botIdentityFieldsEqual(botArchive, botRestore)
-  ) {
-    throw new Error(
-      "Bot identity and avatar must survive archive and restore unchanged.",
-    );
-  }
-  if (botArchive.health !== "archived" || botRestore.health === "archived") {
-    throw new Error("Bot archive and restore fixtures have invalid health states.");
   }
   if (
     botConversation.botId !== canonicalBotId ||
@@ -4706,7 +6305,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botCapabilityCatalog,
     "Canonical Bot Chat",
   );
-  if (botCreate.request.access.accessMode === "full") {
+  if (botCreate.request.access?.accessMode === "full") {
     assertAvailableBotChatModel(
       botCreate.request.access.providerId,
       botCreate.request.access.modelId,
@@ -4740,12 +6339,8 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ["Bot detail", botDetail.access.custom],
     ["Bot create response", botCreate.response.access.custom],
     ["Bot identity response", botIdentity.response.access.custom],
-    ["Bot archive response", botArchive.access.custom],
-    ["Bot restore response", botRestore.access.custom],
     ["Bot policy", botPolicy.custom],
     ["Bot policy update response", botPolicyUpdate.response.custom],
-    ["Bot chat subset", botChatSubset.custom],
-    ["Bot chat subset update response", botChatSubsetUpdate.response.custom],
   ];
   for (const [label, selection] of responseSelections) {
     if (selection) {
@@ -4762,7 +6357,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   > = [
     [
       "Bot create request",
-      botCreate.request.access.accessMode === "custom"
+      botCreate.request.access?.accessMode === "custom"
         ? botCreate.request.access.custom
         : undefined,
     ],
@@ -4770,12 +6365,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "Bot policy update request",
       botPolicyUpdate.request.accessMode === "custom"
         ? botPolicyUpdate.request.custom
-        : undefined,
-    ],
-    [
-      "Bot chat subset update request",
-      botChatSubsetUpdate.request.mode === "custom"
-        ? botChatSubsetUpdate.request.custom
         : undefined,
     ],
   ];
@@ -4790,100 +6379,27 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
   }
   for (const [label, revision] of [
-    ["Bot create request", botCreate.request.access.catalogRevision],
+    ["Bot create request", botCreate.request.access?.catalogRevision],
     ["Bot policy update request", botPolicyUpdate.request.catalogRevision],
-    ["Bot chat subset update request", botChatSubsetUpdate.request.catalogRevision],
   ] as const) {
-    if (revision !== botCapabilityCatalog.revision) {
+    if (revision !== undefined && revision !== botCapabilityCatalog.revision) {
       throw new Error(`${label} does not target the canonical catalog revision.`);
     }
   }
-  assertBotAccessRequestMatchesView(
-    botCreate.request.access,
-    botCreate.response.access,
-    "Bot create",
-  );
+  if (botCreate.request.access) {
+    assertBotAccessRequestMatchesView(
+      botCreate.request.access,
+      botCreate.response.access,
+      "Bot create",
+    );
+  } else if (botCreate.response.access.accessMode !== "full") {
+    throw new Error("A Bot created without access must default to Full access.");
+  }
   assertBotAccessRequestMatchesView(
     botPolicyUpdate.request,
     botPolicyUpdate.response,
     "Bot policy update",
   );
-  if (botChatSubset.botPolicyRevision !== botPolicy.revision) {
-    throw new Error("Bot chat subset does not target the current Bot policy revision.");
-  }
-  if (
-    botChatSubsetUpdate.request.expectedBotPolicyRevision !==
-      botChatSubsetUpdate.response.botPolicyRevision ||
-    botChatSubsetUpdate.request.expectedBotPolicyRevision !==
-      botPolicyUpdate.response.revision
-  ) {
-    throw new Error("Bot chat subset update Bot policy revisions do not agree.");
-  }
-  if (botChatSubsetUpdate.request.mode !== botChatSubsetUpdate.response.mode) {
-    throw new Error("Bot chat subset update request and response modes do not agree.");
-  }
-  if (
-    botChatSubsetUpdate.request.mode === "custom" &&
-    (botChatSubsetUpdate.response.mode !== "custom" ||
-      !botSelectionsEqual(
-        botChatSubsetUpdate.request.custom,
-        botChatSubsetUpdate.response.custom,
-      ))
-  ) {
-    throw new Error(
-      "Bot chat subset update request and response Custom selections do not agree.",
-    );
-  }
-  if (botChatSubset.mode === "custom") {
-    validateBotChatSelectionAgainstPolicy(
-      botChatSubset.custom,
-      botPolicy,
-      "Bot chat subset",
-    );
-  }
-  if (botChatSubsetUpdate.request.mode === "custom") {
-    validateBotChatSelectionAgainstPolicy(
-      botChatSubsetUpdate.request.custom,
-      botPolicyUpdate.response,
-      "Bot chat subset update request",
-    );
-  }
-  if (botChatSubsetUpdate.response.mode === "custom") {
-    validateBotChatSelectionAgainstPolicy(
-      botChatSubsetUpdate.response.custom,
-      botPolicyUpdate.response,
-      "Bot chat subset update response",
-    );
-  }
-  const chatFixtureIdentities = [botChatSubset, botChatSubsetUpdate.response];
-  if (
-    chatFixtureIdentities.some(
-      (view) => view.chatId !== botConversation.chatId || view.botId !== canonicalBotId,
-    )
-  ) {
-    throw new Error("Canonical Bot chat-subset identities do not agree.");
-  }
-  if (
-    JSON.stringify(botList.favorites) !== JSON.stringify(botFavorites) ||
-    JSON.stringify(botFavoritesUpdate.response) !== JSON.stringify(botFavorites) ||
-    JSON.stringify(botFavoritesUpdate.request.botIds) !==
-      JSON.stringify(botFavoritesUpdate.response.botIds) ||
-    botFavoritesUpdate.request.botIds.some(
-      (botId) => !botList.bots.some((bot) => bot.id === botId),
-    )
-  ) {
-    throw new Error("Canonical Bot favorites fixtures do not agree.");
-  }
-  if (
-    JSON.stringify(botCapabilityCatalog.notice) !== JSON.stringify(botNotice) ||
-    botNoticeAcknowledgement.request.version !== botNotice.version ||
-    botNoticeAcknowledgement.response.version !== botNotice.version ||
-    botNoticeAcknowledgement.response.requiresAcknowledgement ||
-    botNoticeAcknowledgement.response.acceptedDecision !==
-      botNoticeAcknowledgement.request.decision
-  ) {
-    throw new Error("Canonical Bot notice fixtures do not agree.");
-  }
   if (
     JSON.stringify(botAvatarUpload.response) !== JSON.stringify(botAvatarMetadata) ||
     (botAvatar.asset !== undefined &&
@@ -4974,7 +6490,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   const progressEventTypes = new Set<AidenRemoteEventType>([
     "task_update",
     "agents_update",
-  "app_controls_changed",
+    "app_controls_changed",
   ]);
   for (const event of chatProgressEvents) {
     if (
@@ -5017,39 +6533,43 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
       "Ordinary turn streams must not carry chat progress projections.",
     );
   }
-  if (!isRecord(value.error) || !isRecord(value.error.error)) {
-    throw new Error("Fixture error envelope is invalid.");
+  const error = parseErrorEnvelopeFixture(value.error, "Fixture error envelope");
+  const revision19 = contractRevision >= 19
+    ? parseRevision19Fixture(value, { instanceId, contractRevision })
+    : {};
+  if (value.pairingRequests !== undefined) {
+    if (contractRevision < 20) throw new Error("Pairing request fixtures require contract revision 20.");
+    parsePairingRequestsFixture(value.pairingRequests);
   }
-  assertExactKeys(value.error, ["error"], "Error envelope");
-  const errorBody = value.error.error;
-  assertExactKeys(errorBody, ["code", "message", "requestId", "retryable", "details"], "Error envelope error");
-  const code = requiredString(errorBody, "code");
-  if (!(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code)) {
-    throw new Error(`Unknown Aiden Remote error code ${code}.`);
+  if (value.phoneRunEvents !== undefined) {
+    if (contractRevision < 24) throw new Error("Phone run fixtures require contract revision 24.");
+    parseRunEventSequence(value.phoneRunEvents, "Fixture phone run events", "phone");
   }
-  if (characterLength(requiredString(errorBody, "message")) > 2_000) throw new Error("Error message is too long.");
-  if (characterLength(requiredString(errorBody, "requestId")) > 128) throw new Error("Error requestId is too long.");
-  if (typeof errorBody.retryable !== "boolean") throw new Error("Error retryable must be boolean.");
-  if (errorBody.details !== undefined) {
-    if (!isRecord(errorBody.details)) throw new Error("Error details must be an object.");
-    assertExactKeys(errorBody.details, ["currentRevision", "retryAfterSeconds", "chatId", "minimumClientVersion", "limit", "field"], "Error details");
-    const stringDetailMaxima = {
-      currentRevision: 128,
-      chatId: 128,
-      minimumClientVersion: 40,
-      field: 120,
-    } as const;
-    for (const [key, maximum] of Object.entries(stringDetailMaxima)) {
-      const detail = errorBody.details[key];
-      if (detail !== undefined && (typeof detail !== "string" || detail.length === 0 || characterLength(detail) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
-    }
-    const boundedNumericDetails = {
-      retryAfterSeconds: 86_400,
-      limit: 1_000_000,
-    } as const;
-    for (const [key, maximum] of Object.entries(boundedNumericDetails)) {
-      const detail = errorBody.details[key];
-      if (detail !== undefined && (!Number.isSafeInteger(detail) || (detail as number) < 0 || (detail as number) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
+  if (value.chatFork !== undefined) {
+    if (contractRevision < 21) throw new Error("Chat fork fixtures require contract revision 21.");
+    parseChatForkFixture(value.chatFork);
+  }
+  if (value.mobileSimulators !== undefined) {
+    if (contractRevision < 26) throw new Error("Mobile simulator fixtures require contract revision 26.");
+    parseMobileSimulatorsFixture(value.mobileSimulators);
+  }
+  if (chat.messages.some((message) => message.visuals?.length) && contractRevision < 28) {
+    throw new Error("Chat visuals fixtures require contract revision 28.");
+  }
+  let botActivity: AidenRemoteBotActivityFixture | undefined;
+  if (value.botActivity !== undefined) {
+    if (contractRevision < 30) throw new Error("Bot activity fixtures require contract revision 30.");
+    botActivity = parseBotActivityFixture(value.botActivity);
+  }
+  if (value.peerRouteAdvertisement !== undefined) {
+    if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
+    const advertisement = value.peerRouteAdvertisement;
+    if (advertisement.feature !== "peer-routes-v1" || !Array.isArray(advertisement.routes) || advertisement.routes.length > 2) throw new Error("Invalid peer route advertisement.");
+    for (const route of advertisement.routes) {
+      if (!isRecord(route)) throw new Error("Invalid peer route.");
+      const endpoint = requiredString(route, "endpoint");
+      assertAidenRemoteEndpoint(endpoint);
+      if (!new URL(endpoint).hostname.endsWith(".ts.net") || !/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(requiredString(route, "serverSpkiSha256"))) throw new Error("Invalid synthetic peer route trust.");
     }
   }
   assertNoForbiddenWireKeys(value);
@@ -5095,8 +6615,6 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botAvatar,
     botCreate,
     botIdentity,
-    botArchive,
-    botRestore,
     botConversation,
     botConversations,
     botConversationQuery,
@@ -5104,12 +6622,25 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     botCapabilityCatalog,
     botPolicy,
     botPolicyUpdate,
-    botChatSubset,
-    botChatSubsetUpdate,
-    botFavorites,
-    botFavoritesUpdate,
-    botNotice,
-    botNoticeAcknowledgement,
+    botSession,
+    botSessionNeedsModel,
+    botSessionEvents,
+    botSessionSend,
+    botSessionResume,
+    botSessionDismiss,
+    botSessionQuestionAnswer,
+    botRoutines,
+    botRoutineCreate,
+    botRoutineUpdate,
+    botConnectionRequest,
+    botPresets,
+    botPresetCreate,
+    botMemory,
+    botMemoryEdit,
+    botRoutineProposalRespond,
+    botRoutineSuggestions,
+    botRoutineNotifications,
+    botSessionCards,
     botAvatarUpload,
     botAvatarMetadata,
     taskProgress,
@@ -5119,7 +6650,648 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     chatProgressEvents,
     legacyNonNegotiating,
     events,
-    error: value.error as unknown as AidenRemoteErrorEnvelope,
+    error,
+    ...revision19,
+    ...(botActivity ? { botActivity } : {}),
+  };
+}
+
+const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
+const ERROR_DETAIL_OUTCOMES = ["answered", "expired", "cancelled"] as const;
+
+function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteErrorEnvelope {
+  if (!isRecord(value) || !isRecord(value.error)) throw new Error(`${label} is invalid.`);
+  assertExactKeys(value, ["error"], label);
+  const errorBody = value.error;
+  assertExactKeys(errorBody, ["code", "message", "requestId", "retryable", "details"], `${label} error`);
+  const code = requiredString(errorBody, "code");
+  if (!(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code)) {
+    throw new Error(`Unknown Aiden Remote error code ${code}.`);
+  }
+  if (characterLength(requiredString(errorBody, "message")) > 2_000) throw new Error("Error message is too long.");
+  if (characterLength(requiredString(errorBody, "requestId")) > 128) throw new Error("Error requestId is too long.");
+  if (typeof errorBody.retryable !== "boolean") throw new Error("Error retryable must be boolean.");
+  if (errorBody.details !== undefined) {
+    if (!isRecord(errorBody.details)) throw new Error("Error details must be an object.");
+    const details = errorBody.details;
+    assertExactKeys(
+      details,
+      ["currentRevision", "retryAfterSeconds", "chatId", "minimumClientVersion", "limit", "field", "decision", "outcome", "resolvedAt"],
+      "Error details",
+    );
+    const stringDetailMaxima = {
+      currentRevision: 128,
+      chatId: 128,
+      minimumClientVersion: 40,
+      field: 120,
+    } as const;
+    for (const [key, maximum] of Object.entries(stringDetailMaxima)) {
+      const detail = details[key];
+      if (detail !== undefined && (typeof detail !== "string" || detail.length === 0 || characterLength(detail) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
+    }
+    const boundedNumericDetails = {
+      retryAfterSeconds: 86_400,
+      limit: 1_000_000,
+    } as const;
+    for (const [key, maximum] of Object.entries(boundedNumericDetails)) {
+      const detail = details[key];
+      if (detail !== undefined && (!Number.isSafeInteger(detail) || (detail as number) < 0 || (detail as number) > maximum)) throw new Error(`Error detail ${key} is invalid.`);
+    }
+    if (details.decision !== undefined && !(ERROR_DETAIL_DECISIONS as readonly unknown[]).includes(details.decision)) {
+      throw new Error("Error detail decision is invalid.");
+    }
+    if (details.outcome !== undefined && !(ERROR_DETAIL_OUTCOMES as readonly unknown[]).includes(details.outcome)) {
+      throw new Error("Error detail outcome is invalid.");
+    }
+    if (details.resolvedAt !== undefined) {
+      if (typeof details.resolvedAt !== "string") throw new Error("Error detail resolvedAt is invalid.");
+      parseStrictRfc3339(details.resolvedAt, "Error detail resolvedAt");
+    }
+  }
+  return value as unknown as AidenRemoteErrorEnvelope;
+}
+
+/** Credential-free `host/owner/name`; never a URL, userinfo, port or local path. */
+const REPOSITORY_CANONICAL_KEY = /^[a-z0-9.-]+(?:\/[A-Za-z0-9._~+-]+)+$/u;
+
+function parseHostEnvelope(
+  value: unknown,
+  label: string,
+  types: readonly string[],
+): { streamId: string; sequence: number; type: string; terminal: boolean; payload: Record<string, unknown> } {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["protocolVersion", "streamId", "sequence", "timestamp", "type", "terminal", "payload"], label);
+  if (value.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION) throw new Error(`${label} protocolVersion must be 1.`);
+  const streamId = assertBoundedString(value, "streamId", 128);
+  const sequence = requiredInteger(value, "sequence");
+  if (sequence < 0) throw new Error(`${label} sequence must not be negative.`);
+  parseStrictRfc3339(requiredString(value, "timestamp"), `${label} timestamp`);
+  const type = requiredString(value, "type");
+  if (!types.includes(type)) throw new Error(`${label} has unknown type ${type}.`);
+  if (typeof value.terminal !== "boolean") throw new Error(`${label} terminal must be boolean.`);
+  if (!isRecord(value.payload)) throw new Error(`${label} payload must be an object.`);
+  return { streamId, sequence, type, terminal: value.terminal, payload: value.payload };
+}
+
+function parseHostFeedWorkspaceRepository(workspace: unknown, label: string): void {
+  if (!isRecord(workspace) || workspace.repository === undefined) return;
+  const repository = workspace.repository;
+  if (!isRecord(repository)) throw new Error(`${label} repository must be an object.`);
+  assertExactKeys(repository, ["canonicalKey", "relativePath"], `${label} repository`);
+  const canonicalKey = boundedText(repository.canonicalKey, `${label} repository canonicalKey`, 512);
+  if (!REPOSITORY_CANONICAL_KEY.test(canonicalKey)) {
+    throw new Error(`${label} repository canonicalKey is not a credential-free host/owner/name key.`);
+  }
+  const relativePath = boundedText(repository.relativePath, `${label} repository relativePath`, 1_024, true);
+  if (relativePath.startsWith("/") || relativePath.split("/").some((part) => part === "..")) {
+    throw new Error(`${label} repository relativePath must stay inside the repository.`);
+  }
+}
+
+const PAIRING_REQUEST_FIXTURE_ID = /^pairreq_[A-Za-z0-9_-]{32}$/u;
+const PAIRING_REQUEST_FIXTURE_STATES = ["pending", "approved", "denied", "expired", "cancelled"] as const;
+
+/** Unpadded base64url carrying exactly `bytes` bytes. */
+function fixtureBase64Url(value: unknown, label: string, bytes: number): string {
+  const length = Math.ceil((bytes * 4) / 3);
+  if (typeof value !== "string" || value.length !== length || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new Error(`${label} must be ${bytes} bytes of unpadded base64url.`);
+  }
+  return value;
+}
+
+function requiredFixtureRecord(
+  value: unknown,
+  label: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} is invalid.`);
+  assertExactKeys(value, [...required, ...optional], label);
+  for (const key of required) {
+    if (!(key in value)) throw new Error(`${label} is missing ${key}.`);
+  }
+  return value;
+}
+
+function fixturePairingRequestId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !PAIRING_REQUEST_FIXTURE_ID.test(value)) {
+    throw new Error(`${label} requestId is invalid.`);
+  }
+  return value;
+}
+
+function fixtureTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value)) || !value.endsWith("Z")) {
+    throw new Error(`${label} expiresAt must be an RFC 3339 UTC timestamp.`);
+  }
+  return value;
+}
+
+function parseChatForkFixtureExchange(value: unknown, label: string): AidenRemoteChatForkFixtureExchange {
+  const exchange = requiredFixtureRecord(value, label, ["request", "response"]);
+  const request = requiredFixtureRecord(exchange.request, `${label} request`, ["messageId", "position"], ["summary"]);
+  const messageId = boundedText(request.messageId, `${label} request messageId`, 128);
+  if (!REMOTE_SAFE_ID.test(messageId)) throw new Error(`${label} request messageId is invalid.`);
+  const position = enumMember(request.position, ["after", "before"] as const, `${label} request position`);
+  let summary: { focus?: string } | undefined;
+  if (request.summary !== undefined) {
+    const body = requiredFixtureRecord(request.summary, `${label} request summary`, [], ["focus"]);
+    summary = body.focus === undefined
+      ? {}
+      : { focus: boundedText(body.focus, `${label} request summary focus`, MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS) };
+  }
+  const response = parseAidenRemoteChatForkResult(exchange.response, `${label} response`);
+  const lineage = response.chat.forkedFrom!;
+  if (lineage.messageId !== messageId || lineage.position !== position) {
+    throw new Error(`${label} response must record the requested fork point.`);
+  }
+  if (Boolean(summary) !== Boolean(lineage.summary)) {
+    throw new Error(`${label} response must carry a summary exactly when one was requested.`);
+  }
+  return { request: { messageId, position, ...(summary ? { summary } : {}) }, response };
+}
+
+function parseChatForkFixture(value: unknown): AidenRemoteChatForkFixture {
+  const section = requiredFixtureRecord(value, "Chat fork fixture", [
+    "features",
+    "fork",
+    "editFork",
+    "summaryStates",
+    "summaryCancel",
+  ]);
+  const features = section.features;
+  if (
+    !Array.isArray(features) ||
+    features.length !== 2 ||
+    !features.includes(AIDEN_REMOTE_CHAT_FORK_FEATURE) ||
+    !features.includes(AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE)
+  ) {
+    throw new Error("Chat fork fixture must name chat-fork-v1 and chat-fork-summary-v1.");
+  }
+  const fork = parseChatForkFixtureExchange(section.fork, "Chat fork fixture fork");
+  if (fork.response.chat.forkedFrom?.summary?.state !== "pending") {
+    throw new Error("Chat fork fixture fork must start with a pending summary.");
+  }
+  const editFork = parseChatForkFixtureExchange(section.editFork, "Chat fork fixture editFork");
+  if (!editFork.response.prefill) throw new Error("Chat fork fixture editFork must return the prompt to edit.");
+  if (!Array.isArray(section.summaryStates)) throw new Error("Chat fork fixture summaryStates must be an array.");
+  const summaryStates = section.summaryStates.map((summary, index) =>
+    parseChatForkSummaryProjection(summary, `Chat fork fixture summaryStates[${index}]`),
+  );
+  const states = summaryStates.map(({ state }) => state);
+  if (!states.includes("ready") || !states.includes("failed")) {
+    throw new Error("Chat fork fixture summaryStates must include ready and failed summaries.");
+  }
+  const cancel = requiredFixtureRecord(section.summaryCancel, "Chat fork fixture summaryCancel", ["cancelled"]);
+  if (typeof cancel.cancelled !== "boolean") throw new Error("Chat fork fixture summaryCancel cancelled must be boolean.");
+  return { features: [...features], fork, editFork, summaryStates, summaryCancel: { cancelled: cancel.cancelled } };
+}
+
+const MOBILE_SIMULATOR_HUB_ROUTE_PREFIX = "/simulators/hub/vendor/serve-sim/helper/";
+/**
+ * Tags a phone may send through the input socket: touch, button, orientation,
+ * hardware keyboard. The simulator relay enforces this on every phone frame.
+ */
+export const MOBILE_SIMULATOR_INPUT_TAGS: ReadonlySet<number> = new Set([0x03, 0x04, 0x07, 0x0d]);
+
+function parseMobileSimulatorListing(value: unknown, label: string): Record<string, unknown> {
+  const listing = requiredFixtureRecord(
+    value,
+    label,
+    ["sharing", "status", "devices"],
+    ["detail", "chatDeviceIds", "toolVersions"],
+  );
+  if (typeof listing.sharing !== "boolean") throw new Error(`${label} sharing must be boolean.`);
+  assertBoundedString(listing, "status", 32);
+  if (listing.detail !== undefined) assertBoundedString(listing, "detail", 2_000);
+  if (!Array.isArray(listing.devices)) throw new Error(`${label} devices must be an array.`);
+  const ids = listing.devices.map((entry, index) => {
+    const device = requiredFixtureRecord(entry, `${label} device ${index}`, [
+      "id",
+      "name",
+      "platform",
+      "version",
+      "booted",
+      "kind",
+    ]);
+    const id = requiredString(device, "id");
+    if (!DEVICE_ID_PATTERN.test(id)) throw new Error(`${label} device ${index} id is invalid.`);
+    assertBoundedString(device, "name", 256);
+    if (device.platform !== "ios" && device.platform !== "android") {
+      throw new Error(`${label} device ${index} platform must be ios or android.`);
+    }
+    assertBoundedString(device, "version", 64);
+    assertBoundedString(device, "kind", 32);
+    if (typeof device.booted !== "boolean") throw new Error(`${label} device ${index} booted must be boolean.`);
+    return id;
+  });
+  if (!listing.sharing && ids.length > 0) throw new Error(`${label} lists no devices while sharing is off.`);
+  if (listing.chatDeviceIds !== undefined) {
+    if (
+      !Array.isArray(listing.chatDeviceIds) ||
+      listing.chatDeviceIds.some((id) => typeof id !== "string" || !ids.includes(id))
+    ) {
+      throw new Error(`${label} chatDeviceIds must name listed devices.`);
+    }
+  }
+  if (listing.toolVersions !== undefined) {
+    const versions = requiredFixtureRecord(listing.toolVersions, `${label} toolVersions`, ["hub", "agent"]);
+    assertBoundedString(versions, "hub", 64);
+    assertBoundedString(versions, "agent", 64);
+  }
+  return listing;
+}
+
+function decodedFixtureBytes(value: unknown, label: string): Buffer {
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/u.test(value)) {
+    throw new Error(`${label} must be base64.`);
+  }
+  return Buffer.from(value, "base64");
+}
+
+function parseMobileSimulatorsFixture(value: unknown): AidenRemoteMobileSimulatorsFixture {
+  const section = requiredFixtureRecord(value, "Mobile simulators fixture", [
+    "feature",
+    "capability",
+    "listing",
+    "sharingOff",
+    "openResponse",
+    "shutdownResponse",
+    "hubRoutes",
+    "inputMessages",
+    "screenConfigs",
+    "mjpeg",
+    "refusal",
+  ]);
+  if (section.feature !== AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE) {
+    throw new Error("Mobile simulators fixture must name mobile-simulators-v1.");
+  }
+  if (section.capability !== AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES[0]) {
+    throw new Error("Mobile simulators fixture must name simulators:mobile.");
+  }
+  const listing = parseMobileSimulatorListing(section.listing, "Mobile simulators listing");
+  const sharingOff = parseMobileSimulatorListing(section.sharingOff, "Mobile simulators sharingOff");
+  if (sharingOff.sharing !== false) throw new Error("Mobile simulators sharingOff must report sharing off.");
+  const open = requiredFixtureRecord(section.openResponse, "Mobile simulators openResponse", ["device"]);
+  parseMobileSimulatorListing(
+    { sharing: true, status: "ready", devices: [open.device] },
+    "Mobile simulators openResponse",
+  );
+  const shutdown = requiredFixtureRecord(section.shutdownResponse, "Mobile simulators shutdownResponse", ["ok"]);
+  if (shutdown.ok !== true) throw new Error("Mobile simulators shutdownResponse must be ok.");
+  const routes = requiredFixtureRecord(section.hubRoutes, "Mobile simulators hubRoutes", ["mjpeg", "config", "input"]);
+  for (const [name, route] of Object.entries(routes)) {
+    if (typeof route !== "string" || !route.startsWith(MOBILE_SIMULATOR_HUB_ROUTE_PREFIX) || !route.includes("{deviceId}")) {
+      throw new Error(`Mobile simulators hubRoutes.${name} is invalid.`);
+    }
+  }
+  if (!Array.isArray(section.inputMessages) || section.inputMessages.length === 0) {
+    throw new Error("Mobile simulators inputMessages must be a non-empty array.");
+  }
+  section.inputMessages.forEach((entry, index) => {
+    const vector = requiredFixtureRecord(entry, `Mobile simulators input ${index}`, ["command", "tag", "payload"], ["screen"]);
+    if (!isRecord(vector.command) || typeof vector.command.kind !== "string") {
+      throw new Error(`Mobile simulators input ${index} command is invalid.`);
+    }
+    if (typeof vector.tag !== "number" || !MOBILE_SIMULATOR_INPUT_TAGS.has(vector.tag)) {
+      throw new Error(`Mobile simulators input ${index} uses a tag phones never send.`);
+    }
+    if (!isRecord(vector.payload)) throw new Error(`Mobile simulators input ${index} payload is invalid.`);
+  });
+  if (!Array.isArray(section.screenConfigs)) throw new Error("Mobile simulators screenConfigs must be an array.");
+  section.screenConfigs.forEach((entry, index) => {
+    const config = requiredFixtureRecord(entry, `Mobile simulators screen config ${index}`, ["tag", "payload", "screen"]);
+    if (typeof config.tag !== "number" || !isRecord(config.payload)) {
+      throw new Error(`Mobile simulators screen config ${index} is invalid.`);
+    }
+    if (config.screen !== null && !isRecord(config.screen)) {
+      throw new Error(`Mobile simulators screen config ${index} screen is invalid.`);
+    }
+  });
+  const mjpeg = requiredFixtureRecord(section.mjpeg, "Mobile simulators mjpeg", [
+    "contentType",
+    "streamBase64",
+    "framesBase64",
+    "unlengthedStreamBase64",
+    "unlengthedFramesBase64",
+  ]);
+  if (!/^multipart\/x-mixed-replace;\s*boundary=frame$/u.test(String(mjpeg.contentType))) {
+    throw new Error("Mobile simulators mjpeg contentType is invalid.");
+  }
+  for (const [streamKey, framesKey] of [
+    ["streamBase64", "framesBase64"],
+    ["unlengthedStreamBase64", "unlengthedFramesBase64"],
+  ] as const) {
+    const stream = decodedFixtureBytes(mjpeg[streamKey], `Mobile simulators mjpeg ${streamKey}`);
+    const frames = mjpeg[framesKey];
+    if (!Array.isArray(frames) || frames.length === 0) throw new Error(`Mobile simulators mjpeg ${framesKey} is empty.`);
+    for (const frame of frames) {
+      const bytes = decodedFixtureBytes(frame, `Mobile simulators mjpeg ${framesKey}`);
+      if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
+        throw new Error(`Mobile simulators mjpeg ${framesKey} must hold complete JPEGs.`);
+      }
+      if (!stream.includes(bytes)) throw new Error(`Mobile simulators mjpeg ${streamKey} must carry each frame.`);
+    }
+  }
+  const refusal = parseErrorEnvelopeFixture(section.refusal, "Mobile simulators refusal");
+  if (refusal.error.code !== "capability_denied") {
+    throw new Error("Mobile simulators refusal must be capability_denied.");
+  }
+  return { ...(section as unknown as AidenRemoteMobileSimulatorsFixture), listing, sharingOff, refusal };
+}
+
+/**
+ * Validates the `pairing-requests-v1` section: unauthenticated request,
+ * reveal and poll shapes, the sealed grant envelope and the match-code
+ * vectors. The cryptographic vectors themselves are checked by the
+ * sealed-envelope tests; this keeps the shapes fail-closed for every client.
+ */
+function parsePairingRequestsFixture(value: unknown): AidenRemotePairingRequestsFixture {
+  const section = requiredFixtureRecord(
+    value,
+    "Pairing requests fixture",
+    ["feature", "create", "reveal", "status", "error", "matchCodeVectors"],
+  );
+  if (section.feature !== AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE) {
+    throw new Error("Pairing requests fixture names another feature.");
+  }
+
+  const create = requiredFixtureRecord(section.create, "Pairing request create", ["request", "response"]);
+  const createRequest = requiredFixtureRecord(
+    create.request,
+    "Pairing request create body",
+    ["deviceName", "deviceType", "publicKey"],
+    ["clientVersion"],
+  );
+  boundedText(createRequest.deviceName, "Pairing request deviceName", 80);
+  if (createRequest.deviceType !== "mac" && createRequest.deviceType !== "linux") {
+    throw new Error("Pairing requests come only from mac or linux devices.");
+  }
+  fixtureBase64Url(createRequest.publicKey, "Pairing request publicKey", 32);
+  if (createRequest.clientVersion !== undefined) boundedText(createRequest.clientVersion, "Pairing request clientVersion", 40);
+  const created = requiredFixtureRecord(
+    create.response,
+    "Pairing request create response",
+    ["requestId", "pollSecret", "expiresAt", "hostCommitment"],
+  );
+  const requestId = fixturePairingRequestId(created.requestId, "Pairing request create response");
+  fixtureBase64Url(created.pollSecret, "Pairing request pollSecret", 32);
+  const expiresAt = fixtureTimestamp(created.expiresAt, "Pairing request create response");
+  fixtureBase64Url(created.hostCommitment, "Pairing request hostCommitment", 32);
+
+  const reveal = requiredFixtureRecord(section.reveal, "Pairing request reveal", ["request", "response"]);
+  fixtureBase64Url(
+    requiredFixtureRecord(reveal.request, "Pairing request reveal body", ["requesterNonce"]).requesterNonce,
+    "Pairing request requesterNonce",
+    32,
+  );
+  fixtureBase64Url(
+    requiredFixtureRecord(reveal.response, "Pairing request reveal response", ["hostNonce"]).hostNonce,
+    "Pairing request hostNonce",
+    32,
+  );
+
+  if (!Array.isArray(section.status) || section.status.length === 0) {
+    throw new Error("Pairing request status fixtures must be a non-empty array.");
+  }
+  section.status.forEach((entry, index) => {
+    const label = `Pairing request status ${index}`;
+    const status = requiredFixtureRecord(entry, label, ["requestId", "state", "expiresAt"], ["envelope"]);
+    if (fixturePairingRequestId(status.requestId, label) !== requestId) throw new Error(`${label} names another request.`);
+    if (fixtureTimestamp(status.expiresAt, label) !== expiresAt) throw new Error(`${label} changes the expiry.`);
+    if (!(PAIRING_REQUEST_FIXTURE_STATES as readonly unknown[]).includes(status.state)) {
+      throw new Error(`${label} state is invalid.`);
+    }
+    if ((status.state === "approved") !== (status.envelope !== undefined)) {
+      throw new Error("Only an approved pairing request carries an envelope, and it always does.");
+    }
+    if (status.envelope === undefined) return;
+    const envelope = requiredFixtureRecord(
+      status.envelope,
+      `${label} envelope`,
+      ["kind", "protocolVersion", "requestId", "expiresAt", "hostPublicKey", "salt", "nonce", "ciphertext", "tag"],
+    );
+    if (envelope.kind !== "aiden-pairing-request-v1" || envelope.protocolVersion !== 1) {
+      throw new Error(`${label} envelope kind is invalid.`);
+    }
+    if (envelope.requestId !== requestId || envelope.expiresAt !== expiresAt) {
+      throw new Error(`${label} envelope must be bound to its request and expiry.`);
+    }
+    fixtureBase64Url(envelope.hostPublicKey, `${label} envelope hostPublicKey`, 32);
+    fixtureBase64Url(envelope.salt, `${label} envelope salt`, 16);
+    fixtureBase64Url(envelope.nonce, `${label} envelope nonce`, 12);
+    fixtureBase64Url(envelope.tag, `${label} envelope tag`, 16);
+    if (
+      typeof envelope.ciphertext !== "string" ||
+      envelope.ciphertext.length === 0 ||
+      envelope.ciphertext.length > 10_923 ||
+      !/^[A-Za-z0-9_-]+$/u.test(envelope.ciphertext)
+    ) {
+      throw new Error(`${label} envelope ciphertext must be bounded unpadded base64url.`);
+    }
+  });
+
+  const error = parseErrorEnvelopeFixture(section.error, "Pairing request error");
+
+  if (!Array.isArray(section.matchCodeVectors) || section.matchCodeVectors.length === 0) {
+    throw new Error("Pairing request match-code vectors must be a non-empty array.");
+  }
+  section.matchCodeVectors.forEach((entry, index) => {
+    const label = `Pairing request match-code vector ${index}`;
+    const vector = requiredFixtureRecord(entry, label, [
+      "requesterPublicKey",
+      "serverSpkiSha256",
+      "requestId",
+      "requesterNonce",
+      "hostNonce",
+      "hostCommitment",
+      "matchCode",
+    ]);
+    fixtureBase64Url(vector.requesterPublicKey, `${label} requesterPublicKey`, 32);
+    if (typeof vector.serverSpkiSha256 !== "string" || !/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(vector.serverSpkiSha256)) {
+      throw new Error(`${label} serverSpkiSha256 is invalid.`);
+    }
+    fixturePairingRequestId(vector.requestId, label);
+    fixtureBase64Url(vector.requesterNonce, `${label} requesterNonce`, 32);
+    fixtureBase64Url(vector.hostNonce, `${label} hostNonce`, 32);
+    fixtureBase64Url(vector.hostCommitment, `${label} hostCommitment`, 32);
+    if (typeof vector.matchCode !== "string" || !/^[0-9]{6}$/u.test(vector.matchCode)) {
+      throw new Error(`${label} matchCode must be six digits.`);
+    }
+  });
+
+  return { ...(section as unknown as AidenRemotePairingRequestsFixture), error };
+}
+
+/**
+ * One complete run stream: contiguous sequences, with `run.ended` repeating
+ * the last event's sequence. The `phone` projection (contract revision 24) is
+ * what a phone holding the phone-scoped run subset receives: approvals carry a
+ * summary, `canAllow` and offered scopes but never tool details.
+ */
+function parseRunEventSequence(value: unknown, label: string, projection: "host" | "phone"): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array.`);
+  }
+  let runStream: string | undefined;
+  let runSequence = 0;
+  let runEnded = false;
+  value.forEach((entry, index) => {
+    const event = parseHostEnvelope(entry, `Run event ${index}`, AIDEN_REMOTE_RUN_EVENT_TYPES);
+    if (runEnded) throw new Error("A run stream carries nothing after run.ended.");
+    runStream ??= event.streamId;
+    if (event.streamId !== runStream) throw new Error("A run stream fixture names one run.");
+    // run.ended repeats the last event's sequence so a resumed cursor stays valid.
+    const expected = event.type === "run.ended" ? runSequence : runSequence + 1;
+    if (event.sequence !== expected) throw new Error(`Run event ${index} must use sequence ${expected}.`);
+    runSequence = event.sequence;
+    if (event.type === "run.started") {
+      assertExactKeys(event.payload, ["runId", "chatId", "origin"], "Run started");
+      if (event.payload.runId !== runStream) throw new Error("run.started names another run.");
+    } else if (event.type === "run.ended") {
+      assertExactKeys(event.payload, ["runId", "chatId", "state"], "Run ended");
+      if (!event.terminal || event.payload.runId !== runStream) throw new Error("run.ended must be terminal for its run.");
+      if (!["done", "failed", "cancelled"].includes(event.payload.state as string)) {
+        throw new Error("run.ended must carry a terminal run state.");
+      }
+      runEnded = true;
+    } else if (event.type === "approval_resolved") {
+      assertExactKeys(event.payload, ["approvalId", "decision"], "Approval resolved");
+      boundedText(event.payload.approvalId, "Approval resolved approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (event.type === "question_resolved") {
+      assertExactKeys(event.payload, ["promptId", "outcome"], "Question resolved");
+      boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    } else if (projection === "phone" && event.type === "approval_required") {
+      const payload = event.payload;
+      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes"], "Phone run approval");
+      assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      assertBoundedString(payload, "summary", 2_000);
+      assertBoundedString(payload, "toolCallId", 128, true);
+      assertBoundedString(payload, "toolName", 120);
+      if (typeof payload.canAllow !== "boolean") throw new Error("Phone run approval canAllow must be boolean.");
+      if (payload.scopes !== undefined) {
+        if (!payload.canAllow) throw new Error("A deny-only phone run approval offers no scopes.");
+        if (
+          !Array.isArray(payload.scopes) ||
+          payload.scopes.some((scope) => !["once", "chat", "always"].includes(scope as string))
+        ) {
+          throw new Error("Phone run approval scopes are invalid.");
+        }
+      }
+    } else if (projection === "phone" && event.type === "question_required") {
+      const payload = event.payload;
+      assertExactKeys(payload, ["promptId", "questions", "toolCallId", "expiresAt"], "Phone run question");
+      assertBoundedString(payload, "promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      assertBoundedString(payload, "toolCallId", 128);
+      if (!parseAskUserQuestions(payload.questions)) throw new Error("Phone run question questions are invalid.");
+      if (payload.expiresAt !== undefined) parseStrictRfc3339(requiredString(payload, "expiresAt"), "Question expiry");
+    } else if (event.type !== "snapshot") {
+      // Content events reuse the `/streams` envelope and validation unchanged.
+      parseAidenRemoteStreamEvent(entry);
+    }
+  });
+  if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
+}
+const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
+  "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
+] as const;
+
+function parseRevision19Fixture(
+  value: Record<string, unknown>,
+  context: { instanceId: string; contractRevision: number },
+): Required<Pick<
+  AidenRemoteContractFixture,
+  "hostHealth" | "hostFeedEvents" | "runEvents" | "messagesWindow" | "runControlError"
+>> {
+  const health = value.hostHealth;
+  if (!isRecord(health) || health.ok !== true || health.protocolVersion !== AIDEN_REMOTE_PROTOCOL_VERSION) {
+    throw new Error("Fixture host health response is invalid.");
+  }
+  assertExactKeys(
+    health,
+    ["ok", "protocolVersion", "instanceId", "displayName", "platform", "contractRevision", "pairingRequests"],
+    "Fixture host health response",
+  );
+  if (health.instanceId !== context.instanceId) throw new Error("Fixture host health names another instance.");
+  boundedText(health.displayName, "Fixture host health displayName", 80);
+  if (health.platform !== undefined && !(AIDEN_REMOTE_HOST_PLATFORMS as readonly unknown[]).includes(health.platform)) {
+    throw new Error("Fixture host health platform is invalid.");
+  }
+  if (health.contractRevision !== context.contractRevision) {
+    throw new Error("Fixture host health contractRevision must match the fixture.");
+  }
+  if (typeof health.pairingRequests !== "boolean") throw new Error("Fixture host health pairingRequests must be boolean.");
+
+  if (!Array.isArray(value.hostFeedEvents) || value.hostFeedEvents.length === 0) {
+    throw new Error("Fixture host feed events must be a non-empty array.");
+  }
+  let feedSequence = -1;
+  value.hostFeedEvents.forEach((entry, index) => {
+    const event = parseHostEnvelope(entry, `Host feed event ${index}`, AIDEN_REMOTE_HOST_FEED_EVENT_TYPES);
+    if (event.streamId !== "host" || event.terminal) throw new Error("Host feed events use stream host and never end.");
+    if (index === 0 ? event.type !== "snapshot" : event.sequence !== feedSequence + 1) {
+      throw new Error("Host feed fixture must open with a snapshot and then advance one sequence at a time.");
+    }
+    feedSequence = event.sequence;
+    if (event.type === "snapshot") {
+      assertExactKeys(event.payload, ["epoch", "sequence", "summaries", "workspaces", "bots"], "Host feed snapshot");
+      boundedText(event.payload.epoch, "Host feed epoch", 64);
+      if (event.payload.sequence !== event.sequence) throw new Error("Host feed snapshot sequence must match its envelope.");
+      if (!Array.isArray(event.payload.summaries) || !Array.isArray(event.payload.workspaces) || !Array.isArray(event.payload.bots)) {
+        throw new Error("Host feed snapshot lists must be arrays.");
+      }
+      event.payload.workspaces.forEach((workspace) => parseHostFeedWorkspaceRepository(workspace, "Host feed workspace"));
+    } else if (event.type === "workspace.upsert") {
+      parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
+    } else if (event.type === "run.state") {
+      assertExactKeys(event.payload, ["chatId", "runId", "state", "unread"], "Host feed run state");
+      boundedText(event.payload.chatId, "Host feed run chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      boundedText(event.payload.runId, "Host feed runId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+      if (!(AIDEN_REMOTE_RUN_STATES as readonly unknown[]).includes(event.payload.state)) {
+        throw new Error("Host feed run state is invalid.");
+      }
+      if (typeof event.payload.unread !== "boolean") throw new Error("Host feed run unread must be boolean.");
+    } else if (event.type.endsWith(".remove")) {
+      assertExactKeys(event.payload, ["id"], "Host feed removal");
+      boundedText(event.payload.id, "Host feed removal id", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+    }
+  });
+
+  parseRunEventSequence(value.runEvents, "Fixture run events", "host");
+
+  const window = value.messagesWindow;
+  if (!isRecord(window)) throw new Error("Fixture messages window is invalid.");
+  const withMetadata = context.contractRevision >= 23;
+  assertExactKeys(
+    window,
+    [
+      "chatId", "revision", "messages", "hasOlder",
+      ...(withMetadata ? AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS : []),
+    ],
+    "Fixture messages window",
+  );
+  boundedText(window.chatId, "Messages window chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
+  boundedRevision(window.revision, "Messages window revision");
+  if (!Array.isArray(window.messages) || window.messages.length > AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT) {
+    throw new Error("Messages window messages must be a bounded array.");
+  }
+  if (typeof window.hasOlder !== "boolean") throw new Error("Messages window hasOlder must be boolean.");
+  if (withMetadata) {
+    // Revision 23: the window's metadata is the chat projection's, so it is
+    // held to the same rules (paired provider/model, ordered timestamps,
+    // Bot transcripts without reasoning).
+    const { chatId, hasOlder: _hasOlder, ...projection } = window;
+    parseAidenRemoteChatProjection({ ...projection, id: chatId }, "Fixture messages window");
+  }
+
+  const runControlError = parseErrorEnvelopeFixture(value.runControlError, "Fixture run control error");
+  return {
+    hostHealth: health as unknown as AidenRemoteHostHealth,
+    hostFeedEvents: value.hostFeedEvents as AidenRemoteContractFixture["hostFeedEvents"] & object,
+    runEvents: value.runEvents as AidenRemoteContractFixture["runEvents"] & object,
+    messagesWindow: window as unknown as AidenRemoteContractFixture["messagesWindow"] & object,
+    runControlError,
   };
 }
 

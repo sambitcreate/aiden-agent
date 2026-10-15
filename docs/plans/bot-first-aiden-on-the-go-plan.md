@@ -5,6 +5,19 @@
 - Primary surface: Aiden On The Go for iPhone and iPad
 - Authority: the paired Aiden Agent Mac remains the runtime and persistence owner
 
+## Superseded by the Bots rework (2026-10)
+
+The [Bots rework](../superpowers/specs/2026-10-07-bots-rework-design.md) (PR #377) replaces the Bot-first access and conversation model in this plan. Read the phases below as history for these concepts:
+
+- **Favorites** and pinned placement, the Favorites carousel, the compose "Choose a Bot" chooser and bottom dock. Bots home is a single list.
+- **Archive** and restore. Delete is permanent (`DELETE /bots/{botId}`, `bot-delete-v1`) and erases the chat, memory, instructions, routines, files and photo.
+- **Per-chat access** overrides, and the per-chat access sheet.
+- **Full Access notice wall** (`bot-full-access-v1`) and the "Set Up Image Understanding" alert.
+- **Multi-conversation.** Each Bot has exactly one durable session on Pi Durable (`bots/<botId>/session.sqlite`), with explicit Resume/Dismiss after an interruption.
+- The **Bot editor wizard**, eye and detail avatar axes, and the LLM avatar generator. Profile, Advanced and a colour-plus-shape Character card replace them.
+
+Bot access continues under the Full/Custom model in the Profile's Advanced page. Remote contract revision 25 carries the new Bot routes.
+
 ## Outcome
 
 Aiden On The Go will have two clear product areas:

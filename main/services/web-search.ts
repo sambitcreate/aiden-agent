@@ -616,8 +616,4 @@ export class WebSearchService {
   }
 }
 
-/** Convenience factory for tests and future non-singleton main consumers. */
-export const createWebSearchService = (dependencies: WebSearchServiceDependencies) =>
-  new WebSearchService(dependencies);
-
 export { DEFAULT_WEB_SEARCH_FALLBACK_ON, classifyWebSearchProfile };

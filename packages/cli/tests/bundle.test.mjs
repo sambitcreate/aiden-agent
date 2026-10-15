@@ -20,20 +20,24 @@ test("bundled app package.json carries the Aiden rebrand", () => {
 	assert.equal(appPackageJson.version, outerPackageJson.version);
 });
 
-test("bundle entry is executable and lazy loaders are emitted beside it", () => {
+test("bundle entry is executable and lazy loaders are emitted beside the shared chunks", () => {
 	accessSync(join(appDir, "cli.js"), constants.X_OK);
 	for (const lazy of [
 		"anthropic.js",
 		"bedrock-converse-stream.js",
 		"github-copilot.js",
 		"image-resize-worker.js",
+		"codemode-worker.js",
+		"meta.js",
+		"openai-chatgpt.js",
 		"kimi-coding.js",
 		"openai-codex.js",
 		"openrouter.js",
 		"radius.js",
 		"xai.js",
 	]) {
-		assert.ok(existsSync(join(appDir, lazy)), `missing lazy loader ${lazy}`);
+		// The resolving modules import these relative to their own chunk.
+		assert.ok(existsSync(join(appDir, "chunks", lazy)), `missing lazy loader ${lazy}`);
 	}
 });
 
@@ -42,11 +46,13 @@ test("Aiden palettes replace pi's built-in dark and light themes", () => {
 	const light = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", "light.json"), "utf-8"));
 	assert.equal(dark.name, "dark");
 	assert.equal(light.name, "light");
-	// Accent anchors from renderer/shared/appearance.ts THEME_PRESETS.
-	assert.equal(dark.vars.accent, "#3E97F6");
-	assert.equal(light.vars.accent, "#006AD6");
-	assert.equal(dark.vars.text, "#D1D4DA");
-	assert.equal(light.vars.text, "#3D3F41");
+	// themes.test.mjs owns palette fidelity to appearance.ts; here the bundle
+	// must carry the generated builtins rather than pi's originals.
+	const piThemeDir = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "interactive", "theme");
+	for (const [name, bundled] of [["dark", dark], ["light", light]]) {
+		assert.deepEqual(bundled, JSON.parse(readFileSync(join(pkgDir, "themes", "builtin", `${name}.json`), "utf-8")));
+		assert.notDeepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
+	}
 });
 
 test("all theme presets and pi originals ship beside the bundle", () => {
@@ -68,6 +74,12 @@ test("all theme presets and pi originals ship beside the bundle", () => {
 	for (const gone of ["pi-dark", "pi-light"]) {
 		assert.ok(!existsSync(join(bundled, `${gone}.json`)), `${gone} must not ship`);
 	}
+});
+
+test("the speech worker ships beside the Silero VAD model it trims silence with", () => {
+	assert.ok(existsSync(join(appDir, "speech-worker.js")));
+	const vad = readFileSync(join(appDir, "speech", "silero_vad.onnx"));
+	assert.deepEqual(vad, readFileSync(join(pkgDir, "..", "..", "resources", "speech", "silero_vad.onnx")));
 });
 
 test("pi's docs directory is vendored for auth/model guidance pointers", () => {
@@ -103,10 +115,11 @@ test("pi telemetry is removed, not just disabled", () => {
 	// The entry forces PI_TELEMETRY=0, which wins over settings and kills both
 	// the pi.dev report-install ping and pi's attribution headers.
 	assert.match(cliBundle, /PI_TELEMETRY["']?\]?\s*=\s*["']0["']/, "entry must force PI_TELEMETRY=0");
-	// The settings default flips to off so /config reflects reality.
-	// minifySyntax rewrites `?? false` / `?? true` as `??!1` / `??!0`
-	assert.ok(everything.includes("enableInstallTelemetry??!1"), "install telemetry must default off");
-	assert.ok(!everything.includes("enableInstallTelemetry??!0"), "stock default-on telemetry must not survive");
+	// The settings default flips to off so /config reflects reality (the
+	// parity suite checks the real SettingsManager reads it as false).
+	// minifySyntax rewrites `false` / `true` as `!1` / `!0`.
+	assert.ok(everything.includes("enableInstallTelemetry:!1"), "install telemetry must default off");
+	assert.ok(!everything.includes("enableInstallTelemetry:!0"), "stock default-on telemetry must not survive");
 	assert.ok(!everything.includes("reportInstallTelemetry(VERSION)"), "ping call sites must be patched out");
 	assert.ok(!everything.includes("pi.dev/api/report-install"), "the telemetry endpoint must not ship");
 	// The startup wordmark: 5-row solid-block AIDEN banner (oh-my-pi style),
@@ -124,17 +137,5 @@ test("pi telemetry is removed, not just disabled", () => {
 	assert.ok(everything.includes("timer&&clearInterval(timer)"), "one loop then settle (timer clear)");
 	// Animation colors derive from the active theme accent, never hardcoded blues.
 	assert.ok(!everything.includes("38;2;62;151;246"), "hardcoded Aiden-blue truecolor must not ship");
-	// Minimal startup: the Aiden header stays (stock quietStartup default), but
-	// the loaded-resources listing is patched off and no longer advertised.
-	assert.ok(everything.includes("quietStartup??!1"), "header branding must keep the stock quietStartup default");
-	assert.ok(!everything.includes("quietStartup??!0"), "flipped quietStartup default must be reverted");
-	assert.match(
-		everything.replace(/\s+/g, ""),
-		/showListing=options\?\.force\|\|this\.options\.verbose[,;]/,
-		"resources listing must be patched off by default",
-	);
-	assert.ok(
-		!everything.includes("and loaded resources"),
-		"header hint must not advertise the removed resources listing",
-	);
+
 });

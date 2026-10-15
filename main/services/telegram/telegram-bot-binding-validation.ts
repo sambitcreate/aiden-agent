@@ -14,7 +14,7 @@ export const TELEGRAM_BOT_BINDING_VALIDATION_COPY = Object.freeze({
 export type TelegramBotBindingValidationResult = true | string;
 
 export interface TelegramBotBindingValidationDependencies {
-  getBot(botId: string): Promise<{ id: string; archivedAt?: number } | null>;
+  getBot(botId: string): Promise<{ id: string } | null>;
   getProfileOwnerUserId(profile: string): Promise<number | undefined>;
   getActiveBinding(botId: string): Promise<TelegramBotBinding | null>;
   resolveManagedWorkspace(
@@ -75,7 +75,7 @@ export function createTelegramBotBindingValidator(
       return TELEGRAM_BOT_BINDING_VALIDATION_COPY.temporarilyUnavailable;
     }
 
-    if (!bot || bot.id !== binding.botId || bot.archivedAt !== undefined) {
+    if (!bot || bot.id !== binding.botId) {
       return TELEGRAM_BOT_BINDING_VALIDATION_COPY.unavailableOrArchived;
     }
     if (!sameActiveBinding(binding, activeBinding)) {

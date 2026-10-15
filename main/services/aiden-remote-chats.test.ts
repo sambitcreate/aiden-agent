@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { Chat, ChatMessage } from "./types.js";
 import {
   AidenRemoteChatService,
   projectAidenRemoteChat,
+  projectAidenRemoteChatMessagesWindow,
   type AidenRemoteBotTurnAuthorityPreflight,
   type AidenRemoteRetainedBotChatAuthorizer,
 } from "./aiden-remote-chats.js";
-import { parseAidenRemoteChatProjection } from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  assertNoForbiddenWireKeys,
+  parseAidenRemoteChatForkResult,
+  parseAidenRemoteChatProjection,
+} from "./aiden-remote-protocol.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import {
   AIDEN_REMOTE_ATTACHMENT_TTL_MS,
@@ -18,6 +28,9 @@ import { BotMutationGate } from "./bot-mutation-gate.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { SkillInvocationError, type SkillCatalogEntry } from "../../renderer/shared/slash-commands.js";
 import type { PreparedSkillInvocation } from "./skill-invocation-turn.js";
+import { ChatForkError, ForkSummaryStateError } from "./chat-fork-error.js";
+import { createChatForkService, type ChatForkRequest } from "./chat-fork-service.js";
+import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 
 const ONE_PIXEL_PNG =
@@ -63,6 +76,8 @@ function fixture(
       workspaceId: string,
     ) => Promise<readonly SkillCatalogEntry[]>;
     resolveSkillInvocation?: (workspaceId: string, invocationId: string) => Promise<RegisteredSkill>;
+    forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
+    inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -72,6 +87,7 @@ function fixture(
   let begins = 0;
   let starts = 0;
   let lastGenerationOptions: Record<string, unknown> | null = null;
+  let lastParams: Record<string, unknown> | null = null;
   const preparedInvocations: PreparedSkillInvocation[] = [];
   let botArchived = fixtureOptions.botArchived === true;
   const streams = new AidenRemoteStreamService({
@@ -194,8 +210,9 @@ function fixture(
           },
         };
       },
-      start: async (streamId, _params, owner, generationOptions) => {
+      start: async (streamId, params, owner, generationOptions) => {
         starts += 1;
+        lastParams = params as unknown as Record<string, unknown>;
         lastGenerationOptions = generationOptions as Record<string, unknown>;
         if (fixtureOptions.startThrows) throw new Error("provider setup failed");
         generationOptions.onTurnAccepted();
@@ -231,7 +248,7 @@ function fixture(
               revision: `botrev:${id}`,
               name: "Fixture bot",
               instructions: "Be helpful.",
-              avatar: "spark" as const,
+              avatar: { version: 1 as const, shape: "wisp" as const, color: "lilac" as const },
               createdAt: 1_000,
               updatedAt: 2_000,
               ...(botArchived ? { archivedAt: 3_000 } : {}),
@@ -257,6 +274,8 @@ function fixture(
     ...(fixtureOptions.resolveSkillInvocation
       ? { resolveSkillInvocation: fixtureOptions.resolveSkillInvocation }
       : {}),
+    ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
+    ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
   });
   return {
     service,
@@ -267,6 +286,7 @@ function fixture(
     begins: () => begins,
     starts: () => starts,
     lastGenerationOptions: () => lastGenerationOptions,
+    lastParams: () => lastParams,
     preparedInvocations: () => [...preparedInvocations],
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
@@ -724,29 +744,6 @@ test("chat classification reads only main-owned metadata before payload access",
   assert.equal(payloadReads, 1);
 });
 
-test("Bot chat mutation rechecks authoritative archive state inside the lifecycle gate", async () => {
-  const app = fixture(chat({ botId: "bot-1" }), {
-    retainedBotChatAuthorizer: () => true,
-  });
-  const classification = await app.service.classify("chat-1");
-  let mutated = false;
-
-  app.setBotArchived(true);
-  await assert.rejects(
-    app.service.runMutation("device-1", "chat-1", classification, async () => {
-      mutated = true;
-    }),
-    (error: unknown) =>
-      (error as { code?: string; status?: number }).code === "bot_archived" &&
-      (error as { status?: number }).status === 409,
-  );
-  assert.equal(mutated, false);
-  assert.deepEqual(await app.service.classify("chat-1"), {
-    botId: "bot-1",
-    botArchived: true,
-  });
-});
-
 test("retained Bot chat authorization is absent-by-default and fails closed", async () => {
   const denied = fixture(chat({ botId: "bot-1" }));
   assert.equal(await denied.service.authorizeRetainedBotChat({
@@ -1057,6 +1054,122 @@ test("chat projection omits a timeline that points beyond truncated assistant te
     prefixTimeline.messages[0]?.timeline?.steps[0]?.contentOffset,
     projectedPrefix.length,
   );
+});
+
+function visualsMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  const snapshotHtml = `visual-snapshot_${"a".repeat(64)}`;
+  const snapshotUi = `visual-snapshot_${"b".repeat(64)}`;
+  return {
+    id: "assistant-visuals",
+    role: "assistant",
+    content: "Here are your numbers.",
+    createdAt: 2_000,
+    timeline: {
+      version: 3,
+      generationId: "stream-visuals",
+      status: "completed",
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      steps: [
+        {
+          id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "render_artifact",
+          label: "Draw visual", status: "completed", startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset: 0,
+        },
+        {
+          id: "tool-2", order: 1, kind: "tool", toolCallId: "call-2", toolName: "render_ui",
+          label: "Draw visual", status: "completed", startedAt: 1_500, updatedAt: 2_000, finishedAt: 2_000, contentOffset: 0,
+        },
+      ],
+    },
+    htmlArtifacts: [{ mediaId: "html-1", title: "Weekly total" } as NonNullable<ChatMessage["htmlArtifacts"]>[number]],
+    htmlArtifactPlacements: [{ mediaId: "html-1", toolCallId: "call-1", layout: "wide" }],
+    uiVisuals: [{
+      version: 1,
+      kind: "ui",
+      id: "ui-1",
+      toolCallId: "call-2",
+      title: "Plan options",
+      catalogVersion: 1,
+      tree: { t: "Visual", k: "0", c: [{ t: "#text", k: "0.0", s: "Team" }] },
+      dataJson: "{\"path\":\"/Users/private/secret\"}",
+      state: { plan: "team" },
+      fallbackText: "Plan options: Team $60",
+    }],
+    visualSnapshots: [
+      { visualId: "html-1", attachmentId: snapshotHtml },
+      { visualId: "ui-1", attachmentId: snapshotUi },
+    ],
+    attachments: [
+      { id: snapshotHtml, name: "Weekly total.png", mimeType: "image/png", kind: "image", size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG },
+      { id: snapshotUi, name: "Plan options.png", mimeType: "image/png", kind: "image", size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG },
+    ],
+    ...overrides,
+  };
+}
+
+test("chat projection lists each inline visual with its snapshot and no private markup", () => {
+  const projection = projectAidenRemoteChat(chat({ messages: [visualsMessage()] }));
+  const message = projection.messages[0]!;
+  const attachmentIds = new Map(message.attachments?.map((attachment) => [attachment.name, attachment.id]));
+  assert.deepEqual(message.visuals, [
+    {
+      id: "html-1",
+      kind: "html",
+      title: "Weekly total",
+      toolCallId: "call-1",
+      snapshotAttachmentId: attachmentIds.get("Weekly total.png"),
+      layout: "wide",
+    },
+    {
+      id: "ui-1",
+      kind: "ui",
+      title: "Plan options",
+      toolCallId: "call-2",
+      fallbackText: "Plan options: Team $60",
+      snapshotAttachmentId: attachmentIds.get("Plan options.png"),
+    },
+  ]);
+  // The tree, data, and saved state stay on the Mac.
+  const wire = JSON.stringify(projection);
+  assert.doesNotMatch(wire, /Users\/private|dataJson|"tree"|"state"/u);
+  assertNoForbiddenWireKeys(projection, "chat projection");
+  // The projection is something a paired client accepts unchanged.
+  assert.deepEqual(parseAidenRemoteChatProjection(projection).messages[0]?.visuals, message.visuals);
+});
+
+test("chat projection drops a damaged visual but keeps its message and neighbours", () => {
+  const stored = visualsMessage();
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{
+      ...stored,
+      uiVisuals: [{ ...stored.uiVisuals![0]!, tree: undefined } as unknown as NonNullable<ChatMessage["uiVisuals"]>[number]],
+      // A snapshot whose attachment is gone is not offered.
+      attachments: stored.attachments!.filter((attachment) => attachment.name !== "Weekly total.png"),
+    }],
+  }));
+  const message = projection.messages[0]!;
+  assert.equal(message.text, "Here are your numbers.");
+  assert.deepEqual(message.visuals?.map((visual) => [visual.id, visual.snapshotAttachmentId]), [["html-1", undefined]]);
+});
+
+test("chat projection omits visuals for a message without any", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{ id: "assistant-plain", role: "assistant", content: "Hi", createdAt: 2_000 }],
+  }));
+  assert.equal("visuals" in projection.messages[0]!, false);
+});
+
+test("a new snapshot changes the chat revision so phones refetch", () => {
+  const stored = visualsMessage();
+  const withoutSnapshots = projectAidenRemoteChat(chat({
+    messages: [{ ...stored, visualSnapshots: undefined, attachments: undefined }],
+  }));
+  const withSnapshots = projectAidenRemoteChat(chat({ messages: [stored] }));
+  assert.notEqual(withSnapshots.revision, withoutSnapshots.revision);
+  const onlyHtml = projectAidenRemoteChat(chat({
+    messages: [{ ...stored, visualSnapshots: stored.visualSnapshots!.slice(0, 1) }],
+  }));
+  assert.notEqual(onlyHtml.revision, withSnapshots.revision);
 });
 
 test("chat reads expose an in-flight background title without changing the revision", async () => {
@@ -1645,6 +1758,23 @@ test("invalidated uploads remain bounded until their retained request bodies set
   store.beginUpload("device-2", "chat-2").release();
 });
 
+test("a remote turn draws visuals by the Mac's Appearance setting and knows they arrive as images", async () => {
+  const off = fixture(chat(), { inlineVisuals: async () => "off" });
+  await off.service.startTurn("device-1", "chat-1", "visuals-turn-001", { text: "chart this" });
+  assert.equal(off.lastParams()?.inlineVisuals, "off");
+  assert.equal(off.lastGenerationOptions()?.visualAudience, "remote");
+
+  const automatic = fixture(chat(), { inlineVisuals: async () => "automatic" });
+  await automatic.service.startTurn("device-1", "chat-1", "visuals-turn-002", { text: "chart this" });
+  assert.equal(automatic.lastParams()?.inlineVisuals, "automatic");
+
+  // An unreadable setting never costs the phone its turn; it gets the default.
+  const unreadable = fixture(chat(), { inlineVisuals: async () => { throw new Error("settings unreadable"); } });
+  await unreadable.service.startTurn("device-1", "chat-1", "visuals-turn-003", { text: "chart this" });
+  assert.equal(unreadable.starts(), 1);
+  assert.equal(unreadable.lastParams()?.inlineVisuals, undefined);
+});
+
 test("question tool is exposed only to devices granted the question capability", async () => {
   const supported = fixture(chat(), {
     deviceSupportsQuestionPrompts: async (deviceId) => deviceId === "device-1",
@@ -1925,4 +2055,479 @@ test("remote skill turn aborts the append when its workspace changes mid-prepare
   } finally {
     endMutation?.();
   }
+});
+
+function conversation(count: number, content = (index: number) => `Message ${index}`): Chat {
+  return chat({
+    messages: Array.from({ length: count }, (_, index) => ({
+      id: `message-${index}`,
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: content(index),
+      createdAt: 2_000 + index,
+    })),
+  });
+}
+
+test("the messages window pages backwards from the newest message without gaps", () => {
+  const source = conversation(7);
+  const pages: string[][] = [];
+  let before: string | undefined;
+  for (;;) {
+    const page = projectAidenRemoteChatMessagesWindow(source, { ...(before ? { before } : {}), limit: 3 });
+    assert.equal(page.chatId, "chat-1");
+    assert.equal(page.revision, projectAidenRemoteChat(source).revision);
+    pages.push(page.messages.map((message) => message.id));
+    if (!page.hasOlder) break;
+    before = page.messages[0]!.id;
+  }
+  assert.deepEqual(pages, [
+    ["message-4", "message-5", "message-6"],
+    ["message-1", "message-2", "message-3"],
+    ["message-0"],
+  ]);
+});
+
+test("the messages window hides system messages and refuses an unknown anchor", () => {
+  const source = conversation(3);
+  source.messages.splice(1, 0, { id: "system-1", role: "system", content: "instructions", createdAt: 2_000 });
+  const page = projectAidenRemoteChatMessagesWindow(source, { limit: 50 });
+  assert.deepEqual(page.messages.map((message) => message.id), ["message-0", "message-1", "message-2"]);
+  assert.equal(page.hasOlder, false);
+
+  for (const before of ["system-1", "message-missing"]) {
+    assert.throws(
+      () => projectAidenRemoteChatMessagesWindow(source, { before, limit: 10 }),
+      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
+    );
+  }
+});
+
+test("a messages window stays within the JSON budget and reports the trimmed history", () => {
+  const source = conversation(8, (index) => `${index}`.padEnd(300_000, "x"));
+  const page = projectAidenRemoteChatMessagesWindow(source, { limit: 8 });
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES);
+  assert.ok(page.messages.length > 0 && page.messages.length < 8);
+  // The newest messages are kept and the trimmed older ones stay reachable.
+  assert.equal(page.messages[page.messages.length - 1]!.id, "message-7");
+  assert.equal(page.hasOlder, true);
+  const older = projectAidenRemoteChatMessagesWindow(source, { before: page.messages[0]!.id, limit: 8 });
+  assert.equal(older.messages[older.messages.length - 1]!.id, `message-${8 - page.messages.length - 1}`);
+});
+
+test("a messages window carries the chat metadata a whole-chat read would, so renames and model changes reach windowed readers", async () => {
+  const source = conversation(5);
+  const before = projectAidenRemoteChatMessagesWindow(source, { limit: 2 });
+  const { messages: _messages, id, ...wholeMetadata } = projectAidenRemoteChat(source);
+  const { messages: _page, chatId, hasOlder: _hasOlder, ...windowMetadata } = before;
+  assert.equal(chatId, id);
+  assert.deepEqual(windowMetadata, wholeMetadata);
+
+  // The desktop renames the chat and switches its model without touching history.
+  const changed = { ...source, title: "Renamed on the Mac", providerId: "provider-2", model: "model-2", updatedAt: 3_000 };
+  const after = projectAidenRemoteChatMessagesWindow(changed, { limit: 2 });
+  assert.deepEqual(after.messages, before.messages);
+  assert.equal(after.title, "Renamed on the Mac");
+  assert.equal(after.providerId, "provider-2");
+  assert.equal(after.modelId, "model-2");
+  assert.equal(after.updatedAt, new Date(3_000).toISOString());
+  assert.notEqual(after.revision, before.revision);
+
+  // A chat without a complete model selection omits both fields, as chat reads do.
+  const unselected = projectAidenRemoteChatMessagesWindow({ ...source, model: "" }, { limit: 2 });
+  assert.equal("providerId" in unselected || "modelId" in unselected, false);
+
+  let pending = true;
+  const app = fixture(source, { isTitlePending: () => pending });
+  assert.equal((await app.service.messagesWindow("chat-1", { limit: 2 })).titlePending, true);
+  pending = false;
+  assert.equal("titlePending" in (await app.service.messagesWindow("chat-1", { limit: 2 })), false);
+});
+
+/** A source chat with two settled turns; the second prompt carries an image. */
+function forkSource(): Chat {
+  return chat({
+    messages: [
+      { id: "u1", role: "user", content: "Why does it fail?", createdAt: 1_100 },
+      { id: "a1", role: "assistant", content: "A missing token.", createdAt: 1_200 },
+      {
+        id: "u2",
+        role: "user",
+        content: "Fix it.",
+        createdAt: 1_300,
+        attachments: [
+          { id: "stored-image", name: "screen.png", mimeType: "image/png", kind: "image", size: Buffer.from(ONE_PIXEL_PNG, "base64").byteLength, data: ONE_PIXEL_PNG },
+        ],
+      },
+      { id: "a2", role: "assistant", content: "Fixed.", createdAt: 1_400 },
+    ],
+  });
+}
+
+/**
+ * The Remote chat service over a fork service that copies the way the real
+ * one does: it checks the source with the caller, then keeps the messages
+ * through (after) or up to (before) the cut under new ids.
+ */
+function forkFixture(
+  options: {
+    fail?: Error;
+    summaries?: NonNullable<ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"]>["summaries"];
+    supportsSummaries?: boolean;
+    attachments?: AidenRemoteAttachmentStore;
+    initial?: Chat;
+  } = {},
+) {
+  const requests: ChatForkRequest[] = [];
+  const admitted: string[] = [];
+  let source!: () => Chat | null;
+  const app = fixture(options.initial ?? forkSource(), {
+    ...(options.attachments ? { attachments: options.attachments } : {}),
+    forks: {
+      service: {
+        supportsSummaries: options.supportsSummaries ?? true,
+        async fork(request, caller) {
+          requests.push(structuredClone(request));
+          if (options.fail) throw options.fail;
+          const chat = source();
+          if (!chat) throw new ChatForkError("not_found", "The chat is no longer available.");
+          caller.assertSource?.(chat);
+          const admission = caller.admitWorkspace(chat.workspaceId!);
+          admission.release();
+          const { messageId, position } = request.forkAt!;
+          const cut = chat.messages.findIndex((message) => message.id === messageId);
+          if (cut < 0) throw new ChatForkError("message_not_found", "That message is no longer in this chat.");
+          const kept = chat.messages
+            .slice(0, position === "after" ? cut + 1 : cut)
+            .map((message) => ({ ...message, id: `f-${message.id}` }));
+          const forked: Chat = {
+            ...chat,
+            id: `fork-${requests.length}`,
+            messages: kept,
+            forkedFrom: {
+              chatId: chat.id,
+              messageId,
+              position,
+              at: 5_000,
+              ...(request.summary
+                ? {
+                    summary: {
+                      state: "pending" as const,
+                      afterMessageId: kept[kept.length - 1]!.id,
+                      ...(request.summary.instructions ? { instructions: request.summary.instructions } : {}),
+                    },
+                  }
+                : {}),
+            },
+          };
+          caller.assertInstallable?.(forked);
+          return forked;
+        },
+      },
+      admitWorkspace: (workspaceId) => {
+        admitted.push(workspaceId);
+        return { isAborted: () => false, release: () => undefined };
+      },
+      summaries: options.summaries ?? {
+        retry: async () => { throw new Error("unused"); },
+        skip: async () => { throw new Error("unused"); },
+        cancel: () => false,
+      },
+    },
+  });
+  source = app.current;
+  return { ...app, requests, admitted };
+}
+
+function hasCode(code: string, status?: number) {
+  return (error: unknown) =>
+    (error as { code?: string }).code === code &&
+    (status === undefined || (error as { status?: number }).status === status);
+}
+
+test("a Remote fork after a reply checks the revision, records lineage and replays by key", async () => {
+  const app = forkFixture();
+  const { revision } = await app.service.get("chat-1");
+
+  await assert.rejects(
+    app.service.fork("device-1", "chat-1", "rev_stale", "fork-key-000000000001", { messageId: "a1", position: "after" }),
+    hasCode("revision_conflict", 409),
+  );
+
+  const key = "fork-key-000000000002";
+  const forked = await app.service.fork("device-1", "chat-1", revision, key, {
+    messageId: "a1",
+    position: "after",
+    summary: { focus: "  the parser  " },
+  });
+  // The response is exactly what a paired client parses.
+  assert.deepEqual(parseAidenRemoteChatForkResult(JSON.parse(JSON.stringify(forked))), forked);
+  assert.deepEqual(forked.chat.messages.map(({ text }) => text), ["Why does it fail?", "A missing token."]);
+  assert.deepEqual(forked.chat.forkedFrom, {
+    chatId: "chat-1",
+    messageId: "a1",
+    position: "after",
+    at: new Date(5_000).toISOString(),
+    summary: { state: "pending", afterMessageId: "f-a1", focus: "the parser" },
+  });
+  assert.equal(forked.prefill, undefined);
+  assert.deepEqual(app.admitted, ["workspace-1"]);
+
+  // A retry with the same key gets the same fork; nothing is copied twice.
+  const notified = app.notifications();
+  assert.deepEqual(
+    await app.service.fork("device-1", "chat-1", revision, key, {
+      messageId: "a1",
+      position: "after",
+      summary: { focus: "  the parser  " },
+    }),
+    forked,
+  );
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.notifications(), notified);
+});
+
+test("a Remote fork before a prompt returns it to edit with its attachments restaged", async () => {
+  let sequence = 0;
+  const attachments = new AidenRemoteAttachmentStore({
+    now: () => 20_000,
+    randomId: () => `att_${String(sequence++).padStart(43, "C")}`,
+  });
+  const app = forkFixture({ attachments });
+  const { revision } = await app.service.get("chat-1");
+
+  const forked = await app.service.fork("device-1", "chat-1", revision, "fork-key-000000000003", {
+    messageId: "u2",
+    position: "before",
+  });
+  assert.deepEqual(forked.chat.messages.map(({ text }) => text), ["Why does it fail?", "A missing token."]);
+  assert.equal(forked.prefill?.text, "Fix it.");
+  const [staged] = forked.prefill?.attachments ?? [];
+  assert.equal(staged?.name, "screen.png");
+  assert.equal(forked.prefill?.attachments?.length, 1);
+  assert.deepEqual(parseAidenRemoteChatForkResult(JSON.parse(JSON.stringify(forked))), forked);
+
+  // The staged attachment sends with the next turn in the fork, for this device only.
+  assert.throws(() => attachments.consume("device-2", forked.chat.id, [staged!.id]), hasCode("handle_wrong_device"));
+  assert.throws(() => attachments.consume("device-1", "chat-1", [staged!.id]), hasCode("handle_invalid"));
+  const [resent] = attachments.consume("device-1", forked.chat.id, [staged!.id]) ?? [];
+  assert.equal(resent?.data, ONE_PIXEL_PNG);
+
+  // A fork after a reply keeps the prompt in history, so there is nothing to edit.
+  const after = await app.service.fork("device-1", "chat-1", revision, "fork-key-000000000004", {
+    messageId: "a2",
+    position: "after",
+  });
+  assert.equal(after.prefill, undefined);
+});
+
+test("attachments that cannot be restaged are omitted without failing the rest", () => {
+  let sequence = 0;
+  const store = new AidenRemoteAttachmentStore({
+    now: () => 20_000,
+    randomId: () => `att_${String(sequence++).padStart(43, "D")}`,
+  });
+  const text = (index: number) => ({
+    id: `stored-${index}`, name: `note-${index}.txt`, mimeType: "text/plain", kind: "text" as const, size: 1, text: "x",
+  });
+  const broken = { id: "stored-gif", name: "old.gif", mimeType: "image/gif", kind: "image" as const, size: 35, data: ONE_PIXEL_GIF };
+
+  const { staged, omitted } = store.stage("device-1", "fork-1", [broken, ...Array.from({ length: 11 }, (_, index) => text(index))]);
+  // One turn holds ten attachments; the unsupported image and the eleventh-plus are omitted.
+  assert.equal(staged.length, 9);
+  assert.equal(omitted, 3);
+  assert.deepEqual(staged.map(({ name }) => name), Array.from({ length: 9 }, (_, index) => `note-${index}.txt`));
+
+  const deleting = store.beginChatDeletion("fork-2");
+  assert.throws(() => store.stage("device-1", "fork-2", [text(0)]), hasCode("not_found", 404));
+  deleting();
+});
+
+test("Remote fork failures carry the status and code a client acts on", async () => {
+  const run = async (fail: Error | undefined, input: unknown, initial?: Chat) => {
+    const app = forkFixture({ ...(fail ? { fail } : {}), ...(initial ? { initial } : {}) });
+    const { revision } = await app.service.get("chat-1");
+    return app.service.fork("device-1", "chat-1", revision, `fork-key-${String(Math.random()).slice(2, 14).padEnd(12, "0")}`, input);
+  };
+  const cut = { messageId: "a1", position: "after" };
+
+  await assert.rejects(run(new ChatForkError("busy", "Busy."), cut), (error: unknown) =>
+    hasCode("operation_in_progress", 409)(error) && (error as { retryable?: boolean }).retryable === true);
+  await assert.rejects(run(undefined, { messageId: "missing", position: "after" }), hasCode("not_found", 404));
+  await assert.rejects(run(new ChatForkError("ineligible", "Pick a settled reply."), cut), hasCode("invalid_request", 400));
+  await assert.rejects(run(new ChatForkError("too_large", "Too large."), cut), hasCode("payload_too_large", 413));
+  await assert.rejects(run(new ChatForkError("unavailable", "Recovering."), cut), hasCode("operation_in_progress", 409));
+
+  for (const malformed of [
+    { messageId: "a1" },
+    { messageId: "a1", position: "middle" },
+    { messageId: "a1/../x", position: "after" },
+    { messageId: "a1", position: "after", extra: true },
+    { messageId: "a1", position: "after", summary: { focus: "   " } },
+    { messageId: "a1", position: "after", summary: { focus: "x".repeat(1_001) } },
+    // The desktop's internal name for the focus is not part of the wire.
+    { messageId: "a1", position: "after", summary: { instructions: "parser" } },
+  ]) {
+    await assert.rejects(run(undefined, malformed), hasCode("invalid_request", 400), JSON.stringify(malformed));
+  }
+
+  // Bot chats are not forked from a paired device.
+  await assert.rejects(run(undefined, cut, { ...forkSource(), botId: "bot-1" }), hasCode("not_found", 404));
+});
+
+test("a host without summaries refuses Fork with summary but still forks", async () => {
+  const app = forkFixture({ supportsSummaries: false });
+  assert.equal(app.service.supportsForks, true);
+  assert.equal(app.service.supportsForkSummaries, false);
+  const { revision } = await app.service.get("chat-1");
+  await assert.rejects(
+    app.service.fork("device-1", "chat-1", revision, "fork-key-000000000005", {
+      messageId: "a1", position: "after", summary: {},
+    }),
+    hasCode("not_found", 404),
+  );
+  assert.equal(app.requests.length, 0);
+  const plain = await app.service.fork("device-1", "chat-1", revision, "fork-key-000000000006", {
+    messageId: "a1", position: "after",
+  });
+  assert.equal(plain.chat.forkedFrom?.summary, undefined);
+  await assert.rejects(app.service.cancelForkSummary(plain.chat.id), hasCode("not_found", 404));
+});
+
+test("fork summary actions reach only forks with a summary and report a moved-on summary as a conflict", async () => {
+  const pending: Chat = {
+    ...forkSource(),
+    forkedFrom: {
+      chatId: "source-1",
+      messageId: "a1",
+      position: "after",
+      at: 5_000,
+      summary: { state: "failed", afterMessageId: "a2", error: "Summary cancelled." },
+    },
+  };
+  const calls: string[] = [];
+  const storageFailure = new Error("EACCES: /Users/private/Library/Aiden/chats/chat-1.json");
+  const app = forkFixture({
+    initial: pending,
+    summaries: {
+      retry: async (chatId) => {
+        calls.push(`retry:${chatId}`);
+        throw calls.length === 1
+          ? new ForkSummaryStateError("Only a failed summary can be retried.")
+          : storageFailure;
+      },
+      skip: async (chatId) => {
+        calls.push(`skip:${chatId}`);
+        const { summary: _summary, ...lineage } = pending.forkedFrom!;
+        return { ...pending, forkedFrom: lineage };
+      },
+      cancel: (chatId) => {
+        calls.push(`cancel:${chatId}`);
+        return false;
+      },
+    },
+  });
+  assert.equal(app.service.supportsForkSummaries, true);
+
+  await assert.rejects(app.service.retryForkSummary("chat-1"), (error: unknown) =>
+    hasCode("revision_conflict", 409)(error) &&
+    (error as Error).message === "Only a failed summary can be retried.");
+  // Anything else is not a conflict, and its text is not handed to the device as one.
+  await assert.rejects(app.service.retryForkSummary("chat-1"), (error: unknown) => error === storageFailure);
+  const skipped = await app.service.skipForkSummary("chat-1");
+  assert.equal(skipped.forkedFrom?.summary, undefined);
+  assert.equal(skipped.forkedFrom?.chatId, "source-1");
+  assert.deepEqual(await app.service.cancelForkSummary("chat-1"), { cancelled: false });
+  assert.deepEqual(calls, ["retry:chat-1", "retry:chat-1", "skip:chat-1", "cancel:chat-1"]);
+
+  // A chat that is not a fork with a summary has no summary to act on.
+  const plain = forkFixture({ summaries: { retry: async () => pending, skip: async () => pending, cancel: () => true } });
+  await assert.rejects(plain.service.cancelForkSummary("chat-1"), hasCode("not_found", 404));
+});
+
+test("a fork summary reaches a paired device without host files or provider errors", async () => {
+  const lineage = (summary: NonNullable<NonNullable<Chat["forkedFrom"]>["summary"]>): Chat => ({
+    ...forkSource(),
+    forkedFrom: { chatId: "source-1", messageId: "a1", position: "after", at: 5_000, summary },
+  });
+  const files = { read: ["/Users/private/project/secret.ts"], modified: ["/Users/private/project/parser.ts"] };
+  const read = async (chat: Chat) => {
+    const projected = await forkFixture({ initial: chat }).service.get("chat-1");
+    // Every summary state parses the way a paired client parses it.
+    assert.deepEqual(parseAidenRemoteChatProjection(JSON.parse(JSON.stringify(projected))), projected);
+    return projected.forkedFrom?.summary;
+  };
+
+  assert.deepEqual(
+    await read(lineage({
+      state: "failed",
+      afterMessageId: "a2",
+      instructions: "the parser",
+      files,
+      error: "401 Unauthorized from https://api.provider.example/v1 (key sk-live-123)",
+    })),
+    { state: "failed", afterMessageId: "a2", focus: "the parser", error: "The summary could not be generated." },
+  );
+  // Aiden's own failure text is safe to show as it is.
+  assert.deepEqual(
+    await read(lineage({ state: "failed", afterMessageId: "a2", error: "Summary cancelled." })),
+    { state: "failed", afterMessageId: "a2", error: "Summary cancelled." },
+  );
+  assert.deepEqual(
+    await read(lineage({ state: "ready", afterMessageId: "a2", text: "Settled on revision 21.", files })),
+    { state: "ready", afterMessageId: "a2", text: "Settled on revision 21." },
+  );
+});
+
+test("a fork too large to send from a paired device is refused without creating it", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-remote-fork-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  let source = await store.create({ title: "Long", workspaceId: "workspace-1" });
+  for (let index = 0; index < 6; index += 1) {
+    source = await store.appendMessage(source.id, {
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: String(index).repeat(190_000),
+    });
+  }
+  const app = fixture(source, {
+    forks: {
+      service: createChatForkService({
+        chatStore: store,
+        beginChatCopy: () => () => undefined,
+        workspaceExists: async () => true,
+      }),
+      admitWorkspace: () => ({ isAborted: () => false, release: () => undefined }),
+    },
+  });
+  // The whole chat is too large to read at once, so a client pages it.
+  const { revision } = await app.service.messagesWindow(source.id, { limit: 1 });
+  const lastReply = source.messages[source.messages.length - 1]!.id;
+  const fork = () =>
+    app.service.fork("device-1", source.id, revision, "fork-key-000000000099", {
+      messageId: lastReply,
+      position: "after",
+    });
+
+  await assert.rejects(fork(), hasCode("payload_too_large", 413));
+  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  // A retry with the same key is refused like any replayed rejection, and still creates nothing.
+  await assert.rejects(fork(), hasCode("internal_error", 409));
+  assert.equal((await store.list()).length, 1);
+});
+
+test("Remote classification refuses feature-owned chats before any payload read", async () => {
+  let payloadReads = 0;
+  const { service } = fixture(
+    chat({ owner: { kind: "design-project", projectId: "project-1" } }),
+    { onPayloadGet: () => { payloadReads += 1; } },
+  );
+
+  await assert.rejects(
+    service.classify("chat-1"),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      (error as { code?: string; status?: number }).code === "not_found" &&
+      (error as { status?: number }).status === 404,
+  );
+  assert.equal(payloadReads, 0);
 });

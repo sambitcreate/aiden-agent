@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveGitExecutable } from "./git-executable.js";
+import { createGitExecutableResolver, resolveGitExecutable } from "./git-executable.js";
 
 function fixture(paths: Record<string, string>, developerDir?: string) {
   let probes = 0;
@@ -108,4 +108,99 @@ test("cancellation during default CLT fallback remains cancellation", async () =
     return candidate;
   };
   await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: "/usr/bin" }, controller.signal, f.deps), { name: "AbortError" });
+});
+
+function memoFixture(paths: Record<string, string>, developerDir?: string) {
+  const f = fixture(paths, developerDir);
+  const inspected: string[] = [];
+  const executablePath = f.deps.executablePath;
+  f.deps.executablePath = async (candidate: string) => {
+    inspected.push(candidate);
+    return executablePath(candidate);
+  };
+  return Object.assign(f, { inspected });
+}
+
+const CLT_GIT = "/Library/Developer/CommandLineTools/usr/bin/git";
+
+test("memoized resolution probes developer tools once and revalidates hits with one file check", async () => {
+  const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT }, "/Library/Developer/CommandLineTools");
+  const resolve = createGitExecutableResolver(f.deps);
+  const env = { PATH: "/usr/bin:/bin" };
+  for (let i = 0; i < 5; i++) assert.equal(await resolve("git", "/workspace", env), CLT_GIT);
+  assert.equal(f.probes, 1);
+  // The first resolution inspects the shim and CLT Git; each hit re-checks only the result.
+  assert.deepEqual(f.inspected.slice(2), Array(4).fill(CLT_GIT));
+});
+
+test("a changed PATH or DEVELOPER_DIR resolves again", async () => {
+  const f = memoFixture({
+    "/usr/bin/git": "/usr/bin/git",
+    [CLT_GIT]: CLT_GIT,
+    "/opt/homebrew/bin/git": "/opt/homebrew/Cellar/git/bin/git",
+  }, "/Library/Developer/CommandLineTools");
+  const resolve = createGitExecutableResolver(f.deps);
+  assert.equal(await resolve("git", "/w", { PATH: "/usr/bin" }), CLT_GIT);
+  assert.equal(await resolve("git", "/w", { PATH: "/opt/homebrew/bin:/usr/bin" }), "/opt/homebrew/Cellar/git/bin/git");
+  assert.equal(await resolve("git", "/w", { PATH: "/usr/bin", DEVELOPER_DIR: "/Library/Developer/CommandLineTools" }), CLT_GIT);
+  assert.equal(f.probes, 2);
+});
+
+test("a removed Git is noticed on the next command instead of being reused", async () => {
+  const paths: Record<string, string> = {
+    "/usr/bin/git": "/usr/bin/git",
+    "/opt/homebrew/bin/git": "/opt/homebrew/bin/git",
+    [CLT_GIT]: CLT_GIT,
+  };
+  const f = memoFixture(paths, "/Library/Developer/CommandLineTools");
+  const resolve = createGitExecutableResolver(f.deps);
+  const env = { PATH: "/opt/homebrew/bin:/usr/bin" };
+  assert.equal(await resolve("git", "/w", env), "/opt/homebrew/bin/git");
+  delete paths["/opt/homebrew/bin/git"];
+  assert.equal(await resolve("git", "/w", env), CLT_GIT);
+});
+
+test("resolution is repeated after the trust window", async () => {
+  let clock = 0;
+  const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT }, "/Library/Developer/CommandLineTools");
+  const resolve = createGitExecutableResolver(f.deps, { ttlMs: 1_000, now: () => clock });
+  await resolve("git", "/w", { PATH: "/usr/bin" });
+  clock = 999;
+  await resolve("git", "/w", { PATH: "/usr/bin" });
+  assert.equal(f.probes, 1);
+  clock = 1_000;
+  await resolve("git", "/w", { PATH: "/usr/bin" });
+  assert.equal(f.probes, 2);
+});
+
+test("failures are not cached, so installing Git later works without restarting", async () => {
+  const paths: Record<string, string> = { "/usr/bin/git": "/usr/bin/git" };
+  const f = memoFixture(paths);
+  const resolve = createGitExecutableResolver(f.deps);
+  await assert.rejects(resolve("git", "/w", { PATH: "/usr/bin" }), /Git is not installed/);
+  paths[CLT_GIT] = CLT_GIT;
+  assert.equal(await resolve("git", "/w", { PATH: "/usr/bin" }), CLT_GIT);
+});
+
+test("concurrent commands share one resolution and one caller's cancellation does not fail the rest", async () => {
+  let release!: (dir: string) => void;
+  const f = memoFixture({ "/usr/bin/git": "/usr/bin/git", [CLT_GIT]: CLT_GIT });
+  f.deps.developerDirectory = () => new Promise<string>((resolve) => { release = resolve; });
+  const resolve = createGitExecutableResolver(f.deps);
+  const controller = new AbortController();
+  const cancelled = resolve("git", "/w", { PATH: "/usr/bin" }, controller.signal);
+  const others = [resolve("git", "/w", { PATH: "/usr/bin" }), resolve("git", "/w", { PATH: "/usr/bin" })];
+  await new Promise((r) => setImmediate(r));
+  controller.abort();
+  await assert.rejects(cancelled, { name: "AbortError" });
+  release("/Library/Developer/CommandLineTools");
+  assert.deepEqual(await Promise.all(others), [CLT_GIT, CLT_GIT]);
+  assert.equal(f.inspected.filter((p) => p === "/usr/bin/git").length, 1);
+});
+
+test("memoized resolver leaves non-macOS binaries untouched", async () => {
+  const f = memoFixture({});
+  const resolve = createGitExecutableResolver({ ...f.deps, platform: "linux" });
+  assert.equal(await resolve("git", "/w", {}), "git");
+  assert.deepEqual(f.inspected, []);
 });

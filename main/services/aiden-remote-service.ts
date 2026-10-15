@@ -1,12 +1,14 @@
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
+import type { AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import Bonjour from "bonjour-service";
+import type Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import os from "node:os";
+import { peerLanInterfaceAddresses } from "./peer-routes.js";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 import {
@@ -15,6 +17,14 @@ import {
   type AidenRemotePairingBootstrap,
   type AidenRemotePairingWindowStatus,
 } from "./aiden-remote-pairing.js";
+import {
+  AidenRemotePairingRequestService,
+  type AidenPairingRequestDecisionResult,
+  type AidenPairingRequestPrompt,
+  type AidenPairingRequestTransport,
+  type AidenPairingRequestTransportIdentity,
+  type AidenPairingRequestTrust,
+} from "./aiden-remote-pairing-requests.js";
 import {
   createAidenRemoteRequestHandler,
   createAidenRemoteUpgradeHandler,
@@ -50,10 +60,6 @@ import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-set
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
-import type {
-  BotNoticeAcknowledgement,
-  BotNoticeStatus,
-} from "../../renderer/shared/bot-capabilities.js";
 import {
   AIDEN_REMOTE_PRODUCTION_LAN_PORT,
   aidenRemotePortCandidatesForRange,
@@ -61,6 +67,12 @@ import {
 
 const MAX_CONNECTIONS = 64;
 const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * How long a probed Tailscale Serve certificate pin is reused for incoming
+ * connection requests, so unauthenticated requests cannot drive one TLS probe
+ * each. Manual pairing always probes afresh.
+ */
+const TAILSCALE_PIN_CACHE_MS = 60_000;
 
 export class AidenRemotePortInUseError extends Error {
   readonly code = "remote_port_in_use" as const;
@@ -89,7 +101,7 @@ export function aidenRemotePortCandidates(preferredPort: number): number[] {
 
 export interface AidenRemoteBonjourPublisher {
   start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void>;
   stop(): void;
@@ -128,8 +140,20 @@ export interface AidenRemoteServiceOptions {
     & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
   bonjour: AidenRemoteBonjourPublisher;
   notifyPairingChanged?: () => void;
+  /**
+   * Persisted "Accept connection requests" setting. When absent the host
+   * serves no `/pairing/requests` routes at all.
+   */
+  pairingRequestSettings?: {
+    load(): Promise<boolean>;
+    save(accept: boolean): Promise<void>;
+  };
+  /** Called whenever the set of incoming connection requests may have changed. */
+  notifyPairingRequestsChanged?: () => void;
   /** Simulator sharing relay (Simulator devices Phase 5); absent when the feature is off. */
   simulators?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["simulators"];
+  /** Host platform for the opt-in `/health?detail=host` descriptor. */
+  hostPlatform?: import("./aiden-remote-protocol.js").AidenRemoteHostPlatform;
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -139,7 +163,9 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"> & Partial<Pick<AidenRemoteChatService, "messagesWindow">>;
+        hostFeed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostFeed"];
+        hostRuns?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostRuns"];
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
@@ -148,35 +174,24 @@ export interface AidenRemoteServiceOptions {
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         appControls?: typeof remoteAppControls;
+        providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
-        botNotice?: {
-          status(deviceId: string): Promise<BotNoticeStatus>;
-          acknowledge(
-            deviceId: string,
-            acknowledgement: BotNoticeAcknowledgement,
-          ): Promise<BotNoticeStatus>;
-        };
+        botSessions?: AidenRemoteRouterDependencies["botSessions"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
           | "get"
           | "create"
           | "updateIdentity"
-          | "archive"
-          | "restore"
           | "capabilityCatalog"
           | "updateAccess"
           | "createChat"
-          | "getChatAccess"
-          | "updateChatAccess"
-          | "favorites"
-          | "updateFavorites"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
         >>;
         settle?: () => Promise<void>;
       }
@@ -186,7 +201,9 @@ export interface AidenRemoteServiceOptions {
           AidenRemoteWorkspaceBrowserService,
           "listRoots" | "listChildren" | "createSelection"
         >;
-        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
+        chats?: Pick<AidenRemoteChatService, "list" | "listSummaries" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"> & Partial<Pick<AidenRemoteChatService, "messagesWindow">>;
+        hostFeed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostFeed"];
+        hostRuns?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["hostRuns"];
         chatProgress?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["chatProgress"];
         models?: Pick<AidenRemoteModelService, "list">;
         streams?: Pick<AidenRemoteStreamService, "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents">;
@@ -195,35 +212,24 @@ export interface AidenRemoteServiceOptions {
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
         appControls?: typeof remoteAppControls;
+        providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
-        botNotice?: {
-          status(deviceId: string): Promise<BotNoticeStatus>;
-          acknowledge(
-            deviceId: string,
-            acknowledgement: BotNoticeAcknowledgement,
-          ): Promise<BotNoticeStatus>;
-        };
+        botSessions?: AidenRemoteRouterDependencies["botSessions"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
           | "get"
           | "create"
           | "updateIdentity"
-          | "archive"
-          | "restore"
           | "capabilityCatalog"
           | "updateAccess"
           | "createChat"
-          | "getChatAccess"
-          | "updateChatAccess"
-          | "favorites"
-          | "updateFavorites"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
         >>;
         settle?: () => Promise<void>;
       }>;
@@ -250,6 +256,8 @@ export interface AidenRemoteServiceStatus {
   tailscaleErrorCode?: AidenTailscaleConnectionStatus["errorCode"] | "permission_denied";
   pairedDeviceCount: number;
   approvedRootCount: number;
+  /** Present only on hosts that can serve desktop connection requests. */
+  acceptPairingRequests?: boolean;
   errorCode?: "remote_port_in_use";
   error?: string;
 }
@@ -334,7 +342,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
@@ -347,6 +355,7 @@ export class DnsSdAidenRemoteBonjourPublisher implements AidenRemoteBonjourPubli
       [
         "-R", serviceName, "_aiden-agent._tcp", "local.",
         String(input.port), "v=1", `instance=${input.instanceId}`,
+        ...(input.hostname ? [`hostname=${input.hostname}`] : []),
       ],
       { stdio: "ignore", windowsHide: true },
     );
@@ -398,11 +407,17 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
   ) {}
 
   async start(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
     onUnexpectedFailure: (error: Error) => void,
   ): Promise<void> {
     this.stop();
     const generation = ++this.generation;
+    // bonjour-service is only needed once Remote publishes on Linux, so it
+    // loads here rather than on the main-process startup path.
+    const { default: BonjourService } = await import("bonjour-service");
+    if (this.generation !== generation) {
+      throw new Error("Local discovery was stopped before it became ready.");
+    }
     let ready = false;
     let failed = false;
     let rejectStartup: (error: Error) => void = () => undefined;
@@ -421,14 +436,14 @@ export class NodeAidenRemoteBonjourPublisher implements AidenRemoteBonjourPublis
       if (!ready) rejectStartup(error);
       else onUnexpectedFailure(error);
     };
-    const bonjour = new Bonjour(undefined, fail);
+    const bonjour = new BonjourService(undefined, fail);
     this.bonjour = bonjour;
     const service = bonjour.publish({
       name: aidenRemoteBonjourServiceName(input.displayName, input.instanceId),
       type: "aiden-agent",
       protocol: "tcp",
       port: input.port,
-      txt: { v: "1", instance: input.instanceId },
+      txt: { v: "1", instance: input.instanceId, ...(input.hostname ? { hostname: input.hostname } : {}) },
     });
     const readySignal = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -481,6 +496,9 @@ export class AidenRemoteService {
   private readonly lanConnections = new Set<Duplex>();
   private readonly tailscaleConnections = new Set<Duplex>();
   private pairing: AidenRemotePairingService | null = null;
+  private pairingRequests: AidenRemotePairingRequestService | null = null;
+  private acceptPairingRequests: boolean | undefined;
+  private tailscalePinCache: { dnsName: string; pin: string; expiresAt: number } | null = null;
   private tlsIdentity: AidenRemoteTlsIdentity | null = null;
   private activeState: AidenRemoteStateDocument | null = null;
   private lastError: string | undefined;
@@ -519,6 +537,8 @@ export class AidenRemoteService {
     this.lastErrorCode = undefined;
     try {
       const tlsIdentity = await this.options.loadTlsIdentity();
+      const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
+      this.settleRemoteApi = workspaceApi?.settle;
       const pairing = new AidenRemotePairingService(
         state.instanceId,
         this.options.state,
@@ -526,18 +546,78 @@ export class AidenRemoteService {
         this.options.notifyPairingChanged,
         () => this.activeState?.displayName ?? state.displayName,
         this.options.botCapabilitiesSupported,
+        // Desktop pairing earns host-wide run authority only where it is served.
+        () => Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
       );
-      const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
-      this.settleRemoteApi = workspaceApi?.settle;
+      const pairingRequests = this.options.pairingRequestSettings
+        ? new AidenRemotePairingRequestService({
+            instanceId: state.instanceId,
+            devices: this.options.state,
+            accepting: () => this.acceptPairingRequests !== false,
+            resolveTransport: (transport) =>
+              this.resolvePairingRequestTransport(transport, tlsIdentity),
+            displayName: () => this.activeState?.displayName ?? state.displayName,
+            botCapabilitiesSupported: this.options.botCapabilitiesSupported ?? (() => true),
+            hostCapabilitiesSupported: () =>
+              Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
+            onChanged: () => this.options.notifyPairingRequestsChanged?.(),
+            now: this.now,
+          })
+        : null;
+      if (pairingRequests) await this.loadPairingRequestSetting();
+      let routeKey: string | undefined;
+      let tailnetRouteCache: { key: string; expires: number; route?: import("./peer-transport.js").PeerTrust } | undefined;
+      let tailnetRouteRefresh: Promise<void> | undefined;
       const routerDependencies: AidenRemoteRouterDependencies = {
         instanceId: state.instanceId,
         displayName: () => this.activeState?.displayName ?? state.displayName,
         appVersion: this.options.appVersion,
         devices: this.options.state,
         pairing,
+        ...(pairingRequests ? { pairingRequests } : {}),
         ...(workspaceApi ?? {}),
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
+        ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
+        peerRoutes: async () => {
+          const current = await this.options.state.snapshot();
+          const routes: Array<import("./peer-transport.js").PeerTrust & { addresses?: string[] }> = [];
+          if (!current.enabled) return routes;
+          const key = JSON.stringify([current.connectionMode, current.tailscaleOwnership, current.tailscalePendingOutcome, Boolean(this.lanServer), Boolean(this.tailscaleServer)]);
+          routeKey = key;
+          // LAN identity is already local. Optional alternate-route discovery must
+          // never hold up an identity read or a healthy peer's wake probe.
+          try {
+            const endpoint = await this.transportEndpoint("lan", current, tlsIdentity);
+            if (new URL(endpoint.endpoint).hostname.endsWith(".local")) {
+              const trust = this.transportTrust("lan", tlsIdentity);
+              routes.push({ ...endpoint,
+                ...(trust.mode === "private-ca" ? { caCertificateDerBase64: trust.caCertificateDerBase64 } : {}),
+                addresses: peerLanInterfaceAddresses(os.networkInterfaces()),
+              });
+            }
+          } catch { /* Local access may be disabled on a Tailscale-only host. */ }
+          const cached = tailnetRouteCache?.key === key ? tailnetRouteCache : undefined;
+          // Keep the last validated observation available to delayed clients
+          // while refreshing. Peers independently verify identity before use.
+          if (cached?.route) routes.push(cached.route);
+          if ((!cached || cached.expires <= this.now()) && !tailnetRouteRefresh && current.tailscaleOwnership && !current.tailscalePendingOutcome
+            && this.tailscaleServer && (current.connectionMode === "tailscale" || current.connectionMode === "both")) {
+            // One on-demand refresh uses the existing bounded ownership/pin
+            // checks. Cold and failed alternates are omitted meanwhile.
+            tailnetRouteRefresh = (async () => {
+              let route: import("./peer-transport.js").PeerTrust | undefined;
+              try {
+                const endpoint = await this.transportEndpoint("tailscale", current, tlsIdentity, { cachedTailscalePin: true });
+                if (new URL(endpoint.endpoint).hostname.endsWith(".ts.net")) route = endpoint;
+              } catch { /* Retry only after the negative cache expires. */ }
+              if (routeKey === key && this.tlsIdentity === tlsIdentity && this.activeState?.instanceId === current.instanceId) {
+                tailnetRouteCache = { key, expires: this.now() + 30_000, ...(route ? { route } : {}) };
+              }
+            })().finally(() => { tailnetRouteRefresh = undefined; });
+          }
+          return routes;
+        },
         now: this.now,
         log: (entry) => {
           this.options.log?.({
@@ -728,6 +808,7 @@ export class AidenRemoteService {
       this.tailscaleServer = selectedTailscaleServer;
       this.tlsIdentity = tlsIdentity;
       this.pairing = pairing;
+      this.pairingRequests = pairingRequests;
       this.activeState = structuredClone(committedState);
       if (state.connectionMode === "lan" || state.connectionMode === "both") {
         await this.publishBonjour({
@@ -757,10 +838,12 @@ export class AidenRemoteService {
   }
 
   private async publishBonjour(
-    input: { instanceId: string; displayName: string; port: number },
+    input: { instanceId: string; displayName: string; port: number; hostname?: string },
   ): Promise<void> {
     try {
-      await this.options.bonjour.start(input, (error) => {
+      const hostname = localDnsName(this.hostname);
+      const hint = hostname.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.local$/u.test(hostname) ? { hostname } : {};
+      await this.options.bonjour.start({ ...input, ...hint }, (error) => {
         void this.serialized(async () => {
           if (
             this.activeState?.instanceId !== input.instanceId
@@ -787,6 +870,9 @@ export class AidenRemoteService {
   private async stopListeners(): Promise<void> {
     this.pairing?.close();
     this.pairing = null;
+    const pairingRequests = this.pairingRequests;
+    this.pairingRequests = null;
+    this.tailscalePinCache = null;
     this.options.bonjour.stop();
     const lan = this.lanServer;
     const tailscale = this.tailscaleServer;
@@ -801,7 +887,10 @@ export class AidenRemoteService {
       closeServer(lan),
       closeServer(tailscale),
       settleRemoteApi?.() ?? Promise.resolve(),
+      // Undelivered approvals are revoked: nobody can collect them any more.
+      pairingRequests?.close() ?? Promise.resolve(),
     ]);
+    if (pairingRequests) this.options.notifyPairingRequestsChanged?.();
   }
 
   async stopAndSettle(): Promise<void> {
@@ -810,6 +899,7 @@ export class AidenRemoteService {
 
   stop(): void {
     this.pairing?.close();
+    void this.pairingRequests?.close().catch(() => undefined);
     this.options.bonjour.stop();
     this.destroyConnections(this.lanConnections);
     this.destroyConnections(this.tailscaleConnections);
@@ -1077,68 +1167,11 @@ export class AidenRemoteService {
     if (!state.enabled || !this.pairing || !this.tlsIdentity) {
       throw new Error("Enable Aiden Remote before pairing a device.");
     }
-    let endpoint: string;
-    let serverSpkiSha256: string;
-    if (transport === "lan") {
-      if (
-        !this.lanServer
-        || (state.connectionMode !== "lan" && state.connectionMode !== "both")
-      ) throw new Error("Local-network access is not enabled.");
-      endpoint = `https://${localDnsName(this.hostname)}:${state.lanPort}${AIDEN_REMOTE_BASE_PATH}`;
-      serverSpkiSha256 = this.tlsIdentity.serverSpkiSha256;
-    } else {
-      if (state.tailscalePendingOutcome) {
-        throw new Error("Verify the previous Tailscale route update before pairing.");
-      }
-      if (
-        !state.tailscaleOwnership
-        || !this.tailscaleServer
-        || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")
-      ) {
-        throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
-      }
-      const inspection = this.options.tailscale.inspectRoute
-        ? await this.options.tailscale.inspectRoute(
-          this.loopbackTarget(state),
-          state.tailscaleOwnership,
-        )
-        : undefined;
-      const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
-      if (inspection || this.options.tailscale.assessRoute) {
-        const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
-          this.loopbackTarget(state),
-          state.tailscaleOwnership,
-        );
-        if (assessment.state !== "owned" || assessment.errorCode) {
-          throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
-        }
-      } else {
-        let connected = false;
-        try {
-          connected = status.serveStatus !== undefined
-            && planAidenTailscaleConnect(
-              status.serveStatus,
-              this.loopbackTarget(state),
-              state.tailscaleOwnership,
-              status.httpsAvailable,
-            ).action === "noop";
-        } catch {
-          connected = false;
-        }
-        if (!connected) {
-          throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
-        }
-      }
-      if (!status.dnsName) throw new Error("Tailscale does not report a stable DNS name.");
-      endpoint = `https://${status.dnsName}${AIDEN_REMOTE_BASE_PATH}`;
-      try {
-        serverSpkiSha256 = await (
-          this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
-        )(status.dnsName, 443);
-      } catch (error) {
-        throw classifyAidenRemoteTlsEndpointFailure(error);
-      }
-    }
+    const { endpoint, serverSpkiSha256 } = await this.transportEndpoint(
+      transport,
+      state,
+      this.tlsIdentity,
+    );
     const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
     try {
       const qrPayload = this.pairingQrPayload(pairing.bootstrap, transport);
@@ -1148,6 +1181,163 @@ export class AidenRemoteService {
       this.pairing.close(pairing.sessionId);
       throw error;
     }
+  }
+
+  /**
+   * The endpoint and certificate pin a client must use on one transport.
+   * Throws when that transport is not currently and privately serving this
+   * profile. `cachedTailscalePin` reuses a recent Serve pin probe.
+   */
+  private async transportEndpoint(
+    transport: "lan" | "tailscale",
+    state: AidenRemoteStateDocument,
+    tlsIdentity: AidenRemoteTlsIdentity,
+    options: { cachedTailscalePin?: boolean } = {},
+  ): Promise<{ endpoint: string; serverSpkiSha256: string }> {
+    if (transport === "lan") {
+      if (
+        !this.lanServer
+        || (state.connectionMode !== "lan" && state.connectionMode !== "both")
+      ) throw new Error("Local-network access is not enabled.");
+      return {
+        endpoint: `https://${localDnsName(this.hostname)}:${state.lanPort}${AIDEN_REMOTE_BASE_PATH}`,
+        serverSpkiSha256: tlsIdentity.serverSpkiSha256,
+      };
+    }
+    if (state.tailscalePendingOutcome) {
+      throw new Error("Verify the previous Tailscale route update before pairing.");
+    }
+    if (
+      !state.tailscaleOwnership
+      || !this.tailscaleServer
+      || (state.connectionMode !== "tailscale" && state.connectionMode !== "both")
+    ) {
+      throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
+    }
+    const inspection = this.options.tailscale.inspectRoute
+      ? await this.options.tailscale.inspectRoute(
+        this.loopbackTarget(state),
+        state.tailscaleOwnership,
+      )
+      : undefined;
+    const status = inspection?.connectionStatus ?? await this.options.tailscale.status();
+    if (inspection || this.options.tailscale.assessRoute) {
+      const assessment = inspection?.assessment ?? await this.options.tailscale.assessRoute!(
+        this.loopbackTarget(state),
+        state.tailscaleOwnership,
+      );
+      if (assessment.state !== "owned" || assessment.errorCode) {
+        throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
+      }
+    } else {
+      let connected = false;
+      try {
+        connected = status.serveStatus !== undefined
+          && planAidenTailscaleConnect(
+            status.serveStatus,
+            this.loopbackTarget(state),
+            state.tailscaleOwnership,
+            status.httpsAvailable,
+          ).action === "noop";
+      } catch {
+        connected = false;
+      }
+      if (!connected) {
+        throw new Error("The Tailscale route is not privately connected to this Aiden profile.");
+      }
+    }
+    const dnsName = status.dnsName;
+    if (!dnsName) throw new Error("Tailscale does not report a stable DNS name.");
+    const endpoint = `https://${dnsName}${AIDEN_REMOTE_BASE_PATH}`;
+    const cached = this.tailscalePinCache;
+    if (
+      options.cachedTailscalePin
+      && cached
+      && cached.dnsName === dnsName
+      && this.now() < cached.expiresAt
+    ) {
+      return { endpoint, serverSpkiSha256: cached.pin };
+    }
+    let serverSpkiSha256: string;
+    try {
+      serverSpkiSha256 = await (
+        this.options.resolveTlsEndpointPin ?? fetchTlsServerSpkiSha256
+      )(dnsName, 443);
+    } catch (error) {
+      throw classifyAidenRemoteTlsEndpointFailure(error);
+    }
+    this.tailscalePinCache = {
+      dnsName,
+      pin: serverSpkiSha256,
+      expiresAt: this.now() + TAILSCALE_PIN_CACHE_MS,
+    };
+    return { endpoint, serverSpkiSha256 };
+  }
+
+  /** How a client on `transport` should trust this host's TLS certificate. */
+  private transportTrust(
+    transport: "lan" | "tailscale",
+    tlsIdentity: AidenRemoteTlsIdentity,
+  ): AidenPairingRequestTrust {
+    return transport === "lan"
+      ? {
+          mode: "private-ca",
+          caCertificateDerBase64: new X509Certificate(
+            tlsIdentity.caCertificate,
+          ).raw.toString("base64"),
+        }
+      : { mode: "system" };
+  }
+
+  /**
+   * The transport identity sealed into an approved connection request. It
+   * describes the listener the request actually arrived on.
+   */
+  private async resolvePairingRequestTransport(
+    transport: AidenPairingRequestTransport,
+    tlsIdentity: AidenRemoteTlsIdentity,
+  ): Promise<AidenPairingRequestTransportIdentity> {
+    const state = await this.options.state.snapshot();
+    if (!state.enabled) throw new Error("Aiden Remote is off.");
+    const { endpoint, serverSpkiSha256 } = await this.transportEndpoint(
+      transport,
+      { ...state, connectionMode: this.activeState?.connectionMode ?? state.connectionMode },
+      tlsIdentity,
+      { cachedTailscalePin: true },
+    );
+    return { endpoint, serverSpkiSha256, trust: this.transportTrust(transport, tlsIdentity) };
+  }
+
+  private async loadPairingRequestSetting(): Promise<boolean> {
+    if (this.acceptPairingRequests === undefined && this.options.pairingRequestSettings) {
+      this.acceptPairingRequests = await this.options.pairingRequestSettings.load();
+    }
+    return this.acceptPairingRequests !== false;
+  }
+
+  /** Persist "Accept connection requests"; turning it off cancels open requests. */
+  async setAcceptPairingRequests(accept: boolean): Promise<void> {
+    const settings = this.options.pairingRequestSettings;
+    if (!settings) throw new Error("Connection requests are unavailable on this host.");
+    await this.serialized(async () => {
+      await settings.save(accept);
+      this.acceptPairingRequests = accept;
+      if (!accept) this.pairingRequests?.cancelOpen();
+      this.options.notifyPairingRequestsChanged?.();
+    });
+  }
+
+  /** Connection requests waiting for a decision on this host, oldest first. */
+  listPairingRequests(): AidenPairingRequestPrompt[] {
+    return this.pairingRequests?.list() ?? [];
+  }
+
+  /** Allow or deny one connection request; null when it no longer exists. */
+  async respondPairingRequest(
+    requestId: string,
+    decision: "allow" | "deny",
+  ): Promise<AidenPairingRequestDecisionResult | null> {
+    return (await this.pairingRequests?.respond(requestId, decision)) ?? null;
   }
 
   /** One acknowledged desktop action; shares the service mutation lane with advanced controls. */
@@ -1276,14 +1466,7 @@ export class AidenRemoteService {
     transport: "lan" | "tailscale",
   ): string {
     if (!this.tlsIdentity) throw new Error("Aiden Remote transport identity is unavailable.");
-    const trust = transport === "lan"
-      ? {
-          mode: "private-ca" as const,
-          caCertificateDerBase64: new X509Certificate(
-            this.tlsIdentity.caCertificate,
-          ).raw.toString("base64"),
-        }
-      : { mode: "system" as const };
+    const trust = this.transportTrust(transport, this.tlsIdentity);
     const payload = JSON.stringify({
       kind: "aiden-pairing-v1",
       bootstrap,
@@ -1362,6 +1545,9 @@ export class AidenRemoteService {
           : {}),
       pairedDeviceCount: state.devices.length,
       approvedRootCount: state.approvedRoots.length,
+      ...(this.options.pairingRequestSettings
+        ? { acceptPairingRequests: await this.loadPairingRequestSetting() }
+        : {}),
       ...(this.lastErrorCode ? { errorCode: this.lastErrorCode } : {}),
       ...(this.lastError ? { error: this.lastError } : {}),
     };

@@ -1,5 +1,10 @@
 /** The desktop browser is shared by the visible Environment surface and agent tools. */
 export type BrowserAppearance = "system" | "light" | "dark";
+export type BrowserLinkOpening = "ask" | "browser" | "external";
+const BROWSER_LINK_OPENINGS: readonly string[] = ["ask", "browser", "external"];
+export function isBrowserLinkOpening(value: unknown): value is BrowserLinkOpening {
+  return typeof value === "string" && BROWSER_LINK_OPENINGS.includes(value);
+}
 export const BROWSER_VIEWPORT_PRESETS = [
   { id: "iphone-se", name: "iPhone SE", width: 375, height: 667 },
   { id: "iphone-xr", name: "iPhone XR", width: 414, height: 896 },
@@ -37,7 +42,7 @@ export interface BrowserDefaults {
   appearance: BrowserAppearance;
   zoom: number;
   recordingFps: number;
-  linkTarget: "browser" | "external";
+  linkOpening: BrowserLinkOpening;
   agentAccess: "off" | "allow";
   autoShow: boolean;
 }
@@ -174,7 +179,7 @@ export interface BrowserAnnotation {
 
 export type BrowserCommand =
   | { action: "agent_access"; access: BrowserAgentAccessOverride }
-  | { action: "open_link"; url: string; alternateTarget?: boolean }
+  | { action: "open_link"; url: string }
   | {
       action: "open_file";
       path: string;
@@ -311,7 +316,8 @@ export type BrowserEvent =
       tabId: string;
       shortcut: "annotate" | "focus_address" | "reload" | "hard_reload";
     }
-  | { type: "annotation"; workspaceId: string; tabId: string; annotation: BrowserAnnotation };
+  | { type: "annotation"; workspaceId: string; tabId: string; annotation: BrowserAnnotation }
+  | { type: "link-preference"; linkOpening: BrowserLinkOpening };
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserDefaults = {
   profileId: "default",
@@ -319,7 +325,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserDefaults = {
   appearance: "system",
   zoom: 1,
   recordingFps: 30,
-  linkTarget: "browser",
+  linkOpening: "ask",
   agentAccess: "allow",
   autoShow: true,
 };

@@ -139,12 +139,15 @@ test("slash availability combines the dispatcher with composer-specific state", 
     }).reason ?? "",
     /remove draft attachments/iu,
   );
-  assert.match(
+  assert.deepEqual(
     slashCommandAvailability(command("visualize"), {
       ...context,
-      hasWorkspaceArtifactAccess: false,
-    }).reason ?? "",
-    /allow workspace access/iu,
+    }),
+    { available: true },
+  );
+  assert.equal(
+    slashCommandAvailability(command("visualize"), { ...context, inlineVisualsOff: true }).reason,
+    "Inline visuals are off. Turn them on in Settings → Appearance.",
   );
   assert.match(
     slashCommandAvailability(command("btw"), { ...context, hasCompletedTurn: false }).reason ?? "",
@@ -346,15 +349,17 @@ test("failed async actions return a controlled failure before the composer commi
   }
 });
 
-test("visualize is idle-workspace and submits a composer instruction", () => {
+test("visualize works in any idle chat and submits a composer instruction", () => {
   const visualize = command("visualize");
-  assert.equal(visualize.availability, "idle-workspace");
   assert.equal(visualize.argument, "optional-prompt");
   assert.deepEqual(visualize.action, { kind: "composer-instruction", instruction: "visualize" });
   assert.deepEqual(slashCommandAvailability(visualize, context), { available: true });
+  assert.deepEqual(slashCommandAvailability(visualize, { ...context, hasWorkspace: false }), {
+    available: true,
+  });
   assert.match(
-    slashCommandAvailability(visualize, { ...context, hasWorkspace: false }).reason ?? "",
-    /workspace first/iu,
+    slashCommandAvailability(visualize, { ...context, hasChat: false }).reason ?? "",
+    /open a chat/iu,
   );
   assert.match(
     slashCommandAvailability(visualize, { ...context, idle: false }).reason ?? "",

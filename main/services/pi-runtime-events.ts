@@ -139,6 +139,14 @@ export function initialPiRuntimeEventState(): PiRuntimeEventState {
   };
 }
 
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
 /** Pure critical reducer. Projection observers never own this state. */
 export function reducePiRuntimeEventState(
   state: PiRuntimeEventState,
@@ -243,13 +251,16 @@ export class PiRuntimeEventChannel {
       timestamp: this.now(),
       payload: structuredClone(payload),
     };
+    // The envelope is already a private copy; freeze it so the queue and the
+    // caller can share it, and clone only once per observer below.
+    deepFreeze(envelope);
     this.state = reducePiRuntimeEventState(this.state, envelope);
     const observers = [...this.observers];
     if (observers.length > 0) {
       if (this.observerQueue.length >= PiRuntimeEventChannel.MAX_PENDING_OBSERVER_EVENTS) {
         this.observerQueue.shift();
       }
-      this.observerQueue.push({ envelope: structuredClone(envelope), observers });
+      this.observerQueue.push({ envelope, observers });
       this.startObserverDrain();
     }
     return envelope;

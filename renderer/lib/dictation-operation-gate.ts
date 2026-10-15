@@ -1,3 +1,7 @@
+import { localSupervisedBudgetMs, MAX_TIMER_DELAY_MS } from "../shared/local-speech-budget";
+import { voiceSetupMessage } from "../shared/voice-provider";
+import { stripIpcErrorPrefix } from "./ipc-error";
+
 /** Invalidates async capture/transcription work when dictation is cancelled. */
 export class DictationOperationGate {
   private generation = 0;
@@ -25,11 +29,16 @@ export class DictationOperationGate {
 }
 
 export const CLOUD_TRANSCRIPTION_BUDGET_MS = 45_000;
-export const LOCAL_TRANSCRIPTION_BUDGET_MS = 125_000;
+export { MAX_TIMER_DELAY_MS };
 
-/** Parakeet owns a 120-second process timeout; leave IPC settlement headroom. */
-export function transcriptionBudgetMs(provider: string): number {
-  return provider === "local" ? LOCAL_TRANSCRIPTION_BUDGET_MS : CLOUD_TRANSCRIPTION_BUDGET_MS;
+/**
+ * The outer budget for one transcription. On-device work covers the supervised
+ * load, transcribe and retry in the speech host (see localSupervisedBudgetMs).
+ * `audioSeconds` is the recording length measured from capture start to stop.
+ */
+export function transcriptionBudgetMs(provider: string, audioSeconds?: number): number {
+  if (provider !== "local") return CLOUD_TRANSCRIPTION_BUDGET_MS;
+  return localSupervisedBudgetMs(typeof audioSeconds === "number" ? audioSeconds : 0);
 }
 
 export async function withDictationTimeout<T>(
@@ -61,7 +70,7 @@ export class DictationDeadline {
     timeoutMs: number,
     private readonly now: () => number = Date.now,
   ) {
-    this.expiresAt = now() + Math.max(1, timeoutMs);
+    this.expiresAt = now() + Math.min(MAX_TIMER_DELAY_MS, Math.max(1, timeoutMs));
   }
 
   remaining(): number {
@@ -101,11 +110,13 @@ export function transcriptionTimeoutError(): Error {
 
 /** Do not expose Electron's remote-method wrapper or provider internals in UI. */
 export function voiceErrorMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error ?? "");
-  const message = raw
-    .replace(/^Error invoking remote method ['"][^'"]+['"]:\s*/iu, "")
-    .replace(/^Error:\s*/iu, "")
-    .trim();
+  const message = stripIpcErrorPrefix(
+    error instanceof Error ? error.message : String(error ?? ""),
+  ).replace(/^Error:\s*/iu, "");
+  // Name the provider the failing transcription path actually needs.
+  if (/set up openai/iu.test(message)) {
+    return "OpenAI needs an API key for voice input. Add it in Settings → Providers, then try again.";
+  }
   if (/providers|api key|set up google gemini/iu.test(message)) {
     return "Gemini needs an API key. Add it in Settings → Providers, then try again.";
   }
@@ -114,7 +125,13 @@ export function voiceErrorMessage(error: unknown): string {
   }
   if (/cancel/iu.test(message)) return "Transcription was cancelled.";
   if (/no speech/iu.test(message)) return "No speech detected.";
-  if (/on-device|parakeet|download and select/iu.test(message)) {
+  // Main replaces an engine-unavailable worker failure with this stable copy.
+  const engineUnavailable = voiceSetupMessage("local-engine-unavailable");
+  if (message === engineUnavailable) return engineUnavailable;
+  if (/couldn.t finish \(decode-failed\)/iu.test(message)) {
+    return "On-device transcription couldn’t finish. Try again.";
+  }
+  if (/on-device|isn.t downloaded|download and select/iu.test(message)) {
     return "On-device transcription isn’t ready. Download and select a model in Settings → Voice.";
   }
   if (/429|rate limit|quota/iu.test(message)) {

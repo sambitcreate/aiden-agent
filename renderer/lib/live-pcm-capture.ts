@@ -1,4 +1,4 @@
-import { voiceApi } from "./ipc";
+import { voiceApi } from "./ipc-voice";
 
 export interface LiveTranscriptSnapshot {
   committed: string;

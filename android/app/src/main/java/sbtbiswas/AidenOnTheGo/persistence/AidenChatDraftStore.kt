@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import sbtbiswas.AidenOnTheGo.models.AidenAttachmentReference
+import sbtbiswas.AidenOnTheGo.models.AidenTurnStart
+import java.util.UUID
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -21,9 +24,71 @@ class AidenChatDraftStore(
     private val storageDir: File? = null,
     root: File? = null
 ) {
+    @Serializable
+    data class PendingSend(
+        val deviceId: String,
+        val request: AidenTurnStart,
+        val key: String,
+        val createdAtMillis: Long,
+        val attachments: List<AidenAttachmentReference>,
+        val streamId: String? = null,
+        val inputMode: sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode? = null
+    ) {
+        fun canRetry(nowMillis: Long = System.currentTimeMillis()): Boolean =
+            nowMillis >= createdAtMillis && nowMillis - createdAtMillis < 24 * 60 * 60 * 1000L
+    }
+
+    @Synchronized
+    fun loadPendingSend(session: Session, deviceId: String): PendingSend? {
+        if (!isCurrent(session)) return null
+        val file = attemptFile(session)
+        if (!file.exists()) return null
+        check(file.length() <= maximumDraftBytes) { "The saved send needs review before another message can be sent." }
+        val pending = json.decodeFromString<PendingSend>(file.readText())
+        UUID.fromString(pending.key)
+        check((pending.streamId == null) == (pending.inputMode == null))
+        return pending.takeIf { it.deviceId == deviceId }
+    }
+
+    @Synchronized
+    fun savePendingSend(pending: PendingSend?, session: Session) {
+        check(isCurrent(session)) { "The pairing changed before the message could be saved." }
+        val file = attemptFile(session)
+        if (pending == null) { check(!file.exists() || file.delete()); return }
+        val previous = loadPendingSend(session, pending.deviceId)
+        check(previous == null || previous == pending) { "Resolve the saved send before sending another message." }
+        val bytes = json.encodeToString(pending).toByteArray(Charsets.UTF_8)
+        check(bytes.size <= maximumDraftBytes) { "The pending message is too large." }
+        file.parentFile?.mkdirs()
+        val temporary = File(file.parentFile, file.name + ".tmp")
+        temporary.outputStream().use { it.write(bytes); it.fd.sync() }
+        check(temporary.renameTo(file)) { "Could not save the pending message." }
+    }
+
+    @Synchronized
+    fun settlePendingSend(key: String, session: Session) {
+        val file = attemptFile(session)
+        if (!file.exists() || file.length() > maximumDraftBytes) return
+        val pending = runCatching { json.decodeFromString<PendingSend>(file.readText()) }.getOrNull()
+        if (pending?.key == key) file.delete()
+    }
+
+    private fun attemptFile(session: Session): File =
+        File(fileURL(session.instanceId, session.chatId).parentFile, "${digest(session.chatId)}.attempt.json")
+
     data class Session(
         val instanceId: String,
         val chatId: String,
+        val generation: Long
+    )
+
+    /**
+     * Write authority over one pairing's drafts, captured before an async
+     * request. [purge] retires it, so a request that settles after an unpair
+     * cannot recreate the removed pairing's draft or staged attachments.
+     */
+    data class PurgeAuthority(
+        val instanceId: String,
         val generation: Long
     )
 
@@ -39,6 +104,8 @@ class AidenChatDraftStore(
     private val maximumDraftScalars = 100_000
     private val maximumDraftBytes = 400_000
     private val generations = ConcurrentHashMap<String, Long>()
+    private val stagedAttachments = ConcurrentHashMap<String, List<AidenAttachmentReference>>()
+    private val purgeGenerations = ConcurrentHashMap<String, Long>()
 
     val root: File
 
@@ -102,7 +169,44 @@ class AidenChatDraftStore(
     }
 
     @Synchronized
+    fun purgeAuthority(instanceId: String): PurgeAuthority =
+        PurgeAuthority(instanceId, purgeGenerations[instanceId] ?: 0L)
+
+    /** False once [purge] ran for the authority's pairing after it was captured. */
+    @Synchronized
+    fun isCurrent(authority: PurgeAuthority): Boolean =
+        (purgeGenerations[authority.instanceId] ?: 0L) == authority.generation
+
+    /** Saves [text] as [chatId]'s draft unless [authority] was purged. */
+    @Synchronized
+    fun setDraft(chatId: String, text: String, authority: PurgeAuthority): Boolean {
+        if (!isCurrent(authority)) return false
+        return save(text, beginSession(authority.instanceId, chatId))
+    }
+
+    /**
+     * Hands server-staged attachments (an "Edit in fork" prefill) to the next
+     * composer that opens [chatId], unless [authority] was purged. They are
+     * only valid until their `expiresAt`, so they live in memory rather than
+     * on disk.
+     */
+    @Synchronized
+    fun stageAttachments(chatId: String, attachments: List<AidenAttachmentReference>, authority: PurgeAuthority): Boolean {
+        if (!isCurrent(authority)) return false
+        val key = sessionKey(authority.instanceId, chatId)
+        if (attachments.isEmpty()) stagedAttachments.remove(key) else stagedAttachments[key] = attachments
+        return true
+    }
+
+    /** Returns and forgets the attachments staged for [chatId]. */
+    @Synchronized
+    fun takeStagedAttachments(instanceId: String, chatId: String): List<AidenAttachmentReference> =
+        stagedAttachments.remove(sessionKey(instanceId, chatId)).orEmpty()
+
+    @Synchronized
     fun remove(instanceId: String, chatId: String) {
+        attemptFile(Session(instanceId, chatId, 0)).delete()
+        stagedAttachments.remove(sessionKey(instanceId, chatId))
         invalidate(instanceId, chatId)
         val file = fileURL(instanceId, chatId)
         if (file.exists()) file.delete()
@@ -110,12 +214,14 @@ class AidenChatDraftStore(
 
     @Synchronized
     fun purge(instanceId: String) {
+        purgeGenerations.compute(instanceId) { _, current -> (current ?: 0L) + 1L }
         val prefix = "$instanceId\u001f"
         for (key in generations.keys) {
             if (key.startsWith(prefix)) {
                 generations.compute(key) { _, current -> (current ?: 0L) + 1L }
             }
         }
+        stagedAttachments.keys.removeAll { it.startsWith(prefix) }
         val dir = instanceDirectory(instanceId)
         if (dir.exists()) dir.deleteRecursively()
         _drafts.value = emptyMap()

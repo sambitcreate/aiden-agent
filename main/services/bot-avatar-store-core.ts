@@ -499,6 +499,34 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
         await options.storage.removeAsset(current.asset).catch(() => false);
       });
     },
+
+    /**
+     * Bot delete: erase every stored photo for this Bot, for every owner, and
+     * forget its operation receipts. Idempotent. The manifest is the commit
+     * point; an asset file left by a crash is swept as an orphan on the next
+     * start.
+     */
+    deleteBot(botId: string): Promise<void> {
+      return serialized(async () => {
+        if (!isSafeIdentifier(botId, 160)) {
+          throw new BotAvatarInputError("Bot avatar identity is invalid.");
+        }
+        await initialize();
+        const removed = document!.records.filter((record) => record.botId === botId);
+        const hasReceipts = document!.receipts.some((receipt) => receipt.botId === botId);
+        if (removed.length === 0 && !hasReceipts) return;
+        const next: BotAvatarStoreDocument = {
+          ...document!,
+          records: document!.records.filter((record) => record.botId !== botId),
+          receipts: document!.receipts.filter((receipt) => receipt.botId !== botId),
+        };
+        await options.storage.writeManifest(next);
+        document = next;
+        for (const record of removed) {
+          await options.storage.removeAsset(record.asset).catch(() => false);
+        }
+      });
+    },
   };
 }
 

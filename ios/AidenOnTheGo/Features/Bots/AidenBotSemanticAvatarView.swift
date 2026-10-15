@@ -1,31 +1,120 @@
 import SwiftUI
 
+/// What a Bot's character looks like: a colour and a shape. Every Bot shares
+/// one fixed eye mark, so the older eye and detail fields are not drawn.
 struct AidenBotAvatarPresentation: Equatable {
     let shape: AidenBotAvatarShape
     let color: AidenBotAvatarColor
-    let eyes: AidenBotAvatarEyes
-    let detail: AidenBotAvatarDetail
 }
 
 func aidenBotAvatarPresentation(_ avatar: AidenBotSemanticAvatar) -> AidenBotAvatarPresentation {
-    switch avatar {
-    case let .recipe(recipe):
-        return .init(
-            shape: recipe.shape,
-            color: recipe.color,
-            eyes: recipe.eyes,
-            detail: recipe.detail
+    .init(shape: avatar.recipe.shape, color: avatar.recipe.color)
+}
+
+/// The eye mark colour, shared with desktop (`BOT_AVATAR_FACE_HEX`).
+let aidenBotAvatarFaceRGB: UInt32 = 0x292735
+
+extension Color {
+    init(aidenRGB rgb: UInt32) {
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
         )
-    case let .legacy(legacy):
-        switch legacy {
-        case .spark: return .init(shape: .wisp, color: .sun, eyes: .happy, detail: .sparkles)
-        case .orbit: return .init(shape: .orb, color: .lilac, eyes: .focus, detail: .orbit)
-        case .leaf: return .init(shape: .drop, color: .mint, eyes: .sleepy, detail: .none)
-        case .prism: return .init(shape: .hex, color: .periwinkle, eyes: .wide, detail: .halo)
-        case .wave: return .init(shape: .cloud, color: .aqua, eyes: .wink, detail: .orbit)
-        case .ember: return .init(shape: .peak, color: .coral, eyes: .dots, detail: .bolts)
+    }
+}
+
+extension AidenBotAvatarColor {
+    /// The colour as 0xRRGGBB, exactly desktop's `BOT_AVATAR_COLOR_HEX`.
+    var rgb: UInt32 {
+        switch self {
+        case .lilac: 0xC6A9FF
+        case .sky: 0x83D8FF
+        case .mint: 0x88E8B1
+        case .sun: 0xFFDA7B
+        case .periwinkle: 0xB2BCFF
+        case .coral: 0xFF9F9B
+        case .peach: 0xFFC294
+        case .aqua: 0x78E8DF
+        case .rose: 0xFFA3C7
+        case .lime: 0xC6EC7E
+        case .plum: 0xDDA8F2
+        case .graphite: 0xC5C5CE
         }
     }
+
+    /// The fill shown for this character colour.
+    var swatch: Color { Color(aidenRGB: rgb) }
+
+    var displayName: String {
+        switch self {
+        case .lilac: "Lilac"
+        case .sky: "Sky"
+        case .mint: "Mint"
+        case .sun: "Sun"
+        case .periwinkle: "Periwinkle"
+        case .coral: "Coral"
+        case .peach: "Peach"
+        case .aqua: "Aqua"
+        case .rose: "Rose"
+        case .lime: "Lime"
+        case .plum: "Plum"
+        case .graphite: "Graphite"
+        }
+    }
+}
+
+extension AidenBotAvatarShape {
+    var displayName: String {
+        switch self {
+        case .wisp: "Wisp"
+        case .orb: "Circle"
+        case .drop: "Drop"
+        case .hex: "Hexagon"
+        case .cloud: "Cloud"
+        case .peak: "Triangle"
+        case .squircle: "Rounded square"
+        case .capsule: "Pill"
+        }
+    }
+}
+
+/// The canonical face's glance while its Bot works: the eyes look left and
+/// right and blink, on the shared `glance` keyframes. `dx` is a fraction of the
+/// avatar's size; `blink` scales the eyes' height.
+struct AidenBotFaceGlancePose: Equatable {
+    var dx: Double
+    var blink: Double
+
+    static let still = AidenBotFaceGlancePose(dx: 0, blink: 1)
+}
+
+private let aidenBotGlanceSpec = AidenActivityMarkSpec.make(.glance)
+
+/// How a working Bot's avatar says so (ruling 8, R19).
+struct AidenBotWorkingCue: Equatable {
+    /// The canonical face's eyes glance.
+    let glances: Bool
+    /// A small glance mark sits on the avatar's corner.
+    let badge: Bool
+
+    static let none = AidenBotWorkingCue(glances: false, badge: false)
+}
+
+/// A canonical face glances while its Bot works. A photo can't, and a face holds
+/// still under Reduce Motion or Low Power, so both wear the glance badge (whose
+/// mark then holds its still pose): a working Bot always keeps a visible cue.
+func aidenBotWorkingCue(working: Bool, hasPhoto: Bool, motionAllowed: Bool) -> AidenBotWorkingCue {
+    guard working else { return .none }
+    if !hasPhoto, motionAllowed { return AidenBotWorkingCue(glances: true, badge: false) }
+    return AidenBotWorkingCue(glances: false, badge: true)
+}
+
+func aidenBotFaceGlancePose(at time: TimeInterval) -> AidenBotFaceGlancePose {
+    let look = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.groups[0].tracks, atTime: time)
+    let eye = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.shapes[0].tracks, atTime: time)
+    // The mark's view box is 24 wide.
+    return AidenBotFaceGlancePose(dx: look.translateX / 24, blink: eye.scaleY)
 }
 
 struct AidenBotSemanticAvatarView: View {
@@ -33,6 +122,12 @@ struct AidenBotSemanticAvatarView: View {
     let name: String
     let size: CGFloat
     var isDecorative = true
+    /// The Bot is in a running turn: its eyes glance (spec §12, ruling 8).
+    var working = false
+
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.aidenReduceMotion) private var appReduceMotion
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
 
     private var presentation: AidenBotAvatarPresentation {
         aidenBotAvatarPresentation(avatar)
@@ -41,88 +136,53 @@ struct AidenBotSemanticAvatarView: View {
     var body: some View {
         ZStack {
             AidenBotAvatarShapeMask(shape: presentation.shape)
-                .fill(avatarColor.gradient)
-            detailDecoration
-            Text(eyeGlyph)
-                .font(.system(size: size * 0.29, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.5)
-                .shadow(color: .black.opacity(0.16), radius: 1, y: 1)
+                .fill(presentation.color.swatch)
+            AidenBotEyeMark(size: size, glancing: working && !systemReduceMotion && !appReduceMotion && !lowPowerMode)
         }
         .frame(width: size, height: size)
-        .overlay {
-            AidenBotAvatarShapeMask(shape: presentation.shape)
-                .stroke(.white.opacity(0.34), lineWidth: max(0.7, size * 0.012))
-        }
         .contentShape(AidenBotAvatarShapeMask(shape: presentation.shape))
         .accessibilityHidden(isDecorative)
         .accessibilityLabel(isDecorative ? "" : "\(name) Bot avatar")
     }
+}
 
-    @ViewBuilder
-    private var detailDecoration: some View {
-        switch presentation.detail {
-        case .none:
-            EmptyView()
-        case .halo:
-            Ellipse()
-                .stroke(.white.opacity(0.72), lineWidth: max(1, size * 0.025))
-                .frame(width: size * 0.55, height: size * 0.18)
-                .offset(y: -size * 0.27)
-        case .orbit:
-            ZStack(alignment: .trailing) {
-                Ellipse()
-                    .stroke(.white.opacity(0.62), lineWidth: max(1, size * 0.02))
-                Circle()
-                    .fill(.white)
-                    .frame(width: size * 0.09, height: size * 0.09)
-            }
-            .frame(width: size * 0.82, height: size * 0.34)
-            .rotationEffect(.degrees(-22))
-        case .sparkles:
-            Image(systemName: "sparkles")
-                .font(.system(size: size * 0.24, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
-                .offset(x: size * 0.24, y: -size * 0.23)
-        case .antenna:
-            VStack(spacing: 0) {
-                Circle().fill(.white).frame(width: size * 0.09, height: size * 0.09)
-                Capsule().fill(.white.opacity(0.78)).frame(width: size * 0.035, height: size * 0.16)
-            }
-            .offset(y: -size * 0.46)
-        case .bolts:
-            HStack(spacing: size * 0.54) {
-                Image(systemName: "bolt.fill")
-                Image(systemName: "bolt.fill")
-                    .scaleEffect(x: -1)
-            }
-            .font(.system(size: size * 0.16, weight: .bold))
-            .foregroundStyle(.white.opacity(0.76))
-        }
+/// A plain character shape, used by the Character card's shape choices.
+struct AidenBotShapeSwatch: View {
+    let shape: AidenBotAvatarShape
+    let color: Color
+    let size: CGFloat
+
+    var body: some View {
+        AidenBotAvatarShapeMask(shape: shape)
+            .fill(color)
+            .frame(width: size, height: size)
     }
+}
 
-    private var eyeGlyph: String {
-        switch presentation.eyes {
-        case .dots: "•  •"
-        case .wide: "●  ●"
-        case .happy: "⌣"
-        case .sleepy: "–  –"
-        case .focus: "⊙  ⊙"
-        case .wink: "•  ˘"
-        }
-    }
+/// The one eye mark every Bot shares: two short, slightly tilted strokes.
+/// While its Bot works they glance; otherwise (and under Reduce Motion) they hold still.
+private struct AidenBotEyeMark: View {
+    let size: CGFloat
+    var glancing = false
 
-    private var avatarColor: Color {
-        switch presentation.color {
-        case .lilac: .purple
-        case .sky: .blue
-        case .mint: .mint
-        case .sun: .yellow
-        case .periwinkle: .indigo
-        case .coral: .pink
-        case .peach: .orange
-        case .aqua: .cyan
+    var body: some View {
+        // 30 frames a second is plenty for a glance and spares the battery.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !glancing)) { context in
+            let pose = glancing ? aidenBotFaceGlancePose(at: context.date.timeIntervalSinceReferenceDate) : .still
+            HStack(spacing: size * 0.09) {
+                Capsule()
+                    .frame(width: size * 0.09, height: size * 0.2)
+                    .scaleEffect(x: 1, y: pose.blink)
+                Capsule()
+                    .frame(width: size * 0.09, height: size * 0.2)
+                    .scaleEffect(x: 1, y: pose.blink)
+            }
+            .foregroundStyle(Color(aidenRGB: aidenBotAvatarFaceRGB))
+            .offset(x: pose.dx * size)
+            .rotationEffect(.degrees(-12))
+            .offset(x: size * 0.08, y: -size * 0.02)
         }
+        .accessibilityHidden(true)
     }
 }
 

@@ -2,6 +2,35 @@ import Foundation
 import Observation
 import UIKit
 
+struct AidenConnectionIssue: Equatable {
+    let title: String
+    let message: String
+    let canRetry: Bool
+
+    static func classify(_ error: Error) -> Self {
+        let url = error as? URLError
+        if error is AidenServerTrustError || [.serverCertificateHasBadDate, .serverCertificateUntrusted, .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .secureConnectionFailed].contains(url?.code) {
+            return Self(title: "Verify this computer", message: "The saved computer's secure identity could not be verified. Check it on the desktop and pair again if its identity changed.", canRetry: false)
+        }
+        if url?.code == .notConnectedToInternet || url?.code == .dataNotAllowed {
+            return Self(title: "Waiting for network", message: "Connect this device to Wi-Fi or cellular data, then retry. Saved conversations remain available.", canRetry: true)
+        }
+        if error is AidenRemoteContractError || error is DecodingError {
+            return Self(title: "Update required", message: "The computer returned data this app cannot use. Update Aiden on both devices, then retry.", canRetry: true)
+        }
+        if let remote = error as? AidenRemoteClientError {
+            switch remote {
+            case .missingCredential, .missingTrustConfiguration:
+                return Self(title: "Pairing required", message: "Open Connections on the computer and pair this device again.", canRetry: false)
+            case .server(_, let body) where body.code.rawValue == "unsupported_protocol" || body.code.rawValue == "client_upgrade_required":
+                return Self(title: "Update required", message: "Update Aiden on both devices, then retry.", canRetry: true)
+            default: break
+            }
+        }
+        return Self(title: "Computer unavailable", message: "Check that Aiden is running on the computer and that both devices can reach the same network or Tailscale. Retry when it is available.", canRetry: true)
+    }
+}
+
 struct AidenClientDeviceIdentity {
     static func displayName(
         userAssignedName: String,
@@ -136,6 +165,7 @@ final class AidenRemoteCoordinator {
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
     private let clientFactory: ClientFactory
+    private(set) var connectionIssue: AidenConnectionIssue?
     private(set) var connectionState: AidenRemoteConnectionState
     private(set) var server: AidenServer?
     private(set) var workspaces: [AidenWorkspace] = []
@@ -265,8 +295,8 @@ final class AidenRemoteCoordinator {
     }
 
     func activatePairing(
-        payload: AidenRemoteContractFixture.PairingPayload,
-        exchange: AidenRemoteContractFixture.PairingExchange
+        payload: AidenRemotePairing.PairingPayload,
+        exchange: AidenRemotePairing.PairingExchange
     ) async throws {
         let temporaryName = exchange.displayName
             ?? payload.bootstrap.endpoint.host
@@ -304,6 +334,7 @@ final class AidenRemoteCoordinator {
         }
         self.server = validatedServer
         applyWorkspaceSnapshot(validatedWorkspaces, instanceId: installation.id)
+        connectionIssue = nil
         connectionState = .connected
         await negotiateProgressCapabilitiesIfNeeded(
             server: validatedServer,
@@ -328,6 +359,7 @@ final class AidenRemoteCoordinator {
             return
         }
         connectionState = .connecting
+        connectionIssue = nil
         presentedError = nil
         do {
             guard let credential = try installationStore.credential(for: installation),
@@ -416,7 +448,8 @@ final class AidenRemoteCoordinator {
             let refreshed = try await client.workspaces()
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             applyWorkspaceSnapshot(refreshed, instanceId: installationId)
-            connectionState = .connected
+            connectionIssue = nil
+        connectionState = .connected
         } catch {
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             await handleConnectionError(error, installationId: installationId)
@@ -768,6 +801,7 @@ final class AidenRemoteCoordinator {
         try installationStore.updateServer(server)
         self.server = server
         applyWorkspaceSnapshot(workspaces, instanceId: installation.id)
+        connectionIssue = nil
         connectionState = .connected
         await refreshDeviceIdentity(using: client, currentName: server.deviceName)
         await negotiateProgressCapabilitiesIfNeeded(
@@ -793,6 +827,10 @@ final class AidenRemoteCoordinator {
         if server.supportsChatAgents { requested.append(.agentsRead) }
         if server.supportsQuestionPrompts { requested.append(.questionsRespond) }
         if server.supportsChatSkills { requested.append(.skillsInvoke) }
+        if server.supportsPhoneRunControl { requested += [.runsObserve, .runsControl] }
+        if server.supportsMobileSimulators { requested.append(.simulatorsMobile) }
+        if server.supportsBotCards { requested.append(.botCards) }
+        if server.offersBotActivity { requested.append(.botActivity) }
         if server.features.contains("chat-ui-panels-enabled-v1") { requested.append(contentsOf: [.appControlsRead, .appControlsRespond]) }
         guard !requested.isEmpty,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
@@ -844,6 +882,13 @@ final class AidenRemoteCoordinator {
         guard let installation = installationStore.activeInstallation else {
             throw AidenRemoteClientError.missingCredential
         }
+        // The cache key changes whenever the active installation, its device
+        // identity, its credential scope, or the activation generation does,
+        // so a hit never needs the Keychain read below.
+        if let cachedActiveClient,
+           cachedActiveClient.key == activeClientKey(for: installation, activationGeneration: activationGeneration) {
+            return cachedActiveClient.client
+        }
         guard let credential = try installationStore.credential(for: installation),
               !credential.isEmpty else {
             throw AidenRemoteClientError.missingCredential
@@ -855,17 +900,24 @@ final class AidenRemoteCoordinator {
         )
     }
 
-    private func client(
+    private func activeClientKey(
         for installation: AidenInstallation,
-        credential: String,
         activationGeneration: Int
-    ) throws -> AidenRemoteClient {
-        let key = ActiveClientKey(
+    ) -> ActiveClientKey {
+        ActiveClientKey(
             instanceId: installation.id,
             deviceId: installation.deviceId,
             credentialScope: installation.credentialScope,
             activationGeneration: activationGeneration
         )
+    }
+
+    private func client(
+        for installation: AidenInstallation,
+        credential: String,
+        activationGeneration: Int
+    ) throws -> AidenRemoteClient {
+        let key = activeClientKey(for: installation, activationGeneration: activationGeneration)
         if let cachedActiveClient, cachedActiveClient.key == key {
             return cachedActiveClient.client
         }
@@ -948,10 +1000,13 @@ final class AidenRemoteCoordinator {
             return
         }
         if let clientError = error as? AidenRemoteClientError,
-           case .server = clientError {
-            connectionState = .connected
+           case .server = clientError, connectionState != .connecting {
+            connectionIssue = nil
+        connectionState = .connected
         } else {
-            connectionState = .offline(message: error.localizedDescription)
+            let issue = AidenConnectionIssue.classify(error)
+            connectionIssue = issue
+            connectionState = .offline(message: issue.message)
         }
         presentedError = error.localizedDescription
     }
@@ -974,8 +1029,11 @@ final class AidenRemoteCoordinator {
     ) async {
         workspaceArchiveStore.purge(instanceID: installationId)
         AidenProductNavigationStore.shared.purge(instanceID: installationId)
+        AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
+        AidenBotSessionCache.shared.purge(instanceId: installationId)
+        await AidenBotOutboxStore.shared.purge(instanceId: installationId)
         AidenModelPreferenceStore.shared.purge(instanceID: installationId)
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)

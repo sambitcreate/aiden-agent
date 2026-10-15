@@ -38,6 +38,31 @@ export interface ToolApprovalDecisionPayload {
 export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached" | "unavailable";
 
 /**
+ * The block reason returned to the model for a tool call that was not
+ * allowed. A declined attended automation proposal tells the model to stop
+ * retrying and hand the conversation back to the user.
+ */
+export function toolApprovalBlockReason(
+  outcome: Exclude<ToolApprovalOutcome, "allowed">,
+  attendedScheduleApproval: boolean,
+): string {
+  if (attendedScheduleApproval && outcome === "denied") {
+    return 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.';
+  }
+  switch (outcome) {
+    case "denied":
+      return "The user denied this action.";
+    case "detached":
+      return "Approval is unavailable while this response continues in the background. Return to the chat and retry the action.";
+    case "unavailable":
+      return "Aiden could not present the approval request. Return to the chat and retry the action.";
+    case "cancelled":
+    default:
+      return "The action was cancelled before approval.";
+  }
+}
+
+/**
  * Owns approval promises and their abort listeners. A decision is one-shot;
  * every settlement path removes both the map entry and signal listener.
  */
@@ -54,11 +79,17 @@ export class ToolApprovalCoordinator {
 
   constructor(
     private readonly publish: (prompt: ToolApprovalPrompt) => void,
-    private readonly withdraw?: (approvalId: string) => void,
+    /** Called once when a published prompt settles, with how it settled. */
+    private readonly withdraw?: (approvalId: string, outcome: ToolApprovalOutcome) => void,
   ) {}
 
+  /**
+   * `approvalId` may be supplied by a caller whose approvals outlive this
+   * process (Bots persist it as their `waitId`). A still-pending prompt with
+   * the same id is withdrawn first, so the id always names the newest ask.
+   */
   request(
-    descriptor: Omit<ToolApprovalPrompt, "approvalId">,
+    descriptor: Omit<ToolApprovalPrompt, "approvalId"> & { approvalId?: string },
     signal?: AbortSignal,
     ownerDocumentId?: string,
   ): Promise<ToolApprovalOutcome> {
@@ -69,7 +100,8 @@ export class ToolApprovalCoordinator {
     if (closedOutcome) {
       return Promise.resolve(closedOutcome);
     }
-    const approvalId = `a-${randomUUID()}`;
+    const approvalId = descriptor.approvalId ?? `a-${randomUUID()}`;
+    this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
       let settled = false;
       let published = false;
@@ -81,7 +113,7 @@ export class ToolApprovalCoordinator {
         signal?.removeEventListener("abort", aborted);
         if (published) {
           try {
-            this.withdraw?.(approvalId);
+            this.withdraw?.(approvalId, outcome);
           } catch {
             // Owner loss can make the withdrawal channel unavailable. The
             // approval capability is still removed and must always settle.
@@ -123,6 +155,29 @@ export class ToolApprovalCoordinator {
   ): boolean {
     const entry = this.pending.get(approvalId);
     if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
+    return this.settleDecision(entry, allowed, payload);
+  }
+
+  /**
+   * Host-authority decision for a paired controller holding `runs:control`.
+   * Skips the owner-document check but keeps the one-shot settlement, so the
+   * first responder across the host UI, phones and controllers wins.
+   */
+  decideAsHost(
+    approvalId: string,
+    allowed: boolean,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
+    const entry = this.pending.get(approvalId);
+    if (!entry) return false;
+    return this.settleDecision(entry, allowed, payload);
+  }
+
+  private settleDecision(
+    entry: PendingApproval,
+    allowed: boolean,
+    payload?: ToolApprovalDecisionPayload,
+  ): boolean {
     if (payload) {
       const { scope: requestedScope, ...rest } = payload;
       const scope = parseToolApprovalScope(requestedScope);

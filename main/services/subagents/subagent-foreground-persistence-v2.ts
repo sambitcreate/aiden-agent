@@ -126,6 +126,12 @@ export interface ForegroundSubagentPersistenceV2Input {
   randomUUID?: () => string;
 }
 
+/** The host-resolved runtime and effort one child runs with. */
+export interface SubagentChildModelBinding {
+  runtime: ResolvedModelRuntime;
+  thinkingLevel: ThinkingLevel;
+}
+
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -195,6 +201,7 @@ export function createForegroundSubagentPersistenceV2(
     maxTurns: number,
     requestedCapabilities: SubagentRequestedCapabilities,
     parentAuthority?: SubagentAuthorityV2,
+    childModel?: SubagentChildModelBinding,
   ): SubagentAuthorityV2 {
     const existing = authorities.get(identity.runId);
     if (existing) return existing;
@@ -304,13 +311,18 @@ export function createForegroundSubagentPersistenceV2(
       workspaceRevision: parentAuthority?.workspaceRevision ?? workspaceBinding,
       ownerDocumentId:
         parentAuthority?.ownerDocumentId ?? input.ownerDocumentId,
-      providerFingerprint:
-        parentAuthority?.providerFingerprint ?? providerBinding,
-      modelFingerprint: parentAuthority?.modelFingerprint ?? modelBinding,
+      // Model selection binds only runtime identity and effort. Capabilities
+      // above were resolved from the parent grant and are never model-dependent.
+      providerFingerprint: childModel
+        ? scheduledProviderFingerprint(childModel.runtime.provider)
+        : parentAuthority?.providerFingerprint ?? providerBinding,
+      modelFingerprint: childModel
+        ? modelFingerprint(childModel.runtime)
+        : parentAuthority?.modelFingerprint ?? modelBinding,
       contextRevision,
       execution: parentAuthority?.execution ?? "foreground",
       context: contextMode,
-      thinkingLevel: parentAuthority?.thinkingLevel ?? input.thinkingLevel,
+      thinkingLevel: childModel?.thinkingLevel ?? parentAuthority?.thinkingLevel ?? input.thinkingLevel,
       capabilities,
       budgets: {
         deadlineMs,
@@ -320,12 +332,15 @@ export function createForegroundSubagentPersistenceV2(
           MAX_SUBAGENT_SUMMARY_CHARS,
           MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
         ),
+        // Generation-wide tree allowance stays on the parent runtime. Pi already
+        // enforces each child's own context window per request; a smaller child
+        // must not shrink the shared remaining budget or clamp larger siblings.
         maxTokens: cumulativeSubagentTokenBudget(input.runtime.model.contextWindow),
         maxLaunches:
           parentAuthority?.budgets.maxLaunches ??
           MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
         maxDepth: 2,
-        maxActive: input.runtime.provider.deployment === "local" ? 1 : 2,
+        maxActive: (childModel?.runtime ?? input.runtime).provider.deployment === "local" ? 1 : 2,
         maxQueued: MAX_QUEUED_SUBAGENT_CHILDREN,
         maxNetworkOperations: 1,
       },
@@ -415,6 +430,7 @@ export function createForegroundSubagentPersistenceV2(
       deadlineMs: number;
       requestedCapabilities?: SubagentRequestedCapabilities;
       parentAuthority?: SubagentAuthorityV2;
+      childModel?: SubagentChildModelBinding;
       stop(reason?: Error): void;
     }) {
       void value.task;
@@ -535,6 +551,7 @@ export function createForegroundSubagentPersistenceV2(
             value.task.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
             requestedCapabilities,
             value.parentAuthority,
+            value.childModel,
           );
         } catch (error) {
           input.store.releaseRunReservation(value.identity.runId);

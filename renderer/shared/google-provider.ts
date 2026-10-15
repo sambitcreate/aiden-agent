@@ -1,3 +1,6 @@
+export const AZURE_PROVIDER_ID = "azure";
+export const LEGACY_AZURE_PROVIDER_ID = "azure-openai-responses";
+
 export const GOOGLE_PROVIDER_ID = "google";
 export const LEGACY_GEMINI_PROVIDER_ID = "gemini";
 export const MOONSHOT_AI_PROVIDER_ID = "moonshotai";
@@ -12,6 +15,7 @@ export function isSelectableGoogleCatalogModel(modelId: string): boolean {
 
 /** Preserve legacy voice-mode ids while remapping Pi chat-provider ownership. */
 export function migrateLegacyPiProviderId(providerId: string | undefined): string | undefined {
+  if (providerId === LEGACY_AZURE_PROVIDER_ID) return AZURE_PROVIDER_ID;
   if (providerId === LEGACY_GEMINI_PROVIDER_ID) return GOOGLE_PROVIDER_ID;
   if (providerId === LEGACY_MOONSHOT_PROVIDER_ID) return MOONSHOT_AI_PROVIDER_ID;
   return providerId;
@@ -19,6 +23,7 @@ export function migrateLegacyPiProviderId(providerId: string | undefined): strin
 
 export function migrateLegacyPiSelection(value: string): string {
   for (const [legacyId, piId] of [
+    [LEGACY_AZURE_PROVIDER_ID, AZURE_PROVIDER_ID],
     [LEGACY_GEMINI_PROVIDER_ID, GOOGLE_PROVIDER_ID],
     [LEGACY_MOONSHOT_PROVIDER_ID, MOONSHOT_AI_PROVIDER_ID],
   ]) {

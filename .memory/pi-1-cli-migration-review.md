@@ -1,0 +1,23 @@
+# Pi 1.0 CLI migration review — 2026-10-02
+
+PR299 review found parsed legacy data and backed-up bytes came from different reads, followed by a racy check/unlink of the active mcp.json pathname. Migration now acquires its destination lease before all reads, parses/validates/backs up one byte snapshot, and commits the Aiden inventory before atomically retiring the source into a private .mcp-migration-* directory. It compares the retired file with the validated bytes and restores unexpected content using exclusive hard-link publication only if no replacement occupies mcp.json. The retired inode stays available for recovery, including late writes through descriptors opened before the rename; the live config is never unlinked and recovery never overwrites another writer.
+
+Deterministic behavioral tests replace the source during validation, immediately before claiming, immediately after claiming, and through a previously opened descriptor. Native replacements survive, the canonical backup matches the validated legacy bytes, mismatches surface reconciliation, and private recovery copies remain readable only through their0700 directory. Existing invalid/conflicting inventory tests retained. README documents the recovery copy.
+
+The earlier revocation review is already corrected in c42320a28: createCliMcpRevision hashes aiden-mcp.json and Bot watchers invalidate that filename; existing parity tests verify both. Plan header and foundation/CLI progress checkpoints now reflect implemented PR299 work without importing later features.
+
+Validation: standalone CLI build and TypeScript passed under Node22.22.3; all39 parity tests passed (including existing Bot/subagent revocation behavior and new deterministic migration concurrency tests); full standalone CLI suite passed. Work remains local for coordinated parent restacking; no external review comments sent.
+
+## PR299 detached-response E2E phase follow-up
+
+Exact-head CI run37038628632 / Electron3/3 job110943055472 reported `Stop after revisiting cancels the detached response and permits a new message` flaky: the post-revisit Stop button was absent on the first attempt, and the built-in retry passed. `--fail-on-flaky-tests` correctly failed the job. No hosted rerun was requested. Hosted artifacts contain only the sanitized receipt, so the original event ordering cannot be proven from a trace.
+
+Stop-enabled is a renderer initialization state, not proof that the mock provider's held SSE response has begun. The scenario now explicitly observes its exact provider request before navigating away; its existing route-selection, Stop, cancellation and fresh-message assertions remain. This is a deterministic test-phase precondition, not a claimed production lifecycle fix. Temporary controlled admission-delay instrumentation showed lifecycle cancellation reaches main and authoritative recovery waits for the admitted turn to become idle, rather than pruning it from an early inactive snapshot; that unconfirmed hypothesis did not justify production changes and the instrumentation was removed.
+
+Validation on Node22.22.3: production build, E2E types, scoped lint and diff check pass. The corrected scenario plus the nearby revisit/queue scenarios passed five iterations each (15 actual Electron executions) with `--fail-on-flaky-tests`; no timeout or retry configuration changed. No production, shared contract or native client changes.
+
+## Main #308 integration across the Pi stack
+
+Merged main `2681471de` normally at the foundation PR after the PR305 native artifact reproduced the ActivityKit delivery assertion corrected by #308. Incoming changes are the plan archive/status refresh, bundled offline model metadata and native test-only ActivityKit delivery synchronization. Kept the active Pi plan entry and all main archive links; all 96 README relative links resolve. Package test scripts, CI registry, Remote protocol and CLI advisor vendor sources have no incoming changes. No live catalog fetch or production mobile changes.
+
+Validation on Node22.22.3: offline model-catalog suites 204/204, CI-policy 47/47, root and standalone CLI TypeScript passed. Focused `AidenNativeIntegrationTests` passed 26/26 without skips on explicit iPhone17Pro simulator FD028BE8-9229-4FDF-B2C4-804059CF5D11 / iOS26.2, using local Xcode27 beta (27A5252f); this differs from hosted stable Xcode and is simulator evidence only. The opt-in physical process-boundary case had no proof environment, so it does not establish physical acceptance. Result bundle `/tmp/aiden-pi-main308-native.xcresult`. Main's existing Markdown two-space line break in performance-stability-efficiency-plan.md is preserved. No hosted retries requested.

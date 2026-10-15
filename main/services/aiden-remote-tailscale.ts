@@ -189,7 +189,7 @@ function parseBoundedJson(serialized: string, label: string): unknown {
   }
 }
 
-function normalizeDnsName(value: unknown): string | undefined {
+export function normalizeDnsName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const dnsName = value.trim().replace(/\.$/u, "").toLowerCase();
   return /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(dnsName)

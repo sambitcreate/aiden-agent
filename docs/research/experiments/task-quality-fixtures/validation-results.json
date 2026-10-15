@@ -1,0 +1,345 @@
+{
+  "evidenceKind": "offline-synthetic-task-oracle-controls",
+  "generatedAt": "2026-10-11T20:46:27.574893+00:00",
+  "python": "3.14.8",
+  "status": "passed",
+  "modelCalls": 0,
+  "rows": [
+    {
+      "case": "old_only_constraints",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 34.991,
+      "candidateSha256": "e074dd5626aaaf4508fa2c7b65792d5dcd32962b844be60afe407393e6f0a02a"
+    },
+    {
+      "case": "old_only_constraints",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: audit_rows: preserve order and duplicates",
+      "elapsedMs": 49.454,
+      "candidateSha256": "b46abf64a8283a7a87e1cb9898694928f14fcee04e87ba597149d71f8d2d0206"
+    },
+    {
+      "case": "old_only_constraints",
+      "control": "wrong_deduplicate",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: audit_rows: preserve order and duplicates",
+      "elapsedMs": 45.848,
+      "candidateSha256": "dea59d85aa41b9dfd4b6b07dc2be6b959005f0caaddab5ee2faeacee21c5644b"
+    },
+    {
+      "case": "old_only_constraints",
+      "control": "wrong_unquoted",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: csv_roundtrip: escaped fields must survive",
+      "elapsedMs": 49.686,
+      "candidateSha256": "2aa92e1057bc9258a549242aab2ec7c96715b38a2dbfb48d863867895dae9931"
+    },
+    {
+      "case": "old_only_constraints",
+      "control": "wrong_crlf",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: lf_record_framing: LF between records for fields without CR data",
+      "elapsedMs": 46.076,
+      "candidateSha256": "3f9136bd12ce8d4ee585de474bc85077f22e058d9ce44338781b4070cb7ae775"
+    },
+    {
+      "case": "old_only_constraints",
+      "control": "correct_quote_all",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 38.189,
+      "candidateSha256": "49358669f0f63de2be89cd283b338109908aa2a53d04760e86e4d5b1f3e40029"
+    },
+    {
+      "case": "superseded_instructions",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 37.023,
+      "candidateSha256": "557b0ec103ecaa144644bf94ff30a8e79bc03992ea65c60e0074591db6292f06"
+    },
+    {
+      "case": "superseded_instructions",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: corrected_threshold: apply latest inclusive cutoff",
+      "elapsedMs": 46.947,
+      "candidateSha256": "b7124b00a0f420baf1624cb5f155ecb84dac4d019a92d48b55bc544b55bda9bb"
+    },
+    {
+      "case": "superseded_instructions",
+      "control": "wrong_old_threshold",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: corrected_threshold: apply latest inclusive cutoff",
+      "elapsedMs": 45.997,
+      "candidateSha256": "5627d5ccacf2ced28bab3f041fa633b6485d7657ed9fd4a61a9f192c2e1ccc9b"
+    },
+    {
+      "case": "superseded_instructions",
+      "control": "wrong_member_discount",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: no_member_discount: latest correction overrides old exemption",
+      "elapsedMs": 46.17,
+      "candidateSha256": "d290c54c15c183fdffc735d2ca394e84d30cf0d5060112c121b566cc087c867c"
+    },
+    {
+      "case": "superseded_instructions",
+      "control": "wrong_float",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: integer_cents",
+      "elapsedMs": 46.626,
+      "candidateSha256": "ec08e0bbd9992c68937d82c6a4727883608b886d93aa80f876fb1e39f9cf62d0"
+    },
+    {
+      "case": "buried_failed_tests",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 34.807,
+      "candidateSha256": "9f4bb60119999c2317077f67fadd549f7c56c4127e96f2c9462ad80575e507a5"
+    },
+    {
+      "case": "buried_failed_tests",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: cap_after_fourth: do not exceed 800ms",
+      "elapsedMs": 44.869,
+      "candidateSha256": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6"
+    },
+    {
+      "case": "buried_failed_tests",
+      "control": "wrong_uncapped",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: cap_after_fourth: do not exceed 800ms",
+      "elapsedMs": 47.733,
+      "candidateSha256": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6"
+    },
+    {
+      "case": "buried_failed_tests",
+      "control": "wrong_all_capped",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: early_schedule: preserve initial retries",
+      "elapsedMs": 47.494,
+      "candidateSha256": "72b3cb20faeca324c4eb71cc402f8fbfc6cc9cbc4a1f0caa192fe4c0f966962b"
+    },
+    {
+      "case": "buried_failed_tests",
+      "control": "wrong_float",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: integer_milliseconds",
+      "elapsedMs": 46.374,
+      "candidateSha256": "fb360b3d2624f282f735099061585954d90319161d57509ef3660ec9c4097c25"
+    },
+    {
+      "case": "output_recovery",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 36.306,
+      "candidateSha256": "f32fcd35bd42c417551d6179de5819d16c7f3c1fb3251f79b589f0b52c193977"
+    },
+    {
+      "case": "output_recovery",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: active_release: archived production must not win",
+      "elapsedMs": 46.44,
+      "candidateSha256": "29b2c3ef7638af1fbd27c4604ee0b0706ccb0d37803a424cdc670714625a4489"
+    },
+    {
+      "case": "output_recovery",
+      "control": "wrong_archived",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: active_release: archived production must not win",
+      "elapsedMs": 46.936,
+      "candidateSha256": "50bda26da9112811a87b0ac21644a2a7cd92df014d42104216327e07331e5dd4"
+    },
+    {
+      "case": "output_recovery",
+      "control": "wrong_unknown_fallback",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: unknown_rejected: no silent production fallback",
+      "elapsedMs": 43.818,
+      "candidateSha256": "31a10f02c652c4d0fe4c077b831bbca8cf71d4838b10e3d5e9f1bc08fa0f62ee"
+    },
+    {
+      "case": "resumed_plans",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 33.159,
+      "candidateSha256": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17"
+    },
+    {
+      "case": "resumed_plans",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: trim_outer: preserve interior spacing and Unicode",
+      "elapsedMs": 45.707,
+      "candidateSha256": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e"
+    },
+    {
+      "case": "resumed_plans",
+      "control": "wrong_new_plan",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: stable_plan_ids: resume existing branch tasks",
+      "elapsedMs": 47.15,
+      "candidateSha256": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17"
+    },
+    {
+      "case": "resumed_plans",
+      "control": "wrong_claimed_done",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: trim_outer: preserve interior spacing and Unicode",
+      "elapsedMs": 45.035,
+      "candidateSha256": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e"
+    },
+    {
+      "case": "comfortable_window_control",
+      "control": "correct",
+      "expected": "pass",
+      "exitCode": 0,
+      "result": "accepted",
+      "elapsedMs": 35.703,
+      "candidateSha256": "21c7178d8f8bc64b617e6397617e13fbaae52fcf4549d0b95c49fe0019945cbb"
+    },
+    {
+      "case": "comfortable_window_control",
+      "control": "starter",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: overlap_merge",
+      "elapsedMs": 46.047,
+      "candidateSha256": "30fa44a4803e646e3650c11bf719dedab0bca169797b48c94c1096864fda41ad"
+    },
+    {
+      "case": "comfortable_window_control",
+      "control": "wrong_touching",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: touching_separate",
+      "elapsedMs": 45.57,
+      "candidateSha256": "7dbc482a5d2ab61f03f2c734ef28c65f97fdb6f373987423725f36402a60b33a"
+    },
+    {
+      "case": "comfortable_window_control",
+      "control": "wrong_inplace",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: input_unchanged: caller owns source order",
+      "elapsedMs": 44.725,
+      "candidateSha256": "7154ebb335a7d54d870d4e4eb9814f16fa122a926b3b4455312ca873feecde30"
+    },
+    {
+      "case": "comfortable_window_control",
+      "control": "wrong_float",
+      "expected": "fail",
+      "exitCode": 1,
+      "result": "AssertionError: integer_endpoints",
+      "elapsedMs": 44.483,
+      "candidateSha256": "6e51d10f91655e4d1f457f241a554068c8d2cd88aff14987f6415eaf1fca66ba"
+    }
+  ],
+  "expandedObservations": [
+    {
+      "case": "buried_failed_tests",
+      "kind": "tool_observation_recipe",
+      "utf8Bytes": 86866,
+      "characters": 86866,
+      "sha256": "a07f872f70e78756c798a15662db786935c8c7c74a7db3bc9078b013e69d6bd8",
+      "decisiveOffset": 40600,
+      "decisiveAbsentFrom16000CharHeadAndTail": true
+    },
+    {
+      "case": "output_recovery",
+      "kind": "retained_output_recipe",
+      "utf8Bytes": 86600,
+      "characters": 86600,
+      "sha256": "4d32b13e99559e896418e4c3ad3ca2b9a0cc4d7d53bf602a232fd3e203a5b93e",
+      "decisiveOffset": 43200,
+      "decisiveAbsentFrom16000CharHeadAndTail": true
+    }
+  ],
+  "filesSha256": {
+    "buried_failed_tests/controls/correct/solution.py": "9f4bb60119999c2317077f67fadd549f7c56c4127e96f2c9462ad80575e507a5",
+    "buried_failed_tests/controls/wrong_all_capped/solution.py": "72b3cb20faeca324c4eb71cc402f8fbfc6cc9cbc4a1f0caa192fe4c0f966962b",
+    "buried_failed_tests/controls/wrong_float/solution.py": "fb360b3d2624f282f735099061585954d90319161d57509ef3660ec9c4097c25",
+    "buried_failed_tests/controls/wrong_uncapped/solution.py": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6",
+    "buried_failed_tests/oracle.py": "3da67fa537bae2045bfd0310142bb8a5cf64cb50803d27c328c46ce4e1a60e74",
+    "buried_failed_tests/task.json": "196fe214f325eb0b6af89305d37a3693a2fec4febf9d2aedafac24cddd22e675",
+    "buried_failed_tests/workspace/solution.py": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6",
+    "comfortable_window_control/controls/correct/solution.py": "21c7178d8f8bc64b617e6397617e13fbaae52fcf4549d0b95c49fe0019945cbb",
+    "comfortable_window_control/controls/wrong_float/solution.py": "6e51d10f91655e4d1f457f241a554068c8d2cd88aff14987f6415eaf1fca66ba",
+    "comfortable_window_control/controls/wrong_inplace/solution.py": "7154ebb335a7d54d870d4e4eb9814f16fa122a926b3b4455312ca873feecde30",
+    "comfortable_window_control/controls/wrong_touching/solution.py": "7dbc482a5d2ab61f03f2c734ef28c65f97fdb6f373987423725f36402a60b33a",
+    "comfortable_window_control/oracle.py": "c0ba268f8975d5fcb558826cba6dc7d1be88f535db3fdbdc456c93f718937a8a",
+    "comfortable_window_control/task.json": "72a6c6a6a38a6e0eac5ffa13918266cb018d2a6b7e12214606f8bb6b0d45e371",
+    "comfortable_window_control/workspace/solution.py": "30fa44a4803e646e3650c11bf719dedab0bca169797b48c94c1096864fda41ad",
+    "old_only_constraints/controls/correct/solution.py": "e074dd5626aaaf4508fa2c7b65792d5dcd32962b844be60afe407393e6f0a02a",
+    "old_only_constraints/controls/correct_quote_all/solution.py": "49358669f0f63de2be89cd283b338109908aa2a53d04760e86e4d5b1f3e40029",
+    "old_only_constraints/controls/wrong_crlf/solution.py": "3f9136bd12ce8d4ee585de474bc85077f22e058d9ce44338781b4070cb7ae775",
+    "old_only_constraints/controls/wrong_deduplicate/solution.py": "dea59d85aa41b9dfd4b6b07dc2be6b959005f0caaddab5ee2faeacee21c5644b",
+    "old_only_constraints/controls/wrong_unquoted/solution.py": "2aa92e1057bc9258a549242aab2ec7c96715b38a2dbfb48d863867895dae9931",
+    "old_only_constraints/oracle.py": "7177f96a65a5a1c05aea9a0279c7b3ad2cfac7048f10db850a62fada58a9ded4",
+    "old_only_constraints/task.json": "eb8a98007d47b35d91d9ae01ec9f2d27ab4d318e1503287fba79b22fe09a5c0d",
+    "old_only_constraints/workspace/solution.py": "b46abf64a8283a7a87e1cb9898694928f14fcee04e87ba597149d71f8d2d0206",
+    "output_recovery/controls/correct/solution.py": "f32fcd35bd42c417551d6179de5819d16c7f3c1fb3251f79b589f0b52c193977",
+    "output_recovery/controls/wrong_archived/solution.py": "50bda26da9112811a87b0ac21644a2a7cd92df014d42104216327e07331e5dd4",
+    "output_recovery/controls/wrong_unknown_fallback/solution.py": "31a10f02c652c4d0fe4c077b831bbca8cf71d4838b10e3d5e9f1bc08fa0f62ee",
+    "output_recovery/oracle.py": "af7eb89d5794b8bfcbf7b82884407f13837c74bad0573188a7df771dc381c7d9",
+    "output_recovery/task.json": "15b7120abbe4da5d2669b3de758332dbe9bb0e3c31156f9c69870549409364f6",
+    "output_recovery/workspace/solution.py": "29b2c3ef7638af1fbd27c4604ee0b0706ccb0d37803a424cdc670714625a4489",
+    "resumed_plans/controls/correct/host-plan-receipt.json": "d19e3aab997d7adbde2e12f35c3a87f045939307a0bd83f4566581491e5b4ca6",
+    "resumed_plans/controls/correct/solution.py": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17",
+    "resumed_plans/controls/wrong_claimed_done/host-plan-receipt.json": "d19e3aab997d7adbde2e12f35c3a87f045939307a0bd83f4566581491e5b4ca6",
+    "resumed_plans/controls/wrong_claimed_done/solution.py": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e",
+    "resumed_plans/controls/wrong_new_plan/host-plan-receipt.json": "a797780055217c8dc8d2af0163c8db4e3eba607ed509f228b37821fe60ba829b",
+    "resumed_plans/controls/wrong_new_plan/solution.py": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17",
+    "resumed_plans/oracle.py": "368edf82f76c810788176adcd2138fa7a4ec0d22f666adddbe9b92179c2eddbc",
+    "resumed_plans/task.json": "ab9ac570e63db4f80ba29751aa8d2cde814564004fdb15d955ef24184151aa26",
+    "resumed_plans/workspace/solution.py": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e",
+    "resumed_plans/workspace-initial-host-plan.json": "d24ca3bb13bea6417ec5a0da8cb19c11266976f71d083740763a380d6a4a9cf9",
+    "superseded_instructions/controls/correct/solution.py": "557b0ec103ecaa144644bf94ff30a8e79bc03992ea65c60e0074591db6292f06",
+    "superseded_instructions/controls/wrong_float/solution.py": "ec08e0bbd9992c68937d82c6a4727883608b886d93aa80f876fb1e39f9cf62d0",
+    "superseded_instructions/controls/wrong_member_discount/solution.py": "d290c54c15c183fdffc735d2ca394e84d30cf0d5060112c121b566cc087c867c",
+    "superseded_instructions/controls/wrong_old_threshold/solution.py": "5627d5ccacf2ced28bab3f041fa633b6485d7657ed9fd4a61a9f192c2e1ccc9b",
+    "superseded_instructions/oracle.py": "848840cc7b6f98d5db0afea5ba7ca9aa724da24278591aaceac87114080d73e1",
+    "superseded_instructions/task.json": "834b9098524adbc416f7933180b1448a0189f1c3946a06984e216abe536a91cc",
+    "superseded_instructions/workspace/solution.py": "b7124b00a0f420baf1624cb5f155ecb84dac4d019a92d48b55bc544b55bda9bb",
+    "validate.py": "bf2d2ede7db25a0ef3610b847521fa2e319a518db58089bb9ef46ec4be813902"
+  },
+  "elapsedMs": 1386.357,
+  "limitations": [
+    "Known-correct/negative implementations are authored fixtures, not model-generated repairs or an estimate of success rate.",
+    "Checks establish only explicit finite behavioral assertions; task-specific limits are in task.json.",
+    "Future output-store and durable-plan setup must use host adapters; offline plan receipts are synthetic.",
+    "Ten-second control subprocess cap is not a security sandbox or a live-pilot time budget."
+  ]
+}

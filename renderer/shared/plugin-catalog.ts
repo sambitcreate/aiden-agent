@@ -1,5 +1,7 @@
 // Official Codex Plugin Directory (openai-curated) plus Aiden's extra Composio
-// connector. Sourced from https://github.com/openai/plugins marketplace.json.
+// connector. Sourced from https://github.com/openai/plugins marketplace.json
+// and maintained by hand: `npm run plugins:refresh` (dev-only, never at
+// runtime) reports upstream additions, removals and URL changes for review.
 // Connectable entries are hosted HTTP MCP servers Aiden can authorize. Other
 // Codex plugins are listed so users can see what they do and why they cannot
 // be enabled as an Aiden MCP preset.
@@ -49,6 +51,11 @@ export interface PluginCatalogEntry {
 }
 
 export const PLUGIN_CATALOG_SOURCE_URL = "https://github.com/openai/plugins";
+/**
+ * The day a person last reviewed this catalog against upstream with
+ * `npm run plugins:refresh` (ISO date). Bump it only after that review.
+ */
+export const PLUGIN_CATALOG_VERIFIED_ON = "2026-10-13";
 
 const SKILLS_NOTE =
   "This Codex plugin ships skills and workflows, not a public hosted MCP server. Listing it here does not add agent tools or workspace access. Add matching instructions in Settings → Skills, or a custom MCP if the vendor publishes one.";
@@ -678,7 +685,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     source: "openai-curated",
     url: "https://mcp.consensus.app/mcp",
   }),
-  listed("chatgpt-app", APP_NOTE, {
+  listed("skills", SKILLS_NOTE, {
     id: "chatcut",
     name: "ChatCut",
     tagline: "Install, open, and connect the signed ChatCut desktop app.",
@@ -713,6 +720,15 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
     vendor: "By CrowdStrike",
     category: "Developer Tools",
     docsUrl: "https://github.com/CrowdStrike/fusion-skills",
+    source: "openai-curated",
+  }),
+  listed("git-marketplace", GIT_NOTE, {
+    id: "qodo",
+    name: "Qodo",
+    tagline: "Qodo code intelligence and review skills installed from GitHub.",
+    vendor: "By Qodo",
+    category: "Developer Tools",
+    docsUrl: "https://github.com/qodo-ai/qodo-skills",
     source: "openai-curated",
   }),
 ];

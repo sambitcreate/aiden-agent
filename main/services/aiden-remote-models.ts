@@ -17,6 +17,8 @@ import {
 import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
+import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -67,6 +69,8 @@ export class AidenRemoteModelService {
     for (const provider of configured) {
       if (
         (!provider.hasKey && provider.needsKey) ||
+        // Agent harnesses run only in chats open on the Mac, never from a phone.
+        isAcpHarnessProvider(provider.id) ||
         provider.id.length === 0 ||
         provider.id.length > MAX_REMOTE_MODEL_ID_LENGTH
       ) {
@@ -99,7 +103,10 @@ export class AidenRemoteModelService {
           continue;
         }
         const metadata = provider.modelMetadata?.[id];
-        const thinkingLevels = metadata?.thinkingLevels
+        const configuredLevels = provider.kind === "openai" && metadata?.overrides?.effortControl
+          ? customModelThinkingLevels(metadata.overrides) ?? []
+          : undefined;
+        const thinkingLevels = (configuredLevels ?? metadata?.thinkingLevels)
           ?.slice(0, 8)
           .map((level) => bounded(level, 32));
         const safeThinkingLevels = thinkingLevels?.filter(isGenerationThinkingLevel) ?? [];
@@ -132,7 +139,8 @@ export class AidenRemoteModelService {
           ...(safeThinkingLevels.length ? {
             thinkingLevels: safeThinkingLevels,
             defaultThinkingLevel,
-            thinkingCanDisable: metadata?.thinkingCanDisable !== false,
+            thinkingCanDisable: configuredLevels
+              ? safeThinkingLevels.includes("off") : metadata?.thinkingCanDisable !== false,
           } : {}),
         };
         const modelBytes = Buffer.byteLength(JSON.stringify(model), "utf8") + 1;
@@ -181,6 +189,8 @@ export class AidenRemoteModelService {
     thinkingLevels: readonly string[];
     supportsImages: boolean;
   }> {
+    const harnessReason = acpHarnessUnavailableReason(providerId);
+    if (harnessReason) throw new AidenRemoteServiceError("invalid_request", harnessReason, 400);
     const [projection, settings] = await Promise.all([this.list(), this.options.getSettings()]);
     const provider = providerId
       ? projection.providers.find((candidate) => candidate.id === providerId)

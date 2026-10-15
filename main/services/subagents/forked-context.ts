@@ -5,6 +5,7 @@ import { MAX_IMAGE_BYTES, MAX_TEXT_CHARS } from "../attachments.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { sanitizeSubagentText } from "./safe-text.js";
+import { redactCredentialTokens } from "../../shared/redaction.js";
 
 export type SubagentContextMode = "fresh" | "fork";
 
@@ -192,10 +193,7 @@ function plainRecord(value: unknown, field: string): object {
 }
 
 function redactPrivateForkText(value: string): string {
-  return sanitizeSubagentText(value)
-    .replace(/-----BEGIN [^-\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\n]+ PRIVATE KEY-----/giu, "[credential redacted]")
-    .replace(/\b(?:authorization\s*:\s*bearer|api[_ -]?key|access[_ -]?token|password|secret)\s*[:=]\s*[^\s,;]+/giu, "[credential redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/gu, "[credential redacted]")
+  return redactCredentialTokens(sanitizeSubagentText(value), "[credential redacted]")
     .replace(/\/(?:Users|home)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._@+,:=-]+)+/gu, "[private path redacted]");
 }
 

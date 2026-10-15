@@ -8,11 +8,46 @@ final class AidenRemoteClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.epoch = UUID().uuidString
     }
 
     override func tearDown() {
         AidenRemoteMockURLProtocol.handler = nil
         super.tearDown()
+    }
+
+    func testQuietProgressResumeCarriesEpochAndReportsOpenWithoutASnapshot() async throws {
+        let opened = expectation(description: "Recognized progress cursor is live")
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Progress-Epoch"), "epoch-original")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), "42")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream", "Aiden-Progress-Resumed": "true"])!, Data())
+        }
+        for try await _ in makeClient().progressEvents(chatId: "chat-1", after: 42, epoch: "epoch-original", onOpen: { resumed in
+            XCTAssertTrue(resumed)
+            opened.fulfill()
+        }) { XCTFail("A quiet resumed channel must not manufacture a snapshot") }
+        await fulfillment(of: [opened], timeout: 1)
+    }
+
+    func testConditionalReadReusesValidatedBytesAndRejectsUnsolicited304() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            let cached = request.value(forHTTPHeaderField: "If-None-Match") != nil
+            let response = HTTPURLResponse(url: request.url!, statusCode: cached ? 304 : 200, httpVersion: nil, headerFields: ["ETag": "W/\"snapshot\""])!
+            let body = #"{"protocolVersion":1,"instanceId":"instance-1","name":"Home","appVersion":"1","capabilities":["server:read"],"serverCapabilities":["server:read"],"connectionMode":"lan","serverTime":"2026-10-06T00:00:00Z"}"#
+            return (response, cached ? Data() : Data(body.utf8))
+        }
+        let first = try await client.server()
+        let second = try await client.server()
+        XCTAssertEqual(first.name, "Home")
+        XCTAssertEqual(second.name, "Home")
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "If-None-Match"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 304, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        do { _ = try await makeClient().server(); XCTFail("A new client must not reuse another client's private bytes") } catch { }
     }
 
     func testClientDeviceIdentityPrefersSpecificUserAssignedName() {
@@ -458,6 +493,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(server.supportsChatSummaries)
         XCTAssertEqual(server.features, [
             AidenServer.chatSummariesFeature,
+            AidenServer.chatVisualsFeature,
             AidenServer.chatTasksFeature,
             AidenServer.chatAgentsFeature,
             AidenServer.chatRunInputFeature,
@@ -465,6 +501,13 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenServer.chatSkillsFeature,
             AidenServer.chatAgentInterruptFeature,
             AidenServer.chatReadStateFeature,
+            AidenBotDeletion.hostFeature,
+            AidenBotHostFeature.durableSession,
+            AidenBotHostFeature.routines,
+            AidenBotHostFeature.connectionRequests,
+            AidenBotHostFeature.presets,
+            AidenBotHostFeature.memory,
+            AidenBotHostFeature.proactive,
             "chat-ui-panels-v1",
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
@@ -920,10 +963,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let botID = "bot_fixture_01"
         let detail = try botFixtureData(at: ["botDetail"])
         let identity = try botFixtureData(at: ["botIdentity", "response"])
-        let archive = try botFixtureData(at: ["botArchive"])
-        let restore = try botFixtureData(at: ["botRestore"])
         let avatarDeleted = try botFixtureData(at: ["botCreate", "response"])
-        let idempotencyKey = UUID(uuidString: "67494088-35C0-4204-84CB-BDF2E04C31FC")!
         var step = 0
         AidenRemoteMockURLProtocol.handler = { request in
             step += 1
@@ -941,25 +981,17 @@ final class AidenRemoteClientTests: XCTestCase {
                 XCTAssertEqual(try Self.jsonBody(request)["purpose"] as? String, "Updated purpose")
                 return Self.response(for: request, status: 200, data: identity)
             case 3:
+                // Permanent delete: 204, no body, guarded by If-Match.
                 XCTAssertEqual(request.httpMethod, "DELETE")
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_8")
-                return Self.response(for: request, status: 200, data: archive)
+                return Self.response(for: request, status: 204, data: Data())
             case 4:
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/restore")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_9")
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "Idempotency-Key"),
-                    idempotencyKey.uuidString.lowercased()
-                )
-                return Self.response(for: request, status: 200, data: restore)
-            case 5:
                 XCTAssertEqual(request.httpMethod, "DELETE")
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/avatar")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_10")
                 return Self.response(for: request, status: 200, data: avatarDeleted)
-            case 6:
+            case 5:
                 return Self.response(for: request, status: 201, data: detail)
             default:
                 XCTFail("Unexpected Bot detail request")
@@ -975,14 +1007,7 @@ final class AidenRemoteClientTests: XCTestCase {
             patch: AidenBotIdentityPatch(purpose: "Updated purpose")
         )
         XCTAssertEqual(updated.id, botID)
-        let archived = try await client.archiveBot(id: botID, revision: "bot_revision_8")
-        XCTAssertEqual(archived.health, .archived)
-        let restored = try await client.restoreBot(
-            id: botID,
-            revision: "bot_revision_9",
-            idempotencyKey: idempotencyKey
-        )
-        XCTAssertEqual(restored.health, .ready)
+        try await client.deleteBot(id: botID, revision: "bot_revision_8")
         let avatarRemoved = try await client.deleteBotAvatar(
             botId: botID,
             revision: "bot_revision_10"
@@ -991,7 +1016,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await assertUnexpectedStatus(201) {
             try await client.bot(id: botID)
         }
-        XCTAssertEqual(step, 6)
+        XCTAssertEqual(step, 5)
     }
 
     func testBotDetailRoutesRejectCrossBotResponseIdentity() async throws {
@@ -1000,8 +1025,6 @@ final class AidenRemoteClientTests: XCTestCase {
         let responses = [
             try botFixtureData(at: ["botDetail"]),
             try botFixtureData(at: ["botIdentity", "response"]),
-            try botFixtureData(at: ["botArchive"]),
-            try botFixtureData(at: ["botRestore"]),
             try botFixtureData(at: ["botCreate", "response"]),
         ]
         var step = 0
@@ -1019,106 +1042,236 @@ final class AidenRemoteClientTests: XCTestCase {
             )
         }
         await assertInvalidResponse {
-            try await client.archiveBot(id: expectedID, revision: "bot_revision_2")
-        }
-        await assertInvalidResponse {
-            try await client.restoreBot(id: expectedID, revision: "bot_revision_3")
-        }
-        await assertInvalidResponse {
             try await client.deleteBotAvatar(botId: expectedID, revision: "bot_revision_4")
         }
-        XCTAssertEqual(step, 5)
+        XCTAssertEqual(step, 3)
     }
 
-    @MainActor
-    func testBotProfileDeleteFetchesAuthoritativeChatAndUsesItsRevision() async throws {
+    /// Revision 25 durable sessions, routines, presets and connection requests
+    /// each send the exact route, precondition and idempotency key the host expects.
+    func testDurableBotRoutesUseCanonicalRoutesPreconditionsAndKeys() async throws {
         let client = makeClient()
-        let projection: AidenBotConversationItem = try botFixtureValue(at: ["botConversation"])
-        var chatObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(
-                with: botFixtureData(at: ["botChatCreate", "response"])
-            ) as? [String: Any]
+        let botID = "bot_fixture_01"
+        let routineID = "task_fixture_routine_01"
+        let createBot: AidenBotCreateRequest = try botFixtureValue(at: ["botCreate", "request"])
+        let query: AidenBotConversationQuery = try botFixtureValue(at: ["botConversationQuery"])
+        let createChat: AidenBotChatCreateRequest = try botFixtureValue(at: ["botChatCreate", "request"])
+        let botAccessUpdate: AidenBotAccessUpdate = try botFixtureValue(at: ["botPolicyUpdate", "request"])
+        let routineCreate: AidenBotRoutineCreateRequest = try botFixtureValue(at: ["botRoutineCreate", "request"])
+        let routineUpdate: AidenBotRoutineUpdateRequest = try botFixtureValue(at: ["botRoutineUpdate", "request"])
+        let connection: AidenBotConnectionRequest = try botFixtureValue(at: ["botConnectionRequest", "request"])
+        let presetCreate: AidenBotPresetCreateRequest = try botFixtureValue(at: ["botPresetCreate", "request"])
+        let resumeKey = UUID(uuidString: "3C3A5A71-4F21-4E02-A7EA-4AA33EE5EF60")!
+        let botCreationKey = UUID(uuidString: "76ED0E79-2DFC-43BE-92D5-98DCC3D83707")!
+        let chatCreationKey = UUID(uuidString: "09EB5E53-A869-4363-9DC6-F305E2AE1E8A")!
+        let routineKey = UUID(uuidString: "5B9D2A7E-0C1F-4E8B-9D3A-6F2C1B0E7A44")!
+        let connectionKey = UUID(uuidString: "0E6F3A2B-8D4C-4B1A-9E7F-2A5C6D8B9E01")!
+        let presetKey = UUID(uuidString: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D")!
+        let responses = [
+            try botFixtureData(at: ["botList"]),
+            try botFixtureData(at: ["botCreate", "response"]),
+            try botFixtureData(at: ["botConversations"]),
+            try botFixtureData(at: ["botChatCreate", "response"]),
+            try botFixtureData(at: ["botCapabilityCatalog"]),
+            try botFixtureData(at: ["botPolicyUpdate", "response"]),
+            try botFixtureData(at: ["botSessionResume", "response"]),
+            try botFixtureData(at: ["botSessionResume", "response"]),
+            try botFixtureData(at: ["botSessionDismiss", "response"]),
+            try botFixtureData(at: ["botRoutines"]),
+            try botFixtureData(at: ["botRoutineCreate", "response"]),
+            try botFixtureData(at: ["botRoutineUpdate", "response"]),
+            Data(),
+            try botFixtureData(at: ["botConnectionRequest", "response"]),
+            try botFixtureData(at: ["botPresets"]),
+            try botFixtureData(at: ["botPresetCreate", "response"]),
+            Data(),
+        ]
+        var resumeKeys: [String?] = []
+        var mismatchedPage = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: responses[2]) as? [String: Any]
         )
-        chatObject["id"] = projection.id
-        chatObject["revision"] = "authoritative_chat_revision_42"
-        let authoritativeChat = try JSONSerialization.data(
-            withJSONObject: chatObject,
-            options: [.sortedKeys]
+        var mismatchedConversations = try XCTUnwrap(
+            mismatchedPage["conversations"] as? [[String: Any]]
         )
+        mismatchedConversations[0]["botId"] = "bot_other_01"
+        mismatchedPage["conversations"] = mismatchedConversations
+        let mismatchData = try JSONSerialization.data(withJSONObject: mismatchedPage)
+
         var step = 0
         AidenRemoteMockURLProtocol.handler = { request in
             step += 1
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), "1")
             switch step {
             case 1:
                 XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(projection.id)")
-                return Self.response(for: request, status: 200, data: authoritativeChat)
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots")
+                XCTAssertNil(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.query)
             case 2:
-                XCTAssertEqual(request.httpMethod, "DELETE")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(projection.id)")
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), botCreationKey.uuidString.lowercased())
+            case 3:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-conversations")
                 XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    "authoritative_chat_revision_42"
+                    URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
+                    [
+                        URLQueryItem(name: "cursor", value: "bot_cursor_fixture_01"),
+                        URLQueryItem(name: "query", value: "week"),
+                        URLQueryItem(name: "botId", value: botID),
+                        URLQueryItem(name: "limit", value: "30"),
+                    ]
                 )
-                XCTAssertNotEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    projection.revision
-                )
-                return Self.response(for: request, status: 204, data: Data())
-            default:
-                XCTFail("Unexpected Bot profile delete request")
-                return Self.response(for: request, status: 500, json: "{}")
-            }
-        }
-
-        let deleted = try await aidenBotProfileDeleteConversation(
-            client: client,
-            projection: projection,
-            expectedBotID: projection.botId,
-            isCurrent: { true }
-        )
-
-        XCTAssertEqual(deleted.id, projection.id)
-        XCTAssertEqual(deleted.revision, "authoritative_chat_revision_42")
-        XCTAssertEqual(step, 2)
-    }
-
-    @MainActor
-    func testBotProfileLifecycleRefreshesFavoritesAfterArchive() async throws {
-        let client = makeClient()
-        let botID = "bot_fixture_01"
-        let archive = try botFixtureData(at: ["botArchive"])
-        let favorites = try botFixtureData(at: ["botFavorites"])
-        var step = 0
-        AidenRemoteMockURLProtocol.handler = { request in
-            step += 1
-            switch step {
-            case 1:
+            case 4:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/chats")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), chatCreationKey.uuidString.lowercased())
+            case 5:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-capabilities")
+            case 6:
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/capabilities")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_policy_revision_4")
+            case 7, 8:
+                // A double Resume sends the same request key both times.
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/resume")
+                resumeKeys.append(request.value(forHTTPHeaderField: "Idempotency-Key"))
+            case 9:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/dismiss")
+            case 10:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/routines")
+            case 11:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/routines")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), routineKey.uuidString.lowercased())
+            case 12:
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/routines/\(routineID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "routine_revision_1")
+            case 13:
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/routines/\(routineID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "routine_revision_2")
+            case 14:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/connection-requests")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), connectionKey.uuidString.lowercased())
+            case 15:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-presets")
+            case 16:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/from-preset")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), presetKey.uuidString.lowercased())
+            case 17:
                 XCTAssertEqual(request.httpMethod, "DELETE")
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_revision_8")
-                return Self.response(for: request, status: 200, data: archive)
-            case 2:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-favorites")
-                return Self.response(for: request, status: 200, data: favorites)
+            case 18:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-conversations")
             default:
-                XCTFail("Unexpected Bot profile lifecycle request")
-                return Self.response(for: request, status: 500, json: "{}")
+                XCTFail("Unexpected Bot API request")
             }
+            let status: Int
+            switch step {
+            case 2, 4, 11, 16: status = 201
+            case 13, 17: status = 204
+            default: status = 200
+            }
+            if step == 18 {
+                // The final conversations read returns another Bot's row: refused.
+                return Self.response(for: request, status: 200, data: mismatchData)
+            }
+            return Self.response(for: request, status: status, data: responses[step - 1])
         }
 
-        let result = try await aidenBotProfileLifecycleUpdate(
-            client: client,
-            botID: botID,
-            revision: "bot_revision_8",
-            action: .archive,
-            isCurrent: { true }
+        let bots = try await client.bots()
+        XCTAssertEqual(bots.bots.first?.id, botID)
+        let createdBot = try await client.createBot(createBot, idempotencyKey: botCreationKey)
+        XCTAssertEqual(createdBot.id, botID)
+        let conversations = try await client.botConversations(query: query)
+        XCTAssertEqual(conversations.conversations.first?.botId, botID)
+        let createdChat = try await client.createBotChat(
+            botId: botID,
+            request: createChat,
+            idempotencyKey: chatCreationKey
         )
+        XCTAssertEqual(createdChat.botId, botID)
+        let catalog = try await client.botCapabilityCatalog()
+        XCTAssertEqual(catalog.revision, "bot_catalog_revision_3")
+        let updatedBotAccess = try await client.updateBotAccess(
+            botId: botID,
+            revision: "bot_policy_revision_4",
+            update: botAccessUpdate
+        )
+        XCTAssertEqual(updatedBotAccess.botId, botID)
 
-        XCTAssertEqual(result.detail.health, .archived)
-        XCTAssertEqual(result.favorites.revision, "bot_favorites_revision_2")
-        XCTAssertEqual(step, 2)
+        let firstResume = try await client.resumeBotSession(botId: botID, idempotencyKey: resumeKey)
+        let secondResume = try await client.resumeBotSession(botId: botID, idempotencyKey: resumeKey)
+        XCTAssertEqual(firstResume, secondResume)
+        XCTAssertEqual(resumeKeys, [resumeKey.uuidString.lowercased(), resumeKey.uuidString.lowercased()])
+        _ = try await client.dismissBotSession(botId: botID, idempotencyKey: UUID())
+
+        let routines = try await client.botRoutines(botId: botID)
+        XCTAssertEqual(routines.count, 2)
+        _ = try await client.createBotRoutine(botId: botID, request: routineCreate, idempotencyKey: routineKey)
+        _ = try await client.updateBotRoutine(
+            botId: botID,
+            routineId: routineID,
+            revision: "routine_revision_1",
+            request: routineUpdate
+        )
+        try await client.deleteBotRoutine(botId: botID, routineId: routineID, revision: "routine_revision_2")
+
+        let receipt = try await client.requestBotConnection(
+            botId: botID,
+            request: connection,
+            idempotencyKey: connectionKey
+        )
+        XCTAssertEqual(receipt.pluginId, connection.pluginId)
+
+        let presets = try await client.botPresets()
+        XCTAssertFalse(presets.isEmpty)
+        let preset = try await client.createBotFromPreset(presetCreate, idempotencyKey: presetKey)
+        XCTAssertEqual(preset.bot.sessionState, .needsModel)
+
+        try await client.deleteBot(id: botID, revision: "bot_revision_8")
+        await assertInvalidResponse { try await client.botConversations(query: query) }
+        XCTAssertEqual(step, 18)
+    }
+
+    /// A quick-reply answer posts to its own question's route under the request
+    /// UUID, and the receipt must name that same wait id.
+    func testBotQuestionAnswerPostsToItsWaitIdUnderTheRequestKey() async throws {
+        let client = makeClient()
+        let botID = "bot_fixture_01"
+        let waitID = "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c"
+        let key = UUID(uuidString: "6A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D")!
+        let answer = AidenQuestionRespondRequest(
+            cancelled: false,
+            answers: [.option(questionIndex: 0, answer: "Blue")]
+        )
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/questions/\(waitID)/answer")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            return Self.response(for: request, status: 200, data: Data("{\"waitId\":\"\(waitID)\"}".utf8))
+        }
+        let receipt = try await client.answerBotQuestion(
+            botId: botID,
+            waitId: waitID,
+            request: answer,
+            idempotencyKey: key
+        )
+        XCTAssertEqual(receipt.waitId, waitID)
+        XCTAssertEqual(step, 1)
     }
 
     @MainActor
@@ -1166,186 +1319,6 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.invalidResponse))
         XCTAssertFalse(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
-    }
-
-    func testRemainingBotAPIsUseCanonicalRoutesQueriesPreconditionsAndResponseAffinity() async throws {
-        let client = makeClient()
-        let botID = "bot_fixture_01"
-        let chatID = "chat_bot_fixture_01"
-        let createBot: AidenBotCreateRequest = try botFixtureValue(at: ["botCreate", "request"])
-        let query: AidenBotConversationQuery = try botFixtureValue(at: ["botConversationQuery"])
-        let createChat: AidenBotChatCreateRequest = try botFixtureValue(at: ["botChatCreate", "request"])
-        let botAccessUpdate: AidenBotAccessUpdate = try botFixtureValue(at: ["botPolicyUpdate", "request"])
-        let chatAccessUpdate: AidenBotChatAccessUpdate = try botFixtureValue(
-            at: ["botChatSubsetUpdate", "request"]
-        )
-        let favoritesUpdate: AidenBotFavoritesUpdateRequest = try botFixtureValue(
-            at: ["botFavoritesUpdate", "request"]
-        )
-        let noticeAcknowledgement: AidenBotNoticeAcknowledgement = try botFixtureValue(
-            at: ["botNoticeAcknowledgement", "request"]
-        )
-        let botCreationKey = UUID(uuidString: "76ED0E79-2DFC-43BE-92D5-98DCC3D83707")!
-        let chatCreationKey = UUID(uuidString: "09EB5E53-A869-4363-9DC6-F305E2AE1E8A")!
-        let noticeKey = UUID(uuidString: "3C3A5A71-4F21-4E02-A7EA-4AA33EE5EF60")!
-        let responses = [
-            try botFixtureData(at: ["botList"]),
-            try botFixtureData(at: ["botCreate", "response"]),
-            try botFixtureData(at: ["botConversations"]),
-            try botFixtureData(at: ["botChatCreate", "response"]),
-            try botFixtureData(at: ["botCapabilityCatalog"]),
-            try botFixtureData(at: ["botPolicyUpdate", "response"]),
-            try botFixtureData(at: ["botChatSubset"]),
-            try botFixtureData(at: ["botChatSubsetUpdate", "response"]),
-            try botFixtureData(at: ["botFavorites"]),
-            try botFixtureData(at: ["botFavoritesUpdate", "response"]),
-            try botFixtureData(at: ["botNotice"]),
-            try botFixtureData(at: ["botNoticeAcknowledgement", "response"]),
-        ]
-        var mismatchedPage = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: responses[2]) as? [String: Any]
-        )
-        var mismatchedConversations = try XCTUnwrap(
-            mismatchedPage["conversations"] as? [[String: Any]]
-        )
-        mismatchedConversations[0]["botId"] = "bot_other_01"
-        mismatchedPage["conversations"] = mismatchedConversations
-        let mismatchData = try JSONSerialization.data(withJSONObject: mismatchedPage)
-
-        var step = 0
-        AidenRemoteMockURLProtocol.handler = { request in
-            step += 1
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), "1")
-            switch step {
-            case 1:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots")
-                XCTAssertEqual(
-                    URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
-                    [URLQueryItem(name: "includeArchived", value: "true")]
-                )
-            case 2:
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots")
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "Idempotency-Key"),
-                    botCreationKey.uuidString.lowercased()
-                )
-                XCTAssertEqual(try Self.jsonBody(request)["name"] as? String, "Scout")
-            case 3, 13:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-conversations")
-                XCTAssertEqual(
-                    URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
-                    [
-                        URLQueryItem(name: "cursor", value: "bot_cursor_fixture_01"),
-                        URLQueryItem(name: "query", value: "week"),
-                        URLQueryItem(name: "botId", value: botID),
-                        URLQueryItem(name: "limit", value: "30"),
-                    ]
-                )
-                if step == 13 {
-                    return Self.response(for: request, status: 200, data: mismatchData)
-                }
-            case 4:
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/chats")
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "Idempotency-Key"),
-                    chatCreationKey.uuidString.lowercased()
-                )
-                XCTAssertEqual(try Self.jsonBody(request)["modelId"] as? String, "model_fixture")
-            case 5:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-capabilities")
-            case 6:
-                XCTAssertEqual(request.httpMethod, "PATCH")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botID)/capabilities")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_policy_revision_4")
-                XCTAssertEqual(try Self.jsonBody(request)["accessMode"] as? String, "custom")
-            case 7:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(chatID)/capabilities")
-            case 8:
-                XCTAssertEqual(request.httpMethod, "PATCH")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/\(chatID)/capabilities")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_policy_revision_2")
-                XCTAssertEqual(try Self.jsonBody(request)["mode"] as? String, "custom")
-            case 9:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-favorites")
-            case 10:
-                XCTAssertEqual(request.httpMethod, "PATCH")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-favorites")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "bot_favorites_revision_1")
-                XCTAssertEqual(try Self.jsonBody(request)["botIds"] as? [String], [botID])
-            case 11:
-                XCTAssertEqual(request.httpMethod, "GET")
-                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bot-access-notice")
-            case 12:
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(
-                    request.url?.path,
-                    "/api/aiden/v1/bot-access-notice/acknowledgement"
-                )
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "Idempotency-Key"),
-                    noticeKey.uuidString.lowercased()
-                )
-                let body = try Self.jsonBody(request)
-                XCTAssertEqual(body["decision"] as? String, "continue_full")
-                XCTAssertEqual(body["confirmedForeground"] as? Bool, true)
-            default:
-                XCTFail("Unexpected Bot API request")
-            }
-            return Self.response(for: request, status: step == 2 || step == 4 ? 201 : 200, data: responses[step - 1])
-        }
-
-        let bots = try await client.bots(includeArchived: true)
-        XCTAssertEqual(bots.bots.first?.id, botID)
-        let createdBot = try await client.createBot(createBot, idempotencyKey: botCreationKey)
-        XCTAssertEqual(createdBot.id, botID)
-        let conversations = try await client.botConversations(query: query)
-        XCTAssertEqual(conversations.conversations.first?.botId, botID)
-        let createdChat = try await client.createBotChat(
-            botId: botID,
-            request: createChat,
-            idempotencyKey: chatCreationKey
-        )
-        XCTAssertEqual(createdChat.botId, botID)
-        let catalog = try await client.botCapabilityCatalog()
-        XCTAssertEqual(catalog.revision, "bot_catalog_revision_3")
-        let updatedBotAccess = try await client.updateBotAccess(
-            botId: botID,
-            revision: "bot_policy_revision_4",
-            update: botAccessUpdate
-        )
-        XCTAssertEqual(updatedBotAccess.botId, botID)
-        let chatAccess = try await client.botChatAccess(chatId: chatID)
-        XCTAssertEqual(chatAccess.chatId, chatID)
-        let updatedChatAccess = try await client.updateBotChatAccess(
-            chatId: chatID,
-            revision: "chat_policy_revision_2",
-            update: chatAccessUpdate
-        )
-        XCTAssertEqual(updatedChatAccess.chatId, chatID)
-        let favorites = try await client.botFavorites()
-        XCTAssertEqual(favorites.botIds, [botID])
-        let updatedFavorites = try await client.updateBotFavorites(
-            favoritesUpdate,
-            revision: "bot_favorites_revision_1"
-        )
-        XCTAssertEqual(updatedFavorites.botIds, [botID])
-        let notice = try await client.botAccessNotice()
-        XCTAssertTrue(notice.requiresAcknowledgement)
-        let acknowledgedNotice = try await client.acknowledgeBotAccessNotice(
-            noticeAcknowledgement,
-            idempotencyKey: noticeKey
-        )
-        XCTAssertFalse(acknowledgedNotice.requiresAcknowledgement)
-        await assertInvalidResponse { try await client.botConversations(query: query) }
-        XCTAssertEqual(step, 13)
     }
 
     func testBotFileRoutesUseBoundedFilePayloadsAndValidateCanonicalResponses() async throws {
@@ -1535,7 +1508,7 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
-    func testBotChatToolsNarrowAccessReconcileFilesAndRevokeWithinExactGrant() async throws {
+    func testBotChatFilesFollowBotAccessAndRevokeWithinExactGrant() async throws {
         let cacheRoot = FileManager.default.temporaryDirectory
             .appending(path: "aiden-bot-chat-tools-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
@@ -1555,7 +1528,6 @@ final class AidenRemoteClientTests: XCTestCase {
         let fileID = "file_\(String(repeating: "F", count: 43))"
         let botDetail = try botFixtureData(at: ["botDetail"])
         let catalog = try botFixtureData(at: ["botCapabilityCatalog"])
-        let inheritedAccess = try botFixtureData(at: ["botChatSubset"])
         let index = Data("""
         {"snapshotId":"files_snapshot_1","entries":[{"id":"\(fileID)","displayPath":"notes.md",
         "name":"notes.md","kind":"file","size":12,"language":"markdown"}],
@@ -1564,24 +1536,16 @@ final class AidenRemoteClientTests: XCTestCase {
         var document = Data("""
         {"id":"\(fileID)","displayPath":"notes.md","content":"first","version":"file_revision_1","truncated":false}
         """.utf8)
-        var authoritativeAccess = inheritedAccess
         var currentBotDetail = botDetail
-        var ambiguousPatch = false
         var failBotLoad = false
         var revokeCredential = false
-        var patchCount = 0
+        var chatAccessReads = 0
         var writeCount = 0
 
-        func customAccessData(body: [String: Any], revision: Int) throws -> Data {
-            try JSONSerialization.data(withJSONObject: [
-                "chatId": chatID,
-                "botId": botID,
-                "mode": "custom",
-                "revision": "chat_policy_revision_\(revision)",
-                "botPolicyRevision": "bot_policy_revision_4",
-                "summary": "Custom · reduced for this chat",
-                "custom": body["custom"] as Any,
-            ])
+        func mutatedBotDetail(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
+            change(&object)
+            return try JSONSerialization.data(withJSONObject: object)
         }
 
         AidenRemoteMockURLProtocol.handler = { request in
@@ -1610,27 +1574,10 @@ final class AidenRemoteClientTests: XCTestCase {
                 }
                 return Self.response(for: request, status: 200, data: currentBotDetail)
             case ("GET", "/api/aiden/v1/chats/\(chatID)/capabilities"):
-                return Self.response(for: request, status: 200, data: authoritativeAccess)
+                chatAccessReads += 1
+                return Self.response(for: request, status: 404, json: "{}")
             case ("GET", "/api/aiden/v1/bot-capabilities"):
                 return Self.response(for: request, status: 200, data: catalog)
-            case ("PATCH", "/api/aiden/v1/chats/\(chatID)/capabilities"):
-                XCTAssertEqual(
-                    request.value(forHTTPHeaderField: "If-Match"),
-                    patchCount == 0 ? "chat_policy_revision_2" : "chat_policy_revision_3"
-                )
-                patchCount += 1
-                let body = try Self.jsonBody(request)
-                XCTAssertEqual(body["catalogRevision"] as? String, "bot_catalog_revision_3")
-                XCTAssertEqual(body["expectedBotPolicyRevision"] as? String, "bot_policy_revision_4")
-                let custom = try XCTUnwrap(body["custom"] as? [String: Any])
-                XCTAssertEqual(custom["providerId"] as? String, "provider_fixture")
-                XCTAssertEqual(custom["modelId"] as? String, "model_fixture")
-                authoritativeAccess = try customAccessData(body: body, revision: patchCount + 2)
-                if ambiguousPatch {
-                    ambiguousPatch = false
-                    throw URLError(.networkConnectionLost)
-                }
-                return Self.response(for: request, status: 200, data: authoritativeAccess)
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files"):
                 return Self.response(for: request, status: 200, data: index)
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
@@ -1664,8 +1611,6 @@ final class AidenRemoteClientTests: XCTestCase {
 
         let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
         await tools.load(coordinator: coordinator)
-        XCTAssertEqual(tools.access?.mode, .inherit)
-        XCTAssertFalse(tools.isDirty)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(
             instanceId: "instance-bot-tools",
@@ -1675,34 +1620,12 @@ final class AidenRemoteClientTests: XCTestCase {
                        tools.bot?.visionModelSelection)
         XCTAssertEqual(cachedAfterRefresh?.catalog(forBotID: botID), tools.catalog)
 
-        tools.draft?.mode = .custom
-        tools.draft?.skillIDs.removeAll()
-        XCTAssertTrue(tools.isDirty, "A changed Access sheet must require save or discard confirmation.")
-        XCTAssertTrue(tools.canEdit(coordinator: coordinator, hostAllowsMutations: true))
-        let savedAccess = await tools.save(coordinator: coordinator, hostAllowsMutations: true)
-        XCTAssertTrue(savedAccess)
-        XCTAssertEqual(patchCount, 1)
-        XCTAssertFalse(tools.isDirty)
-
-        tools.draft?.connectionIDs.removeAll()
-        ambiguousPatch = true
-        let reconciledAccess = await tools.save(coordinator: coordinator, hostAllowsMutations: true)
-        XCTAssertTrue(
-            reconciledAccess,
-            "An ambiguous PATCH committed on the Mac must reconcile as success without replaying."
-        )
-        XCTAssertEqual(patchCount, 2)
-        XCTAssertFalse(tools.isDirty)
-
-        let grant = try XCTUnwrap(tools.fileGrant(
-            coordinator: coordinator,
-            hostAllowsMutations: true
-        ))
+        let grant = try XCTUnwrap(tools.fileGrant(coordinator: coordinator, hostAllowsMutations: true))
         XCTAssertEqual(grant.chatID, chatID)
         XCTAssertEqual(grant.botID, botID)
-        XCTAssertEqual(grant.chatAccessRevision, "chat_policy_revision_4")
         XCTAssertEqual(grant.botPolicyRevision, "bot_policy_revision_4")
         XCTAssertEqual(grant.catalogRevision, "bot_catalog_revision_3")
+        XCTAssertTrue(grant.allowsWrites)
 
         let files = AidenBotConversationFilesModel(grant: grant)
         await files.load(coordinator: coordinator)
@@ -1713,39 +1636,28 @@ final class AidenRemoteClientTests: XCTestCase {
         let savedFile = await files.save(coordinator: coordinator)
         XCTAssertTrue(savedFile)
         XCTAssertEqual(writeCount, 1)
+        XCTAssertEqual(chatAccessReads, 0, "Bot chats no longer read per-chat access.")
 
-        var staleObject = try XCTUnwrap(JSONSerialization.jsonObject(with: authoritativeAccess) as? [String: Any])
-        staleObject["revision"] = "chat_policy_revision_5"
-        authoritativeAccess = try JSONSerialization.data(withJSONObject: staleObject)
+        // A Bot access change on the Mac invalidates the grant before any write.
+        currentBotDetail = try mutatedBotDetail { object in
+            var access = object["access"] as? [String: Any] ?? [:]
+            access["revision"] = "bot_policy_revision_5"
+            object["access"] = access
+        }
         let openedWithStaleGrant = await files.open(entry, coordinator: coordinator)
         XCTAssertFalse(openedWithStaleGrant)
+        files.draft = "must not write"
+        let savedWithStaleGrant = await files.save(coordinator: coordinator)
+        XCTAssertFalse(savedWithStaleGrant)
         XCTAssertEqual(writeCount, 1, "A stale access grant must fail before any file write.")
 
-        await tools.load(coordinator: coordinator)
-        let freshGrant = try XCTUnwrap(tools.fileGrant(
-            coordinator: coordinator,
-            hostAllowsMutations: true
-        ))
-        let archivedFiles = AidenBotConversationFilesModel(grant: freshGrant)
-        await archivedFiles.load(coordinator: coordinator)
-        let openedBeforeArchive = await archivedFiles.open(entry, coordinator: coordinator)
-        XCTAssertTrue(openedBeforeArchive)
-        var archivedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
-        archivedObject["health"] = "archived"
-        archivedObject["archivedAt"] = "2026-08-23T12:30:00.000Z"
-        currentBotDetail = try JSONSerialization.data(withJSONObject: archivedObject)
-        archivedFiles.draft = "must not write"
-        let savedAfterArchive = await archivedFiles.save(coordinator: coordinator)
-        XCTAssertFalse(savedAfterArchive)
-        XCTAssertEqual(writeCount, 1, "Archiving after Files opened must invalidate write authority.")
-
+        currentBotDetail = botDetail
         let readOnlyGrant = AidenBotConversationFileGrant(
-            context: freshGrant.context,
-            chatID: freshGrant.chatID,
-            botID: freshGrant.botID,
-            chatAccessRevision: freshGrant.chatAccessRevision,
-            botPolicyRevision: freshGrant.botPolicyRevision,
-            catalogRevision: freshGrant.catalogRevision,
+            context: grant.context,
+            chatID: grant.chatID,
+            botID: grant.botID,
+            botPolicyRevision: grant.botPolicyRevision,
+            catalogRevision: grant.catalogRevision,
             allowsWrites: false
         )
         let readOnlyFiles = AidenBotConversationFilesModel(grant: readOnlyGrant)
@@ -1753,45 +1665,141 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertFalse(readOnlySaved)
         XCTAssertEqual(writeCount, 1)
 
-        currentBotDetail = botDetail
         failBotLoad = true
         let refreshedAfterOrdinaryFailure = await tools.refresh(coordinator: coordinator)
         XCTAssertFalse(refreshedAfterOrdinaryFailure)
-        XCTAssertNil(tools.access, "A failed authoritative refresh must not keep displaying stale Access.")
-        XCTAssertNotNil(tools.bot, "A failed refresh should retain device-scoped cached Bot capability state.")
-        XCTAssertNotNil(tools.catalog, "A failed refresh should retain the cached model capability catalog.")
+        XCTAssertNil(tools.fileGrant(coordinator: coordinator, hostAllowsMutations: true),
+                     "A failed authoritative refresh must not keep granting Files.")
+        XCTAssertNotNil(tools.bot, "A failed refresh should retain device-scoped cached Bot state.")
         XCTAssertNotNil(store.activeInstallation)
         failBotLoad = false
-        await tools.load(coordinator: coordinator)
-        XCTAssertNotNil(tools.access)
         revokeCredential = true
         let refreshedAfterRevocation = await tools.refresh(coordinator: coordinator)
         XCTAssertFalse(refreshedAfterRevocation)
-        XCTAssertNil(tools.access)
+        XCTAssertNil(tools.bot)
         XCTAssertNil(store.activeInstallation, "Credential revocation must use the coordinator purge bridge.")
     }
 
-    func testBotChatAccessDraftCannotExceedCustomBotCeilingAndFilesFollowEffectiveSelection() throws {
-        let botAccess: AidenBotAccessView = try botFixtureValue(at: ["botPolicyUpdate", "response"])
-        let chatAccess: AidenBotChatAccessView = try botFixtureValue(at: ["botChatSubsetUpdate", "response"])
-        let catalog: AidenBotCapabilityCatalog = try botFixtureValue(at: ["botCapabilityCatalog"])
-        var draft = try XCTUnwrap(AidenBotChatAccessDraft(
-            botAccess: botAccess,
-            chatAccess: chatAccess,
-            catalog: catalog
-        ))
-        XCTAssertTrue(draft.isSaveable(botAccess: botAccess, catalog: catalog))
-        XCTAssertTrue(AidenBotChatAccessPresentation.hasFiles(
-            botAccess: botAccess,
-            chatAccess: chatAccess,
-            catalog: catalog
-        ))
+    @MainActor
+    func testBotDeleteSendsTheBotRevisionAndOnlyWhenTheHostAdvertisesIt() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-bot-delete",
+            deviceId: "device-bot-delete",
+            credential: String(repeating: "D", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Bot Mac")
+        let session = makeSession()
+        let botID = "bot_fixture_01"
+        var features = "[]"
+        var deletes: [String?] = []
 
-        draft.connectionIDs.insert("connection.outside-bot-ceiling")
-        XCTAssertFalse(draft.isSaveable(botAccess: botAccess, catalog: catalog))
-        draft.connectionIDs.remove("connection.outside-bot-ceiling")
-        draft.providerID = "provider-outside-bot-ceiling"
-        XCTAssertFalse(draft.isSaveable(botAccess: botAccess, catalog: catalog))
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-bot-delete","name":"Bot Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "serverCapabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "features":\(features),
+                "connectionMode":"lan","serverTime":"2026-08-23T12:00:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            case ("DELETE", "/api/aiden/v1/bots/\(botID)"):
+                deletes.append(request.value(forHTTPHeaderField: "If-Match"))
+                return Self.response(for: request, status: 204, data: Data())
+            default:
+                XCTFail("Unexpected Bot delete request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator),
+                       "A host that does not advertise delete must not offer Delete.")
+
+        features = "[\"bot-delete-v1\"]"
+        await coordinator.start()
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator))
+
+        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator)
+        XCTAssertEqual(deletes, ["bot_revision_8"])
+    }
+
+    @MainActor
+    func testDeletingABotAlreadyDeletedElsewhereSucceedsWithoutADeleteRequest() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-bot-gone",
+            deviceId: "device-bot-gone",
+            credential: String(repeating: "G", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .botRead, .botWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Bot Mac")
+        let session = makeSession()
+        let botID = "bot_fixture_gone"
+        var deletes = 0
+        var detailStatus = 404
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-bot-gone","name":"Bot Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "serverCapabilities":["server:read","workspace:read","bot:read","bot:write"],
+                "features":["bot-delete-v1"],
+                "connectionMode":"lan","serverTime":"2026-08-23T12:00:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            case ("GET", "/api/aiden/v1/bots/\(botID)"):
+                return Self.response(
+                    for: request,
+                    status: detailStatus,
+                    json: #"{"error":{"code":"not_found","message":"Gone","requestId":"request-1","retryable":false}}"#
+                )
+            case ("DELETE", "/api/aiden/v1/bots/\(botID)"):
+                deletes += 1
+                return Self.response(for: request, status: 204, data: Data())
+            default:
+                XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(path)")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+        XCTAssertEqual(deletes, 0, "A Bot the Mac no longer has needs no delete request.")
+
+        // Any other failure still reports that the Bot wasn't deleted.
+        detailStatus = 500
+        do {
+            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+            XCTFail("A server failure must not count as deleted.")
+        } catch {
+            XCTAssertFalse(AidenBotDeletion.isAlreadyGone(error))
+        }
+        XCTAssertEqual(deletes, 0)
     }
 
     func testUsageReadsPrivacySafeMacAggregate() async throws {
@@ -1911,6 +1919,36 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(downloadStatus.selectedModelId, "parakeet-v3")
         let transcript = try await client.transcribeSpeech(pcm16: Data([0, 0]), modelId: "parakeet-v3")
         XCTAssertEqual(transcript.text, "Hello from the Mac")
+    }
+
+    func testSpeechStatusDecodesSixModelsWithAdditiveFieldsAndVerifyPhase() async throws {
+        let client = makeClient()
+        let statusJSON = """
+        {
+          "engine":{"ready":true,"error":null},
+          "selectedModelId":"parakeet-v3",
+          "models":[
+          {"id":"parakeet-v3","name":"Parakeet TDT 0.6B v3","description":"Fast and accurate across 25 European languages.","sizeLabel":"487 MB","quant":"int8","languagesLabel":"25 languages","accuracy":0.88,"speed":0.79,"recommended":true,"installed":true,"languages":["bg","hr","cs"],"capabilities":{"autoDetect":true,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+          {"id":"parakeet-v2","name":"Parakeet TDT 0.6B v2","description":"English only, and the most accurate model for English.","sizeLabel":"482 MB","quant":"int8","languagesLabel":"English","accuracy":0.89,"speed":0.85,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+          {"id":"canary-180m-flash","name":"Canary 180M Flash","description":"Small and very fast. English, German, Spanish and French, with translation to English.","sizeLabel":"154 MB","quant":"int8","languagesLabel":"English, German, Spanish, French","accuracy":0.88,"speed":0.98,"recommended":false,"installed":false,"languages":["en","de","es","fr"],"capabilities":{"autoDetect":false,"languageHint":true,"translateToEnglish":true,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+          {"id":"whisper-turbo","name":"Whisper Large v3 Turbo","description":"Broadest language coverage. Slower than the others.","sizeLabel":"564 MB","quant":"int8","languagesLabel":"99 languages","accuracy":0.88,"speed":0.35,"recommended":false,"installed":false,"languages":["en","zh","de"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (OpenAI Whisper)","url":"https://github.com/openai/whisper/blob/main/LICENSE"},"download":{"id":"whisper-turbo","percentage":90,"phase":"verify","status":"downloading"}},
+          {"id":"sense-voice","name":"SenseVoice Small","description":"Fast Chinese, Cantonese, English, Japanese and Korean.","sizeLabel":"163 MB","quant":"int8","languagesLabel":"Chinese, Cantonese, English, Japanese, Korean","accuracy":0.81,"speed":0.98,"recommended":false,"installed":false,"languages":["zh","yue","en","ja","ko"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"FunASR Model License 1.1","url":"https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE","attribution":"SenseVoice Small, Alibaba FunAudioLLM"}},
+          {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for Macs with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
+        ],
+          "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
+        }
+        """
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.response(for: request, status: 200, json: statusJSON)
+        }
+
+        let status = try await client.speechStatus()
+        XCTAssertEqual(status.models.count, 6)
+        XCTAssertEqual(status.models.map(\.sizeLabel).first, "487 MB")
+        let whisper = try XCTUnwrap(status.models.first { $0.id == "whisper-turbo" })
+        XCTAssertEqual(whisper.download?.phase, "verify")
+        XCTAssertEqual(whisper.download?.percentage, 90)
+        XCTAssertNil(status.models[0].download)
     }
 
     func testWorkspaceCreateUpdateAndDeleteCarryMutationPreconditions() async throws {
@@ -2296,6 +2334,95 @@ final class AidenRemoteClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is AidenRemoteClientError)
         }
+    }
+
+    func testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() async throws {
+        let client = makeClient()
+        var requests: [(method: String?, path: String?, key: String?, body: [String: Any])] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = (try? Self.jsonBody(request)) ?? [:]
+            requests.append((request.httpMethod, request.url?.path, request.value(forHTTPHeaderField: "Idempotency-Key"), body))
+            switch request.url?.path {
+            case "/api/aiden/v1/runs/run-1/cancel":
+                return Self.response(for: request, status: 202, json: #"{"runId":"run-1","chatId":"chat-1","state":"running","cancelRequested":true}"#)
+            case "/api/aiden/v1/runs/run-1/approvals/approval-1/respond":
+                let decision = body["decision"] as? String ?? "deny"
+                let scope = (body["scope"] as? String).map { ",\"scope\":\"\($0)\"" } ?? ""
+                return Self.response(for: request, status: 200, json: "{\"runId\":\"run-1\",\"approvalId\":\"approval-1\",\"decision\":\"\(decision)\"\(scope),\"resolvedAt\":\"2026-10-05T10:00:00.000Z\"}")
+            case "/api/aiden/v1/runs/run-1/questions/prompt-1/respond":
+                return Self.response(for: request, status: 200, json: #"{"runId":"run-1","promptId":"prompt-1","outcome":"answered","resolvedAt":"2026-10-05T10:00:00.000Z"}"#)
+            default:
+                return Self.response(for: request, status: 409, json: #"{"error":{"code":"approval_resolved","message":"Another controller already resolved this approval.","requestId":"r1","retryable":false,"details":{"decision":"allow","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"#)
+            }
+        }
+
+        let cancelKey = UUID()
+        let cancelled = try await client.cancelRun(id: "run-1", idempotencyKey: cancelKey)
+        XCTAssertTrue(cancelled.cancelRequested)
+        let allowed = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-1", decision: .allow, scope: .chat)
+        XCTAssertEqual(allowed.scope, .chat)
+        let denied = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-1", decision: .deny, scope: .always)
+        XCTAssertEqual(denied.decision, .deny)
+        let answered = try await client.respondToRunQuestion(
+            runId: "run-1", promptId: "prompt-1",
+            request: AidenQuestionRespondRequest(cancelled: true, answers: []),
+            idempotencyKey: UUID()
+        )
+        XCTAssertEqual(answered.outcome, "answered")
+
+        XCTAssertEqual(requests.map(\.method), ["POST", "POST", "POST", "POST"])
+        XCTAssertEqual(requests[0].key, cancelKey.uuidString.lowercased())
+        XCTAssertTrue(requests[0].body.isEmpty)
+        XCTAssertTrue(requests.allSatisfy { $0.key.map { UUID(uuidString: $0) != nil && $0 == $0.lowercased() } ?? false })
+        XCTAssertEqual(requests[1].body["scope"] as? String, "chat")
+        // A deny never carries a remembered scope.
+        XCTAssertEqual(Set(requests[2].body.keys), ["decision"])
+
+        do {
+            _ = try await client.respondToRunApproval(runId: "run-1", approvalId: "approval-2", decision: .allow)
+            XCTFail("A loser must surface the first-responder conflict.")
+        } catch {
+            let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
+            XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+        }
+    }
+
+    func testCurrentRunStreamAttachesToOneExternallyStartedRun() async throws {
+        let client = makeClient()
+        func frame(_ run: String, _ sequence: Int, _ type: String, _ payload: String) -> String {
+            "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"\(run)\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:0\(sequence)Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
+        }
+        let started = frame("run-mac", 1, "run.started", #"{"runId":"run-mac","chatId":"chat-1","origin":"scheduler"}"#)
+        let text = frame("run-mac", 2, "text_delta", #"{"text":"From the Mac"}"#)
+        var serveForeignFrame = false
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat-1/runs/current/events")
+            let tail = serveForeignFrame ? frame("run-other", 3, "text_delta", #"{"text":"x"}"#) : ""
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url), statusCode: 200,
+                httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data((started + text + tail).utf8))
+        }
+
+        var events: [AidenRemoteRunEvent] = []
+        for try await event in client.currentRunEvents(chatId: "chat-1") { events.append(event) }
+        XCTAssertEqual(events.map(\.runId), ["run-mac", "run-mac"])
+        XCTAssertEqual(events.first?.kind, .started(chatId: "chat-1", origin: "scheduler"))
+
+        // A frame naming another run cannot slip into the attached run's feed.
+        serveForeignFrame = true
+        var received = 0
+        do {
+            for try await _ in client.currentRunEvents(chatId: "chat-1") { received += 1 }
+            XCTFail("A second run identity must end the stream.")
+        } catch {
+            guard case .invalidResponse? = error as? AidenRemoteClientError else {
+                return XCTFail("Expected invalidResponse, got \(error)")
+            }
+        }
+        XCTAssertEqual(received, 2)
     }
 
     func testStreamEOFDiscardsUnterminatedFramesAndReplaysFromLastCompleteEvent() async throws {
@@ -3053,6 +3180,76 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testActiveClientIsReusedWithoutKeychainReadsUntilTheActiveInstallationChanges() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let first = makeExchange(
+            instanceId: "instance-first",
+            deviceId: "device-first",
+            credential: String(repeating: "F", count: 43)
+        )
+        let second = makeExchange(
+            instanceId: "instance-second",
+            deviceId: "device-second",
+            credential: String(repeating: "S", count: 43)
+        )
+        _ = try store.savePairing(first, trust: makeSystemTrust(), name: "First Mac")
+        _ = try store.savePairing(second, trust: makeSystemTrust(), name: "Second Mac")
+        try store.setActive(second.instanceId)
+        let session = makeSession()
+        var builtCredentials: [String] = []
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                builtCredentials.append(credential)
+                return AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+
+        let loadsBefore = keychain.scopedLoadCount
+        let client = try coordinator.remoteClient()
+        for _ in 0..<10 {
+            XCTAssertTrue(try coordinator.remoteClient() === client)
+        }
+        XCTAssertEqual(keychain.scopedLoadCount - loadsBefore, 1, "Cache hits must not read the Keychain.")
+        XCTAssertEqual(builtCredentials, [second.credential])
+
+        try store.setActive(first.instanceId)
+        let switched = try coordinator.remoteClient()
+        XCTAssertFalse(switched === client)
+        XCTAssertTrue(try coordinator.remoteClient() === switched)
+        XCTAssertEqual(builtCredentials, [second.credential, first.credential])
+        XCTAssertEqual(keychain.scopedLoadCount - loadsBefore, 2)
+    }
+
+    func testSessionPoliciesBoundInteractiveCallsAndKeepStreamsAliveOnHeartbeats() {
+        let serverHeartbeatInterval: TimeInterval = 15
+        let interactive = AidenRemoteClient.SessionPolicy.interactive.configuration(waitsForConnectivity: true)
+        let stream = AidenRemoteClient.SessionPolicy.stream.configuration(waitsForConnectivity: true)
+
+        // A request issued while offline must fail within minutes, not wait
+        // out an hour-long stream budget.
+        XCTAssertLessThanOrEqual(interactive.timeoutIntervalForResource, 5 * 60)
+        XCTAssertGreaterThanOrEqual(interactive.timeoutIntervalForResource, interactive.timeoutIntervalForRequest)
+        // A healthy stream survives long turns, and a silent one is declared
+        // dead only after missing at least two heartbeats.
+        XCTAssertGreaterThanOrEqual(stream.timeoutIntervalForResource, 30 * 60)
+        XCTAssertGreaterThanOrEqual(stream.timeoutIntervalForRequest, 2 * serverHeartbeatInterval)
+        XCTAssertLessThan(stream.timeoutIntervalForRequest, 3 * serverHeartbeatInterval)
+        for configuration in [interactive, stream] {
+            XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+            XCTAssertFalse(configuration.httpShouldSetCookies)
+        }
+        // Physical-device runs may lengthen the idle timeout; the resource
+        // budget never drops below it.
+        let slow = AidenRemoteClient.SessionPolicy.interactive.configuration(
+            waitsForConnectivity: false,
+            requestTimeout: 600
+        )
+        XCTAssertGreaterThanOrEqual(slow.timeoutIntervalForResource, 600)
+    }
+
+    @MainActor
     func testRePairingAtomicallyReplacesInstallationScopedCredential() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -3368,6 +3565,141 @@ final class AidenRemoteClientTests: XCTestCase {
         let reloaded = AidenInstallationStore(keychain: keychain)
         XCTAssertEqual(reloaded.activeInstallation?.deviceCapabilities, grants)
         XCTAssertEqual(reloaded.activeInstallation?.serverCapabilities, grants)
+    }
+
+    /// Contract revision 26: a phone negotiates `simulators:mobile` after
+    /// pairing, and the store persists it like the other negotiable grants.
+    @MainActor
+    func testNegotiatedSimulatorViewerGrantPersistsAndGatesAccess() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            let body = try Self.jsonBody(request)
+            XCTAssertEqual(body["accepts"] as? [String], ["simulators:mobile"])
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"simulators:mobile\"]}"
+            )
+        }
+        let negotiated = try await client.updateDeviceCapabilities(accepts: [.simulatorsMobile])
+        XCTAssertEqual(negotiated, [.serverRead, .workspaceRead, .simulatorsMobile])
+
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-sim", deviceId: "device-sim", credential: "credential-sim"),
+            trust: makeSystemTrust(), name: "Simulator Mac"
+        )
+        XCTAssertEqual(store.activeInstallation?.hasNegotiatedAccess(to: .simulatorsMobile), false)
+        try store.updateNegotiatedDeviceCapabilities(negotiated, confirmedBy: AidenServer(
+            protocolVersion: 1, instanceId: "instance-sim", name: "Simulator Mac",
+            appVersion: "1.0", capabilities: negotiated, serverCapabilities: negotiated,
+            connectionMode: .lan, minimumClientVersion: nil, serverTime: Date(),
+            features: [AidenServer.mobileSimulatorsFeature]
+        ))
+        let reloaded = AidenInstallationStore(keychain: keychain)
+        XCTAssertEqual(reloaded.activeInstallation?.hasNegotiatedAccess(to: .simulatorsMobile), true)
+    }
+
+    /// Contract revision 30: `bot:activity` persists like the other negotiable
+    /// grants, survives a reload, and goes away when the Mac stops granting it.
+    @MainActor
+    func testNegotiatedBotActivityGrantPersistsAndDropsWhenTheMacStopsGrantingIt() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            let body = try Self.jsonBody(request)
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:activity"])
+            return Self.response(
+                for: request,
+                status: 200,
+                json: "{\"capabilities\":[\"server:read\",\"workspace:read\",\"bot:activity\"]}"
+            )
+        }
+        let negotiated = try await client.updateDeviceCapabilities(accepts: [.botActivity])
+        XCTAssertEqual(negotiated, [.serverRead, .workspaceRead, .botActivity])
+
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-activity", deviceId: "device-activity", credential: "credential-activity"),
+            trust: makeSystemTrust(), name: "Activity Mac"
+        )
+        func server(grants: [AidenRemoteCapability]) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "instance-activity", name: "Activity Mac",
+                appVersion: "1.0", capabilities: grants, serverCapabilities: negotiated,
+                connectionMode: .lan, minimumClientVersion: nil, serverTime: Date(),
+                features: [AidenServer.botActivityFeature]
+            )
+        }
+        XCTAssertEqual(store.activeInstallation?.hasNegotiatedAccess(to: .botActivity), false)
+        try store.updateNegotiatedDeviceCapabilities(negotiated, confirmedBy: server(grants: negotiated))
+        XCTAssertEqual(
+            AidenInstallationStore(keychain: keychain).activeInstallation?.hasNegotiatedAccess(to: .botActivity),
+            true
+        )
+
+        // A /server refresh that no longer grants it narrows the stored grants.
+        try store.updateServer(server(grants: [.serverRead, .workspaceRead]))
+        let reloaded = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertEqual(reloaded.deviceCapabilities, [.serverRead, .workspaceRead])
+        XCTAssertFalse(reloaded.hasNegotiatedAccess(to: .botActivity))
+    }
+
+    /// R21: the pairing remembers what it last knew of Bot activity (the Mac's token
+    /// and this device's grant), so a cold or offline open keeps the line, Steer/Queue
+    /// and the Chat activity row until `/server` answers; then `/server` decides.
+    @MainActor
+    func testTheLastKnownBotActivityStandsInUntilTheMacAnswers() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-cached", deviceId: "device-cached", credential: "credential-cached"),
+            trust: makeSystemTrust(), name: "Cached Mac"
+        )
+        let negotiated: [AidenRemoteCapability] = [.serverRead, .workspaceRead, .botActivity]
+        func server(features: [String], grants: [AidenRemoteCapability]) -> AidenServer {
+            AidenServer(
+                protocolVersion: 1, instanceId: "instance-cached", name: "Cached Mac",
+                appVersion: "1.0", capabilities: grants, serverCapabilities: negotiated,
+                connectionMode: .lan, minimumClientVersion: nil, serverTime: Date(), features: features
+            )
+        }
+        XCTAssertFalse(aidenBotActivitySupported(server: nil, installation: store.activeInstallation), "nothing known yet")
+
+        try store.updateNegotiatedDeviceCapabilities(
+            negotiated, confirmedBy: server(features: [AidenServer.botActivityFeature], grants: negotiated)
+        )
+        // A relaunch, offline: no /server answer yet.
+        let relaunched = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertTrue(aidenBotActivitySupported(server: nil, installation: relaunched))
+        XCTAssertTrue(aidenBotShowsChatActivity(server: nil, installation: relaunched, hasBaseline: true), "the Chat activity row stays reachable")
+
+        // Once /server answers, it decides, whatever is cached.
+        XCTAssertFalse(aidenBotActivitySupported(server: server(features: [], grants: negotiated), installation: relaunched))
+
+        // A Mac that stopped announcing the token is remembered that way too.
+        try store.updateServer(server(features: [], grants: negotiated))
+        let downgraded = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+        XCTAssertTrue(downgraded.hasNegotiatedAccess(to: .botActivity), "the grant alone is kept")
+        XCTAssertFalse(aidenBotActivitySupported(server: nil, installation: downgraded), "but without the token nothing shows")
+    }
+
+    @MainActor
+    func testAPairingSavedBeforeRevision30ReadsAsNoBotActivity() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let saved = try store.savePairing(
+            makeExchange(instanceId: "instance-legacy", deviceId: "device-legacy", credential: "credential-legacy"),
+            trust: makeSystemTrust(), name: "Legacy Mac"
+        )
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+        XCTAssertNotNil(object.removeValue(forKey: "botActivityAnnounced"))
+        let legacy = try JSONDecoder().decode(AidenInstallation.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(legacy.botActivityAnnounced)
+        XCTAssertFalse(aidenBotActivitySupported(server: nil, installation: legacy))
     }
 
     @MainActor
@@ -4379,6 +4711,364 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
+    func testForkWithSummarySendsContractRequestAndDecodesFixtureLineage() async throws {
+        let responseData = try botFixtureData(at: ["chatFork", "fork", "response"])
+        let expectedBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "request"])
+            ) as? [String: Any]
+        )
+        let key = UUID()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://aiden.test/api/aiden/v1/chats/chat_fixture_source_01/fork"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_revision_source_7")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                key.uuidString.lowercased()
+            )
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, expectedBody as NSDictionary)
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+
+        let result = try await makeClient().forkChat(
+            chatId: "chat_fixture_source_01",
+            revision: "chat_revision_source_7",
+            messageId: "message_fixture_source_assistant_01",
+            position: .after,
+            summaryFocus: "  the protocol decisions\n",
+            idempotencyKey: key
+        )
+
+        XCTAssertEqual(result.chat.id, "chat_fixture_fork_01")
+        XCTAssertNil(result.prefill)
+        let lineage = try XCTUnwrap(result.chat.forkedFrom)
+        XCTAssertEqual(lineage.chatId, "chat_fixture_source_01")
+        XCTAssertEqual(lineage.position, .after)
+        XCTAssertEqual(lineage.summary?.state, .pending)
+        XCTAssertEqual(lineage.summary?.afterMessageId, "message_fixture_fork_assistant_01")
+        XCTAssertEqual(lineage.summary?.focus, "the protocol decisions")
+    }
+
+    func testEditInForkOmitsSummaryAndReturnsPrefill() async throws {
+        let responseData = try botFixtureData(at: ["chatFork", "editFork", "response"])
+        let expectedBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "editFork", "request"])
+            ) as? [String: Any]
+        )
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, expectedBody as NSDictionary)
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+
+        let result = try await makeClient().forkChat(
+            chatId: "chat_fixture_source_01",
+            revision: "chat_revision_source_7",
+            messageId: "message_fixture_source_user_02",
+            position: .before
+        )
+
+        XCTAssertEqual(result.chat.id, "chat_fixture_fork_02")
+        XCTAssertEqual(result.chat.forkedFrom?.position, .before)
+        XCTAssertNil(result.chat.forkedFrom?.summary)
+        XCTAssertEqual(result.prefill?.text, "Now check the error codes.")
+        XCTAssertEqual(result.prefill?.attachments.map(\.name), ["codes.txt"])
+    }
+
+    func testForkSummaryRequestShapesMatchTheContract() async throws {
+        var bodies: [[String: Any]] = []
+        let responseData = try botFixtureData(at: ["chatFork", "fork", "response"])
+        AidenRemoteMockURLProtocol.handler = { request in
+            bodies.append(try Self.jsonBody(request))
+            return Self.response(for: request, status: 201, data: responseData)
+        }
+        let client = makeClient()
+        for focus in [nil, " \n", "the protocol decisions"] as [String?] {
+            _ = try await client.forkChat(
+                chatId: "chat_fixture_source_01",
+                revision: "chat_revision_source_7",
+                messageId: "message_fixture_source_assistant_01",
+                position: .after,
+                summaryFocus: focus
+            )
+        }
+
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertNil(bodies[0]["summary"], "A plain fork asks for no summary.")
+        XCTAssertEqual(bodies[1]["summary"] as? NSDictionary, [:] as NSDictionary)
+        XCTAssertEqual(
+            bodies[2]["summary"] as? NSDictionary,
+            ["focus": "the protocol decisions"] as NSDictionary
+        )
+
+        await assertInvalidResponse {
+            try await client.forkChat(
+                chatId: "chat_fixture_source_01",
+                revision: "chat_revision_source_7",
+                messageId: "message_fixture_source_assistant_01",
+                position: .after,
+                summaryFocus: String(repeating: "é", count: 1_001)
+            )
+        }
+        XCTAssertEqual(bodies.count, 3, "An over-long focus never leaves the phone.")
+    }
+
+    func testForkRejectsResultsThatDoNotRecordTheRequestedCut() async throws {
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "editFork", "response"])
+            ) as? [String: Any]
+        )
+        func mutated(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var value = fixture
+            change(&value)
+            return try JSONSerialization.data(withJSONObject: value)
+        }
+        func chat(_ value: [String: Any], _ change: (inout [String: Any]) -> Void) -> [String: Any] {
+            var chat = value["chat"] as! [String: Any]
+            change(&chat)
+            return chat
+        }
+        let cases: [(position: AidenChatForkPosition, data: Data)] = [
+            (.before, try mutated { $0["chat"] = chat($0) { $0.removeValue(forKey: "forkedFrom") } }),
+            (.before, try mutated { $0["chat"] = chat($0) { $0["id"] = "chat_fixture_source_01" } }),
+            (.after, try mutated { _ in }),
+        ]
+        for testCase in cases {
+            AidenRemoteMockURLProtocol.handler = { request in
+                Self.response(for: request, status: 201, data: testCase.data)
+            }
+            await assertInvalidResponse {
+                try await self.makeClient().forkChat(
+                    chatId: "chat_fixture_source_01",
+                    revision: "chat_revision_source_7",
+                    messageId: "message_fixture_source_user_02",
+                    position: testCase.position
+                )
+            }
+        }
+    }
+
+    func testForkSummaryActionsPostToTheirRoutes() async throws {
+        var paths: [String] = []
+        let cancelData = try botFixtureData(at: ["chatFork", "summaryCancel"])
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            let path = try XCTUnwrap(request.url?.path)
+            paths.append(path)
+            if path.hasSuffix("/cancel") {
+                return Self.response(for: request, status: 200, data: cancelData)
+            }
+            return Self.chatResponse(for: request, status: 200, revision: "rev-2", id: "chat-1")
+        }
+        let client = makeClient()
+
+        let retried = try await client.retryForkSummary(chatId: "chat-1")
+        let skipped = try await client.skipForkSummary(chatId: "chat-1")
+        XCTAssertEqual(retried.id, "chat-1")
+        XCTAssertEqual(skipped.id, "chat-1")
+        let cancelled = try await client.cancelForkSummary(chatId: "chat-1")
+        XCTAssertTrue(cancelled)
+        XCTAssertEqual(paths, [
+            "/api/aiden/v1/chats/chat-1/fork-summary/retry",
+            "/api/aiden/v1/chats/chat-1/fork-summary/skip",
+            "/api/aiden/v1/chats/chat-1/fork-summary/cancel",
+        ])
+
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.chatResponse(for: request, status: 200, revision: "rev-2", id: "chat-2")
+        }
+        await assertInvalidResponse { try await client.skipForkSummary(chatId: "chat-1") }
+    }
+
+    func testForkLineageDecodingKeepsChatsReadableWhenLineageIsDamaged() throws {
+        var chat = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat"])
+            ) as? [String: Any]
+        )
+        func decode(_ value: [String: Any]) throws -> AidenChat {
+            try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+        // A chat read keeps the summary's focus text.
+        XCTAssertEqual(try decode(chat).forkedFrom?.summary?.focus, "the protocol decisions")
+        var leaked = chat
+        leaked["instructions"] = "the protocol decisions"
+        XCTAssertThrowsError(try decode(leaked))
+
+        var lineage = try XCTUnwrap(chat["forkedFrom"] as? [String: Any])
+
+        // A damaged summary is dropped on its own; the chat stays a fork.
+        lineage["summary"] = ["state": "thinking", "afterMessageId": "message_fixture_fork_assistant_01"]
+        chat["forkedFrom"] = lineage
+        let unsummarized = try decode(chat)
+        XCTAssertEqual(unsummarized.forkedFrom?.chatId, "chat_fixture_source_01")
+        XCTAssertNil(unsummarized.forkedFrom?.summary)
+
+        // Damaged lineage identity is dropped; the chat itself still decodes.
+        lineage["chatId"] = "chat with spaces"
+        chat["forkedFrom"] = lineage
+        let unlinked = try decode(chat)
+        XCTAssertEqual(unlinked.id, "chat_fixture_fork_01")
+        XCTAssertNil(unlinked.forkedFrom)
+
+        chat.removeValue(forKey: "forkedFrom")
+        XCTAssertNil(try decode(chat).forkedFrom)
+    }
+
+    func testForkSummaryStatesDecodeInChatReadsAndChatLists() throws {
+        let chat = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat"])
+            ) as? [String: Any]
+        )
+        let lineage = try XCTUnwrap(chat["forkedFrom"] as? [String: Any])
+        let pending = try XCTUnwrap(lineage["summary"] as? [String: Any])
+        let settled = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "summaryStates"])
+            ) as? [[String: Any]]
+        )
+        func withSummary(_ summary: [String: Any]) -> [String: Any] {
+            var forkedFrom = lineage
+            forkedFrom["summary"] = summary
+            var value = chat
+            value["forkedFrom"] = forkedFrom
+            return value
+        }
+        func decodedSummaries(_ summary: [String: Any]) throws -> [AidenChatForkSummary?] {
+            let value = withSummary(summary)
+            let read = try AidenRemoteJSONDecoder.decode(
+                AidenChat.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+            let list = try AidenRemoteJSONDecoder.decode(
+                AidenChatListResponse.self,
+                from: JSONSerialization.data(withJSONObject: ["chats": [value]])
+            )
+            XCTAssertEqual(list.chats.map(\.id), ["chat_fixture_fork_01"])
+            return [read.forkedFrom?.summary, list.chats.first?.forkedFrom?.summary]
+        }
+
+        let expected: [AidenChatForkSummary] = [
+            AidenChatForkSummary(
+                state: .pending,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions"
+            ),
+            AidenChatForkSummary(
+                state: .ready,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                text: "The review settled on revision 21 and kept every route additive."
+            ),
+            AidenChatForkSummary(
+                state: .failed,
+                afterMessageId: "message_fixture_fork_assistant_01",
+                focus: "the protocol decisions",
+                error: "The summary could not be generated."
+            ),
+        ]
+        let fixtures = [pending] + settled
+        XCTAssertEqual(fixtures.count, expected.count)
+        for (fixture, summary) in zip(fixtures, expected) {
+            XCTAssertEqual(try decodedSummaries(fixture), [summary, summary])
+        }
+
+        // The pre-rename `instructions` key is private text again everywhere,
+        // so a chat carrying it is refused outright rather than half-shown.
+        var renamed = pending
+        renamed.removeValue(forKey: "focus")
+        renamed["instructions"] = "the protocol decisions"
+        XCTAssertThrowsError(try decodedSummaries(renamed))
+
+        // File paths stay on the Mac: a summary that still lists them is
+        // dropped on its own and the chat stays a readable fork.
+        var withFiles = settled[0]
+        withFiles["files"] = ["read": ["Sources/App.swift"], "modified": []]
+        XCTAssertEqual(try decodedSummaries(withFiles), [nil, nil])
+    }
+
+    func testChatSummaryRowsCarryLineageWithoutTheSummary() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let lineage = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: botFixtureData(at: ["chatFork", "fork", "response", "chat", "forkedFrom"])
+            ) as? [String: Any]
+        )
+        var summaries = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        // Rows never need the focus text; a row that sends a summary still
+        // shows only the lineage.
+        var rowLineage = lineage
+        rowLineage["summary"] = ["state": "pending", "afterMessageId": "message_fixture_fork_assistant_01"]
+        summaries[0]["forkedFrom"] = rowLineage
+        summaries[1]["forkedFrom"] = ["chatId": "chat_fixture_source_01"]
+        object["summaries"] = summaries
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        XCTAssertEqual(page.summaries[0].forkedFrom?.chatId, "chat_fixture_source_01")
+        XCTAssertEqual(page.summaries[0].forkedFrom?.position, .after)
+        XCTAssertNil(page.summaries[0].forkedFrom?.summary)
+        XCTAssertNil(page.summaries[1].forkedFrom, "An incomplete lineage is dropped, not the row.")
+    }
+
+    func testProviderCreationUsesForegroundWriteOnlyCredentialAndStableKey() async throws {
+        let client = makeClient()
+        let key = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/providers")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any])
+            XCTAssertEqual(payload["confirmedForeground"] as? Bool, true)
+            XCTAssertEqual(payload["apiKey"] as? String, "synthetic-provider-key")
+            let models = try XCTUnwrap(payload["models"] as? [[String: Any]])
+            XCTAssertEqual(models.first?["vision"] as? Bool, true)
+            return Self.response(for: request, status: 201, json: #"{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"#)
+        }
+        let input = AidenProviderCreation(label: "Private", baseUrl: "https://models.example.test/v1", kind: "openai", deployment: "hosted", needsKey: true, apiKey: "synthetic-provider-key", models: [.init(id: "vision", vision: true, reasoning: false, toolCall: true)])
+        XCTAssertTrue(input.isValid)
+        let receipt = try await client.createProvider(input, idempotencyKey: key)
+        XCTAssertEqual(receipt.models, ["vision"])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"google","label":"Private","models":["vision"]}"#.utf8)))
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenProviderCreationReceipt.self, from: Data(#"{"id":"custom:remote-fixture","label":"Private","models":[]}"#.utf8)))
+    }
+
+    func testProviderCreationValidationRejectsControlCharactersAndOversizedFields() {
+        func input(label: String = "Private", url: String = "https://models.example.test/v1", key: String = "synthetic-key", id: String = "vision") -> AidenProviderCreation {
+            AidenProviderCreation(label: label, baseUrl: url, kind: "openai", deployment: "hosted", needsKey: true, apiKey: key, models: [.init(id: id, vision: true, reasoning: false, toolCall: true)])
+        }
+        XCTAssertTrue(input(key: String(repeating: "a", count: 4096)).isValid)
+        XCTAssertFalse(input(key: String(repeating: "a", count: 4097)).isValid)
+        XCTAssertFalse(input(url: "https://models.example.test/" + String(repeating: "a", count: 2048)).isValid)
+        XCTAssertFalse(input(label: "private\tname").isValid)
+        XCTAssertFalse(input(id: "model\nnext").isValid)
+        XCTAssertFalse(input(id: " ").isValid)
+        XCTAssertTrue(input().isValid)
+        XCTAssertNotNil(input(id: "model\nnext").validationMessage)
+    }
+
+    func testProviderCreationSharedFixtureOmitsCredentialsForKeylessConnections() throws {
+        let input = try botFixtureData(at: ["providerCreation"])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: input) as? [String: Any])
+        XCTAssertNil(payload["apiKey"])
+        XCTAssertEqual(payload["needsKey"] as? Bool, false)
+        let receipt: AidenProviderCreationReceipt = try botFixtureValue(at: ["providerCreationReceipt"])
+        XCTAssertEqual(receipt.models, ["fixture-vision"])
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
@@ -4390,6 +5080,7 @@ final class AidenRemoteClientTests: XCTestCase {
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AidenRemoteMockURLProtocol.self]
+        configuration.httpAdditionalHeaders = [AidenRemoteMockURLProtocol.epochHeader: AidenRemoteMockURLProtocol.epoch]
         return URLSession(configuration: configuration)
     }
 
@@ -4690,11 +5381,20 @@ private actor AidenInstallationDataRaceProbe {
 
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// Sessions carry the epoch of the test that made them. A request an
+    /// earlier test left behind (a cancelled `async let` can still reach
+    /// `startLoading`) fails instead of answering from a later test's handler.
+    static let epochHeader = "X-Aiden-Test-Epoch"
+    static var epoch = UUID().uuidString
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        guard request.value(forHTTPHeaderField: Self.epochHeader) == Self.epoch else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
@@ -4731,8 +5431,11 @@ private final class AidenRemoteMemoryKeychain: KeychainStoring {
         scoped[KeychainStore.scopedKey(key, scope: scope)] = value
     }
 
+    private(set) var scopedLoadCount = 0
+
     func load(_ key: KeychainStore.Key, scope: String) throws -> String? {
-        scoped[KeychainStore.scopedKey(key, scope: scope)]
+        scopedLoadCount += 1
+        return scoped[KeychainStore.scopedKey(key, scope: scope)]
     }
 
     func delete(_ key: KeychainStore.Key, scope: String) throws {

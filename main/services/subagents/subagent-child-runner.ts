@@ -1,4 +1,4 @@
-import type { CompactionEngine } from "../../../renderer/shared/compaction.js";
+import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
@@ -43,6 +43,7 @@ import {
 } from "../../../renderer/shared/subagent-safe-text.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import { createSubagentTool } from "./subagent-tool.js";
+import type { SubagentModelToolOptions } from "./subagent-model-selection.js";
 import type { SubagentSupervisor } from "./subagent-supervisor.js";
 import {
   projectRequestableSubagentMcpInventoryV2,
@@ -157,6 +158,7 @@ export interface SubagentChildRunnerDependencies {
     runtime: ResolvedModelRuntime;
     thinkingLevel: ThinkingLevel;
     compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
     systemPrompt: string;
     tools: AgentTool[];
     initialMessages: AgentMessage[];
@@ -189,6 +191,7 @@ export interface SubagentChildToolAssembly {
 
 export interface RunSubagentChildInput {
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
   authority: SubagentRuntimeAuthority;
   runId?: string;
   childId?: string;
@@ -223,6 +226,8 @@ export interface RunSubagentChildInput {
     signal?: AbortSignal,
     forkContext?: SubagentContextCapture,
   ) => Promise<string>;
+  /** Requestable models and efforts advertised on the nested subagent tool. */
+  nestedModelOptions?: SubagentModelToolOptions;
   /** Private context binding and a transcript allocated only for this child. */
   context: {
     mode: SubagentContextMode;
@@ -642,6 +647,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           projectRequestableSubagentMcpMutationInventoryV2(authority.capabilities.mcp),
           authority.capabilities.shell,
           false,
+          input.nestedModelOptions,
         ),
       );
     }
@@ -653,6 +659,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       runtime: input.runtime,
       thinkingLevel: input.thinkingLevel,
       compactionEngine: input.compactionEngine,
+      compactionModelOverrides: input.compactionModelOverrides,
       systemPrompt: subagentRoleSystemPrompt(input.request.role, {
         contextMode: input.context.mode,
         workspaceRead: childTools.some((tool) =>

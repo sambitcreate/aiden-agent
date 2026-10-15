@@ -1,3 +1,4 @@
+import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 // Composer context meter: exposes the runtime's own next-request projection
 // (projectChatContextUsage over the Pi journal + the generation's static
 // context) as a renderer-safe snapshot. Nothing here invents a second token
@@ -18,7 +19,7 @@ import {
 import { resolveCompactionModelMetadata } from "./model-runtime.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { skillRegistry } from "./skill-registry-main.js";
-import { buildSystemPrompt } from "./chat-system-prompt.js";
+import { buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
 import {
   agentsInstructionFingerprint,
@@ -33,6 +34,9 @@ import {
   type GenerationContextScope,
 } from "./context-profile.js";
 import { buildAgentTools } from "./tools.js";
+import { ambientRuntimeToolEstimate } from "./context-pressure-tools.js";
+import { mcpManager } from "./mcp.js";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
 const generationProfiles = new Map<string, GenerationContextProfile>();
@@ -137,8 +141,21 @@ async function ambientContextOptions(
     await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
   const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
+  // Codemode turns declare codemode/tool_search instead of MCP tools (except
+  // "Always visible" servers); other turns declare the MCP tools this process
+  // already built (never connecting).
+  const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
+  const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
+    const mcpTools = await configStore.listMcpServers()
+      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled && mcpServerOffersTools(server)).map((server) => server.id)))
+      .catch(() => []);
+    const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
+    if (!extra.length) return options;
+    const names = new Set(options.tools.map((tool) => tool.name));
+    return { ...options, tools: [...options.tools, ...extra.filter((tool) => !names.has(tool.name))] };
+  };
   const cached = ambientProfiles.get(chatId);
-  if (cached?.key === key) return cached.options;
+  if (cached?.key === key) return withRuntimeTools(cached.options);
   const settings = await configStore.getSettings();
   const skillsEnabled = settings.skillsEnabled !== false;
   const skillSnapshot =
@@ -162,7 +179,7 @@ async function ambientContextOptions(
     allowSubagents: false,
     includeCodingTools: true,
   });
-  const hostPrompt = await buildSystemPrompt(
+  const { systemPrompt: hostPrompt, sections } = await buildSystemPromptWithSections(
     folderPath,
     branch,
     permission,
@@ -180,9 +197,11 @@ async function ambientContextOptions(
     supportsImages,
     providerId: chat.providerId,
     modelId: chat.model,
+    // Only what this estimate builds: no MCP tools, MCP guidance or memory.
+    promptSections: sections,
   };
   ambientProfiles.set(chatId, { key, options });
-  return options;
+  return withRuntimeTools(options);
 }
 
 async function journalMessages(
@@ -258,6 +277,8 @@ export async function chatContextPressure(
     retainsSystemUpdates: modelRetainsSystemUpdates(model),
     overrides,
   });
+  const settings = await configStore.getCompactionSettings();
+  options.compactionReserveTokens = configuredCompactionReserveTokens(settings.compactionModelOverrides, model, settings.compactionEngine);
   const hasDraft =
     (draft?.draftText !== undefined && draft.draftText.trim() !== "") ||
     (draft?.attachments?.length ?? 0) > 0;

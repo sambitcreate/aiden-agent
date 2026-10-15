@@ -1,5 +1,11 @@
+import type { SamplingParamsByThinkingLevel } from "@earendil-works/pi-ai";
+import { GENERATION_THINKING_LEVELS, isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking";
+
 /** Explicit user overrides, separate from rediscovered provider metadata. */
 export interface CustomModelOptions {
+  effortControl?: "openai" | "glm";
+  effortLevels?: GenerationThinkingLevel[];
+  samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   vision?: boolean;
   reasoning?: boolean;
   toolCall?: boolean;
@@ -19,6 +25,24 @@ export function parseCustomModelOptions(
   }
   const raw = value as Record<string, unknown>;
   const result: CustomModelOptions = {};
+  if (raw.effortControl !== undefined) {
+    if (raw.effortControl !== "openai" && raw.effortControl !== "glm") {
+      throw new Error("Invalid effort control format.");
+    }
+    result.effortControl = raw.effortControl;
+  }
+  if (raw.effortLevels !== undefined) {
+    if (!Array.isArray(raw.effortLevels) || raw.effortLevels.length > 6 ||
+        !raw.effortLevels.every(isGenerationThinkingLevel) ||
+        new Set(raw.effortLevels).size !== raw.effortLevels.length) {
+      throw new Error("Invalid supported effort levels.");
+    }
+    const levels = raw.effortLevels;
+    result.effortLevels = GENERATION_THINKING_LEVELS.filter((level) => levels.includes(level));
+  }
+  if (raw.samplingParamsByThinkingLevel !== undefined) {
+    result.samplingParamsByThinkingLevel = parseSamplingParamsByThinkingLevel(raw.samplingParamsByThinkingLevel);
+  }
   for (const key of [
     "vision",
     "reasoning",
@@ -53,6 +77,20 @@ export function parseCustomModelOptions(
     throw new Error("Maximum output tokens cannot exceed the context length.");
   }
   return result;
+}
+
+/** Explicit server presets, independent of similarly named catalog models. */
+export function customModelThinkingLevels(
+  options: CustomModelOptions | undefined,
+): GenerationThinkingLevel[] | undefined {
+  if (options?.reasoning !== true || !options.effortControl) return undefined;
+  if (options.effortLevels !== undefined) {
+    const selected = GENERATION_THINKING_LEVELS.filter((level) => options.effortLevels?.includes(level));
+    return selected.length ? selected : undefined;
+  }
+  if (options?.effortControl === "glm") return ["off", "low", "high", "max"];
+  if (options?.effortControl === "openai") return ["off", "low", "medium", "high"];
+  return undefined;
 }
 
 export function mergeDiscoveredModelMetadata<
@@ -116,4 +154,22 @@ export async function prepareCustomModelToolContext<T>(
   options: CustomModelOptions | undefined,
 ): Promise<T> {
   return options?.toolCall === false || !prepare ? context : prepare(context);
+}
+
+/** Sampling only: metadata must not overwrite messages, tools, model or auth. */
+export function parseSamplingParamsByThinkingLevel(value: unknown): SamplingParamsByThinkingLevel {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid per-thinking-level sampling parameters.");
+  const result: SamplingParamsByThinkingLevel = {};
+  const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const fields = new Set(["temperature", "top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "seed"]);
+  for (const [level, parameters] of Object.entries(value)) {
+    if (!levels.has(level) || !parameters || typeof parameters !== "object" || Array.isArray(parameters)) throw new Error("Invalid sampling thinking level.");
+    const parsed: Record<string, number> = {};
+    for (const [key, number] of Object.entries(parameters)) {
+      if (!fields.has(key) || typeof number !== "number" || !Number.isFinite(number) || Math.abs(number) > 1_000_000) throw new Error("Invalid sampling parameter.");
+      parsed[key] = number;
+    }
+    result[level as keyof SamplingParamsByThinkingLevel] = parsed;
+  }
+  return result;
 }

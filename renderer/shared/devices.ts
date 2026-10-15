@@ -1,10 +1,26 @@
 /** Simulator devices cross the renderer ↔ main boundary only through these fail-closed shapes. */
-export type DevicePlatform = "ios";
+import {
+  parseDeviceToolVersions,
+  parseSshDeviceHostConfigs,
+  type DeviceToolVersions,
+  type SshDeviceHostConfig,
+} from "./device-ssh-hosts.js";
+export const DEVICE_PLATFORMS = ["ios", "android"] as const;
+/** iOS Simulators (serve-sim) and Android Emulators (serve-emu), both streamed by expo-device-hub. */
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+export const DEVICE_PLATFORM_LABELS: Record<DevicePlatform, string> = { ios: "iOS", android: "Android" };
+/**
+ * A simulator UDID, an adb serial (`emulator-5554`), or an AVD name while the
+ * emulator is not running (`Pixel_9_API_35`). The first character is
+ * alphanumeric so an id can never be read as a command-line flag.
+ */
+export const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 /** `peer` is a paired Aiden desktop sharing its simulators (Phase 5). */
 export type DeviceHostKind = "local" | "peer" | "ssh";
 export const LOCAL_DEVICE_HOST_ID = "local";
 /** Local is `local`; a paired desktop uses its Aiden Remote instance ID. */
 export const DEVICE_HOST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
+/** Android emulators are `other`; the platform tells them apart from unknown Apple devices. */
 export type DeviceKind = "iphone" | "ipad" | "other";
 export interface DeviceSummary {
   hostId: string;
@@ -27,12 +43,17 @@ export const DEVICE_HOST_STATUSES = [
   "error",
 ] as const;
 export type DeviceHostStatus = (typeof DEVICE_HOST_STATUSES)[number];
-export type DeviceConsentKind = "streaming" | "agentAccess" | "peerSharing";
+export type DeviceConsentKind = "streaming" | "agentAccess" | "peerSharing" | "mobileSharing";
 export interface DeviceConsent {
   streaming: boolean;
   agentAccess: boolean;
   /** Lets paired desktops holding `simulators:control` watch and control this Mac's simulators. */
   peerSharing: boolean;
+  /**
+   * "Share with Aiden On The Go": lets paired phones holding `simulators:mobile`
+   * watch, tap and shut down this Mac's simulators. Off by default; absent reads as off.
+   */
+  mobileSharing?: boolean;
 }
 export interface DeviceSession {
   chatId: string;
@@ -44,11 +65,23 @@ export interface DeviceHostState {
   status: DeviceHostStatus;
   detail?: string;
 }
+/** Whether a host can run one platform. Missing toolchains are reported, not hidden, so the tab can say why. */
+export interface DevicePlatformAvailability {
+  platform: DevicePlatform;
+  available: boolean;
+  reason?: string;
+}
 /** One device host the Simulator tab can show, local first. */
 export interface DeviceHostInfo extends DeviceHostState {
   id: string;
   kind: DeviceHostKind;
   name: string;
+  /** Installed, running, and pinned helper versions, when known. SSH hosts report them after a check or connect. */
+  tools?: DeviceToolVersions;
+  /** Why the last version check failed. Installed tools were not changed. */
+  toolInspectionError?: string;
+  /** Per-platform availability, once the host has been checked. Paired Macs do not report it. */
+  platforms?: DevicePlatformAvailability[];
 }
 export interface DeviceServiceState {
   hostStatus: DeviceHostStatus;
@@ -60,6 +93,8 @@ export interface DeviceServiceState {
   toolVersions: { hub: string; agent: string };
   /** A user-readable reason the host cannot run, e.g. missing Xcode or npm. */
   unavailableReason?: string;
+  /** Configured SSH device hosts, in the order Settings shows them. */
+  sshHosts?: SshDeviceHostConfig[];
 }
 /** Shown before anything is downloaded from npm, in the panel and in Settings. */
 export const DEVICE_SETUP_NOTICE =
@@ -116,20 +151,55 @@ function isHostId(value: unknown): value is string {
   return typeof value === "string" && DEVICE_HOST_ID_PATTERN.test(value);
 }
 
+export function isDevicePlatform(value: unknown): value is DevicePlatform {
+  return value === "ios" || value === "android";
+}
+
+function parsePlatformAvailability(value: unknown): DevicePlatformAvailability | null {
+  if (!isRecord(value) || !isDevicePlatform(value.platform) || typeof value.available !== "boolean") return null;
+  if (value.reason !== undefined && typeof value.reason !== "string") return null;
+  return {
+    platform: value.platform,
+    available: value.available,
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
+  };
+}
+
 function parseHostInfo(value: unknown): DeviceHostInfo | null {
   if (!isRecord(value)) return null;
   const state = parseHostState(value);
   const { id, kind, name } = value;
   if (!state || !isHostId(id) || !nonEmptyString(name)) return null;
   if (kind !== "local" && kind !== "peer" && kind !== "ssh") return null;
-  return { id, kind, name, ...state };
+  let tools: DeviceToolVersions | undefined;
+  if (value.tools !== undefined) {
+    const parsed = parseDeviceToolVersions(value.tools);
+    if (!parsed) return null;
+    tools = parsed;
+  }
+  if (value.toolInspectionError !== undefined && typeof value.toolInspectionError !== "string") return null;
+  let platforms: DevicePlatformAvailability[] | undefined;
+  if (value.platforms !== undefined) {
+    const parsed = parseList(value.platforms, parsePlatformAvailability);
+    if (!parsed) return null;
+    platforms = parsed;
+  }
+  return {
+    id,
+    kind,
+    name,
+    ...state,
+    ...(tools ? { tools } : {}),
+    ...(typeof value.toolInspectionError === "string" ? { toolInspectionError: value.toolInspectionError } : {}),
+    ...(platforms ? { platforms } : {}),
+  };
 }
 
 function parseDevice(value: unknown): DeviceSummary | null {
   if (!isRecord(value)) return null;
   const { hostId, id, name, platform, version, booted, kind } = value;
   if (!isHostId(hostId) || !nonEmptyString(id) || !nonEmptyString(name)) return null;
-  if (platform !== "ios" || typeof version !== "string" || typeof booted !== "boolean") return null;
+  if (!isDevicePlatform(platform) || typeof version !== "string" || typeof booted !== "boolean") return null;
   if (kind !== "iphone" && kind !== "ipad" && kind !== "other") return null;
   return { hostId, id, name, platform, version, booted, kind };
 }
@@ -168,7 +238,8 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
     !isRecord(consent) ||
     typeof consent.streaming !== "boolean" ||
     typeof consent.agentAccess !== "boolean" ||
-    typeof consent.peerSharing !== "boolean"
+    typeof consent.peerSharing !== "boolean" ||
+    (consent.mobileSharing !== undefined && typeof consent.mobileSharing !== "boolean")
   ) {
     return null;
   }
@@ -187,6 +258,12 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
   if (value.unavailableReason !== undefined && typeof value.unavailableReason !== "string") {
     return null;
   }
+  let sshHosts: SshDeviceHostConfig[] | undefined;
+  if (value.sshHosts !== undefined) {
+    const parsed = parseSshDeviceHostConfigs(value.sshHosts);
+    if (!parsed) return null;
+    sshHosts = parsed;
+  }
   return {
     hostStatus,
     hostStatuses,
@@ -195,6 +272,7 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
       streaming: consent.streaming,
       agentAccess: consent.agentAccess,
       peerSharing: consent.peerSharing,
+      mobileSharing: consent.mobileSharing === true,
     },
     devices,
     sessions,
@@ -202,6 +280,7 @@ export function parseDeviceServiceState(value: unknown): DeviceServiceState | nu
     ...(value.unavailableReason === undefined
       ? {}
       : { unavailableReason: value.unavailableReason }),
+    ...(sshHosts ? { sshHosts } : {}),
   };
 }
 
@@ -256,16 +335,38 @@ export const DEVICE_PERMISSIONS = [
   "notifications",
 ] as const;
 export type DevicePermission = (typeof DEVICE_PERMISSIONS)[number];
+/** The permission groups `adb shell pm grant|revoke` can change; each maps to one or more runtime permissions. */
+export const ANDROID_DEVICE_PERMISSIONS = [
+  "camera",
+  "microphone",
+  "photos",
+  "contacts",
+  "calendar",
+  "location",
+  "notifications",
+  "motion",
+] as const satisfies readonly DevicePermission[];
 export type DevicePermissionDecision = "grant" | "revoke" | "reset";
-/** Accessibility switches. Increase Contrast goes through `simctl ui`; the rest through serve-sim's helper. */
+/**
+ * Device switches. On iOS, Increase Contrast goes through `simctl ui` and the
+ * rest through serve-sim's helper. Android supports Reduce Motion (animation
+ * scales) and the network switch (`svc wifi` and `svc data`).
+ */
 export const DEVICE_TOGGLES = [
   "reduceMotion",
   "increaseContrast",
   "reduceTransparency",
   "showBorders",
   "voiceOver",
+  "networkEnabled",
 ] as const;
 export type DeviceToggle = (typeof DEVICE_TOGGLES)[number];
+export const DEVICE_PLATFORM_TOGGLES: Record<DevicePlatform, readonly DeviceToggle[]> = {
+  ios: ["reduceMotion", "increaseContrast", "reduceTransparency", "showBorders", "voiceOver"],
+  android: ["reduceMotion", "networkEnabled"],
+};
+export const DEVICE_ORIENTATIONS = ["portrait", "landscape_left", "portrait_upside_down", "landscape_right"] as const;
+export type DeviceOrientationValue = (typeof DEVICE_ORIENTATIONS)[number];
 export const DEVICE_LIQUID_GLASS = ["clear", "tinted"] as const;
 export type DeviceLiquidGlass = (typeof DEVICE_LIQUID_GLASS)[number];
 export const DEVICE_COLOR_FILTERS = ["none", "grayscale", "red-green", "green-red", "blue-yellow"] as const;
@@ -298,8 +399,52 @@ export type DeviceActionInput = DeviceActionTarget &
       }
     | { type: "setLocation"; latitude: number; longitude: number }
     | { type: "clearLocation" }
+    /** Android only: tilts the emulator's accelerometer so the display really rotates. */
+    | { type: "setOrientation"; value: DeviceOrientationValue }
   );
 export type DeviceActionType = DeviceActionInput["type"];
+
+const IOS_ACTIONS: ReadonlySet<DeviceActionType> = new Set([
+  "setAppearance",
+  "setTextSize",
+  "setToggle",
+  "setLiquidGlass",
+  "setColorFilter",
+  "openUrl",
+  "launchApp",
+  "terminateApp",
+  "sendPush",
+  "setPermission",
+  "setLocation",
+  "clearLocation",
+]);
+const ANDROID_ACTIONS: ReadonlySet<DeviceActionType> = new Set([
+  "setAppearance",
+  "setTextSize",
+  "setToggle",
+  "setOrientation",
+  "openUrl",
+  "launchApp",
+  "terminateApp",
+  "setPermission",
+  "setLocation",
+  "clearLocation",
+]);
+
+/** Adapted from t3code DeviceActions `supportsAction` @ a6ec88f7 (MIT): what each platform can actually do. */
+export function deviceActionSupported(
+  platform: DevicePlatform,
+  input: Pick<DeviceActionInput, "type"> & { setting?: unknown; permission?: unknown },
+): boolean {
+  if (!(platform === "ios" ? IOS_ACTIONS : ANDROID_ACTIONS).has(input.type)) return false;
+  if (input.type === "setToggle") {
+    return (DEVICE_PLATFORM_TOGGLES[platform] as readonly unknown[]).includes(input.setting);
+  }
+  if (input.type === "setPermission" && platform === "android") {
+    return (ANDROID_DEVICE_PERMISSIONS as readonly unknown[]).includes(input.permission);
+  }
+  return true;
+}
 
 /** What the settings read could determine; an unknown value is simply absent. */
 export interface DeviceSettings {
@@ -312,10 +457,14 @@ export interface DeviceSettings {
   voiceOver?: boolean;
   liquidGlass?: DeviceLiquidGlass;
   colorFilter?: DeviceColorFilter;
+  /** Android: Wi-Fi and mobile data are both on. */
+  networkEnabled?: boolean;
+  /** Android: the package that holds window focus, read with the settings. iOS uses serve-sim's feed instead. */
+  foregroundApp?: string;
 }
 
-const DEVICE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
-const APP_ID_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
+/** A bundle ID or Android package name. Starts alphanumeric so it can never be read as a flag. */
+const APP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/u;
 const URL_SCHEME_PATTERN = /^([a-z][a-z0-9+.-]{0,31}):/iu;
 /** Schemes that would reach the local filesystem or run script instead of opening an app or page. */
 const REFUSED_URL_SCHEMES = new Set(["file", "javascript", "data", "vbscript", "blob"]);
@@ -407,6 +556,10 @@ export function parseDeviceActionInput(value: unknown): DeviceActionInput | null
         : null;
     case "clearLocation":
       return { ...target, type };
+    case "setOrientation":
+      return (DEVICE_ORIENTATIONS as readonly unknown[]).includes(value.value)
+        ? { ...target, type, value: value.value as DeviceOrientationValue }
+        : null;
     default:
       return null;
   }
@@ -435,6 +588,10 @@ export function parseDeviceSettings(value: unknown): DeviceSettings | null {
   if (value.colorFilter !== undefined) {
     if (!(DEVICE_COLOR_FILTERS as readonly unknown[]).includes(value.colorFilter)) return null;
     settings.colorFilter = value.colorFilter as DeviceColorFilter;
+  }
+  if (value.foregroundApp !== undefined) {
+    if (!isAppId(value.foregroundApp)) return null;
+    settings.foregroundApp = value.foregroundApp;
   }
   return settings;
 }

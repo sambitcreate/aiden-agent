@@ -1,0 +1,55 @@
+/* Create Images: semantic tokens only. Imported only by the lazy images route. */
+.image-node {
+  width: 280px;
+}
+
+.image-node-media {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-control);
+  background: var(--color-control);
+}
+
+.image-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.image-gallery img,
+.image-gallery-placeholder {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-control);
+  background: var(--color-control);
+}
+
+.studio-canvas .image-port {
+  width: 10px;
+  height: 10px;
+  border: none;
+  background: var(--color-tertiary);
+}
+
+.studio-canvas .image-port:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-run-panel {
+  width: 300px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--color-popover);
+  box-shadow: inset 1px 0 0 var(--color-separator);
+}
+
+@media (max-width: 720px) {
+  .image-run-panel {
+    width: 220px;
+  }
+}

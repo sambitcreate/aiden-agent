@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Clock3,
   ExternalLink,
   GitMerge,
   GitPullRequest,
@@ -57,10 +58,9 @@ import {
   useGitBranches,
 } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
-
-export function openPullRequestExternal(url: string): void {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
+import { formatGitHubPausedUntil } from "../lib/github-pause";
+import { chatPullRequestChipLabels, chatPullRequestListStatus } from "../lib/chat-pull-request-chip";
+import { useLinkOpener } from "../lib/link-opener";
 
 export function chatPullRequestRef(
   view: ChatPullRequestView,
@@ -98,7 +98,7 @@ export function chatPullRequestChecksLabel(
   }
 }
 
-function stateLabel(view: ChatPullRequestView): string {
+export function chatPullRequestStateLabel(view: ChatPullRequestView): string {
   if (view.state === "merged") return "Merged";
   if (view.state === "closed") return "Closed";
   if (view.isDraft) return "Draft";
@@ -174,6 +174,7 @@ function PullRequestRow({
   current: boolean;
   onChanged: () => void;
 }) {
+  const { openLink } = useLinkOpener();
   const [busy, setBusy] = React.useState<"refresh" | "unlink" | null>(null);
   const checkSummary = chatPullRequestChecksLabel(view.checksState);
   return (
@@ -213,7 +214,7 @@ function PullRequestRow({
               {checkSummary}
             </span>
           ) : (
-            <span className="text-tertiary">{stateLabel(view)}</span>
+            <span className="text-tertiary">{chatPullRequestStateLabel(view)}</span>
           )}
           {sourceHint(view) ? (
             <span className="truncate text-tertiary">{sourceHint(view)}</span>
@@ -232,13 +233,11 @@ function PullRequestRow({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onSelect={() => openPullRequestExternal(view.url)}>
+          <DropdownMenuItem onSelect={() => openLink(view.url)}>
             <ExternalLink aria-hidden="true" />
             Open on GitHub
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => openPullRequestExternal(`${view.url}/checks`)}
-          >
+          <DropdownMenuItem onSelect={() => openLink(`${view.url}/checks`)}>
             <CheckCircle2 aria-hidden="true" />
             View checks
           </DropdownMenuItem>
@@ -270,9 +269,29 @@ function PullRequestRow({
               disabled={busy !== null}
               onSelect={() => {
                 setBusy("unlink");
+                const ref = chatPullRequestRef(view);
+                const relinkSource =
+                  view.source === "branch-discovered" ? "branch-discovered" : "manual";
                 void pullRequestsApi
-                  .unlink(chatId, chatPullRequestRef(view))
-                  .then(onChanged)
+                  .unlink(chatId, ref)
+                  .then(() => {
+                    onChanged();
+                    toast.success(`Unlinked PR #${view.number} from this chat.`, {
+                      action: {
+                        label: "Undo",
+                        onClick: () => {
+                          void pullRequestsApi
+                            .linkRef(chatId, ref, relinkSource)
+                            .then(onChanged)
+                            .catch((error: unknown) =>
+                              toast.error(
+                                error instanceof Error ? error.message : "Couldn't link it again.",
+                              ),
+                            );
+                        },
+                      },
+                    });
+                  })
                   .catch((error: unknown) =>
                     toast.error(
                       error instanceof Error ? error.message : "Unlink failed.",
@@ -471,6 +490,7 @@ export function PullRequestLinkDialog({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={(nextOpen) => {
         if (!busy) onOpenChange(nextOpen);
@@ -523,8 +543,11 @@ export function PullRequestLinkDialog({
             </p>
           ) : candidates.data?.availability !== "ready" ? (
             <p className="py-1 text-small text-tertiary">
-              {candidates.data?.message ??
-                "Pull requests are not available for this workspace."}
+              {candidates.data?.availability === "rate-limited" &&
+              candidates.data.retryAt !== undefined
+                ? `${formatGitHubPausedUntil(candidates.data.retryAt, Date.now())}.`
+                : (candidates.data?.message ??
+                  "Pull requests are not available for this workspace.")}
             </p>
           ) : candidates.data.pullRequests.length === 0 ? (
             <p className="py-1 text-small text-tertiary">
@@ -812,6 +835,7 @@ export function PullRequestCreateDialog({
  * resolved current PR, keeping local review and GitHub state separate.
  */
 export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
+  const { openLink } = useLinkOpener();
   const current = useChatCurrentPullRequest(chatId, Boolean(chatId));
   const view = current.data?.pullRequest;
   if (!view) return null;
@@ -822,13 +846,13 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
         <ChatPullRequestStateIcon view={view} />
         <span className="truncate">
           PR #{view.number}
-          {checks ? ` · ${checks}` : ` · ${stateLabel(view)}`}
+          {checks ? ` · ${checks}` : ` · ${chatPullRequestStateLabel(view)}`}
         </span>
       </span>
       <button
         type="button"
         className="shrink-0 rounded-control px-1.5 py-0.5 text-small text-accent outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
-        onClick={() => openPullRequestExternal(view.url)}
+        onClick={() => openLink(view.url)}
       >
         View pull request →
       </button>
@@ -840,6 +864,7 @@ export function ChatPullRequestReviewFooter({ chatId }: { chatId?: string }) {
  * The composer chip: "Pull Requests · N" / "N open · M linked", opening the rail.
  */
 export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
+  const { openLink } = useLinkOpener();
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [linkOpen, setLinkOpen] = React.useState(false);
@@ -865,14 +890,42 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     ]);
   }, [queryClient, chatId]);
 
-  // Opening the rail refreshes linked snapshots from GitHub.
-  React.useEffect(() => {
-    if (!open) return;
+  // Opening the rail refreshes linked snapshots from GitHub; failures keep saved details visible.
+  const [refresh, setRefresh] = React.useState<{
+    state: "idle" | "refreshing" | "failed";
+    message?: string;
+    rateLimitedUntil?: number;
+  }>({ state: "idle" });
+  const refreshAttempt = React.useRef(0);
+  const runRefresh = React.useCallback(() => {
+    const attempt = ++refreshAttempt.current;
+    setRefresh({ state: "refreshing" });
     void pullRequestsApi
       .refresh(chatId)
-      .then(invalidate)
-      .catch(() => undefined);
-  }, [open, chatId, invalidate]);
+      .then((result) => {
+        if (attempt !== refreshAttempt.current) return;
+        setRefresh(
+          result.rateLimitedUntil !== undefined
+            ? { state: "idle", rateLimitedUntil: result.rateLimitedUntil }
+            : { state: "idle" },
+        );
+        invalidate();
+      })
+      .catch((error: unknown) => {
+        if (attempt !== refreshAttempt.current) return;
+        setRefresh({
+          state: "failed",
+          message: error instanceof Error ? error.message : undefined,
+        });
+      });
+  }, [chatId, invalidate]);
+  React.useEffect(() => {
+    if (!open) return;
+    runRefresh();
+    return () => {
+      refreshAttempt.current += 1;
+    };
+  }, [open, runRefresh]);
 
   const views = links.data?.links ?? [];
   const openCount = views.filter((view) => view.state === "open").length;
@@ -888,14 +941,26 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
     return merged;
   }, [views, currentView]);
 
-  const chipLabel =
-    views.length === 0
-      ? "Pull Requests"
-      : openCount > 0
-        ? `⑂ ${openCount} open · ${views.length} linked`
-        : `Pull Requests · ${views.length}`;
+  const pausedUntil = Math.max(
+    refresh.rateLimitedUntil ?? 0,
+    current.data?.rateLimitedUntil ?? 0,
+  );
+  const pausedLabel =
+    pausedUntil > Date.now()
+      ? formatGitHubPausedUntil(pausedUntil, Date.now())
+      : undefined;
 
   const pendingCount = pending.data?.length ?? 0;
+  const chip = chatPullRequestChipLabels({
+    linked: views.length,
+    open: openCount,
+    pending: pendingCount,
+  });
+  const listStatus = chatPullRequestListStatus({
+    rows: rows.length,
+    linksLoaded: links.data !== undefined,
+    linksFailed: links.isError,
+  });
 
   return (
     <>
@@ -905,10 +970,10 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
             variant="transparent"
             size="small"
             className="h-7 shrink-0 gap-1.5 px-2 text-secondary"
-            aria-label={`${chipLabel} for this chat`}
+            aria-label={chip.ariaLabel}
           >
             <GitPullRequest className="size-4 shrink-0" aria-hidden="true" />
-            <span className="max-w-[14rem] truncate">{chipLabel}</span>
+            <span className="max-w-[14rem] truncate">{chip.text}</span>
             {pendingCount > 0 ? (
               <span
                 className="size-1.5 rounded-full bg-status-warning"
@@ -945,7 +1010,44 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                 onChanged={invalidate}
               />
             ))}
-            {rows.length === 0 ? (
+            {pausedLabel && listStatus !== "error" ? (
+              <p className="flex items-center gap-2 px-2 py-2 text-small text-secondary" role="status">
+                <Clock3 className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1">{pausedLabel}. Showing saved details.</span>
+              </p>
+            ) : null}
+            {refresh.state === "failed" && listStatus !== "error" ? (
+              <div className="flex items-center gap-2 px-2 py-2" role="alert">
+                <Text variant="small" color="secondary" className="min-w-0 flex-1">
+                  Couldn’t refresh from GitHub. Showing saved details.
+                </Text>
+                <Button variant="transparent" size="small" onClick={runRefresh}>
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+            {listStatus === "loading" ? (
+              <p className="flex items-center gap-2 px-2 py-3 text-small text-tertiary" role="status">
+                <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                Loading pull requests…
+              </p>
+            ) : listStatus === "error" ? (
+              <div className="flex items-center gap-2 px-2 py-3" role="alert">
+                <Text variant="small" color="secondary" className="min-w-0 flex-1">
+                  Couldn’t load pull requests for this chat.
+                </Text>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  onClick={() => {
+                    void links.refetch();
+                    runRefresh();
+                  }}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : listStatus === "empty" ? (
               <p className="px-2 py-3 text-small text-tertiary">
                 No pull requests are linked to this chat yet.
               </p>
@@ -978,7 +1080,7 @@ export function ChatPullRequestsChip({ chatId }: { chatId: string }) {
                 variant="transparent"
                 size="small"
                 className="shrink-0 gap-1 px-1.5 text-accent"
-                onClick={() => openPullRequestExternal(currentView.url)}
+                onClick={() => openLink(currentView.url)}
               >
                 View pull request
                 <ExternalLink className="size-3" aria-hidden="true" />

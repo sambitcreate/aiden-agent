@@ -1,4 +1,8 @@
-import type { AidenRemoteErrorCode } from "./aiden-remote-protocol.js";
+import type {
+  AidenRemoteErrorCode,
+  AidenRemoteResolvedApprovalDecision,
+  AidenRemoteResolvedQuestionOutcome,
+} from "./aiden-remote-protocol.js";
 
 export class AidenRemoteServiceError extends Error {
   constructor(
@@ -13,6 +17,9 @@ export class AidenRemoteServiceError extends Error {
       minimumClientVersion?: string;
       limit?: number;
       field?: string;
+      decision?: AidenRemoteResolvedApprovalDecision;
+      outcome?: AidenRemoteResolvedQuestionOutcome;
+      resolvedAt?: string;
     },
   ) {
     super(message);

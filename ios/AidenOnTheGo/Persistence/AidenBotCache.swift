@@ -11,7 +11,6 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
     var conversations: AidenBotConversationPage?
     var catalog: AidenBotCapabilityCatalog?
     var catalogsByBotID: [String: AidenBotCapabilityCatalog]?
-    var notice: AidenBotNoticeStatus?
     var savedAt: Date
 
     init(
@@ -20,15 +19,13 @@ struct AidenBotCacheSnapshot: Codable, Equatable, Sendable {
         conversations: AidenBotConversationPage? = nil,
         catalog: AidenBotCapabilityCatalog? = nil,
         catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil,
-        notice: AidenBotNoticeStatus? = nil,
-        savedAt: Date = Date()
+        savedAt: Date = aidenBotCacheNow()
     ) {
         self.list = list
         self.details = details
         self.conversations = conversations
         self.catalog = catalog
         self.catalogsByBotID = catalogsByBotID
-        self.notice = notice
         self.savedAt = savedAt
     }
 
@@ -49,22 +46,19 @@ struct AidenBotCacheSegments: Sendable {
     var conversations: AidenBotConversationPage?
     var catalog: AidenBotCapabilityCatalog?
     var catalogsByBotID: [String: AidenBotCapabilityCatalog]?
-    var notice: AidenBotNoticeStatus?
 
     init(
         list: AidenBotList? = nil,
         details: [AidenBotDetail]? = nil,
         conversations: AidenBotConversationPage? = nil,
         catalog: AidenBotCapabilityCatalog? = nil,
-        catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil,
-        notice: AidenBotNoticeStatus? = nil
+        catalogsByBotID: [String: AidenBotCapabilityCatalog]? = nil
     ) {
         self.list = list
         self.details = details
         self.conversations = conversations
         self.catalog = catalog
         self.catalogsByBotID = catalogsByBotID
-        self.notice = notice
     }
 
     func applying(
@@ -96,7 +90,6 @@ struct AidenBotCacheSegments: Sendable {
             conversations: prunedConversations,
             catalog: catalog ?? existing?.catalog,
             catalogsByBotID: scopedCatalogs.isEmpty ? nil : scopedCatalogs,
-            notice: notice ?? existing?.notice,
             savedAt: savedAt
         )
     }
@@ -199,7 +192,7 @@ actor AidenBotCache {
     /// or the combination would violate the cache's bounded projection rules.
     func mergeAndStore(
         _ segments: AidenBotCacheSegments,
-        savedAt: Date = Date(),
+        savedAt: Date = aidenBotCacheNow(),
         activation: Activation
     ) throws -> AidenBotCacheSnapshot? {
         guard isCurrent(activation) else { return nil }
@@ -229,13 +222,42 @@ actor AidenBotCache {
         )
     }
 
+    /// Forgets a permanently deleted Bot: its list row, detail, conversation,
+    /// and scoped catalog.
+    func removeBotAndStore(
+        botId: String,
+        instanceId: String,
+        deviceId: String
+    ) throws -> AidenBotCacheSnapshot? {
+        guard var snapshot = load(instanceId: instanceId, deviceId: deviceId) else { return nil }
+        snapshot.list = try snapshot.list?.removing(botID: botId)
+        snapshot.details.removeAll { $0.id == botId }
+        snapshot.catalogsByBotID?[botId] = nil
+        if let page = snapshot.conversations {
+            snapshot.conversations = AidenBotConversationPage(
+                validatedSubsetOf: page,
+                retainingBotIDs: Set(page.conversations.map(\.botId)).subtracting([botId])
+            )
+        }
+        snapshot.savedAt = aidenBotCacheNow()
+        return try mergeAndStore(
+            AidenBotCacheSegments(
+                list: snapshot.list,
+                details: snapshot.details,
+                conversations: snapshot.conversations
+            ),
+            instanceId: instanceId,
+            deviceId: deviceId
+        )
+    }
+
     /// Merges authoritative segments for an exact retained pairing without
     /// changing the foreground surface activation. Callers must hold
     /// `AidenRemoteCoordinator.withRetainedInstallationData` while using this
     /// entry point so removal or re-pair cannot race the write.
     func mergeAndStore(
         _ segments: AidenBotCacheSegments,
-        savedAt: Date = Date(),
+        savedAt: Date = aidenBotCacheNow(),
         instanceId: String,
         deviceId: String
     ) throws -> AidenBotCacheSnapshot? {
@@ -496,4 +518,11 @@ actor AidenBotCache {
             try? fileManager.removeItem(at: file)
         }
     }
+}
+
+/// The cache encodes dates with `.iso8601` (whole seconds), so a timestamp it
+/// stamps is truncated to whole seconds: an in-memory snapshot and its reloaded
+/// copy compare equal.
+func aidenBotCacheNow() -> Date {
+    Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
 }

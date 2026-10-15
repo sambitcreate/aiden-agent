@@ -10,6 +10,7 @@ import {
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { ChatForkError } from "./chat-fork-error.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(
@@ -37,6 +38,29 @@ test("seeds only the first user message and preserves a manual rename", async (t
   );
   assert.equal(replaced, null);
   assert.equal((await store.get(chat.id))?.title, "Keep my title");
+});
+
+test("index observers see each committed summary change and stop after unsubscribing", async (t) => {
+  const store = await testStore(t);
+  const observed: Promise<string[]>[] = [];
+  const unsubscribe = store.onIndexChanged(() => {
+    observed.push(store.listSummaryMetadata().then((chats) => chats.map((chat) => chat.title)));
+  });
+
+  const chat = await store.create({});
+  await store.rename(chat.id, "Remote feed title");
+  const afterRename = observed.length;
+  assert.ok(afterRename >= 2, "create and rename each notify");
+  assert.deepEqual(await observed[afterRename - 1], ["Remote feed title"]);
+
+  await store.remove(chat.id);
+  assert.ok(observed.length > afterRename, "delete notifies");
+  assert.deepEqual(await observed[observed.length - 1], []);
+
+  unsubscribe();
+  const beforeQuiet = observed.length;
+  await store.create({});
+  assert.equal(observed.length, beforeQuiet);
 });
 
 test("serializes assistant persistence with a background title update", async (t) => {
@@ -72,8 +96,8 @@ test("Bot model authority changes durably without changing history or activity t
     botId: "bot:model-owner",
     providerId: "provider:old",
     model: "model:old",
-    initialAssistantMessage: "Welcome",
   });
+  await first.appendMessage(chat.id, { role: "assistant", content: "Welcome" });
   const before = await first.appendMessage(chat.id, {
     role: "user",
     content: "Keep this conversation",
@@ -999,6 +1023,174 @@ test("removes an indexed chat even when its payload is corrupt", async (t) => {
   );
 });
 
+test("a torn chat payload is set aside with its bytes intact and counted", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-quarantine-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let notices = 0;
+  const store = createChatStore(async () => directory, undefined, {
+    onQuarantine: () => {
+      notices += 1;
+    },
+  });
+  const damaged = await store.create({ title: "Damaged" });
+  const survivor = await store.create({ title: "Survivor" });
+  const torn = '{"id":"' + damaged.id + '","title":"Damaged","messages":[{"role":"us';
+  await fs.writeFile(path.join(directory, `${damaged.id}.json`), torn, "utf-8");
+
+  assert.equal(await store.get(damaged.id), null);
+
+  // The damaged chat leaves the list, but its original bytes survive aside.
+  assert.deepEqual((await store.list()).map((chat) => chat.id), [survivor.id]);
+  await assert.rejects(fs.access(path.join(directory, `${damaged.id}.json`)));
+  const aside = (await fs.readdir(directory)).filter((name) =>
+    name.startsWith(`.${damaged.id}.json.`) && name.endsWith(".corrupt"),
+  );
+  assert.equal(aside.length, 1);
+  assert.equal(await fs.readFile(path.join(directory, aside[0]!), "utf-8"), torn);
+  assert.equal(await store.quarantinedPayloadCount(), 1);
+  assert.equal(notices, 1);
+
+  // A later chat with the same identity cannot overwrite the rescued bytes.
+  const restarted = createChatStore(async () => directory);
+  assert.equal(await restarted.quarantinedPayloadCount(), 1);
+  assert.deepEqual((await restarted.list()).map((chat) => chat.id), [survivor.id]);
+});
+
+test("legacy indented chat payloads still load and are rewritten compactly", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-indented-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "indented-chat",
+    title: "Indented",
+    workspaceId: "default",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [{ id: "m1", role: "user", content: "Hello", createdAt: 10 }],
+  };
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat], null, 2));
+  await fs.writeFile(path.join(directory, `${chat.id}.json`), JSON.stringify(chat, null, 2));
+  const store = createChatStore(async () => directory);
+
+  assert.equal((await store.list())[0]?.title, "Indented");
+  await store.appendMessage(chat.id, { role: "assistant", content: "Hi" });
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    (await restarted.get(chat.id))?.messages.map((message) => message.content),
+    ["Hello", "Hi"],
+  );
+  const stored = await fs.readFile(path.join(directory, `${chat.id}.json`), "utf-8");
+  assert.equal(stored.includes("\n"), false);
+});
+
+test("appending to one chat reads only that chat's payload once the index is verified", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-read-amplification-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const reads: string[] = [];
+  const store = createChatStore(async () => directory, undefined, {
+    readFile: async (target) => {
+      reads.push(path.basename(target));
+      return fs.readFile(target, "utf-8");
+    },
+  });
+  const chats = [];
+  for (let index = 0; index < 6; index += 1) {
+    chats.push(await store.create({ title: `Chat ${index}` }));
+  }
+  await store.list();
+
+  reads.length = 0;
+  await store.appendMessage(chats[2]!.id, { role: "user", content: "only me" });
+  const listed = await store.list();
+
+  assert.deepEqual(reads, [`${chats[2]!.id}.json`]);
+  assert.equal(listed[0]?.id, chats[2]!.id);
+  assert.equal(listed[0]?.preview, "only me");
+  assert.equal(listed.length, 6);
+});
+
+test("a slow write to one chat does not block writes to another chat", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-per-chat-queue-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let blockedId: string | undefined;
+  let releaseBlocked!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    releaseBlocked = resolve;
+  });
+  const store = createChatStore(async () => directory, undefined, {
+    syncFile: async (target) => {
+      if (blockedId && path.basename(target).startsWith(`.${blockedId}.json.`)) {
+        await blocked;
+      }
+    },
+    syncDirectory: async () => undefined,
+  });
+  const slow = await store.create({ title: "Slow" });
+  const fast = await store.create({ title: "Fast" });
+  blockedId = slow.id;
+
+  const slowAppend = store.appendMessage(slow.id, { role: "user", content: "large" });
+  const sameChatFollowUp = store.rename(slow.id, "Renamed after append");
+  await store.appendMessage(fast.id, { role: "user", content: "quick" });
+
+  assert.deepEqual(
+    (await store.get(fast.id))?.messages.map((message) => message.content),
+    ["quick"],
+  );
+  // The slow append has not committed yet; its payload is still the old one.
+  const pending = JSON.parse(
+    await fs.readFile(path.join(directory, `${slow.id}.json`), "utf-8"),
+  ) as { messages: unknown[] };
+  assert.equal(pending.messages.length, 0);
+
+  releaseBlocked();
+  await slowAppend;
+  const renamed = await sameChatFollowUp;
+  // Same-chat operations stay ordered: the rename saw the appended message.
+  assert.deepEqual(renamed.messages.map((message) => message.content), ["large"]);
+  const listed = await store.list();
+  assert.deepEqual(
+    listed.map((chat) => [chat.title, chat.preview]).sort(),
+    [["Fast", "quick"], ["Renamed after append", "large"]],
+  );
+});
+
+test("same-chat calls commit in call order even when index checks finish out of order", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-admission-order-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let delayNextLookup = false;
+  const store = createChatStore(async () => {
+    if (delayNextLookup) {
+      // Hold the first call's index check so the second call's finishes first.
+      delayNextLookup = false;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return directory;
+  });
+  const chat = await store.create({ title: "Ordered" });
+  await store.list();
+
+  delayNextLookup = true;
+  const appended = store.appendMessage(chat.id, { role: "user", content: "first" });
+  const renamed = store.rename(chat.id, "Renamed second");
+
+  await appended;
+  assert.deepEqual(
+    (await renamed).messages.map((message) => message.content),
+    ["first"],
+  );
+});
+
 test("rejects a valid chat payload whose identity differs from its storage key", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-mismatched-id-"),
@@ -1428,49 +1620,50 @@ test("does not move a chat after its conversation has started", async (t) => {
   assert.equal((await store.get(chat.id))?.workspaceId, "first");
 });
 
-test("persists Computer Use per chat without reordering the chat index", async (t) => {
+test("persists a per-chat Computer Use grant without reordering the chat index", async (t) => {
   const store = await testStore(t);
   const older = await store.create({ title: "Older" });
   await new Promise((resolve) => setTimeout(resolve, 2));
   const newer = await store.create({ title: "Newer" });
 
-  const enabled = await store.setComputerUseEnabled(older.id, true);
-  assert.equal(enabled.computerUseEnabled, true);
-  assert.equal((await store.get(older.id))?.computerUseEnabled, true);
+  const allowed = await store.setComputerUseAllowed(older.id, true);
+  assert.equal(allowed.computerUseAllowed, true);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, true);
+  assert.equal((await store.get(newer.id))?.computerUseAllowed, undefined);
   assert.deepEqual(
     (await store.list()).map((chat) => chat.id),
     [newer.id, older.id],
   );
 
-  const disabled = await store.setComputerUseEnabled(older.id, false);
-  assert.equal(disabled.computerUseEnabled, false);
+  await store.setComputerUseAllowed(older.id, false);
+  assert.equal((await store.get(older.id))?.computerUseAllowed, undefined);
 });
 
-test("a stale renderer guard cannot persist a per-chat Computer Use opt-in", async (t) => {
-  const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded" });
+test("a Computer Use continue marker survives reopening the store until cleared", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ title: "Waiting on setup" });
+  await first.appendMessage(chat.id, { role: "user", content: "Open Notes" });
 
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => false),
-    /no longer active/u,
-  );
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  const marked = await first.setComputerUsePendingContinue(chat.id, true);
+  assert.equal(marked.computerUsePendingContinue, true);
+
+  // A fresh store over the same directory stands in for relaunching Aiden.
+  const reopened = createChatStore(async () => directory);
+  const restored = await reopened.get(chat.id);
+  assert.equal(restored?.computerUsePendingContinue, true);
+  assert.equal(restored?.messages.length, 1);
+
+  const cleared = await reopened.setComputerUsePendingContinue(chat.id, false);
+  assert.equal(cleared.computerUsePendingContinue, undefined);
+  assert.equal((await createChatStore(async () => directory).get(chat.id))?.computerUsePendingContinue, undefined);
 });
 
-test("a renderer replaced while a per-chat opt-in is staged cannot commit it", async (t) => {
+test("Computer Use access setters reject a missing chat", async (t) => {
   const store = await testStore(t);
-  const chat = await store.create({ title: "Guarded during write" });
-  let checks = 0;
-
-  await assert.rejects(
-    store.setComputerUseEnabled(chat.id, true, () => {
-      checks += 1;
-      return checks === 1;
-    }),
-    /no longer active/u,
-  );
-  assert.equal(checks, 2);
-  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+  await assert.rejects(store.setComputerUsePendingContinue("missing-chat", false), /not found/u);
+  await assert.rejects(store.setComputerUseAllowed("missing-chat", true), /not found/u);
 });
 
 test("the summary index records when assistant output was last persisted", async (t) => {
@@ -1492,4 +1685,98 @@ test("the summary index records when assistant output was last persisted", async
   const afterUser = (await store.list()).find((meta) => meta.id === chat.id);
   assert.equal(afterUser?.lastAssistantAt, assistant?.createdAt);
   assert.equal(afterUser?.lastAssistantSequence, 1);
+});
+
+
+test("loads legacy Azure chat identities through the renamed native provider", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-google-migration-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "legacy-chat",
+    title: "Legacy Gemini",
+    workspaceId: "default",
+    providerId: "azure-openai-responses",
+    model: "deployment",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [],
+  };
+  await fs.writeFile(
+    path.join(directory, "index.json"),
+    JSON.stringify([chat]),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(directory, "legacy-chat.json"),
+    JSON.stringify(chat),
+    "utf-8",
+  );
+  const store = createChatStore(async () => directory);
+
+  assert.equal((await store.list())[0]?.providerId, "azure");
+  assert.equal((await store.get("legacy-chat"))?.providerId, "azure");
+});
+
+test("feature-owned chats leave regular listings but stay in the full index across a restart", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-owner-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  const store = createChatStore(async () => directory);
+  const regular = await store.create({ workspaceId: "default" });
+  const assistant = await store.create({ workspaceId: "assistant" });
+  // No workspace: an owned chat lands in "default", which is exactly where a leak would show.
+  const owned = await store.create({ owner });
+
+  assert.deepEqual(
+    new Set((await store.listRegular()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id]),
+  );
+  assert.deepEqual((await store.listRegular("default")).map(({ id }) => id), [regular.id]);
+
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    new Set((await restarted.list()).map(({ id }) => id)),
+    new Set([regular.id, assistant.id, owned.id]),
+  );
+  assert.deepEqual(
+    (await restarted.listSummaryMetadata()).find(({ id }) => id === owned.id)?.owner,
+    owner,
+  );
+  assert.deepEqual((await restarted.get(owned.id))?.owner, owner);
+  assert.deepEqual((await restarted.listRegular("default")).map(({ id }) => id), [regular.id]);
+});
+
+test("an owner is main-only, exclusive with Bots, and never copied", async (t) => {
+  const store = await testStore(t);
+  const owner = { kind: "design-project" as const, projectId: "project-1" };
+  await assert.rejects(store.create({ botId: "bot-1", owner }), /Invalid chat owner/u);
+  await assert.rejects(
+    store.create({ owner: { kind: "design-project", projectId: "../escape" } }),
+    /Invalid chat owner/u,
+  );
+  const owned = await store.create({ owner });
+  await store.appendMessage(owned.id, { role: "user", content: "A pricing page" });
+  await assert.rejects(
+    store.copyVisibleHistory({ sourceChatId: owned.id }),
+    (error: unknown) => error instanceof ChatForkError && error.code === "ineligible",
+  );
+  assert.equal((await store.list()).length, 1);
+});
+
+test("renderer-authored appends cannot write into a feature-owned conversation", async (t) => {
+  const store = await testStore(t);
+  const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
+  const regular = await store.create({ workspaceId: "default" });
+  await assert.rejects(
+    store.appendMessage(owned.id, { role: "user", content: "steer the design" }, { rejectFeatureOwned: true }),
+    /belongs to another Aiden feature/u,
+  );
+  assert.equal((await store.get(owned.id))?.messages.length, 0);
+  // The main-owned design run still writes its own turns.
+  await store.appendMessage(owned.id, { role: "user", content: "Explore a pricing page" });
+  assert.equal((await store.get(owned.id))?.messages.length, 1);
+  await store.appendMessage(regular.id, { role: "user", content: "hello" }, { rejectFeatureOwned: true });
+  assert.equal((await store.get(regular.id))?.messages.length, 1);
 });

@@ -84,7 +84,8 @@ function harness(
   workspace: Workspace,
   options: {
     allow?: boolean;
-    outcome?: "exited" | "cleanup_unconfirmed";
+    outcome?: "exited" | "timed_out" | "output_limit" | "cleanup_unconfirmed";
+    exitCode?: number;
     longOutput?: boolean;
     waitForAbort?: boolean;
     onRunShellStart?: () => void;
@@ -148,8 +149,8 @@ function harness(
             stderr: "",
           }
         : {
-            outcome: "exited",
-            exitCode: 0,
+            outcome: options.outcome ?? "exited",
+            ...(options.outcome === undefined || options.outcome === "exited" ? { exitCode: options.exitCode ?? 0 } : {}),
             cleanupConfirmed: true,
             stdout: options.longOutput ? `HEAD${"x".repeat(30_000)}TAIL` : "one two",
             stderr: "warning",
@@ -282,6 +283,7 @@ test("cleanup-unconfirmed is durable unknown and never retries", async (t) => {
     result.content[0]?.type === "text" ? result.content[0].text : "",
     /Cleanup confirmed: no/u,
   );
+  assert.equal(result.isError, true, "unconfirmed cleanup must not look successful to Pi");
   assert.equal(run.rawCalls(), 1);
   assert.equal(run.transitions[run.transitions.length - 1], "unknown");
   await assert.rejects(
@@ -293,6 +295,30 @@ test("cleanup-unconfirmed is durable unknown and never retries", async (t) => {
     /no live one-shot/u,
   );
   assert.equal(run.rawCalls(), 1);
+});
+
+test("shell result error flags agree with durable exit and termination outcomes without replay", async (t) => {
+  for (const scenario of [
+    { outcome: "exited" as const, exitCode: 0, expectedState: "completed", expectedError: false },
+    { outcome: "exited" as const, exitCode: 7, expectedState: "remote_error", expectedError: true },
+    { outcome: "timed_out" as const, expectedState: "remote_error", expectedError: true },
+    { outcome: "output_limit" as const, expectedState: "remote_error", expectedError: true },
+  ]) {
+    const workspace = await fixture(t);
+    const run = harness(workspace, scenario);
+    const command = "printf 'one'\nprintf 'two'";
+    await run.gate.beforeToolCall(call(command));
+    const result = await run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } });
+    assert.equal(result.isError === true, scenario.expectedError, `${scenario.outcome}/${scenario.exitCode ?? "none"}`);
+    assert.deepEqual(run.transitions, ["prepared", "authorized", "dispatch_started", scenario.expectedState]);
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    assert.ok(text.includes(`Shell outcome: ${scenario.outcome}`));
+    if (scenario.exitCode !== undefined) assert.ok(text.includes(`Exit code: ${scenario.exitCode}`));
+    assert.equal(run.rawCalls(), 1);
+    await assert.rejects(run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } }), /no live one-shot/u);
+    assert.equal(run.rawCalls(), 1);
+    await run.gate.shutdown();
+  }
 });
 
 test("workspace drift blocks dispatch and bounded output preserves head and tail", async (t) => {

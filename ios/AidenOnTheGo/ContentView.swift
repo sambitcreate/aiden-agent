@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var navigationRequest: AidenNavigationRequest?
+    @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
 
     var body: some View {
         Group {
@@ -24,6 +25,28 @@ struct ContentView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(issue.title).font(.subheadline.weight(.semibold))
+                    if let installation = coordinator.installationStore.activeInstallation {
+                        Text(installation.name).font(.caption.weight(.medium))
+                        if let last = installation.lastConnectedAt {
+                            Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(issue.message).font(.caption).foregroundStyle(.secondary)
+                    if issue.canRetry {
+                        Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.regularMaterial)
+                .accessibilityElement(children: .contain)
+            }
+        }
         .task { await coordinator.start() }
         .onOpenURL { url in
             guard let request = AidenDeepLink.request(from: url) else {
@@ -33,11 +56,14 @@ struct ContentView: View {
             Task { await open(request) }
         }
         .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
+            switch sceneRefreshGate.transition(to: phase) {
+            case .refresh:
                 guard coordinator.connectionState != .needsPairing else { return }
                 Task {
                     await coordinator.connectActiveInstallation()
+                    // Bot routine results land as local notifications when
+                    // the app comes to the foreground (there is no push).
+                    Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
                     if let context = try? coordinator.requestContext(),
                        let client = try? coordinator.remoteClient(for: context) {
                         await AidenRemoteLiveActivityManager.shared.reconcile(
@@ -47,9 +73,11 @@ struct ContentView: View {
                         )
                     }
                 }
-            case .background:
+            case .suspend:
                 Task { await AidenRemoteLiveActivityManager.shared.markAllStale() }
-            default:
+            case .resume, .none:
+                // Returning from a transient `.inactive` (Control Center,
+                // app switcher, system prompts) keeps the live connection.
                 break
             }
         }

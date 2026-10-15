@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { recordMcpStepUpScope } from "./mcp-oauth-session.js";
+
 export const MAX_MCP_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const MCP_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -14,6 +17,216 @@ function isJsonRpcBody(body: BodyInit | null | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/** Pi 1.0 accepts absent optional token values some OAuth servers encode as null or empty strings. */
+async function normalizeOAuthTokenResponse(response: Response): Promise<Response> {
+  if (!response.ok) return response;
+  const value: unknown = await response.json();
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid OAuth token response.");
+  const tokens = value as Record<string, unknown>;
+  if (typeof tokens.access_token !== "string" || !tokens.access_token || typeof tokens.token_type !== "string" || !tokens.token_type) throw new Error("OAuth token response is missing required credentials.");
+  for (const key of ["scope", "refresh_token", "id_token", "expires_in"]) {
+    if (tokens[key] === null || tokens[key] === "") delete tokens[key];
+  }
+  if (tokens.expires_in !== undefined) {
+    if ((typeof tokens.expires_in !== "string" && typeof tokens.expires_in !== "number") || !Number.isFinite(Number(tokens.expires_in)) || Number(tokens.expires_in) < 0) throw new Error("Invalid OAuth token lifetime.");
+    tokens.expires_in = Number(tokens.expires_in);
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-length"); headers.delete("content-encoding");
+  return new Response(JSON.stringify(tokens), { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
+ * Dynamic client registration responses and authorization-server metadata
+ * from some providers encode absent optional members as `null` or `""`, which
+ * the SDK's schemas reject (or, for URL fields, treat as invalid). Drop those
+ * optional members; required members stay untouched so they still fail closed.
+ */
+const OAUTH_REGISTRATION_REQUIRED = new Set(["client_id", "redirect_uris"]);
+const OAUTH_METADATA_REQUIRED = new Set(["issuer", "authorization_endpoint", "token_endpoint", "response_types_supported"]);
+const OAUTH_METADATA_PATH = /\/\.well-known\/(?:oauth-authorization-server|openid-configuration)(?:\/|$)/u;
+
+async function normalizeOptionalOAuthFields(response: Response, required: ReadonlySet<string>): Promise<Response> {
+  if (!response.ok) return response;
+  const text = await response.text();
+  const rebuild = (body: string) => {
+    const headers = new Headers(response.headers);
+    headers.delete("content-length"); headers.delete("content-encoding");
+    return new Response(body, { status: response.status, statusText: response.statusText, headers });
+  };
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return rebuild(text); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return rebuild(text);
+  const document = value as Record<string, unknown>;
+  for (const [key, member] of Object.entries(document)) {
+    if (!required.has(key) && (member === null || member === "")) delete document[key];
+  }
+  return rebuild(JSON.stringify(document));
+}
+
+/**
+ * SDK 1.30 reads `scope=""` in a challenge as the two-character scope `""`
+ * (and `scope=" "` as whitespace), which then wins over scopes_supported.
+ * Remove empty scope parameters so discovery falls back as the spec intends.
+ */
+export function withoutEmptyChallengeScope(header: string): string {
+  return header
+    .replace(/(^|[\s,])scope=(?:"\s*"|'\s*'|(?=,|\s|$))\s*,?/giu, "$1")
+    .replace(/[\s,]+$/u, "")
+    .replace(/\s{2,}/gu, " ");
+}
+
+function challengeParameter(header: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|[\\s,])${name}=(?:"([^"]*)"|([^\\s,]+))`, "iu").exec(header);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+/** Snapshot of a token response shared by coalesced refresh callers. */
+interface SharedTokenResponse {
+  status: number;
+  statusText: string;
+  headers: [string, string][];
+  body: Uint8Array;
+}
+
+interface RefreshFlight {
+  promise: Promise<SharedTokenResponse>;
+  waiters: number;
+  controller: AbortController;
+  settled: boolean;
+}
+
+/**
+ * A completed rotation is replayed to late callers still holding the old
+ * refresh token, until the refresh token it issued is itself presented.
+ */
+const REFRESH_REPLAY_MS = 30_000;
+const refreshFlights = new Map<string, RefreshFlight>();
+/** Digest of (token endpoint, issued refresh token) -> key of the completed flight that issued it. */
+const refreshIssuers = new Map<string, string>();
+
+function issuedTokenKey(url: URL, refreshToken: string): string {
+  return createHash("sha256").update(url.href).update("\0").update(refreshToken).digest("hex");
+}
+
+function issuedRefreshToken(snapshot: SharedTokenResponse): string | undefined {
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(snapshot.body));
+    const token = value && typeof value === "object" ? (value as { refresh_token?: unknown }).refresh_token : undefined;
+    return typeof token === "string" && token ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Presenting a refresh token consumes it: the completed response that issued
+ * it must no longer be replayed, or a caller still holding the older token
+ * would receive (and the SDK would persist) credentials already rotated away.
+ */
+function retireIssuerOf(url: URL, presented: string | null): void {
+  if (!presented) return;
+  const issued = issuedTokenKey(url, presented);
+  const issuerKey = refreshIssuers.get(issued);
+  if (issuerKey === undefined) return;
+  refreshIssuers.delete(issued);
+  if (refreshFlights.get(issuerKey)?.settled) refreshFlights.delete(issuerKey);
+}
+
+function refreshFlightKey(url: URL, body: string, headers: Headers): string {
+  return createHash("sha256")
+    .update(url.href).update("\0")
+    .update(body).update("\0")
+    .update(headers.get("authorization") ?? "")
+    .digest("hex");
+}
+
+function sharedResponse(snapshot: SharedTokenResponse): Response {
+  return new Response(snapshot.body.slice(), { status: snapshot.status, statusText: snapshot.statusText, headers: snapshot.headers });
+}
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+/**
+ * Process-wide single flight for `grant_type=refresh_token` POSTs. Status
+ * checks, chat, child-agent and Bot clients each own a transport but share one
+ * stored refresh token; with rotating refresh tokens a second concurrent POST
+ * gets `invalid_grant`, after which the SDK erases the tokens the first caller
+ * just saved. Identical requests (same endpoint, body and client
+ * authentication) share one network request; each caller gets its own
+ * Response and stops waiting on its own cancellation. The shared request is
+ * cancelled only when every waiter has left.
+ */
+function coalesceRefresh(
+  key: string,
+  exchange: { url: URL; presented: string | null },
+  run: (signal: AbortSignal) => Promise<Response>,
+  callerSignal: AbortSignal,
+): Promise<Response> {
+  callerSignal.throwIfAborted();
+  retireIssuerOf(exchange.url, exchange.presented);
+  let flight = refreshFlights.get(key);
+  if (!flight) {
+    const controller = new AbortController();
+    const created: RefreshFlight = { waiters: 0, controller, settled: false, promise: undefined as unknown as Promise<SharedTokenResponse> };
+    created.promise = (async () => {
+      const response = await run(controller.signal);
+      const body = new Uint8Array(await response.arrayBuffer());
+      return { status: response.status, statusText: response.statusText, headers: [...response.headers], body };
+    })();
+    created.promise.then(
+      (snapshot) => {
+        created.settled = true;
+        if (snapshot.status < 200 || snapshot.status >= 300) {
+          if (refreshFlights.get(key) === created) refreshFlights.delete(key);
+          return;
+        }
+        retireIssuerOf(exchange.url, exchange.presented);
+        const issued = issuedRefreshToken(snapshot);
+        // A non-rotating server re-issues the presented token; nothing was consumed.
+        const issuedKey = issued && issued !== exchange.presented ? issuedTokenKey(exchange.url, issued) : undefined;
+        if (issuedKey && refreshFlights.get(key) === created) refreshIssuers.set(issuedKey, key);
+        setTimeout(() => {
+          if (refreshFlights.get(key) === created) refreshFlights.delete(key);
+          if (issuedKey && refreshIssuers.get(issuedKey) === key) refreshIssuers.delete(issuedKey);
+        }, REFRESH_REPLAY_MS).unref?.();
+      },
+      () => {
+        created.settled = true;
+        if (refreshFlights.get(key) === created) refreshFlights.delete(key);
+      },
+    );
+    refreshFlights.set(key, created);
+    flight = created;
+  }
+  const joined = flight;
+  joined.waiters += 1;
+  return new Promise<Response>((resolve, reject) => {
+    let left = false;
+    const leave = () => {
+      if (left) return;
+      left = true;
+      callerSignal.removeEventListener("abort", onAbort);
+      joined.waiters -= 1;
+    };
+    const onAbort = () => {
+      leave();
+      if (joined.waiters === 0 && !joined.settled) {
+        joined.controller.abort(abortError(callerSignal));
+        if (refreshFlights.get(key) === joined) refreshFlights.delete(key);
+      }
+      reject(abortError(callerSignal));
+    };
+    callerSignal.addEventListener("abort", onAbort, { once: true });
+    joined.promise.then(
+      (snapshot) => { if (left) return; leave(); resolve(sharedResponse(snapshot)); },
+      (error: unknown) => { if (left) return; leave(); reject(error); },
+    );
+  });
 }
 
 /** Count SSE frames, not the lifetime of an intentionally long-lived stream. */
@@ -56,7 +269,6 @@ export interface McpFetchPolicyOptions {
  * its own Authorization header. Redirects cannot carry either set elsewhere.
  */
 export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fetch {
-  const service = new URL(options.serviceUrl);
   const configuredHeaders = new Headers(options.serviceHeaders);
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const maximumBytes = options.maximumBytes ?? MAX_MCP_RESPONSE_BYTES;
@@ -65,7 +277,12 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error("Invalid MCP transport policy.");
   }
-  return async (input, init) => {
+  const service = new URL(options.serviceUrl);
+  const policyFetch = async (
+    input: Parameters<typeof fetch>[0],
+    init: RequestInit | undefined,
+    owner: { signal?: AbortSignal; isCurrent?: () => boolean; caller: boolean },
+  ): Promise<Response> => {
     const request = input instanceof Request ? input : undefined;
     const url = new URL(request?.url ?? String(input));
     const requestHeaders = new Headers(init?.headers ?? request?.headers);
@@ -84,8 +301,8 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     const controller = new AbortController();
     const signal = AbortSignal.any([
       controller.signal,
-      ...(options.signal ? [options.signal] : []),
-      ...(init?.signal ? [init.signal] : request ? [request.signal] : []),
+      ...(owner.signal ? [owner.signal] : []),
+      ...(owner.caller ? init?.signal ? [init.signal] : request ? [request.signal] : [] : []),
     ]);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -104,7 +321,7 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     };
     const assertCurrent = () => {
       signal.throwIfAborted();
-      if (options.isCurrent && !options.isCurrent()) {
+      if (owner.isCurrent && !owner.isCurrent()) {
         throw new Error("MCP connection is no longer current.");
       }
     };
@@ -124,9 +341,26 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
         void response.body?.cancel(OVERSIZED).catch(() => undefined);
         throw new Error(OVERSIZED);
       }
+      let responseHeaders = response.headers;
+      const challenge = response.headers.get("www-authenticate");
+      if ((response.status === 401 || response.status === 403) && challenge) {
+        // Legacy SSE servers take JSON-RPC POSTs at a separate message path
+        // (e.g. /messages), so any MCP request to the server's origin counts.
+        if (response.status === 403 && mcpRequest && url.origin === service.origin &&
+            challengeParameter(challenge, "error") === "insufficient_scope") {
+          const scope = challengeParameter(challenge, "scope");
+          if (scope) recordMcpStepUpScope(options.serviceUrl, scope);
+        }
+        const rewritten = withoutEmptyChallengeScope(challenge);
+        if (rewritten !== challenge) {
+          responseHeaders = new Headers(response.headers);
+          responseHeaders.set("www-authenticate", rewritten);
+        }
+      }
       if (!response.body) {
         cleanup();
-        return response;
+        return responseHeaders === response.headers ? response
+          : new Response(null, { status: response.status, statusText: response.statusText, headers: responseHeaders });
       }
       reader = response.body.getReader();
       const checkFrame = frameCounter(maximumBytes);
@@ -162,14 +396,55 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
           return reader!.cancel(reason);
         },
       });
-      return new Response(body, {
+      const boundedResponse = new Response(body, {
         status: response.status,
         statusText: response.statusText,
-        headers: response.headers,
+        headers: responseHeaders,
       });
+      const grant = formGrant(method, contentType, init?.body);
+      if (grant === "authorization_code" || grant === "refresh_token") return await normalizeOAuthTokenResponse(boundedResponse);
+      if (!mcpRequest && method === "GET" && OAUTH_METADATA_PATH.test(url.pathname)) {
+        return await normalizeOptionalOAuthFields(boundedResponse, OAUTH_METADATA_REQUIRED);
+      }
+      if (!mcpRequest && method === "POST" && contentType === "application/json") {
+        return await normalizeOptionalOAuthFields(boundedResponse, OAUTH_REGISTRATION_REQUIRED);
+      }
+      return boundedResponse;
     } catch (error) {
       cleanup();
       throw error;
     }
   };
+  return async (input, init) => {
+    const request = input instanceof Request ? input : undefined;
+    const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+    const headers = new Headers(init?.headers ?? request?.headers);
+    const contentType = (headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
+    if (formGrant(method, contentType, init?.body) !== "refresh_token") {
+      return policyFetch(input, init, { signal: options.signal, isCurrent: options.isCurrent, caller: true });
+    }
+    const callerSignal = AbortSignal.any([
+      ...(options.signal ? [options.signal] : []),
+      ...(init?.signal ? [init.signal] : request ? [request.signal] : []),
+    ]);
+    if (options.isCurrent && !options.isCurrent()) throw new Error("MCP connection is no longer current.");
+    const url = new URL(request?.url ?? String(input));
+    const body = String(init?.body ?? "");
+    const key = refreshFlightKey(url, body, headers);
+    const presented = new URLSearchParams(body).get("refresh_token");
+    // The shared request belongs to no single caller: it carries only its own
+    // deadline and the cancellation of every waiter, and each caller re-checks
+    // its own currency before using the result.
+    const response = await coalesceRefresh(key, { url, presented }, (signal) => policyFetch(input, init, { signal, caller: false }), callerSignal);
+    if (options.isCurrent && !options.isCurrent()) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error("MCP connection is no longer current.");
+    }
+    return response;
+  };
+}
+
+function formGrant(method: string, contentType: string, body: BodyInit | null | undefined): string | null {
+  if (method !== "POST" || contentType !== "application/x-www-form-urlencoded") return null;
+  return new URLSearchParams(typeof body === "string" || body instanceof URLSearchParams ? body : "").get("grant_type");
 }

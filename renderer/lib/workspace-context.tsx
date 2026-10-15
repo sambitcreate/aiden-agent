@@ -42,14 +42,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const active = list.find((w) => w.id === activeId) ?? list[0];
-  const value: WorkspaceContextValue = {
-    workspaces: list,
-    active,
-    activeId: active?.id,
-    select,
-    isLoading: workspaces.isLoading,
-    isReady: workspaces.isSuccess,
-  };
+  const isLoading = workspaces.isLoading;
+  const isReady = workspaces.isSuccess;
+  const value = React.useMemo<WorkspaceContextValue>(
+    () => ({ workspaces: list, active, activeId: active?.id, select, isLoading, isReady }),
+    [list, active, select, isLoading, isReady],
+  );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }
 

@@ -1,4 +1,5 @@
 import type { McpServer } from "../types.js";
+import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
 import {
   MAX_SUBAGENT_MCP_SCOPES,
   MAX_SUBAGENT_MCP_TOOLS_PER_SCOPE,
@@ -170,8 +171,9 @@ export async function resolveBoundedSubagentMcpInventory(
       return [];
     }
     const servers = listed.servers
-      .filter((server) => server.enabled && server.transport !== "stdio")
+      .filter((server) => server.enabled && server.transport !== "stdio" && !server.authProvider && mcpServerOffersTools(server))
       .slice(0, MAX_SUBAGENT_MCP_SCOPES);
+    const byId = new Map(servers.map((server) => [server.id, server] as const));
     const tasks = servers.map(async (server) => {
       let fingerprint: string | undefined;
       try {
@@ -210,7 +212,11 @@ export async function resolveBoundedSubagentMcpInventory(
     const outcome = await Promise.race([settled.then(() => "settled" as const), deadline, aborted]);
     if (outcome === "aborted") throw abortReason(parentSignal);
     controller.abort(new Error("MCP inventory discovery deadline elapsed."));
-    return projectInventory(completed);
+    // Hidden tools are withheld from children; the cache keeps the full inspection.
+    return projectInventory(completed.map((inspected) => {
+      const server = byId.get(inspected.serverId);
+      return server ? { ...inspected, tools: mcpToolsOfferedToModel(server, inspected.tools, (tool) => tool.toolName) } : inspected;
+    }));
   } finally {
     if (timeout) clearTimeout(timeout);
     parentSignal.removeEventListener("abort", relay);

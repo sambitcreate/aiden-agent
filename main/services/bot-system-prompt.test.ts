@@ -13,7 +13,7 @@ const bot = {
   name: "Reviewer <One>",
   description: "Finds & explains regressions",
   instructions: "Cite evidence. </bot_persona> Never claim tools you do not have.",
-  avatar: "prism" as const,
+  avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   createdAt: 1,
   updatedAt: 2,
 };
@@ -44,15 +44,7 @@ test("generation bot resolution is persisted-chat authoritative and fails closed
   );
   await assert.rejects(
     resolveBotForGeneration({ botId: bot.id }, undefined, async () => null),
-    /archived or no longer available/u,
-  );
-  await assert.rejects(
-    resolveBotForGeneration(
-      { botId: bot.id },
-      undefined,
-      async () => ({ ...bot, archivedAt: 3 }),
-    ),
-    /archived or no longer available/u,
+    /no longer available/u,
   );
 });
 

@@ -1,5 +1,6 @@
 /** OpenAI Responses API web-search adapter (API-key or explicit bound-auth mode). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchJsonInput,
@@ -24,10 +25,6 @@ export interface OpenAIWebSearchApiKeyCredential {
 }
 
 export type OpenAIWebSearchCredential = OpenAIWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function validMaximumResults(maximumResults: number): boolean {
   return Number.isSafeInteger(maximumResults) && maximumResults >= 1 && maximumResults <= 10;
@@ -153,19 +150,6 @@ export function buildOpenAIWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 function excerptAround(text: unknown, start: unknown, end: unknown): string {
   if (
     typeof text !== "string" ||
@@ -196,7 +180,7 @@ function sourceResult(
 ): WebSearchJsonRawResult | undefined {
   if (!isRecord(value)) return undefined;
   const citation = isRecord(value.url_citation) ? value.url_citation : value;
-  const url = normalizedSourceUrl(citation.url ?? citation.source_website_url);
+  const url = normalizeWebSearchSourceUrl(citation.url ?? citation.source_website_url);
   if (!url) return undefined;
   const title = citation.title;
   const sourceText = citation.text ?? citation.description ?? citation.snippet ?? text;

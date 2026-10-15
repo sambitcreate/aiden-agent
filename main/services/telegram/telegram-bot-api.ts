@@ -167,31 +167,80 @@ export interface TelegramApiResponse<T> {
   parameters?: { retry_after?: number };
 }
 
+/** Optional per-request controls. Transports should abort the request when the signal fires. */
+export interface TelegramRequestOptions {
+  signal?: AbortSignal;
+}
+
 /** Inject-able transport so tests can mock the network entirely. */
 export type TelegramTransport = (
   method: string,
   body: Record<string, unknown>,
+  options?: TelegramRequestOptions,
 ) => Promise<TelegramApiResponse<unknown>>;
 
-export type TelegramFileDownloader = (filePath: string) => Promise<Uint8Array>;
+export type TelegramFileDownloader = (
+  filePath: string,
+  options?: TelegramRequestOptions & { sizeBytes?: number },
+) => Promise<Uint8Array>;
 export type TelegramUploadTransport = (
   method: string,
   fields: Record<string, string>,
   file: { field: string; bytes: Uint8Array; name: string; mimeType: string },
+  options?: TelegramRequestOptions,
 ) => Promise<TelegramApiResponse<unknown>>;
+
+/** Grace beyond the server-side long-poll window before the client gives up. */
+export const TELEGRAM_LONG_POLL_GRACE_MS = 10_000;
+const TELEGRAM_REQUEST_TIMEOUT_MS = 30_000;
+const TELEGRAM_COMMAND_MENU_TIMEOUT_MS = 10_000;
+const TELEGRAM_TRANSFER_BASE_MS = 30_000;
+/** Allow ~128 KiB/s, slow enough for a poor mobile uplink yet bounded. */
+const TELEGRAM_TRANSFER_BYTES_PER_SECOND = 128 * 1024;
+const TELEGRAM_TRANSFER_MAX_MS = 10 * 60_000;
+/** Bot API downloads are limited to 20 MB; assume that when the size is unknown. */
+const TELEGRAM_UNKNOWN_TRANSFER_BYTES = 20 * 1024 * 1024;
+
+/** Client-side deadline for one JSON Bot API request. */
+export function telegramRequestTimeoutMs(method: string, body: Record<string, unknown>): number {
+  if (method === "getUpdates") {
+    const seconds = typeof body.timeout === "number" && Number.isFinite(body.timeout) && body.timeout > 0
+      ? body.timeout
+      : 0;
+    return seconds * 1000 + TELEGRAM_LONG_POLL_GRACE_MS;
+  }
+  // A menu refresh must not indefinitely block later gate changes.
+  if (method === "setMyCommands") return TELEGRAM_COMMAND_MENU_TIMEOUT_MS;
+  return TELEGRAM_REQUEST_TIMEOUT_MS;
+}
+
+/** Client-side deadline for a file transfer, scaled by its size. */
+export function telegramTransferTimeoutMs(sizeBytes?: number): number {
+  const bytes = typeof sizeBytes === "number" && Number.isFinite(sizeBytes) && sizeBytes >= 0
+    ? sizeBytes
+    : TELEGRAM_UNKNOWN_TRANSFER_BYTES;
+  return Math.min(
+    TELEGRAM_TRANSFER_MAX_MS,
+    TELEGRAM_TRANSFER_BASE_MS + Math.ceil((bytes / TELEGRAM_TRANSFER_BYTES_PER_SECOND) * 1000),
+  );
+}
+
+function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
 
 /** Production transport: posts JSON to api.telegram.org. Resolves the token
  *  per request so runtime key changes are picked up without re-creation. */
 export function createFetchTransport(tokenResolver: () => Promise<string | null>): TelegramTransport {
-  return async (method: string, body: Record<string, unknown>) => {
+  return async (method, body, options) => {
     const token = await tokenResolver();
     if (!token) throw new Error("No Telegram bot token configured.");
     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      // A menu refresh must not indefinitely block later gate changes.
-      ...(method === "setMyCommands" ? { signal: AbortSignal.timeout(10_000) } : {}),
+      signal: requestSignal(telegramRequestTimeoutMs(method, body), options?.signal),
     });
     return (await response.json()) as TelegramApiResponse<unknown>;
   };
@@ -200,10 +249,12 @@ export function createFetchTransport(tokenResolver: () => Promise<string | null>
 export function createFetchFileDownloader(
   tokenResolver: () => Promise<string | null>,
 ): TelegramFileDownloader {
-  return async (filePath: string) => {
+  return async (filePath, options) => {
     const token = await tokenResolver();
     if (!token) throw new Error("No Telegram bot token configured.");
-    const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
+    const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, {
+      signal: requestSignal(telegramTransferTimeoutMs(options?.sizeBytes), options?.signal),
+    });
     if (!response.ok) {
       throw new TelegramApiError(
         `Telegram file download failed: ${response.status} ${response.statusText}`,
@@ -217,7 +268,7 @@ export function createFetchFileDownloader(
 export function createFetchUploadTransport(
   tokenResolver: () => Promise<string | null>,
 ): TelegramUploadTransport {
-  return async (method, fields, file) => {
+  return async (method, fields, file, options) => {
     const token = await tokenResolver();
     if (!token) throw new Error("No Telegram bot token configured.");
     const form = new FormData();
@@ -226,6 +277,7 @@ export function createFetchUploadTransport(
     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
       body: form,
+      signal: requestSignal(telegramTransferTimeoutMs(file.bytes.byteLength), options?.signal),
     });
     return (await response.json()) as TelegramApiResponse<unknown>;
   };
@@ -252,9 +304,12 @@ function unwrap<T>(res: TelegramApiResponse<unknown>): T {
   return res.result as T;
 }
 
-/** Race a transport call against an abort signal for cooperative cancellation. */
+/**
+ * Hand the signal to the transport so the underlying request is cancelled, and
+ * also race it so a transport that ignores the signal still releases the caller.
+ */
 function callWithAbort(
-  transport: () => Promise<TelegramApiResponse<unknown>>,
+  transport: (signal?: AbortSignal) => Promise<TelegramApiResponse<unknown>>,
   signal?: AbortSignal,
 ): Promise<TelegramApiResponse<unknown>> {
   if (!signal) return transport();
@@ -262,7 +317,7 @@ function callWithAbort(
   return new Promise<TelegramApiResponse<unknown>>((resolve, reject) => {
     const onAbort = () => reject(new Error("Telegram polling aborted."));
     signal.addEventListener("abort", onAbort, { once: true });
-    transport()
+    transport(signal)
       .then((result) => {
         signal.removeEventListener("abort", onAbort);
         resolve(result);
@@ -293,7 +348,7 @@ export class TelegramBotApi {
     };
     if (offset !== undefined) body.offset = offset;
     return callWithAbort(
-      () => this.transport("getUpdates", body),
+      (requestSignal) => this.transport("getUpdates", body, requestSignal ? { signal: requestSignal } : undefined),
       signal,
     ).then((r) => unwrap<TelegramUpdate[]>(r));
   }
@@ -324,7 +379,13 @@ export class TelegramBotApi {
     if (!this.fileDownloader) throw new Error("Telegram file downloads are unavailable.");
     const file = await this.getFile(fileId);
     if (!file.file_path) throw new Error("Telegram did not return a file path.");
-    return { file, bytes: await this.fileDownloader(file.file_path) };
+    return {
+      file,
+      bytes: await this.fileDownloader(
+        file.file_path,
+        file.file_size === undefined ? undefined : { sizeBytes: file.file_size },
+      ),
+    };
   }
 
   async sendDocument(params: {

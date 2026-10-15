@@ -27,8 +27,30 @@ export interface AidenRemoteStatusView {
     | "permission_denied";
   pairedDeviceCount: number;
   approvedRootCount: number;
+  /** Present only on hosts that can serve desktop connection requests. */
+  acceptPairingRequests?: boolean;
   errorCode?: "remote_port_in_use";
   error?: string;
+}
+
+/** A desktop connection request waiting for the person's decision. */
+export interface AidenRemotePairingRequestPrompt {
+  requestId: string;
+  deviceName: string;
+  deviceType: "mac" | "linux";
+  transport: "lan" | "tailscale";
+  /** Six digits the person compares with the requesting computer. */
+  matchCode: string;
+  expiresAt: string;
+  /** True while an Allow is being committed. */
+  approving: boolean;
+}
+
+export interface AidenRemotePairingRequestDecisionView {
+  requestId: string;
+  state: "pending" | "approved" | "denied" | "expired" | "cancelled";
+  /** Set when Allow was chosen but the credential could not be issued. */
+  failed?: true;
 }
 
 export interface AidenRemoteTailscaleTakeoverReviewView {
@@ -39,7 +61,7 @@ export interface AidenRemoteTailscaleTakeoverReviewView {
 export interface AidenRemoteDeviceView {
   id: string;
   name: string;
-  type: "iphone" | "ipad" | "mac" | "linux";
+  type: "iphone" | "ipad" | "android" | "mac" | "linux";
   clientVersion: string;
   capabilities: string[];
   createdAt: number;

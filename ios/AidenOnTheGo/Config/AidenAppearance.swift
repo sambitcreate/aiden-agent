@@ -167,6 +167,7 @@ enum AidenThemePresetID: String, CaseIterable, Identifiable, Codable, Sendable {
     case graphite
     case dusk
     case midnight
+    case monochrome
 
     var id: String { rawValue }
 
@@ -181,6 +182,7 @@ enum AidenThemePresetID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .graphite: "Graphite"
         case .dusk: "Dusk"
         case .midnight: "Midnight"
+        case .monochrome: "Monochrome"
         }
     }
 }
@@ -323,12 +325,12 @@ enum AidenThemeCatalog {
             .init(canvasHex: "#18201C", sidebarHex: "#202A25", raisedHex: "#29342E", foregroundHex: "#D1D6D3", secondaryHex: "#95A39B", accentHex: "#42B596", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
         ],
         .paper: [
-            .init(canvasHex: "#F5F3EE", sidebarHex: "#ECE8E0", raisedHex: "#FFFFFF", foregroundHex: "#3E3C38", secondaryHex: "#6F6A60", accentHex: "#7E5E2A", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
-            .init(canvasHex: "#1E1C19", sidebarHex: "#262320", raisedHex: "#2E2A26", foregroundHex: "#D6D2CA", secondaryHex: "#A39E93", accentHex: "#C9A97C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
+            .init(canvasHex: "#FBFBFA", sidebarHex: "#F5F4F1", raisedHex: "#FFFFFF", foregroundHex: "#373329", secondaryHex: "#5A554A", accentHex: "#7E5E2A", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
+            .init(canvasHex: "#242016", sidebarHex: "#2F2B21", raisedHex: "#413D33", foregroundHex: "#F5F4F1", secondaryHex: "#B0AB9F", accentHex: "#C9A97C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
         ],
         .calm: [
-            .init(canvasHex: "#F7F3EA", sidebarHex: "#EFE9DD", raisedHex: "#FFFDF8", foregroundHex: "#44403A", secondaryHex: "#6E685C", accentHex: "#7E5B2C", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
-            .init(canvasHex: "#201D18", sidebarHex: "#28241E", raisedHex: "#322C25", foregroundHex: "#D8D3C8", secondaryHex: "#A8A091", accentHex: "#D9A86C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
+            .init(canvasHex: "#F5F4F1", sidebarHex: "#EAE7E1", raisedHex: "#FBFBFA", foregroundHex: "#373329", secondaryHex: "#5A554A", accentHex: "#7E5B2C", successHex: "#3DBF7D", warningHex: "#D4A22A", dangerHex: "#E05353"),
+            .init(canvasHex: "#2F2B21", sidebarHex: "#242016", raisedHex: "#413D33", foregroundHex: "#F5F4F1", secondaryHex: "#B0AB9F", accentHex: "#D9A86C", successHex: "#47D18C", warningHex: "#D9B43A", dangerHex: "#EB6B6B"),
         ],
         .graphite: [
             .init(canvasHex: "#F4F4F5", sidebarHex: "#E9E9EB", raisedHex: "#FFFFFF", foregroundHex: "#38383B", secondaryHex: "#64646A", accentHex: "#52525B", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
@@ -341,6 +343,10 @@ enum AidenThemeCatalog {
         .midnight: [
             .init(canvasHex: "#EFF2F8", sidebarHex: "#E3E8F2", raisedHex: "#FFFFFF", foregroundHex: "#38405A", secondaryHex: "#5F6880", accentHex: "#3B5BA9", successHex: "#30D158", warningHex: "#FF9F0A", dangerHex: "#FF453A"),
             .init(canvasHex: "#141826", sidebarHex: "#1B2133", raisedHex: "#262D42", foregroundHex: "#D2D8E6", secondaryHex: "#94A0BC", accentHex: "#7FA0F0", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
+        ],
+        .monochrome: [
+            .init(canvasHex: "#FFFFFF", sidebarHex: "#F5F5F5", raisedHex: "#FFFFFF", foregroundHex: "#000000", secondaryHex: "#525252", accentHex: "#000000", successHex: "#00906C", warningHex: "#B58A00", dangerHex: "#D70022"),
+            .init(canvasHex: "#0A0A0A", sidebarHex: "#141414", raisedHex: "#1F1F1F", foregroundHex: "#FFFFFF", secondaryHex: "#A3A3A3", accentHex: "#FFFFFF", successHex: "#2FBF8F", warningHex: "#FFD60A", dangerHex: "#FF4D5E"),
         ],
     ]
 }
@@ -453,6 +459,7 @@ private struct AidenPaletteEnvironmentKey: EnvironmentKey {
 }
 
 private struct AidenReduceMotionEnvironmentKey: EnvironmentKey { static let defaultValue = false }
+private struct AidenLowPowerModeEnvironmentKey: EnvironmentKey { static let defaultValue = false }
 private struct AidenDiffMarkerEnvironmentKey: EnvironmentKey { static let defaultValue = AidenDiffMarkerPreference.symbols }
 private struct AidenSidebarTranslucencyEnvironmentKey: EnvironmentKey { static let defaultValue = true }
 private struct AidenCodeTypographyEnvironmentKey: EnvironmentKey {
@@ -479,6 +486,13 @@ extension EnvironmentValues {
         set { self[AidenReduceMotionEnvironmentKey.self] = newValue }
     }
 
+    /// True while the system Low Power Mode is on. Decorative, continuously
+    /// redrawn animations (orbs, shimmers) hold still to save power.
+    var aidenLowPowerMode: Bool {
+        get { self[AidenLowPowerModeEnvironmentKey.self] }
+        set { self[AidenLowPowerModeEnvironmentKey.self] = newValue }
+    }
+
     var aidenDiffMarkers: AidenDiffMarkerPreference {
         get { self[AidenDiffMarkerEnvironmentKey.self] }
         set { self[AidenDiffMarkerEnvironmentKey.self] = newValue }
@@ -500,6 +514,7 @@ struct AidenAppearanceRoot<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -515,6 +530,7 @@ struct AidenAppearanceRoot<Content: View>: View {
         content()
             .environment(\.aidenPalette, palette)
             .environment(\.aidenReduceMotion, appearance.resolvedReduceMotion(system: systemReduceMotion))
+            .environment(\.aidenLowPowerMode, lowPowerMode)
             .environment(\.aidenDiffMarkers, appearance.diffMarkers)
             .environment(\.aidenSidebarTranslucent, appearance.translucentSidebar(for: effectiveScheme))
             .environment(\.aidenCodeTypography, AidenCodeTypography(font: appearance.codeFont(for: effectiveScheme), size: appearance.codeFontSize))
@@ -522,6 +538,11 @@ struct AidenAppearanceRoot<Content: View>: View {
             .preferredColorScheme(appearance.mode.colorScheme)
             .tint(palette.accent)
             .background(palette.canvas.ignoresSafeArea())
+            .task {
+                for await _ in NotificationCenter.default.notifications(named: .NSProcessInfoPowerStateDidChange) {
+                    lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+                }
+            }
     }
 }
 
@@ -669,7 +690,7 @@ extension Color {
         )
     }
 
-    fileprivate static func mixHex(_ from: String, _ to: String, fraction: Double) -> String {
+    static func mixHex(_ from: String, _ to: String, fraction: Double) -> String {
         let start = rgb(from)
         let end = rgb(to)
         let amount = min(max(fraction, 0), 1)

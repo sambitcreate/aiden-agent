@@ -1,0 +1,2 @@
+# Unified-diff context prefixes are intentional; preserve evidence hashes.
+*.patch -whitespace

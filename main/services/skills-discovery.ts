@@ -14,6 +14,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { isPathInside } from "../shared/path-containment.js";
 import { constants as fsConstants } from "node:fs";
 import { isMap, isScalar, parseDocument } from "yaml";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
@@ -135,17 +136,9 @@ async function dirExists(dirPath: string): Promise<boolean> {
   }
 }
 
-function isContainedPath(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 async function assertNoSymlinkSegments(root: string, candidate: string): Promise<void> {
   const relative = path.relative(root, candidate);
-  if (!isContainedPath(root, candidate) || !relative) throw new Error("Invalid skill path.");
+  if (!isPathInside(root, candidate) || !relative) throw new Error("Invalid skill path.");
   let current = root;
   for (const segment of relative.split(path.sep)) {
     current = path.join(current, segment);
@@ -183,7 +176,7 @@ async function readBoundedSkillFile(
     }
     await assertNoSymlinkSegments(realRoot, skillMd);
     const realSkillMd = await fs.realpath(skillMd);
-    if (!isContainedPath(realRoot, realSkillMd)) {
+    if (!isPathInside(realRoot, realSkillMd)) {
       throw new Error("Skill path escapes its root.");
     }
     await testHooks.beforeSkillFileOpen?.(skillMd);
@@ -201,7 +194,7 @@ async function readBoundedSkillFile(
     }
     await assertNoSymlinkSegments(realRoot, skillMd);
     const verifiedSkillMd = await fs.realpath(skillMd);
-    if (!isContainedPath(realRoot, verifiedSkillMd)) {
+    if (!isPathInside(realRoot, verifiedSkillMd)) {
       throw new Error("Skill path escapes its stable root.");
     }
     const verifiedSkillStat = await fs.stat(verifiedSkillMd);

@@ -1,35 +1,41 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.KeepGeneratedSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonTransformingSerializer
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import sbtbiswas.AidenOnTheGo.protocol.AidenBotContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.time.Instant
 import java.util.Base64
-import java.util.UUID
 
 object AidenBotWire {
     const val MAX_NAME_LENGTH = 80
     const val MAX_PURPOSE_LENGTH = 280
-    const val MAX_GREETING_LENGTH = 2_000
     const val MAX_INSTRUCTIONS_LENGTH = 32_000
     const val MAX_SUMMARY_LENGTH = 280
     const val MAX_PREVIEW_LENGTH = 500
     const val MAX_BOTS = 256
-    const val MAX_FAVORITES = 20
     const val MAX_CONVERSATION_PAGE = 50
     const val MAX_CHAT_MESSAGES = 10_000
     const val MAX_CHAT_TITLE_LENGTH = 1_024
@@ -42,7 +48,6 @@ object AidenBotWire {
     const val MAX_OTHER_CAPABILITIES = 128
     const val MAX_AVATAR_BASE64_LENGTH = 5_592_408
     const val MAX_AVATAR_BYTES = 4 * 1_048_576
-    const val FULL_ACCESS_NOTICE_VERSION = "bot-full-access-v1"
 
     fun validateIdentifier(value: String, field: String, maxLength: Int = AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH) {
         validateString(value, field, maxLength, allowEmpty = false)
@@ -56,6 +61,11 @@ object AidenBotWire {
             c in '0'..'9' || c in 'A'..'Z' || c in 'a'..'z' || c == '-' || c == '.' || c == ':' || c == '_'
         }
     }
+
+    private val SUBMISSION_ID = Regex("^[A-Za-z0-9._:-]{1,64}$")
+
+    /** A submission id the Mac minted: 1 to 64 of `A-Za-z0-9._:-`. */
+    fun isSubmissionId(value: String): Boolean = SUBMISSION_ID.matches(value)
 
     fun validateString(value: String, field: String, maxLength: Int, allowEmpty: Boolean = false) {
         if ((!allowEmpty && value.isEmpty()) || value.codePointCount(0, value.length) > maxLength) {
@@ -72,16 +82,6 @@ object AidenBotWire {
         }
         return values
     }
-}
-
-@Serializable
-enum class AidenBotLegacyAvatar {
-    @SerialName("spark") SPARK,
-    @SerialName("orbit") ORBIT,
-    @SerialName("leaf") LEAF,
-    @SerialName("prism") PRISM,
-    @SerialName("wave") WAVE,
-    @SerialName("ember") EMBER
 }
 
 @Serializable
@@ -105,45 +105,74 @@ enum class AidenBotAvatarColor {
     @SerialName("periwinkle") PERIWINKLE,
     @SerialName("coral") CORAL,
     @SerialName("peach") PEACH,
-    @SerialName("aqua") AQUA
+    @SerialName("aqua") AQUA,
+    @SerialName("rose") ROSE,
+    @SerialName("lime") LIME,
+    @SerialName("plum") PLUM,
+    @SerialName("graphite") GRAPHITE
 }
 
-@Serializable
-enum class AidenBotAvatarEyes {
-    @SerialName("dots") DOTS,
-    @SerialName("wide") WIDE,
-    @SerialName("happy") HAPPY,
-    @SerialName("sleepy") SLEEPY,
-    @SerialName("focus") FOCUS,
-    @SerialName("wink") WINK
-}
-
-@Serializable
-enum class AidenBotAvatarDetail {
-    @SerialName("none") NONE,
-    @SerialName("halo") HALO,
-    @SerialName("orbit") ORBIT,
-    @SerialName("sparkles") SPARKLES,
-    @SerialName("antenna") ANTENNA,
-    @SerialName("bolts") BOLTS
-}
-
-@Serializable
+/**
+ * A Bot's character on the wire: `{version:1, shape, color}`. Contract revision 25 retired
+ * the `eyes` and `detail` axes; a host may still echo them, so decoding accepts and drops
+ * them, and encoding never sends them.
+ */
+@Serializable(with = AidenBotAvatarRecipeSerializer::class)
 data class AidenBotAvatarRecipe(
     val version: Int = 1,
     val shape: AidenBotAvatarShape,
-    val color: AidenBotAvatarColor,
-    val eyes: AidenBotAvatarEyes,
-    val detail: AidenBotAvatarDetail
+    val color: AidenBotAvatarColor
 ) {
     init {
         if (version != 1) throw AidenBotContractException.InvalidField("avatar.version")
     }
 }
 
+object AidenBotAvatarRecipeSerializer : KSerializer<AidenBotAvatarRecipe> {
+    private val ALLOWED_KEYS = setOf("version", "shape", "color", "eyes", "detail")
+
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AidenBotAvatarRecipe") {
+        element<Int>("version")
+        element("shape", AidenBotAvatarShape.serializer().descriptor)
+        element("color", AidenBotAvatarColor.serializer().descriptor)
+    }
+
+    override fun serialize(encoder: Encoder, value: AidenBotAvatarRecipe) {
+        val jsonEncoder = encoder as? JsonEncoder ?: throw SerializationException("Avatar recipes are JSON only")
+        jsonEncoder.encodeJsonElement(buildJsonObject {
+            put("version", JsonPrimitive(value.version))
+            put("shape", jsonEncoder.json.encodeToJsonElement(AidenBotAvatarShape.serializer(), value.shape))
+            put("color", jsonEncoder.json.encodeToJsonElement(AidenBotAvatarColor.serializer(), value.color))
+        })
+    }
+
+    override fun deserialize(decoder: Decoder): AidenBotAvatarRecipe {
+        val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Avatar recipes are JSON only")
+        val obj = jsonDecoder.decodeJsonElement() as? JsonObject
+            ?: throw AidenBotContractException.InvalidField("avatar")
+        if (!ALLOWED_KEYS.containsAll(obj.keys)) throw AidenBotContractException.InvalidField("avatar")
+        for (retired in listOf("eyes", "detail")) {
+            val value = obj[retired] ?: continue
+            if (value !is JsonPrimitive || !value.isString) throw AidenBotContractException.InvalidField("avatar.$retired")
+        }
+        val version = (obj["version"] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
+            ?: throw AidenBotContractException.InvalidField("avatar.version")
+        val shape = obj["shape"] ?: throw AidenBotContractException.InvalidField("avatar.shape")
+        val color = obj["color"] ?: throw AidenBotContractException.InvalidField("avatar.color")
+        return AidenBotAvatarRecipe(
+            version = version,
+            shape = jsonDecoder.json.decodeFromJsonElement(AidenBotAvatarShape.serializer(), shape),
+            color = jsonDecoder.json.decodeFromJsonElement(AidenBotAvatarColor.serializer(), color)
+        )
+    }
+}
+
+/**
+ * A Bot's semantic avatar. Since contract revision 25 it is always the
+ * `{version:1, shape, color}` recipe; the retired legacy string ids are rejected.
+ */
 @Serializable(with = AidenBotSemanticAvatarSerializer::class)
 sealed class AidenBotSemanticAvatar {
-    data class Legacy(val legacy: AidenBotLegacyAvatar) : AidenBotSemanticAvatar()
     data class Recipe(val recipe: AidenBotAvatarRecipe) : AidenBotSemanticAvatar()
 }
 
@@ -151,42 +180,13 @@ object AidenBotSemanticAvatarSerializer : KSerializer<AidenBotSemanticAvatar> {
     override val descriptor: SerialDescriptor = AidenBotAvatarRecipe.serializer().descriptor
 
     override fun serialize(encoder: Encoder, value: AidenBotSemanticAvatar) {
-        require(encoder is JsonEncoder)
         when (value) {
-            is AidenBotSemanticAvatar.Legacy -> encoder.encodeSerializableValue(AidenBotLegacyAvatar.serializer(), value.legacy)
             is AidenBotSemanticAvatar.Recipe -> encoder.encodeSerializableValue(AidenBotAvatarRecipe.serializer(), value.recipe)
         }
     }
 
-    override fun deserialize(decoder: Decoder): AidenBotSemanticAvatar {
-        require(decoder is JsonDecoder)
-        val element = decoder.decodeJsonElement()
-        return if (element is JsonPrimitive && element.isString) {
-            AidenBotSemanticAvatar.Legacy(decoder.json.decodeFromJsonElement(AidenBotLegacyAvatar.serializer(), element))
-        } else {
-            AidenBotSemanticAvatar.Recipe(decoder.json.decodeFromJsonElement(AidenBotAvatarRecipe.serializer(), element))
-        }
-    }
-}
-
-private object AidenBotLegacyAvatarWrapperSerializer : KSerializer<AidenBotSemanticAvatar.Legacy> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("LegacyAvatar", PrimitiveKind.STRING)
-    override fun serialize(encoder: Encoder, value: AidenBotSemanticAvatar.Legacy) {
-        encoder.encodeSerializableValue(AidenBotLegacyAvatar.serializer(), value.legacy)
-    }
-    override fun deserialize(decoder: Decoder): AidenBotSemanticAvatar.Legacy {
-        return AidenBotSemanticAvatar.Legacy(decoder.decodeSerializableValue(AidenBotLegacyAvatar.serializer()))
-    }
-}
-
-private object AidenBotAvatarRecipeWrapperSerializer : KSerializer<AidenBotSemanticAvatar.Recipe> {
-    override val descriptor: SerialDescriptor = AidenBotAvatarRecipe.serializer().descriptor
-    override fun serialize(encoder: Encoder, value: AidenBotSemanticAvatar.Recipe) {
-        encoder.encodeSerializableValue(AidenBotAvatarRecipe.serializer(), value.recipe)
-    }
-    override fun deserialize(decoder: Decoder): AidenBotSemanticAvatar.Recipe {
-        return AidenBotSemanticAvatar.Recipe(decoder.decodeSerializableValue(AidenBotAvatarRecipe.serializer()))
-    }
+    override fun deserialize(decoder: Decoder): AidenBotSemanticAvatar =
+        AidenBotSemanticAvatar.Recipe(decoder.decodeSerializableValue(AidenBotAvatarRecipe.serializer()))
 }
 
 @Serializable
@@ -233,8 +233,17 @@ typealias AidenBotAvatar = AidenBotAvatarView
 enum class AidenBotHealth {
     @SerialName("ready") READY,
     @SerialName("degraded") DEGRADED,
-    @SerialName("unavailable") UNAVAILABLE,
-    @SerialName("archived") ARCHIVED
+    @SerialName("unavailable") UNAVAILABLE
+}
+
+/** Durable Bot session state (contract revision 25, `bot-durable-session-v1`). */
+@Serializable
+enum class AidenBotSessionState {
+    @SerialName("idle") IDLE,
+    @SerialName("running") RUNNING,
+    @SerialName("interrupted") INTERRUPTED,
+    @SerialName("needs_model") NEEDS_MODEL,
+    @SerialName("unavailable") UNAVAILABLE
 }
 
 @Serializable
@@ -244,19 +253,17 @@ data class AidenBotSummary(
     val purpose: String,
     val avatar: AidenBotAvatarView,
     val health: AidenBotHealth,
+    /** Present when the host advertises `bot-durable-session-v1`. */
+    val sessionState: AidenBotSessionState? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
-    val revision: String,
-    @Serializable(with = InstantIso8601Serializer::class) val archivedAt: Instant? = null
+    val revision: String
 ) {
     init {
         AidenBotWire.validateIdentifier(id, "id", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
         AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        if ((health == AidenBotHealth.ARCHIVED) != (archivedAt != null)) {
-            throw AidenBotContractException.InvalidCombination("bot health/timestamps")
-        }
         if (updatedAt.isBefore(createdAt)) {
             throw AidenBotContractException.InvalidCombination("bot timestamps")
         }
@@ -266,16 +273,12 @@ data class AidenBotSummary(
 @Serializable
 data class AidenBotList(
     val bots: List<AidenBotSummary>,
-    val maxBots: Int = AidenBotWire.MAX_BOTS,
-    val favorites: AidenBotFavorites
+    val maxBots: Int = AidenBotWire.MAX_BOTS
 ) {
     init {
-        val archivedIds = bots.filter { it.health == AidenBotHealth.ARCHIVED }.map { it.id }.toSet()
         val allIds = bots.map { it.id }.toSet()
         if (bots.size > AidenBotWire.MAX_BOTS || maxBots != AidenBotWire.MAX_BOTS || bots.size > maxBots ||
-            allIds.size != bots.size ||
-            !allIds.containsAll(favorites.botIds) ||
-            favorites.botIds.any { archivedIds.contains(it) }
+            allIds.size != bots.size
         ) {
             throw AidenBotContractException.InvalidField("bots")
         }
@@ -293,30 +296,91 @@ data class AidenBotModelSelection(
     }
 }
 
+/**
+ * Contract revision 27 retired `openingGreeting`. An older Mac may still send it on a Bot,
+ * and an older request shape may still carry it, so a strict decode accepts a bounded string
+ * there and drops it; nothing this build encodes ever names it.
+ */
+object AidenBotRetiredGreeting {
+    const val KEY = "openingGreeting"
+    private const val MAX_LENGTH = 2_000
+
+    fun strip(element: JsonElement): JsonElement {
+        val obj = element as? JsonObject ?: return element
+        val legacy = obj[KEY] ?: return element
+        if (legacy !is JsonNull) {
+            if (legacy !is JsonPrimitive || !legacy.isString ||
+                legacy.content.codePointCount(0, legacy.content.length) > MAX_LENGTH
+            ) {
+                throw AidenBotContractException.InvalidField(KEY)
+            }
+        }
+        return JsonObject(obj - KEY)
+    }
+}
+
+/** Decodes [base] strictly after dropping a retired `openingGreeting`. */
+open class AidenBotRetiredGreetingSerializer<T : Any>(base: KSerializer<T>) : JsonTransformingSerializer<T>(base) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = AidenBotRetiredGreeting.strip(element)
+}
+
+object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDetail>(AidenBotDetail.generatedSerializer())
+object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
+object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer())
+
+/** A Bot's Chat activity choice (spec §7, contract revision 30). */
 @Serializable
+enum class AidenBotChatActivityLevel {
+    @SerialName("quiet") QUIET,
+    @SerialName("summary") SUMMARY,
+    @SerialName("detailed") DETAILED
+}
+
+@Serializable
+enum class AidenBotChatActivityWording {
+    @SerialName("follows") FOLLOWS,
+    @SerialName("thinking") THINKING
+}
+
+@Serializable
+data class AidenBotChatActivity(
+    val level: AidenBotChatActivityLevel,
+    val wording: AidenBotChatActivityWording
+) {
+    companion object {
+        /** What a Bot that never chose shows: Quiet, Follows the work. */
+        val DEFAULT = AidenBotChatActivity(AidenBotChatActivityLevel.QUIET, AidenBotChatActivityWording.FOLLOWS)
+    }
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotDetailSerializer::class)
 data class AidenBotDetail(
     val id: String,
     val name: String,
     val purpose: String,
-    val openingGreeting: String? = null,
     val instructions: String,
     val avatar: AidenBotAvatarView,
     val health: AidenBotHealth,
+    /** Present when the host advertises `bot-durable-session-v1`. */
+    val sessionState: AidenBotSessionState? = null,
     val access: AidenBotAccessView,
     val modelSelection: AidenBotModelSelection? = null,
+    val visionModelSelection: AidenBotModelSelection? = null,
+    /** Revision 30 (`bot:activity`). */
+    val chatActivity: AidenBotChatActivity? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
-    val revision: String,
-    @Serializable(with = InstantIso8601Serializer::class) val archivedAt: Instant? = null
+    val revision: String
 ) {
     init {
         AidenBotWire.validateIdentifier(id, "id", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         AidenBotWire.validateString(instructions, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH)
         AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        if (access.botId != id || (health == AidenBotHealth.ARCHIVED) != (archivedAt != null)) {
+        if (access.botId != id) {
             throw AidenBotContractException.InvalidCombination("bot detail identity/state")
         }
         if (updatedAt.isBefore(createdAt)) {
@@ -325,39 +389,52 @@ data class AidenBotDetail(
     }
 }
 
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotCreateRequestSerializer::class)
 data class AidenBotCreateRequest(
     val name: String,
     val purpose: String,
-    val openingGreeting: String? = null,
     val instructions: String,
     val avatar: AidenBotSemanticAvatar,
-    val access: AidenBotAccessUpdate
+    /** Optional since revision 25: omitted means Full access. */
+    val access: AidenBotAccessUpdate? = null
 ) {
     init {
         AidenBotWire.validateString(name, "name", AidenBotWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(purpose, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true)
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         AidenBotWire.validateString(instructions, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH)
     }
 }
 
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotIdentityPatchSerializer::class)
 data class AidenBotIdentityPatch(
     val name: String? = null,
     val purpose: String? = null,
-    val openingGreeting: String? = null,
     val instructions: String? = null,
-    val avatar: AidenBotSemanticAvatar? = null
+    val avatar: AidenBotSemanticAvatar? = null,
+    /** Revision 30 (`bot:activity`): how much a running turn shows in the chat. */
+    val chatActivity: AidenBotChatActivity? = null
 ) {
     init {
-        if (name == null && purpose == null && openingGreeting == null && instructions == null && avatar == null) {
+        if (name == null && purpose == null && instructions == null && avatar == null && chatActivity == null) {
             throw AidenBotContractException.InvalidCombination("empty identity patch")
         }
         name?.let { AidenBotWire.validateString(it, "name", AidenBotWire.MAX_NAME_LENGTH) }
         purpose?.let { AidenBotWire.validateString(it, "purpose", AidenBotWire.MAX_PURPOSE_LENGTH, allowEmpty = true) }
-        openingGreeting?.let { AidenBotWire.validateString(it, "openingGreeting", AidenBotWire.MAX_GREETING_LENGTH, allowEmpty = true) }
         instructions?.let { AidenBotWire.validateString(it, "instructions", AidenBotWire.MAX_INSTRUCTIONS_LENGTH) }
+    }
+
+    /**
+     * The patch a Mac can take: without `chatActivity` unless it announces `bot-activity-v1` and
+     * this phone holds `bot:activity`. Null when nothing else is left to send.
+     */
+    fun forHost(supportsBotActivity: Boolean): AidenBotIdentityPatch? = when {
+        supportsBotActivity || chatActivity == null -> this
+        name == null && purpose == null && instructions == null && avatar == null -> null
+        else -> copy(chatActivity = null)
     }
 }
 
@@ -446,7 +523,8 @@ data class AidenBotFileScopeOption(
 data class AidenBotModelOption(
     val id: String,
     val label: String,
-    val available: Boolean
+    val available: Boolean,
+    val supportsImages: Boolean? = null
 ) {
     init {
         AidenBotWire.validateString(id, "id", 512)
@@ -495,7 +573,6 @@ data class AidenBotCapabilityCatalog(
     val connections: List<AidenBotCapabilityOption>,
     val skills: List<AidenBotCapabilityOption>,
     val otherCapabilities: List<AidenBotCapabilityOption>,
-    val notice: AidenBotNoticeStatus,
     @Serializable(with = AidenBotSkillsEnabledSerializer::class)
     val skillsEnabled: Boolean = true
 ) {
@@ -662,124 +739,6 @@ data class AidenBotAccessUpdate(
 }
 
 @Serializable
-enum class AidenBotChatAccessMode {
-    @SerialName("inherit") INHERIT,
-    @SerialName("custom") CUSTOM
-}
-
-@Serializable
-data class AidenBotChatAccessView(
-    val chatId: String,
-    val botId: String,
-    val mode: AidenBotChatAccessMode,
-    val revision: String,
-    val botPolicyRevision: String,
-    val summary: String,
-    val custom: AidenBotCustomSelection? = null
-) {
-    init {
-        AidenBotWire.validateString(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(botPolicyRevision, "botPolicyRevision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(summary, "summary", AidenBotWire.MAX_SUMMARY_LENGTH)
-        if ((mode == AidenBotChatAccessMode.CUSTOM) != (custom != null)) {
-            throw AidenBotContractException.InvalidCombination("chat access mode/custom")
-        }
-    }
-}
-
-@Serializable
-data class AidenBotChatAccessUpdate(
-    val mode: AidenBotChatAccessMode,
-    val catalogRevision: String,
-    val expectedBotPolicyRevision: String,
-    val custom: AidenBotCustomSelection? = null
-) {
-    init {
-        AidenBotWire.validateString(catalogRevision, "catalogRevision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(expectedBotPolicyRevision, "expectedBotPolicyRevision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        if ((mode == AidenBotChatAccessMode.CUSTOM) != (custom != null)) {
-            throw AidenBotContractException.InvalidCombination("inherited chat access")
-        }
-    }
-
-    companion object {
-        fun inherit(catalogRevision: String, expectedBotPolicyRevision: String) = AidenBotChatAccessUpdate(
-            mode = AidenBotChatAccessMode.INHERIT,
-            catalogRevision = catalogRevision,
-            expectedBotPolicyRevision = expectedBotPolicyRevision
-        )
-
-        fun custom(catalogRevision: String, expectedBotPolicyRevision: String, selection: AidenBotCustomSelection) = AidenBotChatAccessUpdate(
-            mode = AidenBotChatAccessMode.CUSTOM,
-            catalogRevision = catalogRevision,
-            expectedBotPolicyRevision = expectedBotPolicyRevision,
-            custom = selection
-        )
-    }
-}
-
-@Serializable
-data class AidenBotFavorites(
-    val botIds: List<String>,
-    val revision: String
-) {
-    init {
-        AidenBotWire.uniqueIdentifiers(botIds, "botIds", AidenBotWire.MAX_FAVORITES, AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        AidenBotWire.validateString(revision, "revision", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-    }
-}
-
-@Serializable
-data class AidenBotFavoritesUpdateRequest(
-    val botIds: List<String>
-) {
-    init {
-        AidenBotWire.uniqueIdentifiers(botIds, "botIds", AidenBotWire.MAX_FAVORITES, AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-    }
-}
-
-@Serializable
-enum class AidenBotNoticeDecision {
-    @SerialName("continue_full") CONTINUE_FULL,
-    @SerialName("customize_first") CUSTOMIZE_FIRST
-}
-
-typealias AidenBotDecision = AidenBotNoticeDecision
-
-@Serializable
-data class AidenBotNoticeStatus(
-    val version: String,
-    val requiresAcknowledgement: Boolean,
-    @Serializable(with = InstantIso8601Serializer::class) val acceptedAt: Instant? = null,
-    val acceptedDecision: AidenBotNoticeDecision? = null
-) {
-    init {
-        AidenBotWire.validateString(version, "version", 80)
-        if (version != AidenBotWire.FULL_ACCESS_NOTICE_VERSION ||
-            (requiresAcknowledgement && (acceptedAt != null || acceptedDecision != null)) ||
-            (!requiresAcknowledgement && (acceptedAt == null || acceptedDecision == null))
-        ) {
-            throw AidenBotContractException.InvalidCombination("notice acknowledgement")
-        }
-    }
-}
-
-@Serializable
-data class AidenBotNoticeAcknowledgement(
-    val version: String,
-    val decision: AidenBotNoticeDecision,
-    val confirmedForeground: Boolean = true
-) {
-    init {
-        if (version != AidenBotWire.FULL_ACCESS_NOTICE_VERSION || !confirmedForeground) {
-            throw AidenBotContractException.InvalidField("notice acknowledgement")
-        }
-    }
-}
-
-@Serializable
 data class AidenBotAvatarUpload(
     val data: String,
     val mimeType: AidenBotAvatarUploadMimeType = AidenBotAvatarUploadMimeType.PNG
@@ -811,33 +770,6 @@ data class AidenBotChatCreateRequest(
         providerId?.let { AidenBotWire.validateString(it, "providerId", 256) }
         modelId?.let { AidenBotWire.validateString(it, "modelId", 512) }
     }
-}
-
-enum class AidenBotFavoriteOrderMove {
-    ADD, EARLIER, LATER, REMOVE
-}
-
-fun aidenBotFavoriteOrder(
-    botIds: List<String>,
-    movingBotId: String,
-    move: AidenBotFavoriteOrderMove
-): List<String> {
-    val result = botIds.filter { it != movingBotId }.toMutableList()
-    when (move) {
-        AidenBotFavoriteOrderMove.ADD -> result.add(movingBotId)
-        AidenBotFavoriteOrderMove.REMOVE -> {}
-        AidenBotFavoriteOrderMove.EARLIER, AidenBotFavoriteOrderMove.LATER -> {
-            val oldIndex = botIds.indexOf(movingBotId)
-            if (oldIndex == -1) return botIds
-            val destination = if (move == AidenBotFavoriteOrderMove.EARLIER) {
-                maxOf(0, oldIndex - 1)
-            } else {
-                minOf(botIds.size - 1, oldIndex + 1)
-            }
-            result.add(destination, movingBotId)
-        }
-    }
-    return result
 }
 
 sealed class AidenBotDeepLinkResolution {
@@ -883,39 +815,6 @@ fun aidenCanonicalBotConversations(
         canonicalByBotId[conversation.botId]?.chatId == conversation.chatId
     }
 }
-
-data class AidenBotsFavoriteMutation(
-    val id: UUID,
-    val botID: String
-)
-
-data class AidenBotsFavoriteMutationFinish(
-    val favoriteOverride: List<String>?,
-    val favoriteError: String?
-)
-
-fun aidenBotsFinishFavoriteMutation(
-    current: AidenBotsFavoriteMutation?,
-    finishing: AidenBotsFavoriteMutation,
-    restoring: List<String>?,
-    error: String? = null
-): AidenBotsFavoriteMutationFinish? {
-    if (current != finishing) return null
-    return AidenBotsFavoriteMutationFinish(
-        favoriteOverride = restoring,
-        favoriteError = error
-    )
-}
-
-@Serializable
-data class AidenBotArchiveResponse(
-    val bot: AidenBotDetail
-)
-
-@Serializable
-data class AidenBotRestoreResponse(
-    val bot: AidenBotDetail
-)
 
 @Serializable
 data class AidenBotChatCreateResponse(

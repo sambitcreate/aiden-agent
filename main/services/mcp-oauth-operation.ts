@@ -7,6 +7,15 @@ export interface McpOAuthOperation extends McpOAuthGeneration {
   readonly signal: AbortSignal;
 }
 
+/** The user cancelled sign-in; callers report it quietly, not as a failure. */
+export class McpOAuthCancelledError extends Error {
+  readonly code = "mcp-oauth-cancelled";
+  constructor() {
+    super("Sign-in was cancelled.");
+    this.name = "McpOAuthCancelledError";
+  }
+}
+
 interface ActiveOperation {
   generation: number;
   controller: AbortController;
@@ -41,6 +50,19 @@ export class McpOAuthOperationGate {
     active?.controller.abort(new Error("MCP authorization was superseded by a config change."));
     this.generations.set(serverId, (this.generations.get(serverId) ?? 0) + 1);
     this.interactive.delete(serverId);
+  }
+
+  /**
+   * The user stopped an interactive sign-in. Aborts it with a cancellation
+   * reason and supersedes its generation; false when nothing was waiting.
+   */
+  cancel(serverId: string): boolean {
+    const active = this.interactive.get(serverId);
+    if (!active) return false;
+    active.controller.abort(new McpOAuthCancelledError());
+    this.generations.set(serverId, (this.generations.get(serverId) ?? 0) + 1);
+    this.interactive.delete(serverId);
+    return true;
   }
 
   suspend(serverId: string): () => void {

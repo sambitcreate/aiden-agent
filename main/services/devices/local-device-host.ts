@@ -2,15 +2,15 @@
  * Adapted from t3code apps/server/src/device/LocalDeviceHost.ts @ 1c127066 (MIT)
  *
  * The device host that is this Mac. It runs expo-device-hub as a supervised
- * Electron-as-Node child on a loopback port and starts the agent-device
+ * standalone Node.js child on a loopback port and starts the agent-device
  * daemon in HTTP mode under an Aiden-owned state directory. Both are lazy:
  * the device service asks for explicit consent before calling `ensureReady`.
  */
 import { spawn as nodeSpawn } from "node:child_process";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { LOCAL_DEVICE_HOST_ID } from "../../../renderer/shared/devices.js";
+import { LOCAL_DEVICE_HOST_ID, type DevicePlatform } from "../../../renderer/shared/devices.js";
 import {
   DeviceHostError,
   DeviceHostUnavailableError,
@@ -29,6 +29,10 @@ import {
 } from "./device-host.js";
 import {
   AGENT_DEVICE,
+  DeviceNodeUnavailableError,
+  defaultDeviceNodeResolutionDeps,
+  deviceNodeEnvironment,
+  resolveDeviceNode,
   DEVICE_HUB,
   deviceToolPaths,
   ensureTool,
@@ -48,11 +52,12 @@ const DAEMON_HEALTH_TIMEOUT_MS = 2_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
 
 export const NPM_REQUIRED_REASON =
-  "Node.js and npm are needed once to install the simulator helpers. Install Node.js, then try again.";
+  "Node.js 22 or newer and npm are needed to install the simulator helpers. Install Node.js, then try again.";
 
 /** The subset of `ChildProcess` the host relies on, so tests can pass a fake. */
 export interface HostChildProcess {
   pid?: number;
+  startupError?: Error;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -63,8 +68,8 @@ export interface LocalDeviceHostDeps {
   /** `userData/devices`: tool installs, `hub.json`, and agent-device state. */
   baseDir: string;
   platform: NodeJS.Platform;
-  /** Electron's own binary, run with `ELECTRON_RUN_AS_NODE=1`. */
-  nodePath: string;
+  /** Resolved only when a device action needs a standalone Node runtime. */
+  resolveNodePath(): Promise<string>;
   env: NodeJS.ProcessEnv;
   spawn(command: string, args: readonly string[], env: NodeJS.ProcessEnv): HostChildProcess;
   runCommand(
@@ -80,6 +85,9 @@ export interface LocalDeviceHostDeps {
   kill(pid: number, signal: NodeJS.Signals): void;
   /** Resolves the user's npm only when an install is needed; null means npm was not found. */
   resolveNpmRunner(): Promise<NpmRunner | null>;
+  /** Filesystem probes for Android SDK discovery. Default to the real filesystem. */
+  pathExists?(file: string): Promise<boolean>;
+  realPath?(file: string): Promise<string | null>;
 }
 
 interface HubProcess {
@@ -139,6 +147,101 @@ function parseDaemonFile(text: string): { httpPort: number; token: string } | nu
   }
 }
 
+/** Where the Android SDK is and which of its tools are installed. Adapted from t3code LocalDeviceHost @ a6ec88f7 (MIT). */
+export interface AndroidSdk {
+  root: string | null;
+  adb: boolean;
+  emulator: boolean;
+  avdmanager: boolean;
+  legacyAvdmanager: boolean;
+}
+
+/**
+ * Finds the Android SDK: `ANDROID_HOME` or `ANDROID_SDK_ROOT` when set, else
+ * the Android Studio default, else the SDK that owns an `adb` on PATH. Only
+ * existence checks; nothing is run.
+ */
+export async function findAndroidSdk(input: {
+  env: NodeJS.ProcessEnv;
+  pathExists(file: string): Promise<boolean>;
+  realPath(file: string): Promise<string | null>;
+}): Promise<AndroidSdk> {
+  const { env } = input;
+  const home = env.HOME ?? "";
+  const explicit = env.ANDROID_HOME?.trim() || env.ANDROID_SDK_ROOT?.trim();
+  const candidates = explicit ? [explicit] : [path.join(home, "Library", "Android", "sdk"), path.join(home, "Android", "Sdk")];
+  if (!explicit) {
+    for (const directory of (env.PATH ?? "").split(":")) {
+      if (!directory) continue;
+      const resolved = await input.realPath(path.join(directory, "adb"));
+      if (resolved) candidates.push(path.dirname(path.dirname(resolved)));
+    }
+  }
+  for (const root of candidates) {
+    const adb = await input.pathExists(path.join(root, "platform-tools", "adb"));
+    const emulator = await input.pathExists(path.join(root, "emulator", "emulator"));
+    if (explicit || adb || emulator) {
+      const avdmanager = await input.pathExists(path.join(root, "cmdline-tools", "latest", "bin", "avdmanager"));
+      const legacyAvdmanager = !avdmanager && (await input.pathExists(path.join(root, "tools", "bin", "avdmanager")));
+      return { root, adb, emulator, avdmanager, legacyAvdmanager };
+    }
+  }
+  return { root: null, adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false };
+}
+
+/** Why Android Emulators cannot run, or null when the SDK has everything the hub needs. */
+export function androidUnavailableReason(sdk: AndroidSdk): string | null {
+  if (!sdk.root) {
+    return "Android SDK not found. Install it with Android Studio, or set ANDROID_HOME to your SDK folder.";
+  }
+  if (!sdk.adb) {
+    return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+  }
+  if (!sdk.emulator) return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
+  if (!sdk.avdmanager) {
+    return sdk.legacyAvdmanager
+      ? `The Android SDK command-line tools in ${sdk.root} are too old. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager.`
+      : `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+  }
+  return null;
+}
+
+/**
+ * Android Studio's bundled Java runtime, used when `JAVA_HOME` is unset. The
+ * hub runs `avdmanager` to list AVDs before it boots one, and `avdmanager`
+ * needs Java. A Mac that only has Android Studio has no Java on PATH
+ * (`/usr/bin/java` is a stub), so every boot failed with "Failed to allocate an
+ * emulator port". Only existence checks; nothing is run.
+ */
+export async function findAndroidStudioJava(input: {
+  env: NodeJS.ProcessEnv;
+  pathExists(file: string): Promise<boolean>;
+}): Promise<string | null> {
+  if (input.env.JAVA_HOME?.trim()) return null;
+  const apps = ["/Applications/Android Studio.app", path.join(input.env.HOME ?? "", "Applications", "Android Studio.app")];
+  for (const app of apps) {
+    const javaHome = path.join(app, "Contents", "jbr", "Contents", "Home");
+    if (await input.pathExists(path.join(javaHome, "bin", "java"))) return javaHome;
+  }
+  return null;
+}
+
+/** The hub and every host command see the SDK: `ANDROID_HOME` set and its tools first on PATH, plus Java when found. */
+export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null, javaHome: string | null = null): NodeJS.ProcessEnv {
+  if (!root) return env;
+  return {
+    ...env,
+    ANDROID_HOME: root,
+    ...(javaHome ? { JAVA_HOME: javaHome } : {}),
+    PATH: [
+      path.join(root, "platform-tools"),
+      path.join(root, "emulator"),
+      ...(javaHome ? [path.join(javaHome, "bin")] : []),
+      env.PATH ?? "",
+    ].join(":"),
+  };
+}
+
 /** The next supervised restart delay: immediate after stable uptime, else 1s doubling to 30s. */
 export function nextHubRestartDelay(previousDelayMs: number, uptimeMs: number): number {
   if (uptimeMs >= HUB_RESTART_STABLE_UPTIME_MS) return 0;
@@ -162,9 +265,20 @@ export function xcodeUnavailableReason(result: DeviceCommandResult): string | nu
 export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   const hubStatePath = path.join(deps.baseDir, "hub.json");
   const agentStateDir = path.join(deps.baseDir, "agent-state");
+  const pathExists =
+    deps.pathExists ??
+    ((file: string) =>
+      access(file).then(
+        () => true,
+        () => false,
+      ));
+  const realPath = deps.realPath ?? ((file: string) => realpath(file).catch(() => null));
+  // Rediscovered on every check, so installing the SDK or Xcode needs no relaunch.
+  let sdkEnv: NodeJS.ProcessEnv = deps.env;
+  let iosAvailable = false;
+  let nodePath: string | null = null;
   const nodeEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
-    ...deps.env,
-    ELECTRON_RUN_AS_NODE: "1",
+    ...deviceNodeEnvironment(sdkEnv, nodePath!),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     ...extra,
@@ -197,11 +311,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     deps.runCommand(command, args, {
       timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
       ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
-      env: options.env ? { ...deps.env, ...options.env } : deps.env,
+      env: nodePath
+        ? deviceNodeEnvironment({ ...sdkEnv, ...options.env }, nodePath)
+        : { ...sdkEnv, ...options.env },
     });
 
   const ready = (): DeviceHostReady | null =>
-    hub ? { nodePath: deps.nodePath, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run } : null;
+    hub ? { nodePath: nodePath!, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run, env: deviceNodeEnvironment(sdkEnv, nodePath!) } : null;
 
   async function install(
     spec: ToolSpec,
@@ -236,6 +352,9 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   async function waitForHub(child: HostChildProcess, origin: string): Promise<void> {
     const deadline = deps.now() + HUB_READY_TIMEOUT_MS;
     while (deps.now() < deadline) {
+      if (child.startupError) {
+        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", { cause: child.startupError });
+      }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub");
       }
@@ -251,7 +370,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     const port = await deps.reservePort();
     const origin = `http://127.0.0.1:${port}`;
     const child = deps.spawn(
-      deps.nodePath,
+      nodePath!,
       [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
       nodeEnv(),
     );
@@ -315,7 +434,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     await mkdir(agentStateDir, { recursive: true });
     // Any agent-device command starts the daemon; `devices` is the cheapest one.
     const launch = deps
-      .runCommand(deps.nodePath, [entryPath, "devices", "--json"], {
+      .runCommand(nodePath!, [entryPath, "devices", "--json"], {
         timeoutMs: DAEMON_READY_TIMEOUT_MS,
         env: agentEnv(),
       })
@@ -341,8 +460,14 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     return withStartLock(async () => {
       const existing = ready();
       if (existing) return existing;
-      const availability = await platformAvailability();
-      if (!availability.available) throw new DeviceHostUnavailableError(availability.reason ?? "");
+      // The hub serves both platforms, so it starts when either one can run.
+      const [ios, android] = await Promise.all([platformAvailability("ios"), platformAvailability("android")]);
+      if (!ios.available && !android.available) {
+        throw new DeviceHostUnavailableError(
+          deps.platform === "darwin" ? [ios.reason, android.reason].filter(Boolean).join(" ") : (ios.reason ?? ""),
+        );
+      }
+      nodePath = await deps.resolveNodePath();
       const entryPath = await install(DEVICE_HUB, onPhase, options.allowInstall === true);
       onPhase?.("starting");
       stopped = false;
@@ -352,12 +477,25 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
   }
 
-  async function platformAvailability(): Promise<DevicePlatformAvailability> {
+  async function platformAvailability(platform: DevicePlatform): Promise<DevicePlatformAvailability> {
+    // Simulator devices are a macOS feature; the hub is never started elsewhere.
     if (deps.platform !== "darwin") {
-      return { platform: "ios", available: false, reason: "iOS Simulators need macOS with Xcode." };
+      return platform === "ios"
+        ? { platform, available: false, reason: "iOS Simulators need macOS with Xcode." }
+        : { platform, available: false, reason: "Android Emulators in Aiden need macOS." };
     }
+    if (platform === "android") {
+      const sdk = await findAndroidSdk({ env: deps.env, pathExists, realPath });
+      const javaHome = sdk.root ? await findAndroidStudioJava({ env: deps.env, pathExists }) : null;
+      sdkEnv = androidSdkEnv(deps.env, sdk.root, javaHome);
+      const reason = androidUnavailableReason(sdk);
+      return reason ? { platform, available: false, reason } : { platform, available: true };
+    }
+    // Once Xcode answers it stays installed for this run; only a missing Xcode is checked again.
+    if (iosAvailable) return { platform, available: true };
     const reason = xcodeUnavailableReason(await run("xcrun", ["simctl", "help"], { timeoutMs: 15_000 }));
-    return reason ? { platform: "ios", available: false, reason } : { platform: "ios", available: true };
+    iosAvailable = reason === null;
+    return reason ? { platform, available: false, reason } : { platform, available: true };
   }
 
   /**
@@ -374,12 +512,17 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
       entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
     }
-    await deps
-      .runCommand(deps.nodePath, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
+    try {
+      const runtime = nodePath ?? await deps.resolveNodePath();
+      nodePath = runtime;
+      await deps.runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
         timeoutMs: DAEMON_STOP_TIMEOUT_MS,
         env: agentEnv(),
-      })
-      .catch(() => undefined);
+      });
+    } catch {
+      // Discovery and daemon stop are both best effort. Revocation/removal must
+      // still clear token configs, close the proxy and remove installed files.
+    }
   }
 
   return {
@@ -408,6 +551,14 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       });
     },
     current: ready,
+    async installTool(tool) {
+      const spec = tool === "hub" ? DEVICE_HUB : AGENT_DEVICE;
+      await withStartLock(() => install(spec, undefined, true));
+    },
+    runningToolVersions: () => ({
+      hub: hub ? DEVICE_HUB.version : null,
+      agent: agentDevice ? AGENT_DEVICE.version : null,
+    }),
     onHealth(listener) {
       healthListeners.add(listener);
       return () => healthListeners.delete(listener);
@@ -427,16 +578,20 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
 /** Production dependencies: real processes, the loopback network, and the wall clock. */
 export function defaultLocalDeviceHostDeps(
   options: Pick<LocalDeviceHostDeps, "baseDir" | "resolveNpmRunner"> &
-    Partial<Pick<LocalDeviceHostDeps, "nodePath" | "env" | "platform">>,
+    Partial<Pick<LocalDeviceHostDeps, "resolveNodePath" | "env" | "platform">>,
 ): LocalDeviceHostDeps {
   return {
     baseDir: options.baseDir,
     resolveNpmRunner: options.resolveNpmRunner,
     platform: options.platform ?? process.platform,
-    nodePath: options.nodePath ?? process.execPath,
+    resolveNodePath: options.resolveNodePath ?? (() => requireDeviceNode(options.env)),
     env: options.env ?? process.env,
-    spawn: (command, args, env) =>
-      nodeSpawn(command, [...args], { env, stdio: "ignore", detached: false }),
+    spawn: (command, args, env) => {
+      const child: HostChildProcess = nodeSpawn(command, [...args], { env, stdio: "ignore", detached: false });
+      // Spawn errors do not emit exit. Record them so readiness fails without an unhandled event.
+      (child as ReturnType<typeof nodeSpawn>).once("error", (error) => { child.startupError = error; });
+      return child;
+    },
     runCommand: runChildCommand,
     reservePort,
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
@@ -511,4 +666,11 @@ export function reservePort(): Promise<number> {
       server.close(() => (port ? resolve(port) : reject(new Error("No loopback port was available."))));
     });
   });
+}
+
+/** Fresh discovery lets Retry recover after Node is installed without restarting Aiden. */
+export async function requireDeviceNode(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const nodePath = await resolveDeviceNode(defaultDeviceNodeResolutionDeps(env));
+  if (!nodePath) throw new DeviceNodeUnavailableError();
+  return nodePath;
 }

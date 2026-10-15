@@ -4,6 +4,7 @@ import {
   createLastSafeSnapshotReload,
   createLastSafeSnapshotTracker,
   createPortableConfigWatcher,
+  createThrottledTrigger,
 } from "./portable-config-watch-core.js";
 import {
   mutatePortableConfigAndSync,
@@ -394,4 +395,22 @@ test("the first portable mutation seeds its baseline before absorbing an externa
       current: { endpoint: "https://b.example" },
     },
   ]);
+});
+
+test("a focus storm re-reads once now and once when the interval ends", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let runs = 0;
+  const focus = createThrottledTrigger(() => void (runs += 1), 2_000);
+  for (let i = 0; i < 20; i += 1) {
+    focus.trigger();
+    t.mock.timers.tick(50);
+  }
+  assert.equal(runs, 1);
+  t.mock.timers.tick(2_000);
+  assert.equal(runs, 2);
+  t.mock.timers.tick(10_000);
+  assert.equal(runs, 2);
+  focus.trigger();
+  assert.equal(runs, 3);
+  focus.dispose();
 });

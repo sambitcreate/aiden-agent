@@ -1,4 +1,5 @@
-import { onNotification, settingsApi } from "./ipc";
+import { onNotification } from "./ipc-bridge";
+import { settingsApi } from "./ipc-voice";
 import {
   APPEARANCE_STORAGE_KEY,
   applyAppearanceConfig,

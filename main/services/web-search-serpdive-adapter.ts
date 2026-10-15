@@ -1,10 +1,10 @@
 /** SERPdive Search API web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -26,10 +26,6 @@ export interface SerpDiveWebSearchApiKeyCredential {
 }
 
 export type SerpDiveWebSearchCredential = SerpDiveWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("serpdive", value);
@@ -92,19 +88,6 @@ export function buildSerpDiveWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 function businessErrorKind(
   value: unknown,
 ): "auth" | "invalid-request" | "quota" | "transient" | "invalid-response" {
@@ -147,7 +130,7 @@ export function parseSerpDiveWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({
@@ -180,21 +163,3 @@ export function createSerpDiveWebSearchAdapter(
 }
 
 export const serpDiveWebSearchAdapterFactory = createSerpDiveWebSearchAdapter;
-
-// Keep the provider's display-name casing available to main-only integrations
-// that use the API's SERPdive spelling.
-export const createSERPdiveWebSearchAdapter = createSerpDiveWebSearchAdapter;
-export const createSerpdiveWebSearchAdapter = createSerpDiveWebSearchAdapter;
-export const serpdiveWebSearchAdapterFactory = createSerpDiveWebSearchAdapter;
-export const buildSERPdiveWebSearchRequest = buildSerpDiveWebSearchRequest;
-export const buildSerpdiveWebSearchRequest = buildSerpDiveWebSearchRequest;
-export const parseSERPdiveWebSearchResponse = parseSerpDiveWebSearchResponse;
-export const parseSerpdiveWebSearchResponse = parseSerpDiveWebSearchResponse;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireSerpDiveWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "serpdive");
-}
-
-export const requireSERPdiveWebSearchApiKey = requireSerpDiveWebSearchApiKey;
-export const requireSerpdiveWebSearchApiKey = requireSerpDiveWebSearchApiKey;

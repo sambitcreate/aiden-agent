@@ -94,6 +94,9 @@ enum AgentRunActivityStatus: String, Codable, Hashable, CaseIterable {
     case runningCommand
     case responding
     case waitingForApproval
+    /// Client-derived: the wire projects an `ask_user_question` wait as
+    /// `waiting_for_approval`; see `AgentRunBlockingStatus`.
+    case waitingForAnswer
     case complete
     case failed
     case cancelled
@@ -116,6 +119,8 @@ enum AgentRunActivityStatus: String, Codable, Hashable, CaseIterable {
             String(localized: "Responding")
         case .waitingForApproval:
             String(localized: "Waiting for approval")
+        case .waitingForAnswer:
+            String(localized: "Waiting for answer")
         case .complete:
             String(localized: "Complete")
         case .failed:
@@ -143,6 +148,8 @@ enum AgentRunActivityStatus: String, Codable, Hashable, CaseIterable {
             String(localized: "Reply")
         case .waitingForApproval:
             String(localized: "Approve")
+        case .waitingForAnswer:
+            String(localized: "Answer")
         case .complete:
             String(localized: "Done")
         case .failed:
@@ -150,6 +157,39 @@ enum AgentRunActivityStatus: String, Codable, Hashable, CaseIterable {
         case .cancelled:
             String(localized: "Stop")
         }
+    }
+}
+
+extension AgentRunActivityStatus {
+    /// The run is blocked until the user approves a tool call or answers a
+    /// question; stale and quiet surfaces must keep this ask visible.
+    var isAwaitingUser: Bool {
+        self == .waitingForApproval || self == .waitingForAnswer
+    }
+}
+
+/// The Remote contract projects a pending tool approval and a pending
+/// `ask_user_question` prompt alike as `waiting_for_approval`. The phone
+/// already holds both prompt snapshots, so it tells them apart client-side
+/// without a contract change. An approval wins when both are pending (it gates
+/// the tool call); a lone question reads as "Needs your answer".
+enum AgentRunBlockingStatus {
+    static func status(hasPendingApproval: Bool, hasPendingQuestion: Bool) -> AgentRunActivityStatus {
+        hasPendingQuestion && !hasPendingApproval ? .waitingForAnswer : .waitingForApproval
+    }
+
+    static func activityLine(for status: AgentRunActivityStatus) -> String? {
+        switch status {
+        case .waitingForApproval: String(localized: "Needs your approval")
+        case .waitingForAnswer: String(localized: "Needs your answer")
+        default: nil
+        }
+    }
+
+    /// A server status snapshot only says "waiting"; keep a question wait the
+    /// phone already identified instead of flipping it back to approval.
+    static func refreshedWaitingStatus(current: AgentRunActivityStatus) -> AgentRunActivityStatus {
+        current == .waitingForAnswer ? .waitingForAnswer : .waitingForApproval
     }
 }
 
@@ -281,6 +321,35 @@ enum AgentRunFreshness {
 
     static func staleDate(for state: AgentRunActivityAttributes.ContentState) -> Date? {
         state.isFinal ? nil : state.updatedAt.addingTimeInterval(staleAfter)
+    }
+}
+
+/// Lock Screen and expanded Dynamic Island copy for a stale activity.
+/// Staleness normally replaces the activity line with "Latest status shown",
+/// but a run waiting for approval is still blocked on the user after the
+/// phone stops receiving updates, so it keeps its ask and offers an action.
+/// Fresh and finished runs return `nil`, so each surface keeps its own lead.
+enum AgentRunStalePresentation {
+    struct Copy: Equatable {
+        var lead: String
+        /// Present only when the user can unblock the run by opening the app.
+        var action: String?
+    }
+
+    static func copy(
+        for state: AgentRunActivityAttributes.ContentState,
+        systemMarkedStale: Bool
+    ) -> Copy? {
+        guard AgentRunFreshness.isStale(state, systemMarkedStale: systemMarkedStale) else { return nil }
+        return Copy(lead: lead(for: state.status), action: action(for: state.status))
+    }
+
+    static func lead(for status: AgentRunActivityStatus) -> String {
+        status == .waitingForApproval ? status.title : String(localized: "Latest status shown")
+    }
+
+    static func action(for status: AgentRunActivityStatus) -> String? {
+        status == .waitingForApproval ? String(localized: "Open to answer") : nil
     }
 }
 
@@ -474,7 +543,40 @@ enum AgentRunActivityStateReducer {
         state: AgentRunActivityAttributes.ContentState,
         now: Date = Date()
     ) -> AgentRunActivityAttributes.ContentState {
-        statusState(.waitingForApproval, activity: String(localized: "Waiting for approval"), state: state, now: now)
+        blocked(.waitingForApproval, state: state, now: now)
+    }
+
+    static func waitingForAnswer(
+        state: AgentRunActivityAttributes.ContentState,
+        now: Date = Date()
+    ) -> AgentRunActivityAttributes.ContentState {
+        blocked(.waitingForAnswer, state: state, now: now)
+    }
+
+    /// Server status refresh for a `waiting_for_approval` snapshot: keeps the
+    /// approval-vs-question distinction and does not claim new progress.
+    static func refreshedWaiting(
+        state: AgentRunActivityAttributes.ContentState
+    ) -> AgentRunActivityAttributes.ContentState {
+        let status = AgentRunBlockingStatus.refreshedWaitingStatus(current: state.status)
+        return refreshedStatus(
+            status,
+            activity: AgentRunBlockingStatus.activityLine(for: status) ?? status.title,
+            state: state
+        )
+    }
+
+    private static func blocked(
+        _ status: AgentRunActivityStatus,
+        state: AgentRunActivityAttributes.ContentState,
+        now: Date
+    ) -> AgentRunActivityAttributes.ContentState {
+        statusState(
+            status,
+            activity: AgentRunBlockingStatus.activityLine(for: status) ?? status.title,
+            state: state,
+            now: now
+        )
     }
 
     static func stale(
@@ -484,7 +586,7 @@ enum AgentRunActivityStateReducer {
             sessionID: state.sessionID,
             sessionTitle: state.sessionTitle,
             status: state.status,
-            currentActivity: state.currentActivity.isEmpty ? String(localized: "Latest status shown") : state.currentActivity,
+            currentActivity: state.currentActivity.isEmpty ? AgentRunStalePresentation.lead(for: state.status) : state.currentActivity,
             responseExcerpt: state.responseExcerpt,
             startedAt: state.startedAt,
             // Keep the last real agent update: marking stale is not progress,

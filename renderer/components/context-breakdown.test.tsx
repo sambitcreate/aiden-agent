@@ -1,0 +1,228 @@
+import "../main/bots/test-dom";
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import { projectChatContextPressure } from "../../main/services/generation-context.js";
+import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
+import { ContextBreakdown } from "./context-breakdown";
+
+afterEach(cleanup);
+
+function pressure(extra: Partial<ChatContextPressureV1> = {}): ChatContextPressureV1 {
+  return {
+    contextTokens: 299_800,
+    contextWindow: 1_000_000,
+    inputBudgetTokens: 967_000,
+    reservedTokens: 33_000,
+    percentOfWindow: 29.98,
+    percentOfUsableInput: 31,
+    shouldCompact: false,
+    messageTokens: 273_400,
+    staticTokens: 26_400,
+    compressibleHistoryMessages: 43,
+    source: "provider-anchored",
+    computedAt: 1_000,
+    breakdown: {
+      categories: [
+        { id: "system-prompt", tokens: 6_200 },
+        { id: "builtin-tools", tokens: 11_800 },
+        { id: "mcp-tools", tokens: 2_100 },
+        { id: "skills", tokens: 2_400 },
+        { id: "project-instructions", tokens: 1_900 },
+        { id: "memory", tokens: 900 },
+        { id: "mcp-instructions", tokens: 1_100 },
+      ],
+      deferred: [
+        {
+          id: "mcp-tools",
+          tokens: 61_400,
+          count: 142,
+          servers: [
+            { name: "Figma", count: 38, tokens: 21_800 },
+            { name: "Notion", count: 47, tokens: 18_200 },
+            { name: "Playwright", count: 23, tokens: 9_900 },
+            { name: "Linear", count: 34, tokens: 11_500 },
+          ],
+        },
+      ],
+    },
+    ...extra,
+  };
+}
+
+function legendLabels(): string[] {
+  const legend = screen.getByRole("list", { name: "Context by category" });
+  return within(legend)
+    .getAllByRole("listitem")
+    .map((item) => item.querySelector("[data-legend-label]")?.textContent ?? "");
+}
+
+test("headline percentage matches the composer meter", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.ok(screen.getByText("31% used"));
+});
+
+test("legend lists messages, then categories largest first, then reserve, free space and deferred", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.deepEqual(legendLabels(), [
+    "Messages",
+    "Built-in tools",
+    "System prompt",
+    "Skills",
+    "MCP tools",
+    "Project instructions",
+    "MCP server instructions",
+    "Memory",
+    "Reserved for response",
+    "Free space",
+    "MCP tools (deferred)",
+  ]);
+});
+
+test("the deferred row shows its tokens and is not counted toward the window", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  const legend = screen.getByRole("list", { name: "Context by category" });
+  const deferred = within(legend)
+    .getAllByRole("listitem")
+    .find((item) => item.textContent?.startsWith("MCP tools (deferred)"));
+  assert.ok(deferred);
+  assert.ok(within(deferred).getByText("61.4K"));
+  // The dash is visual only; assistive tech reads "not counted" instead.
+  assert.equal(within(deferred).getByText("—").getAttribute("aria-hidden"), "true");
+  assert.ok(within(deferred).getByText("not counted"));
+  assert.match(screen.getByRole("note").textContent ?? "", /Deferred tools load through tool search and aren't counted until used\./u);
+});
+
+test("MCP tools by server starts folded and opens to list each server", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  const fold = screen.getByRole("button", { name: /MCP tools by server/u });
+  assert.equal(fold.getAttribute("aria-expanded"), "false");
+  assert.match(fold.textContent ?? "", /142/u);
+  assert.equal(screen.queryByText("Figma"), null);
+
+  fireEvent.click(fold);
+
+  assert.equal(fold.getAttribute("aria-expanded"), "true");
+  const servers = screen.getByRole("list", { name: "MCP tools by server" });
+  const rows = within(servers).getAllByRole("listitem");
+  assert.equal(rows.length, 4);
+  for (const name of ["Figma", "Notion", "Playwright", "Linear"]) assert.ok(within(servers).getByText(name));
+  assert.ok(within(servers).getByText("47 tools"));
+});
+
+test("the bar's image label names every segment", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  const label = screen.getByRole("img").getAttribute("aria-label") ?? "";
+  for (const name of [
+    "Messages 273.4K",
+    "Built-in tools 11.8K",
+    "System prompt 6.2K",
+    "Skills 2.4K",
+    "MCP tools 2.1K",
+    "Project instructions 1.9K",
+    "MCP server instructions 1.1K",
+    "Memory 900",
+    "Free space 667.2K",
+    "Reserved for response 33K",
+  ]) {
+    assert.ok(label.includes(name), `missing "${name}" in "${label}"`);
+  }
+});
+
+test("without a breakdown the legend falls back to messages and system prompt & tools", () => {
+  render(<ContextBreakdown pressure={pressure({ breakdown: undefined })} />);
+  assert.deepEqual(legendLabels(), ["Messages", "System prompt & tools", "Reserved for response", "Free space"]);
+  assert.equal(screen.queryByRole("button", { name: /MCP tools by server/u }), null);
+  assert.doesNotMatch(screen.getByRole("note").textContent ?? "", /Deferred tools/u);
+});
+
+test("the note says Aiden will compact when the runtime rule trips", () => {
+  render(<ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} />);
+  assert.match(screen.getByRole("note").textContent ?? "", /^Aiden will compact context before the next request\./u);
+});
+
+test("a running compaction leads the note, even when the runtime rule has tripped", () => {
+  render(<ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} compacting />);
+  const note = screen.getByRole("note").textContent ?? "";
+  assert.match(note, /^Compacting context…/u);
+  assert.doesNotMatch(note, /will compact|Healthy/u);
+  cleanup();
+
+  render(<ContextBreakdown pressure={pressure()} compacting />);
+  assert.match(screen.getByRole("note").textContent ?? "", /^Compacting context…/u);
+});
+
+test("the note reports how many earlier messages compaction could remove", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.match(screen.getByRole("note").textContent ?? "", /43 earlier messages could be compacted later\./u);
+});
+
+// A real provider-anchored projection: the provider reported far more input than
+// the tiny transcript estimates, so contextTokens exceeds messages + static.
+function anchoredPressure(): ChatContextPressureV1 {
+  const options = {
+    contextWindow: 128_000,
+    systemPrompt: "You are a coding agent.",
+    tools: [],
+    providerId: "openai-codex",
+    modelId: "gpt-5.3-codex-spark",
+  };
+  const user = (content: string): UserMessage => ({ role: "user", content, timestamp: 1 });
+  const reply: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "ok" }],
+    api: "openai-codex-responses",
+    provider: options.providerId,
+    model: options.modelId,
+    usage: {
+      input: 50_000,
+      output: 1_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 51_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 2,
+  };
+  return projectChatContextPressure([user("hi"), reply, user("next")], options, 1_000);
+}
+
+function barWeights(): number[] {
+  return Array.from(screen.getByRole("img").children)
+    .map((segment) => Number((segment as HTMLElement).style.flexGrow))
+    .filter((weight) => Number.isFinite(weight) && weight > 0);
+}
+
+test("provider-counted tokens beyond the local itemization get their own segment on the whole-window scale", () => {
+  const anchored = anchoredPressure();
+  const excess = anchored.contextTokens - anchored.messageTokens - anchored.staticTokens;
+  assert.equal(anchored.source, "provider-anchored");
+  assert.ok(excess > 40_000, `expected a large unitemized excess, got ${excess}`);
+
+  for (const variant of [anchored, { ...anchored, breakdown: undefined }]) {
+    render(<ContextBreakdown pressure={variant} />);
+    const legend = screen.getByRole("list", { name: "Context by category" });
+    const row = within(legend)
+      .getAllByRole("listitem")
+      .find((item) => item.querySelector("[data-legend-label]")?.textContent === "Provider-counted, not itemized");
+    assert.ok(row, "missing the provider-counted row");
+    assert.ok(within(row).getByText(formatContextTokenCount(excess)));
+    assert.equal(legendLabels()[0], "Provider-counted, not itemized");
+    assert.ok(within(legend).getByText("Messages"));
+    const label = screen.getByRole("img").getAttribute("aria-label") ?? "";
+    assert.ok(label.includes(`Provider-counted, not itemized ${formatContextTokenCount(excess)}`), label);
+    assert.equal(
+      barWeights().reduce((sum, weight) => sum + weight, 0),
+      anchored.contextWindow,
+    );
+    cleanup();
+  }
+});
+
+test("no provider-counted row when the itemization covers the whole projection", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.ok(!legendLabels().includes("Provider-counted, not itemized"));
+  assert.equal(barWeights().reduce((sum, weight) => sum + weight, 0), 1_000_000);
+});

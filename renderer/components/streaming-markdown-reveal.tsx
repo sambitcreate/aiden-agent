@@ -1,20 +1,22 @@
 import * as React from "react";
-import { MARKDOWN_CLASSNAME, MarkdownContent, MarkdownInline } from "./markdown";
+import { MARKDOWN_CLASSNAME, MarkdownContent } from "./markdown";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import {
-  advanceStreamingRevealSchedule,
-  clampStreamingRevealSchedule,
-  parseStreamingReveal,
-  splitStreamingRevealUnit,
+  advanceStreamingRevealGate,
+  INITIAL_STREAMING_REVEAL_GATE,
+  STREAMING_REVEAL_FADE_MS,
+  StreamingRevealParser,
   streamingRevealHandoffDelay,
-  type StreamingRevealBlock,
-  type StreamingRevealScheduleInput,
-  type StreamingRevealScheduleState,
+  streamingRevealVisibleEnd,
+  type StreamingRevealGateInput,
 } from "../lib/streaming-reveal";
 
 interface StreamingMarkdownRevealProps {
   content: string;
+  /** The turn ended: show everything now and hand over to the saved reply. */
   complete?: boolean;
+  /** A tool step closed the text: it joins at the next release, still gated. */
+  closed?: boolean;
   onHandoffComplete?: () => void;
   richLinks?: boolean;
 }
@@ -35,74 +37,81 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-function visibleBlocks(
-  blocks: StreamingRevealBlock[],
-  revealedCount: number,
-): StreamingRevealBlock[] {
-  let remaining = revealedCount;
-  const visible: StreamingRevealBlock[] = [];
-  for (const block of blocks) {
-    if (remaining <= 0) break;
-    const units = block.units.slice(0, remaining);
-    if (units.length) visible.push({ ...block, units });
-    remaining -= units.length;
-  }
-  return visible;
-}
-
 export function StreamingMarkdownReveal({
   content,
   complete = false,
+  closed = false,
   onHandoffComplete,
   richLinks = false,
 }: StreamingMarkdownRevealProps) {
   const reducedMotion = useReducedMotion();
-  const blocks = React.useMemo(() => parseStreamingReveal(content, complete), [complete, content]);
-  const unitCount = React.useMemo(
-    () => blocks.reduce((count, block) => count + block.units.length, 0),
-    [blocks],
-  );
-  const [revealedCount, setRevealedCount] = React.useState(0);
-  const handoffNotified = React.useRef(false);
-  const scheduleRef = React.useRef<StreamingRevealScheduleState>({
-    revealedCount: 0,
-    dueAt: null,
-  });
-  const scheduleInputRef = React.useRef<StreamingRevealScheduleInput>({
-    unitCount,
+  const gateRef = React.useRef(INITIAL_STREAMING_REVEAL_GATE);
+  const [gate, setGate] = React.useState(INITIAL_STREAMING_REVEAL_GATE);
+  const inputRef = React.useRef<StreamingRevealGateInput>({
+    content,
     complete,
+    closed,
     reducedMotion,
   });
-  scheduleInputRef.current = { unitCount, complete, reducedMotion };
+  inputRef.current = { content, complete, closed, reducedMotion };
 
-  React.useEffect(() => {
-    const clamped = clampStreamingRevealSchedule(scheduleRef.current, unitCount);
-    if (clamped !== scheduleRef.current) {
-      scheduleRef.current = clamped;
-      setRevealedCount(unitCount);
-    }
-    if (scheduleRef.current.revealedCount >= unitCount) return;
-    let frame = 0;
-    const tick = (now: number) => {
-      const next = advanceStreamingRevealSchedule(
-        scheduleRef.current,
-        scheduleInputRef.current,
+  // New text joins at whole-block boundaries, at most every few hundred ms;
+  // the layout pass applies each release before paint so follow stays pinned.
+  React.useLayoutEffect(() => {
+    let timer = 0;
+    const release = () => {
+      const now = performance.now();
+      const { gate: next, nextAt } = advanceStreamingRevealGate(
+        gateRef.current,
+        inputRef.current,
         now,
       );
-      if (next.revealedCount !== scheduleRef.current.revealedCount) {
-        setRevealedCount(next.revealedCount);
-      }
-      scheduleRef.current = next;
-      if (next.revealedCount < unitCount) frame = window.requestAnimationFrame(tick);
+      if (next.text !== gateRef.current.text) setGate(next);
+      gateRef.current = next;
+      if (nextAt !== null) timer = window.setTimeout(release, Math.max(0, nextAt - now));
     };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [unitCount, complete, reducedMotion]);
+    release();
+    return () => window.clearTimeout(timer);
+  }, [content, complete, closed, reducedMotion]);
 
-  const visibleCount = reducedMotion ? unitCount : revealedCount;
-  const visible = visibleBlocks(blocks, visibleCount);
-  const handoffReady = complete && visibleCount >= unitCount;
+  // The end of the turn and reduced motion show everything in this render.
+  const released =
+    complete || reducedMotion ? content : content.startsWith(gate.text) ? gate.text : "";
+  const parserRef = React.useRef<StreamingRevealParser | null>(null);
+  parserRef.current ??= new StreamingRevealParser();
+  const parser = parserRef.current;
+  // Closed text that has fully joined has no unfinished tail to hold back.
+  const parsedComplete = complete || reducedMotion || (closed && released === content);
+  const blocks = React.useMemo(
+    () => parser.parse(released, parsedComplete),
+    [parser, parsedComplete, released],
+  );
 
+  // New blocks keep fading in until the last release has finished its fade;
+  // a reply that mounts finished shows at once.
+  const [fadeDone, setFadeDone] = React.useState(complete);
+  React.useEffect(() => {
+    if (!complete) {
+      setFadeDone(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setFadeDone(true), reducedMotion ? 0 : STREAMING_REVEAL_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [complete, reducedMotion]);
+
+  // The released text renders as one document, exactly like a reply loaded
+  // from history: reference links, footnotes, and loose lists resolve across
+  // blocks. Blocks keep their elements as the text grows, so the finished
+  // reply settles in place.
+  // A tail the deadline released shows as written, even unfinished.
+  const source = complete || reducedMotion
+    ? content
+    : released.slice(
+        0,
+        Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
+      );
+
+  const handoffNotified = React.useRef(false);
   const notifyHandoffComplete = React.useCallback(() => {
     if (handoffNotified.current) return;
     handoffNotified.current = true;
@@ -110,39 +119,19 @@ export function StreamingMarkdownReveal({
   }, [onHandoffComplete]);
 
   React.useEffect(() => {
-    if (!handoffReady || handoffNotified.current) return;
+    // Only the turn's end hands over; text closed by a tool step waits for it.
+    if (!complete || !onHandoffComplete || handoffNotified.current) return;
     const delay = streamingRevealHandoffDelay(reducedMotion);
     const timer = window.setTimeout(notifyHandoffComplete, delay);
     return () => window.clearTimeout(timer);
-  }, [handoffReady, notifyHandoffComplete, reducedMotion]);
+  }, [complete, notifyHandoffComplete, onHandoffComplete, reducedMotion]);
 
   return (
-    <div className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}>
-      {visible.map((block) => {
-        if (block.kind === "prose") {
-          return (
-            <p key={block.id} className="my-3 max-w-[72ch] first:mt-0 last:mb-0">
-              {block.units.map((unit) => {
-                const parts = splitStreamingRevealUnit(unit.text);
-                return (
-                  <span key={unit.id} className="streaming-reveal-unit">
-                    {parts.leadingWhitespace}
-                    {parts.markdown ? (
-                      <MarkdownInline content={parts.markdown} richLinks={richLinks} />
-                    ) : null}
-                    {parts.trailingWhitespace}
-                  </span>
-                );
-              })}
-            </p>
-          );
-        }
-        return block.units.map((unit) => (
-          <div key={unit.id} className="streaming-reveal-block">
-            <MarkdownContent content={unit.text} richLinks={richLinks} />
-          </div>
-        ));
-      })}
+    <div
+      className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}
+      data-streaming={fadeDone ? undefined : ""}
+    >
+      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} />
     </div>
   );
 }

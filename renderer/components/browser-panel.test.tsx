@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BrowserDeviceToolbar } from "./browser-panel.js";
+import { BrowserDeviceToolbar, BrowserEmptyState } from "./browser-panel.js";
 import { BrowserAnnotationEditor } from "./browser-annotation-editor.js";
 import { storedEnvironmentPanelTab, reduceEnvironmentSurfaceState } from "../lib/environment-panel-state.js";
 import { DEFAULT_BROWSER_SETTINGS, type BrowserSnapshot, type BrowserTab } from "../shared/browser.js";
@@ -88,7 +88,10 @@ test("floating preview uses the live browser portal independently of sidebar vis
   const controls = readFileSync(new URL("./browser-floating-frame.tsx", import.meta.url), "utf8");
   for (const label of ["Move floating browser", "Return browser to Environment", "Close floating browser preview"]) assert.ok(controls.includes(label));
   assert.ok(controls.includes("setPointerCapture"));
-  assert.ok(controls.includes("ResizeObserver"));
+  // The frame's container tracking is shared with the floating device player.
+  assert.ok(controls.includes("useFloatingContainerBounds()"));
+  const bounds = readFileSync(new URL("../lib/use-floating-container-bounds.ts", import.meta.url), "utf8");
+  assert.ok(bounds.includes("ResizeObserver"));
   const composer = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
   assert.ok(composer.includes('data-browser-composer-inset="true"'));
   assert.ok(!composer.includes('data-browser-composer-inset={hasMessages'));
@@ -100,4 +103,14 @@ test("browser settings distinguish global agent access from the effective worksp
   assert.ok(source.includes('action: "agent_access"'));
   assert.ok(source.includes('state.agentAccessAllowed ? "allowed" : "off"'));
   assert.ok(source.includes('state.defaults.agentAccess === "allow"'));
+});
+
+test("a failed first browser state read replaces the endless spinner with Try again", () => {
+  const props = { state: null, onOpen: () => undefined, run: async () => null };
+  const loading = renderToStaticMarkup(<BrowserEmptyState {...props} />);
+  assert.match(loading, /role="status"[^>]*>Opening browser…/u);
+  const failed = renderToStaticMarkup(<BrowserEmptyState {...props} loadFailed onRetryLoad={() => undefined} />);
+  assert.doesNotMatch(failed, /Opening browser/u);
+  assert.match(failed, /Couldn’t open the browser/u);
+  assert.match(failed, />Try again<\/button>/u);
 });

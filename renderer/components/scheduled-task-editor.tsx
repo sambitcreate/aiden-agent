@@ -37,6 +37,8 @@ import type {
   ScheduledTaskPermission,
   Workspace,
 } from "../lib/types";
+import { isAcpHarnessProvider } from "../shared/acp-harness";
+import { mcpServerOffersTools } from "../shared/mcp-exposure";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -69,6 +71,52 @@ const WEEKDAYS = [
 ] as const;
 
 const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
+
+/** The soft inline warning under the Provider select when an LLM task may not be able to run. */
+/**
+ * The connections the editor lists: every usable server plus each selected
+ * one, including selections whose server is missing. A missing server is
+ * named by its id so the person can tell which approval needs repair. A
+ * server switched off for the model is usable by no schedule: it is listed
+ * only when already selected, as unavailable with that reason.
+ */
+export function scheduledTaskMcpServerChoices(
+  mcpServers: readonly Pick<McpServer, "id" | "name" | "enabled" | "exposure">[],
+  selectedMcpIds: readonly string[],
+): {
+  unavailableMcpIds: string[];
+  visibleMcpServers: Array<Pick<McpServer, "id" | "name" | "enabled"> & { unavailableReason?: string }>;
+} {
+  const usable = (server: Pick<McpServer, "enabled" | "exposure">) => server.enabled && mcpServerOffersTools(server);
+  const enabledMcpIds = new Set(
+    mcpServers.filter(usable).map((server) => server.id),
+  );
+  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
+  const visibleMcpServers = [
+    ...mcpServers
+      .filter((server) => usable(server) || selectedMcpIds.includes(server.id))
+      .map(({ id, name, enabled, exposure }) =>
+        enabled && !mcpServerOffersTools({ exposure })
+          ? { id, name, enabled: false, unavailableReason: "Off for the model in Settings → Plugins" }
+          : { id, name, enabled }),
+    ...unavailableMcpIds
+      .filter((id) => !mcpServers.some((server) => server.id === id))
+      .map((id) => ({ id, name: `Unavailable MCP server (${id})`, enabled: false })),
+  ];
+  return { unavailableMcpIds, visibleMcpServers };
+}
+
+export function ScheduledTaskProviderWarning({ message }: { message: string | undefined }) {
+  if (!message) return null;
+  return (
+    <div
+      className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
+      role="status"
+    >
+      <span>{message}</span>
+    </div>
+  );
+}
 
 export function ScheduledTaskEditor({
   open,
@@ -189,16 +237,10 @@ export function ScheduledTaskEditor({
     }));
   };
   const selectedMcpIds = draft.mcpServerIds ?? [];
-  const enabledMcpIds = new Set(
-    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+  const { unavailableMcpIds, visibleMcpServers } = scheduledTaskMcpServerChoices(
+    mcpServers,
+    selectedMcpIds,
   );
-  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
-  const visibleMcpServers = [
-    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
-    ...unavailableMcpIds
-      .filter((id) => !mcpServers.some((server) => server.id === id))
-      .map((id) => ({ id, name: "Unavailable MCP server", enabled: false })),
-  ];
   const toggleMcpServer = (id: string, enabled: boolean) => {
     setDraft((current) => {
       const ids = new Set(current.mcpServerIds ?? []);
@@ -243,7 +285,8 @@ export function ScheduledTaskEditor({
     return [...new Set([localTimezone, draft.timezone ?? localTimezone, "UTC", ...supported])];
   }, [draft.timezone, localTimezone]);
 
-  const usableProviders = providers.filter(isUsable);
+  // Agent harnesses need someone watching to answer approvals; schedules run unattended.
+  const usableProviders = providers.filter((provider) => isUsable(provider) && !isAcpHarnessProvider(provider.id));
   const pinnedProvider = usableProviders.find((provider) => provider.id === draft.providerId);
   const providerModelOptions = pinnedProvider
     ? scheduledTaskProviderModelOptions(
@@ -283,6 +326,7 @@ export function ScheduledTaskEditor({
 
   return (
     <Dialog
+      submitOnEnter
       open={open}
       onOpenChange={onOpenChange}
       title={draft.id ? "Edit scheduled task" : "Create scheduled task"}
@@ -604,16 +648,7 @@ export function ScheduledTaskEditor({
                 ))}
               </SelectContent>
             </Select>
-            {providerGuardrail ? (
-              <div
-                className="mt-2 flex items-start gap-1.5 rounded-control bg-status-warning-surface px-2.5 py-1.5 text-small text-status-warning"
-                role="status"
-              >
-                <span>
-                  No provider pinned. If no app default is available, this task cannot run.
-                </span>
-              </div>
-            ) : null}
+            <ScheduledTaskProviderWarning message={providerGuardrail} />
           </Field>
         ) : null}
         {pinnedProvider && providerModelOptions ? (
@@ -739,7 +774,7 @@ export function ScheduledTaskEditor({
                         </Text>
                         {!server.enabled ? (
                           <Text variant="small" color="red" className="mt-0.5 block">
-                            Disabled or removed
+                            {server.unavailableReason ?? "Disabled or removed"}
                           </Text>
                         ) : null}
                       </span>

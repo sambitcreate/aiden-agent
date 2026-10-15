@@ -1,5 +1,8 @@
 {
-  "contractRevision": 19,
+  "contractRevision": 32,
+  "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
+  "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
+  "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -50,9 +53,62 @@
     "instanceId": "instance_fixture_01",
     "name": "Fixture Aiden",
     "appVersion": "0.30.0",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
-    "serverCapabilities": ["server:read", "chat:read", "chat:write", "approval:respond", "workspace:read", "workspace:browse", "workspace:manage", "files:read", "files:write", "git:read", "git:write", "schedule:read", "schedule:write", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke", "app-controls:read", "app-controls:respond"],
-    "features": ["chat-summaries-v1", "chat-tasks-v1", "chat-agents-v1", "chat-run-input-v1", "chat-question-prompts-v1", "chat-skills-v1", "chat-agent-interrupt-v1", "chat-read-state-v1", "chat-ui-panels-v1"],
+    "capabilities": [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "bot:read",
+      "bot:write",
+      "tasks:read",
+      "agents:read",
+      "questions:respond",
+      "skills:invoke"
+    ],
+    "serverCapabilities": [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "approval:respond",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "files:read",
+      "files:write",
+      "git:read",
+      "git:write",
+      "schedule:read",
+      "schedule:write",
+      "bot:read",
+      "bot:write",
+      "tasks:read",
+      "agents:read",
+      "questions:respond",
+      "skills:invoke",
+      "app-controls:read",
+      "app-controls:respond"
+    ],
+    "features": [
+      "chat-summaries-v1",
+      "chat-visuals-v1",
+      "chat-tasks-v1",
+      "chat-agents-v1",
+      "chat-run-input-v1",
+      "chat-question-prompts-v1",
+      "chat-skills-v1",
+      "chat-agent-interrupt-v1",
+      "chat-read-state-v1",
+      "bot-delete-v1",
+      "bot-durable-session-v1",
+      "bot-routines-v1",
+      "bot-connection-requests-v1",
+      "bot-presets-v1",
+      "bot-memory-v1",
+      "bot-proactive-v1",
+      "chat-ui-panels-v1"
+    ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
     "serverTime": "2026-08-18T19:00:00.000Z"
@@ -136,7 +192,7 @@
     "modelId": "model_fixture",
     "messages": [
       { "id": "message_fixture_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
-      { "id": "message_fixture_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+      { "id": "message_fixture_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z", "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}], "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}], "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}], "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]} }
     ],
     "createdAt": "2026-08-18T18:59:00.000Z",
     "updatedAt": "2026-08-18T19:00:01.000Z",
@@ -191,7 +247,7 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }] } } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "question_required", "terminal": false, "payload": { "promptId": "q-fixture-01", "questions": [{ "question": "Which tolerance should the chamfer use?", "header": "Chamfer", "multiSelect": false, "options": [{ "label": "0.5 mm", "description": "Standard shop chamfer." }, { "label": "1.0 mm", "description": "Heavy chamfer for handling." }] }], "expiresAt": "2026-08-18T19:06:10.000Z" } },
@@ -268,14 +324,33 @@
       {
         "id": "parakeet-v3",
         "name": "Parakeet TDT 0.6B v3",
-        "description": "Fast and accurate. Supports 25 European languages.",
-        "sizeLabel": "620 MB",
+        "description": "Fast and accurate across 25 European languages.",
+        "sizeLabel": "487 MB",
         "quant": "int8",
         "languagesLabel": "25 languages",
-        "accuracy": 0.8,
-        "speed": 0.85,
+        "accuracy": 0.88,
+        "speed": 0.79,
         "recommended": true,
-        "installed": true
+        "installed": true,
+        "languages": ["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
+        "capabilities": { "autoDetect": true, "languageHint": false, "translateToEnglish": false, "maxWindowSeconds": null },
+        "license": { "name": "CC-BY-4.0 (NVIDIA)", "url": "https://creativecommons.org/licenses/by/4.0/" }
+      },
+      {
+        "id": "whisper-turbo",
+        "name": "Whisper Large v3 Turbo",
+        "description": "Broadest language coverage. Slower than the others.",
+        "sizeLabel": "564 MB",
+        "quant": "int8",
+        "languagesLabel": "99 languages",
+        "accuracy": 0.88,
+        "speed": 0.35,
+        "recommended": false,
+        "installed": false,
+        "languages": ["en", "zh", "de"],
+        "capabilities": { "autoDetect": true, "languageHint": true, "translateToEnglish": false, "maxWindowSeconds": 30 },
+        "license": { "name": "MIT (OpenAI Whisper)", "url": "https://github.com/openai/whisper/blob/main/LICENSE" },
+        "download": { "id": "whisper-turbo", "percentage": 90, "phase": "verify", "status": "downloading" }
       }
     ],
     "input": {
@@ -322,9 +397,7 @@
       "semantic": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
+        "color": "rose"
       },
       "asset": {
         "assetRevision": "avatar_revision_3",
@@ -335,6 +408,7 @@
       }
     },
     "health": "ready",
+    "sessionState": "interrupted",
     "createdAt": "2026-08-18T17:00:00.000Z",
     "updatedAt": "2026-08-18T18:45:00.000Z",
     "revision": "bot_revision_7"
@@ -349,9 +423,7 @@
           "semantic": {
             "version": 1,
             "shape": "orb",
-            "color": "sky",
-            "eyes": "wide",
-            "detail": "orbit"
+            "color": "rose"
           },
           "asset": {
             "assetRevision": "avatar_revision_3",
@@ -362,30 +434,24 @@
           }
         },
         "health": "ready",
+        "sessionState": "interrupted",
         "createdAt": "2026-08-18T17:00:00.000Z",
         "updatedAt": "2026-08-18T18:45:00.000Z",
         "revision": "bot_revision_7"
       }
     ],
-    "maxBots": 256,
-    "favorites": {
-      "botIds": ["bot_fixture_01"],
-      "revision": "bot_favorites_revision_2"
-    }
+    "maxBots": 256
   },
   "botDetail": {
     "id": "bot_fixture_01",
     "name": "Scout",
     "purpose": "Finds the signal in a busy week",
-    "openingGreeting": "What should I help you sort out?",
     "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
     "avatar": {
       "semantic": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
+        "color": "rose"
       },
       "asset": {
         "assetRevision": "avatar_revision_3",
@@ -396,6 +462,7 @@
       }
     },
     "health": "ready",
+    "sessionState": "idle",
     "access": {
       "botId": "bot_fixture_01",
       "accessMode": "full",
@@ -419,9 +486,7 @@
     "semantic": {
       "version": 1,
       "shape": "orb",
-      "color": "sky",
-      "eyes": "wide",
-      "detail": "orbit"
+      "color": "rose"
     },
     "asset": {
       "assetRevision": "avatar_revision_3",
@@ -435,37 +500,27 @@
     "request": {
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
-      "openingGreeting": "What should I help you sort out?",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
       "avatar": {
         "version": 1,
         "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "access": {
-        "accessMode": "full",
-        "catalogRevision": "bot_catalog_revision_3",
-        "confirmedForeground": true
+        "color": "rose"
       }
     },
     "response": {
       "id": "bot_fixture_01",
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
-      "openingGreeting": "What should I help you sort out?",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
       "avatar": {
         "semantic": {
           "version": 1,
           "shape": "orb",
-          "color": "sky",
-          "eyes": "wide",
-          "detail": "orbit"
+          "color": "rose"
         }
       },
       "health": "ready",
+      "sessionState": "needs_model",
       "access": {
         "botId": "bot_fixture_01",
         "accessMode": "full",
@@ -480,7 +535,7 @@
   },
   "botIdentity": {
     "request": {
-      "openingGreeting": ""
+      "purpose": "Finds the signal in a busy week"
     },
     "response": {
       "id": "bot_fixture_01",
@@ -491,9 +546,7 @@
         "semantic": {
           "version": 1,
           "shape": "orb",
-          "color": "sky",
-          "eyes": "wide",
-          "detail": "orbit"
+          "color": "rose"
         },
         "asset": {
           "assetRevision": "avatar_revision_3",
@@ -515,73 +568,6 @@
       "updatedAt": "2026-08-18T18:46:00.000Z",
       "revision": "bot_revision_8"
     }
-  },
-  "botArchive": {
-    "id": "bot_fixture_01",
-    "name": "Scout",
-    "purpose": "Finds the signal in a busy week",
-    "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-    "avatar": {
-      "semantic": {
-        "version": 1,
-        "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "asset": {
-        "assetRevision": "avatar_revision_3",
-        "mimeType": "image/png",
-        "width": 512,
-        "height": 512,
-        "byteSize": 1024
-      }
-    },
-    "health": "archived",
-    "access": {
-      "botId": "bot_fixture_01",
-      "accessMode": "full",
-      "revision": "bot_policy_revision_5",
-      "policyEpoch": "bot_policy_epoch_5",
-      "summary": "Can use your Mac, shell, enabled connections, and skills."
-    },
-    "createdAt": "2026-08-18T17:00:00.000Z",
-    "updatedAt": "2026-08-18T18:47:00.000Z",
-    "archivedAt": "2026-08-18T18:47:00.000Z",
-    "revision": "bot_revision_9"
-  },
-  "botRestore": {
-    "id": "bot_fixture_01",
-    "name": "Scout",
-    "purpose": "Finds the signal in a busy week",
-    "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-    "avatar": {
-      "semantic": {
-        "version": 1,
-        "shape": "orb",
-        "color": "sky",
-        "eyes": "wide",
-        "detail": "orbit"
-      },
-      "asset": {
-        "assetRevision": "avatar_revision_3",
-        "mimeType": "image/png",
-        "width": 512,
-        "height": 512,
-        "byteSize": 1024
-      }
-    },
-    "health": "ready",
-    "access": {
-      "botId": "bot_fixture_01",
-      "accessMode": "full",
-      "revision": "bot_policy_revision_6",
-      "policyEpoch": "bot_policy_epoch_6",
-      "summary": "Can use your Mac, shell, enabled connections, and skills."
-    },
-    "createdAt": "2026-08-18T17:00:00.000Z",
-    "updatedAt": "2026-08-18T18:48:00.000Z",
-    "revision": "bot_revision_10"
   },
   "botConversation": {
     "chatId": "chat_bot_fixture_01",
@@ -709,11 +695,7 @@
         "label": "Web",
         "available": true
       }
-    ],
-    "notice": {
-      "version": "bot-full-access-v1",
-      "requiresAcknowledgement": true
-    }
+    ]
   },
   "botPolicy": {
     "botId": "bot_fixture_01",
@@ -757,77 +739,6 @@
       }
     }
   },
-  "botChatSubset": {
-    "chatId": "chat_bot_fixture_01",
-    "botId": "bot_fixture_01",
-    "mode": "inherit",
-    "revision": "chat_policy_revision_2",
-    "botPolicyRevision": "bot_policy_revision_4",
-    "summary": "Inherits Scout's Full Access."
-  },
-  "botChatSubsetUpdate": {
-    "request": {
-      "mode": "custom",
-      "catalogRevision": "bot_catalog_revision_3",
-      "expectedBotPolicyRevision": "bot_policy_revision_5",
-      "custom": {
-        "providerId": "provider_fixture",
-        "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home"],
-        "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
-      }
-    },
-    "response": {
-      "chatId": "chat_bot_fixture_01",
-      "botId": "bot_fixture_01",
-      "mode": "custom",
-      "revision": "chat_policy_revision_3",
-      "botPolicyRevision": "bot_policy_revision_5",
-      "summary": "Uses a reduced subset of Scout's access.",
-      "custom": {
-        "providerId": "provider_fixture",
-        "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home"],
-        "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
-      }
-    }
-  },
-  "botFavorites": {
-    "botIds": ["bot_fixture_01"],
-    "revision": "bot_favorites_revision_2"
-  },
-  "botFavoritesUpdate": {
-    "request": {
-      "botIds": ["bot_fixture_01"]
-    },
-    "response": {
-      "botIds": ["bot_fixture_01"],
-      "revision": "bot_favorites_revision_2"
-    }
-  },
-  "botNotice": {
-    "version": "bot-full-access-v1",
-    "requiresAcknowledgement": true
-  },
-  "botNoticeAcknowledgement": {
-    "request": {
-      "version": "bot-full-access-v1",
-      "decision": "continue_full",
-      "confirmedForeground": true
-    },
-    "response": {
-      "version": "bot-full-access-v1",
-      "requiresAcknowledgement": false,
-      "acceptedAt": "2026-08-18T19:03:00.000Z",
-      "acceptedDecision": "continue_full"
-    }
-  },
   "botAvatarUpload": {
     "request": {
       "mimeType": "image/png",
@@ -847,6 +758,482 @@
     "width": 512,
     "height": 512,
     "byteSize": 1024
+  },
+  "botSession": {
+    "botId": "bot_fixture_01",
+    "epoch": "epoch_fixture_01",
+    "seq": 12,
+    "state": "interrupted",
+    "interrupted": true,
+    "partial": "Your first meeting is at 9",
+    "entries": [
+      {
+        "type": "notice",
+        "id": "entry_2",
+        "notice": "session_reset"
+      },
+      {
+        "type": "message",
+        "id": "entry_3",
+        "role": "user",
+        "text": "Plan my week, please.",
+        "createdAt": "2026-08-18T19:00:00.000Z"
+      },
+      {
+        "type": "message",
+        "id": "entry_5",
+        "role": "assistant",
+        "text": "Here is a first pass at your week.",
+        "createdAt": "2026-08-18T19:00:20.000Z"
+      },
+      {
+        "type": "message",
+        "id": "entry_8",
+        "role": "user",
+        "text": "Give me a short brief for today.",
+        "label": "Morning brief",
+        "createdAt": "2026-08-19T15:00:00.000Z"
+      },
+      {
+        "type": "connect_card",
+        "id": "entry_9",
+        "pluginId": "google-calendar",
+        "name": "Google Calendar",
+        "iconId": "google-calendar",
+        "reason": "I can check your meetings before I plan.",
+        "status": "pending"
+      },
+      {
+        "type": "message",
+        "id": "entry_11",
+        "role": "assistant",
+        "text": "Your first meeting is",
+        "interrupted": true,
+        "createdAt": "2026-08-19T15:00:05.000Z"
+      }
+    ],
+    "hasOlder": false,
+    "question": null,
+    "approval": null
+  },
+  "botSessionNeedsModel": {
+    "botId": "bot_fixture_02",
+    "epoch": "epoch_fixture_02",
+    "seq": 0,
+    "state": "needs_model",
+    "interrupted": false,
+    "entries": [],
+    "hasOlder": false,
+    "question": null,
+    "approval": null
+  },
+  "botSessionEvents": [
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 12,
+      "type": "snapshot",
+      "payload": {
+        "session": {
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_01",
+          "seq": 12,
+          "state": "interrupted",
+          "interrupted": true,
+          "partial": "Your first meeting is at 9",
+          "entries": [
+            {
+              "type": "notice",
+              "id": "entry_2",
+              "notice": "session_reset"
+            },
+            {
+              "type": "message",
+              "id": "entry_3",
+              "role": "user",
+              "text": "Plan my week, please.",
+              "createdAt": "2026-08-18T19:00:00.000Z"
+            },
+            {
+              "type": "message",
+              "id": "entry_5",
+              "role": "assistant",
+              "text": "Here is a first pass at your week.",
+              "createdAt": "2026-08-18T19:00:20.000Z"
+            },
+            {
+              "type": "message",
+              "id": "entry_8",
+              "role": "user",
+              "text": "Give me a short brief for today.",
+              "label": "Morning brief",
+              "createdAt": "2026-08-19T15:00:00.000Z"
+            },
+            {
+              "type": "connect_card",
+              "id": "entry_9",
+              "pluginId": "google-calendar",
+              "name": "Google Calendar",
+              "iconId": "google-calendar",
+              "reason": "I can check your meetings before I plan.",
+              "status": "pending"
+            },
+            {
+              "type": "message",
+              "id": "entry_11",
+              "role": "assistant",
+              "text": "Your first meeting is",
+              "interrupted": true,
+              "createdAt": "2026-08-19T15:00:05.000Z"
+            }
+          ],
+          "hasOlder": false,
+          "question": null,
+          "approval": null
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 13,
+      "type": "partial",
+      "payload": {
+        "text": "Your first meeting is at 9:30"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 14,
+      "type": "entry",
+      "payload": {
+        "entry": {
+          "type": "message",
+          "id": "entry_13",
+          "role": "assistant",
+          "text": "Your first meeting is at 9:30 with Dana.",
+          "createdAt": "2026-08-19T15:01:00.000Z"
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 15,
+      "type": "state",
+      "payload": {
+        "state": "interrupted",
+        "interrupted": true,
+        "blocked": "access_changed"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 16,
+      "type": "closed",
+      "payload": {}
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 1,
+      "type": "state",
+      "payload": {
+        "state": "idle",
+        "interrupted": false
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 2,
+      "type": "question",
+      "payload": {
+        "question": {
+          "waitId": "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c",
+          "toolCallId": "call_fixture_01",
+          "questions": [
+            {
+              "question": "Which colour should the banner use?",
+              "header": "Colour",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "Blue",
+                  "description": "Calm and cool."
+                },
+                {
+                  "label": "Red",
+                  "description": "Loud and warm."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 3,
+      "type": "question",
+      "payload": {
+        "question": null
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 4,
+      "type": "approval",
+      "payload": {
+        "approval": {
+          "waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6",
+          "toolCallId": "call_fixture_02",
+          "toolName": "mcp__mail__send_email",
+          "summary": "Send an email to dana@example.com: Lunch on Friday?",
+          "canAllow": true
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_03",
+      "seq": 5,
+      "type": "approval",
+      "payload": {
+        "approval": null
+      }
+    }
+  ],
+  "botSessionSend": {
+    "request": {
+      "text": "Plan my week, please."
+    },
+    "response": {
+      "submissionId": "17",
+      "deduped": false,
+      "state": "running",
+      "interrupted": false
+    }
+  },
+  "botSessionResume": {
+    "request": {},
+    "response": {
+      "state": "running",
+      "interrupted": false
+    }
+  },
+  "botSessionDismiss": {
+    "request": {},
+    "response": {
+      "state": "idle",
+      "interrupted": false
+    }
+  },
+  "botSessionQuestionAnswer": {
+    "request": {
+      "cancelled": false,
+      "answers": [
+        {
+          "questionIndex": 0,
+          "kind": "option",
+          "answer": "Blue"
+        }
+      ]
+    },
+    "response": {
+      "waitId": "5f0c1a2e-7b3d-4e9a-8c61-0d2e3f4a5b6c"
+    }
+  },
+  "botRoutines": {
+    "routines": [
+      {
+        "id": "task_fixture_routine_01",
+        "botId": "bot_fixture_01",
+        "name": "Morning brief",
+        "message": "Give me a short brief for today.",
+        "schedule": {
+          "kind": "weekdays",
+          "time": "08:00"
+        },
+        "timezone": "America/Los_Angeles",
+        "label": "Weekdays at 8:00 AM",
+        "enabled": true,
+        "nextRunAt": "2026-08-20T15:00:00.000Z",
+        "lastRunAt": "2026-08-19T15:00:00.000Z",
+        "lastResult": "success",
+        "updatedAt": "2026-08-18T19:00:00.000Z",
+        "revision": "routine_revision_1787079600000"
+      },
+      {
+        "id": "task_fixture_routine_02",
+        "botId": "bot_fixture_01",
+        "name": "Weekly meal plan",
+        "message": "Plan this week's meals and the shopping list.",
+        "schedule": {
+          "kind": "weekly",
+          "days": [
+            0
+          ],
+          "time": "09:00"
+        },
+        "timezone": "America/Los_Angeles",
+        "label": "Every Sunday at 9:00 AM",
+        "enabled": true,
+        "nextRunAt": "2026-08-23T16:00:00.000Z",
+        "updatedAt": "2026-08-18T19:05:00.000Z",
+        "revision": "routine_revision_1787079900000"
+      }
+    ]
+  },
+  "botRoutineCreate": {
+    "request": {
+      "name": "Weekly meal plan",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          0
+        ],
+        "time": "09:00"
+      },
+      "message": "Plan this week's meals and the shopping list."
+    },
+    "response": {
+      "id": "task_fixture_routine_02",
+      "botId": "bot_fixture_01",
+      "name": "Weekly meal plan",
+      "message": "Plan this week's meals and the shopping list.",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          0
+        ],
+        "time": "09:00"
+      },
+      "timezone": "America/Los_Angeles",
+      "label": "Every Sunday at 9:00 AM",
+      "enabled": true,
+      "nextRunAt": "2026-08-23T16:00:00.000Z",
+      "updatedAt": "2026-08-18T19:05:00.000Z",
+      "revision": "routine_revision_1787079900000"
+    }
+  },
+  "botRoutineUpdate": {
+    "request": {
+      "enabled": false
+    },
+    "response": {
+      "id": "task_fixture_routine_01",
+      "botId": "bot_fixture_01",
+      "name": "Morning brief",
+      "message": "Give me a short brief for today.",
+      "schedule": {
+        "kind": "weekdays",
+        "time": "08:00"
+      },
+      "timezone": "America/Los_Angeles",
+      "label": "Weekdays at 8:00 AM",
+      "enabled": false,
+      "lastRunAt": "2026-08-19T15:00:00.000Z",
+      "lastResult": "success",
+      "updatedAt": "2026-08-19T16:00:00.000Z",
+      "revision": "routine_revision_1787166000000"
+    }
+  },
+  "botConnectionRequest": {
+    "request": {
+      "pluginId": "google-calendar"
+    },
+    "response": {
+      "pluginId": "google-calendar",
+      "name": "Google Calendar",
+      "status": "sent"
+    }
+  },
+  "botPresets": {
+    "presets": [
+      {
+        "id": "chief-of-staff",
+        "name": "Chief of Staff",
+        "subtitle": "Keeps your week on track",
+        "avatar": {
+          "version": 1,
+          "shape": "hex",
+          "color": "periwinkle"
+        },
+        "suggestedConnections": [
+          {
+            "pluginId": "gmail",
+            "name": "Gmail",
+            "iconId": "gmail"
+          },
+          {
+            "pluginId": "google-calendar",
+            "name": "Google Calendar",
+            "iconId": "google-calendar"
+          }
+        ],
+        "suggestedRoutine": {
+          "name": "Morning brief",
+          "label": "Weekdays at 8:00 AM"
+        }
+      },
+      {
+        "id": "researcher",
+        "name": "Researcher",
+        "subtitle": "Digs into topics and sums them up",
+        "avatar": {
+          "version": 1,
+          "shape": "orb",
+          "color": "mint"
+        },
+        "suggestedConnections": [
+          {
+            "pluginId": "composio",
+            "name": "Composio",
+            "iconId": "composio"
+          }
+        ]
+      }
+    ]
+  },
+  "botPresetCreate": {
+    "request": {
+      "presetId": "chief-of-staff"
+    },
+    "response": {
+      "created": true,
+      "bot": {
+        "id": "bot_fixture_03",
+        "name": "Chief of Staff",
+        "purpose": "Keeps your week on track",
+        "avatar": {
+          "semantic": {
+            "version": 1,
+            "shape": "hex",
+            "color": "periwinkle"
+          }
+        },
+        "health": "ready",
+        "sessionState": "needs_model",
+        "createdAt": "2026-08-19T10:00:00.000Z",
+        "updatedAt": "2026-08-19T10:00:00.000Z",
+        "revision": "bot_revision_1"
+      }
+    }
   },
   "taskProgress": {
     "version": 1,
@@ -1142,6 +1529,851 @@
       "value": false,
       "scope": "Paired host",
       "effective": "next_turn"
+    }
+  },
+  "hostHealth": {
+    "ok": true,
+    "protocolVersion": 1,
+    "instanceId": "instance_fixture_01",
+    "displayName": "Fixture Aiden",
+    "platform": "mac",
+    "contractRevision": 32,
+    "pairingRequests": true
+  },
+  "hostFeedEvents": [
+    { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
+    { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },
+    { "protocolVersion": 1, "streamId": "host", "sequence": 2, "timestamp": "2026-08-18T19:02:02.000Z", "type": "workspace.remove", "terminal": false, "payload": { "id": "workspace_fixture_02" } }
+  ],
+  "runEvents": [
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:01.000Z", "type": "run.started", "terminal": false, "payload": { "runId": "run_fixture_01", "chatId": "chat_fixture_01", "origin": "remote" } },
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:02.000Z", "type": "status", "terminal": false, "payload": { "state": "running" } },
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:09.000Z", "type": "approval_resolved", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "decision": "allow" } },
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
+    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:10.000Z", "type": "run.ended", "terminal": true, "payload": { "runId": "run_fixture_01", "chatId": "chat_fixture_01", "state": "done" } }
+  ],
+  "messagesWindow": {
+    "chatId": "chat_fixture_01",
+    "revision": "chat_revision_4",
+    "messages": [
+      {
+        "id": "message_fixture_assistant_01",
+        "role": "assistant",
+        "text": "Starting the review.",
+        "createdAt": "2026-08-18T19:00:01.000Z",
+        "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}],
+        "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}],
+        "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}],
+        "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]}
+      }
+    ],
+    "hasOlder": true,
+    "workspaceId": "workspace_fixture_01",
+    "title": "Fixture review chat",
+    "providerId": "provider_fixture",
+    "modelId": "model_fixture",
+    "createdAt": "2026-08-18T19:00:00.000Z",
+    "updatedAt": "2026-08-18T19:01:10.000Z"
+  },
+  "runControlError": {
+    "error": {
+      "code": "approval_resolved",
+      "message": "Another controller already resolved this approval.",
+      "requestId": "request_fixture_02",
+      "retryable": false,
+      "details": {
+        "decision": "deny",
+        "resolvedAt": "2026-08-18T19:01:09.000Z"
+      }
+    }
+  },
+  "pairingRequests": {
+    "feature": "pairing-requests-v1",
+    "create": {
+      "request": {
+        "deviceName": "Fixture Linux Desktop",
+        "deviceType": "linux",
+        "publicKey": "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY",
+        "clientVersion": "0.52.0"
+      },
+      "response": {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "pollSecret": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "expiresAt": "2026-08-18T19:02:00.000Z",
+        "hostCommitment": "9l-hyGsHBURBtMJu9IzdhYl8u4pMZ361g5LOscBuWl8"
+      }
+    },
+    "reveal": {
+      "request": {
+        "requesterNonce": "09bZ3N_i5ejr7vH09_r9AAMGCQwPEhUYGx4hJCcqLTA"
+      },
+      "response": {
+        "hostNonce": "Q0xVXmdweYKLlJ2mr7jBytPc5e73AAkSGyQtNj9IUVo"
+      }
+    },
+    "status": [
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "pending",
+        "expiresAt": "2026-08-18T19:02:00.000Z"
+      },
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "approved",
+        "expiresAt": "2026-08-18T19:02:00.000Z",
+        "envelope": {
+          "kind": "aiden-pairing-request-v1",
+          "protocolVersion": 1,
+          "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+          "expiresAt": "2026-08-18T19:02:00.000Z",
+          "hostPublicKey": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+          "salt": "AAECAwQFBgcICQoLDA0ODw",
+          "nonce": "EBESExQVFhcYGRob",
+          "ciphertext": "ZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGiow",
+          "tag": "yMnKy8zNzs_Q0dLT1NXW1w"
+        }
+      },
+      {
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "state": "denied",
+        "expiresAt": "2026-08-18T19:02:00.000Z"
+      }
+    ],
+    "error": {
+      "error": {
+        "code": "pairing_closed",
+        "message": "This computer is not accepting connection requests.",
+        "requestId": "request_fixture_03",
+        "retryable": false
+      }
+    },
+    "matchCodeVectors": [
+      {
+        "requesterPublicKey": "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY",
+        "serverSpkiSha256": "sha256/cXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5A=",
+        "requestId": "pairreq_AwgNEhccISYrMDU6P0RJTlNYXWJnbHF2",
+        "requesterNonce": "09bZ3N_i5ejr7vH09_r9AAMGCQwPEhUYGx4hJCcqLTA",
+        "hostNonce": "Q0xVXmdweYKLlJ2mr7jBytPc5e73AAkSGyQtNj9IUVo",
+        "hostCommitment": "9l-hyGsHBURBtMJu9IzdhYl8u4pMZ361g5LOscBuWl8",
+        "matchCode": "483342"
+      },
+      {
+        "requesterPublicKey": "Dg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0",
+        "serverSpkiSha256": "sha256/fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ0=",
+        "requestId": "pairreq_BgsQFRofJCkuMzg9QkdMUVZbYGVqb3R5",
+        "requesterNonce": "3uHk5-rt8PP2-fz_AgUICw4RFBcaHSAjJiksLzI1ODs",
+        "hostNonce": "VF1mb3iBipOcpa63wMnS2-Tt9v8IERojLDU-R1BZYms",
+        "hostCommitment": "WOecAdu_gmwZ4pmQ4iuddo1c8POxpevVCa46mnyPj78",
+        "matchCode": "607391"
+      },
+      {
+        "requesterPublicKey": "fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ0",
+        "serverSpkiSha256": "sha256/Tk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG0=",
+        "requestId": "pairreq_NjtARUpPVFleY2htcnd8gYaLkJWan6Sp",
+        "requesterNonce": "jpGUl5qdoKOmqayvsrW4u77BxMfKzdDT1tnc3-Ll6Os",
+        "hostNonce": "ZG12f4iRmqOstb7H0Nni6_T9Bg8YISozPEVOV2Bpcns",
+        "hostCommitment": "vzlNrbjRTHUnV9Y36lptQl0iAYpfOQ_ueI5Ad1UnvhU",
+        "matchCode": "086098"
+      }
+    ]
+  },
+  "phoneRunEvents": [
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:10:01.000Z",
+      "type": "run.started",
+      "terminal": false,
+      "payload": {
+        "runId": "run_fixture_02",
+        "chatId": "chat_fixture_01",
+        "origin": "renderer"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:10:02.000Z",
+      "type": "status",
+      "terminal": false,
+      "payload": {
+        "state": "running"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:10:03.000Z",
+      "type": "text_delta",
+      "terminal": false,
+      "payload": {
+        "text": "Checking the build."
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 4,
+      "timestamp": "2026-08-18T19:10:04.000Z",
+      "type": "tool_started",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_1",
+        "name": "run_command"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 5,
+      "timestamp": "2026-08-18T19:10:06.000Z",
+      "type": "tool_finished",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_1",
+        "status": "succeeded"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 6,
+      "timestamp": "2026-08-18T19:10:07.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_02",
+        "summary": "Create the nightly test schedule?",
+        "toolCallId": "tool_fixture_03",
+        "toolName": "schedule_task",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ]
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 7,
+      "timestamp": "2026-08-18T19:10:08.000Z",
+      "type": "approval_resolved",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_02",
+        "decision": "allow"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 8,
+      "timestamp": "2026-08-18T19:10:09.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_03",
+        "summary": "Write to the workspace?",
+        "toolCallId": "tool_fixture_04",
+        "toolName": "write_file",
+        "canAllow": false
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 9,
+      "timestamp": "2026-08-18T19:10:10.000Z",
+      "type": "approval_resolved",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_03",
+        "decision": "deny"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 10,
+      "timestamp": "2026-08-18T19:10:11.000Z",
+      "type": "question_required",
+      "terminal": false,
+      "payload": {
+        "promptId": "q-fixture-02",
+        "questions": [
+          {
+            "question": "Which tolerance should the chamfer use?",
+            "header": "Chamfer",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "0.5 mm",
+                "description": "Standard shop chamfer."
+              },
+              {
+                "label": "1.0 mm",
+                "description": "Heavy chamfer for handling."
+              }
+            ]
+          }
+        ],
+        "toolCallId": "tool_fixture_05"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 11,
+      "timestamp": "2026-08-18T19:10:12.000Z",
+      "type": "question_resolved",
+      "terminal": false,
+      "payload": {
+        "promptId": "q-fixture-02",
+        "outcome": "answered"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 12,
+      "timestamp": "2026-08-18T19:10:13.000Z",
+      "type": "done",
+      "terminal": true,
+      "payload": {
+        "messageId": "message_fixture_assistant_03"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_02",
+      "sequence": 12,
+      "timestamp": "2026-08-18T19:10:13.000Z",
+      "type": "run.ended",
+      "terminal": true,
+      "payload": {
+        "runId": "run_fixture_02",
+        "chatId": "chat_fixture_01",
+        "state": "done"
+      }
+    }
+  ],
+  "chatFork": {
+    "features": ["chat-fork-v1", "chat-fork-summary-v1"],
+    "fork": {
+      "request": { "messageId": "message_fixture_source_assistant_01", "position": "after", "summary": { "focus": "the protocol decisions" } },
+      "response": {
+        "chat": {
+          "id": "chat_fixture_fork_01",
+          "workspaceId": "workspace_fixture_01",
+          "title": "Remote protocol review",
+          "providerId": "provider_fixture",
+          "modelId": "model_fixture",
+          "messages": [
+            { "id": "message_fixture_fork_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
+            { "id": "message_fixture_fork_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+          ],
+          "createdAt": "2026-08-18T19:05:00.000Z",
+          "updatedAt": "2026-08-18T19:05:00.000Z",
+          "revision": "chat_revision_fork_1",
+          "forkedFrom": {
+            "chatId": "chat_fixture_source_01",
+            "messageId": "message_fixture_source_assistant_01",
+            "position": "after",
+            "at": "2026-08-18T19:05:00.000Z",
+            "summary": { "state": "pending", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions" }
+          }
+        }
+      }
+    },
+    "editFork": {
+      "request": { "messageId": "message_fixture_source_user_02", "position": "before" },
+      "response": {
+        "chat": {
+          "id": "chat_fixture_fork_02",
+          "workspaceId": "workspace_fixture_01",
+          "title": "Remote protocol review",
+          "providerId": "provider_fixture",
+          "modelId": "model_fixture",
+          "messages": [
+            { "id": "message_fixture_edit_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
+            { "id": "message_fixture_edit_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+          ],
+          "createdAt": "2026-08-18T19:06:00.000Z",
+          "updatedAt": "2026-08-18T19:06:00.000Z",
+          "revision": "chat_revision_fork_2",
+          "forkedFrom": { "chatId": "chat_fixture_source_01", "messageId": "message_fixture_source_user_02", "position": "before", "at": "2026-08-18T19:06:00.000Z" }
+        },
+        "prefill": {
+          "text": "Now check the error codes.",
+          "attachments": [
+            { "id": "att_fixture_fork_codes_000000000000000000000000", "name": "codes.txt", "mimeType": "text/plain", "kind": "text", "size": 42, "expiresAt": "2026-08-18T19:16:00.000Z" }
+          ]
+        }
+      }
+    },
+    "summaryStates": [
+      { "state": "ready", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "text": "The review settled on revision 21 and kept every route additive." },
+      { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
+    ],
+    "summaryCancel": { "cancelled": true }
+  },
+  "mobileSimulators": {
+    "feature": "mobile-simulators-v1",
+    "capability": "simulators:mobile",
+    "listing": {
+      "sharing": true,
+      "status": "ready",
+      "devices": [
+        { "id": "5A0C1F3E-0000-4000-8000-000000000001", "name": "iPhone 17 Pro", "platform": "ios", "version": "26.0", "booted": true, "kind": "iphone" },
+        { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": false, "kind": "ipad" },
+        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" },
+        { "id": "Pixel_9_API_35", "name": "Pixel 9 API 35", "platform": "android", "version": "15", "booted": false, "kind": "other" }
+      ],
+      "chatDeviceIds": ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554"],
+      "toolVersions": { "hub": "0.12.0", "agent": "0.21.12" }
+    },
+    "sharingOff": { "sharing": false, "status": "ready", "devices": [] },
+    "openResponse": { "device": { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": true, "kind": "ipad" } },
+    "shutdownResponse": { "ok": true },
+    "hubRoutes": {
+      "mjpeg": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/stream.mjpeg",
+      "config": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/config",
+      "input": "/simulators/hub/vendor/serve-sim/helper/ws?device={deviceId}"
+    },
+    "inputMessages": [
+      { "command": { "kind": "hardwareKeyboard", "enabled": false }, "tag": 13, "payload": { "enabled": false } },
+      { "command": { "kind": "touch", "phase": "begin", "x": 0.25, "y": 0.75 }, "tag": 3, "payload": { "type": "begin", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "move", "x": 0.75, "y": 0.75 } },
+      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_right" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait_upside_down" }, "tag": 3, "payload": { "type": "end", "x": 0.75, "y": 0.25 } },
+      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "end", "x": 0.25, "y": 0.75 } },
+      { "command": { "kind": "button", "button": "home" }, "tag": 4, "payload": { "button": "home" } },
+      { "command": { "kind": "button", "button": "lock" }, "tag": 4, "payload": { "button": "lock" } },
+      { "command": { "kind": "button", "button": "appSwitcher" }, "tag": 4, "payload": { "button": "app_switcher" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 7, "payload": { "orientation": "landscape_left" } },
+      { "command": { "kind": "rotate" }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_right" }, "tag": 7, "payload": { "orientation": "portrait" } },
+      { "command": { "kind": "rotate" }, "tag": 7, "payload": { "orientation": "landscape_left" } }
+    ],
+    "screenConfigs": [
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "portrait" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" } },
+      { "tag": 130, "payload": { "width": 2622, "height": 1206, "orientation": "landscape_left", "screenId": 1, "futureField": true }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" } },
+      { "tag": 130, "payload": { "width": 0, "height": 2622, "orientation": "portrait" }, "screen": null },
+      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "sideways" }, "screen": null },
+      { "tag": 144, "payload": { "requestId": 1, "ok": true }, "screen": null }
+    ],
+    "mjpeg": {
+      "contentType": "multipart/x-mixed-replace; boundary=frame",
+      "streamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQpDb250ZW50LUxlbmd0aDogMTQNCg0K/9j/4AAQSkZJRgAB/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KQ29udGVudC1MZW5ndGg6IDE1DQoNCv/Y/9sNCi0tZnJhbWX/2Q0K",
+      "framesBase64": ["/9j/4AAQSkZJRgAB/9k=", "/9j/2w0KLS1mcmFtZf/Z"],
+      "unlengthedStreamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQoNCv/YAQID/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KDQr/2AQF/9kNCi0tZnJhbWUNCg==",
+      "unlengthedFramesBase64": ["/9gBAgP/2Q==", "/9gEBf/Z"]
+    },
+    "refusal": {
+      "error": {
+        "code": "capability_denied",
+        "message": "Phones can watch, tap, and shut down shared simulators, but not change their settings.",
+        "requestId": "request_fixture_sim_01",
+        "retryable": false
+      }
+    }
+  },
+  "botAvatarPalette": {"face":"#292735","colors":{"lilac":"#C6A9FF","sky":"#83D8FF","mint":"#88E8B1","sun":"#FFDA7B","periwinkle":"#B2BCFF","coral":"#FF9F9B","peach":"#FFC294","aqua":"#78E8DF","rose":"#FFA3C7","lime":"#C6EC7E","plum":"#DDA8F2","graphite":"#C5C5CE"}},
+  "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}],
+  "botMemory": {
+    "botId": "bot_fixture_01",
+    "revision": "9f2c1a0b7d3e4f51",
+    "readable": true,
+    "memory": {
+      "entries": [
+        {
+          "id": "a1b2c3d4e5f60718",
+          "text": "Weekly meal plan is vegetarian except Fridays."
+        }
+      ],
+      "usedChars": 46,
+      "limitChars": 2200,
+      "overBudget": false
+    },
+    "user": {
+      "entries": [
+        {
+          "id": "0f1e2d3c4b5a6978",
+          "text": "Prefers short answers."
+        },
+        {
+          "id": "1122334455667788",
+          "text": "Has two kids, Mia (8) and Leo (5)."
+        }
+      ],
+      "usedChars": 58,
+      "limitChars": 1375,
+      "overBudget": false
+    },
+    "updatedAt": "2026-08-19T15:00:00.000Z"
+  },
+  "botMemoryEdit": {
+    "request": {
+      "edit": {
+        "kind": "replace",
+        "target": "user",
+        "entryId": "0f1e2d3c4b5a6978",
+        "text": "Prefers short, friendly answers."
+      }
+    },
+    "response": {
+      "ok": true,
+      "view": {
+        "botId": "bot_fixture_01",
+        "revision": "7a7a7a7a7a7a7a7a",
+        "readable": true,
+        "memory": {
+          "entries": [
+            {
+              "id": "a1b2c3d4e5f60718",
+              "text": "Weekly meal plan is vegetarian except Fridays."
+            }
+          ],
+          "usedChars": 46,
+          "limitChars": 2200,
+          "overBudget": false
+        },
+        "user": {
+          "entries": [
+            {
+              "id": "5e5e5e5e5e5e5e5e",
+              "text": "Prefers short, friendly answers."
+            },
+            {
+              "id": "1122334455667788",
+              "text": "Has two kids, Mia (8) and Leo (5)."
+            }
+          ],
+          "usedChars": 68,
+          "limitChars": 1375,
+          "overBudget": false
+        },
+        "updatedAt": "2026-08-19T15:05:00.000Z"
+      }
+    },
+    "errors": [
+      {
+        "status": 404,
+        "code": "memory_entry_not_found"
+      },
+      {
+        "status": 422,
+        "code": "memory_over_budget"
+      },
+      {
+        "status": 422,
+        "code": "memory_blocked"
+      }
+    ]
+  },
+  "botRoutineProposalRespond": {
+    "request": {
+      "decision": "accept"
+    },
+    "response": {
+      "status": "accepted",
+      "routineId": "task_fixture_routine_03"
+    }
+  },
+  "botRoutineSuggestions": {
+    "suggestions": [
+      {
+        "id": "daily-check-in",
+        "name": "Daily check-in",
+        "prompt": "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
+        "schedule": {
+          "kind": "daily",
+          "time": "09:00"
+        },
+        "label": "Every day at 9:00 AM"
+      }
+    ]
+  },
+  "botRoutineNotifications": {
+    "notifications": [
+      {
+        "id": "run_fixture_bot_01",
+        "botId": "bot_fixture_01",
+        "botName": "Scout",
+        "routineId": "task_fixture_routine_01",
+        "routineName": "Morning brief",
+        "status": "succeeded",
+        "finishedAt": "2026-08-19T15:00:09.000Z",
+        "preview": "Your first meeting is at 9:30 with Priya."
+      }
+    ],
+    "now": "2026-08-19T15:01:00.000Z"
+  },
+  "botSessionCards": {
+    "botId": "bot_fixture_01",
+    "epoch": "epoch_fixture_01",
+    "seq": 3,
+    "state": "idle",
+    "interrupted": false,
+    "entries": [
+      {
+        "type": "memory_update",
+        "id": "entry_20",
+        "createdAt": "2026-08-19T15:02:00.000Z"
+      },
+      {
+        "type": "routine_proposal",
+        "id": "entry_21",
+        "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
+        "name": "Daily check-in",
+        "prompt": "Check in briefly…",
+        "label": "Every day at 9:00 AM",
+        "status": "pending",
+        "createdAt": "2026-08-19T15:02:05.000Z"
+      },
+      {
+        "type": "routine_proposal",
+        "id": "entry_22",
+        "proposalId": "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
+        "name": "Weekly meal plan",
+        "prompt": "Plan this week's meals.",
+        "label": "Every Sunday at 9:00 AM",
+        "status": "accepted",
+        "routineId": "task_fixture_routine_02",
+        "createdAt": "2026-08-19T15:03:00.000Z"
+      }
+    ],
+    "hasOlder": false,
+    "question": null,
+    "approval": null
+  },
+  "botActivity": {
+    "phases": [
+      { "id": "preparing", "word": "Getting ready", "mark": "bounce" },
+      { "id": "thinking", "word": "Thinking", "mark": "tri-step" },
+      { "id": "reading", "word": "Reading", "mark": "scan-grid" },
+      { "id": "photo", "word": "Looking at your photo", "mark": "scan-grid" },
+      { "id": "searching", "word": "Searching the web", "mark": "scan-grid" },
+      { "id": "command", "word": "Running a command", "mark": "quad-shuffle" },
+      { "id": "editing", "word": "Editing files", "mark": "quad-shuffle" },
+      { "id": "app", "word": "Using an app", "mark": "quad-shuffle" },
+      { "id": "helper", "word": "Asking a helper", "mark": "quad-shuffle" },
+      { "id": "computer", "word": "Using your Mac", "mark": "quad-shuffle" },
+      { "id": "remembering", "word": "Remembering", "mark": "compose" },
+      { "id": "routine", "word": "Setting up a routine", "mark": "tri-step" },
+      { "id": "working", "word": "Working", "mark": "quad-shuffle" },
+      { "id": "writing", "word": "Writing", "mark": "compose" },
+      { "id": "waiting", "word": "Waiting for you", "mark": "glance" },
+      { "id": "tidying", "word": "Tidying up its notes", "mark": "bounce" },
+      { "id": "stopping", "word": "Stopping", "mark": "bounce" },
+      { "id": "resuming", "word": "Picking up where it left off", "mark": "bounce" },
+      { "id": "reconnecting", "word": "Reconnecting to your Mac", "mark": "bounce" }
+    ],
+    "thinkingKeeps": ["waiting", "stopping", "reconnecting"],
+    "app": { "app": "Notion", "word": "Using Notion" },
+    "elapsed": [
+      { "startedAt": 1760450000000, "now": 1760450019999, "label": null },
+      { "startedAt": 1760450000000, "now": 1760450020000, "label": "20s" },
+      { "startedAt": 1760450000000, "now": 1760450072000, "label": "1m 12s" },
+      { "startedAt": 1760450000000, "now": 1760450120000, "label": "2m" },
+      { "startedAt": 1760450000000, "now": 1760453720000, "label": "1h 2m" },
+      { "startedAt": 1760450060000, "now": 1760450000000, "label": null }
+    ],
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_02",
+      "seq": 7,
+      "state": "running",
+      "interrupted": false,
+      "entries": [
+        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
+      ],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+      "queued": [
+        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
+        { "submissionId": "19", "mode": "steer", "text": "Keep it vegetarian." }
+      ]
+    },
+    "events": [
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 8, "type": "activity", "payload": { "activity": { "phase": "searching", "startedAt": 1760450000000 } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": [ { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." } ] } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 10, "type": "activity", "payload": { "activity": { "phase": "teleporting", "startedAt": 1760450000000 } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 11, "type": "activity", "payload": { "activity": null } }
+    ],
+    "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z", "submissionId": "18" } } },
+    "detail": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+      "health": "ready",
+      "sessionState": "running",
+      "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+      "chatActivity": { "level": "summary", "wording": "thinking" },
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T18:46:00.000Z",
+      "revision": "bot_revision_8"
+    },
+    "identityPatch": {
+      "request": { "chatActivity": { "level": "detailed", "wording": "follows" } },
+      "response": {
+        "id": "bot_fixture_01",
+        "name": "Scout",
+        "purpose": "Finds the signal in a busy week",
+        "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+        "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+        "health": "ready",
+        "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+        "chatActivity": { "level": "detailed", "wording": "follows" },
+        "createdAt": "2026-08-18T17:00:00.000Z",
+        "updatedAt": "2026-08-18T18:47:00.000Z",
+        "revision": "bot_revision_9"
+      }
+    },
+    "send": {
+      "request": { "text": "Keep it vegetarian.", "whenBusy": "steer" },
+      "response": { "submissionId": "19", "deduped": false, "state": "running", "interrupted": false }
+    }
+  },
+  "botActivityPrivacy": {
+    "note": "Every decoder must refuse each sample: only phase, app and startedAt cross the wire.",
+    "nonHolder": {
+      "note": "The same session and entry frame as botActivity, as a device without bot:activity receives them: no activity or queued keys, and no submissionId on any entry.",
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 7,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z" }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z" } } }
+    },
+    "rejectedSubmissionIdEntries": [
+      { "type": "message", "id": "entry_31", "role": "assistant", "text": "Here is a plan.", "submissionId": "17" },
+      { "type": "message", "id": "entry_33", "role": "user", "text": "Check my inbox.", "label": "Morning brief", "submissionId": "21" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "17 18" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcde" },
+      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": 17 }
+    ],
+    "rejectedActivities": [
+      { "phase": "command", "startedAt": 1760450000000, "detail": "cat ~/Documents/plan.md" },
+      { "phase": "reading", "startedAt": 1760450000000, "step": { "kind": "reading", "label": "Reading", "detail": "plan.md" } },
+      { "phase": "reading", "startedAt": 1760450000000, "path": "~/Documents/plan.md" },
+      { "phase": "command", "startedAt": 1760450000000, "command": "ls ~/Documents" },
+      { "phase": "searching", "startedAt": 1760450000000, "query": "dinner ideas near me" },
+      { "phase": "thinking", "startedAt": 1760450000000, "thinking": "The person wants a plan." },
+      { "phase": "app", "app": "abcdefghijabcdefghijabcdefghijabcdefghijX", "startedAt": 1760450000000 },
+      { "phase": "Reading!", "startedAt": 1760450000000 },
+      { "phase": "thinking", "startedAt": -1 },
+      { "phase": "thinking", "startedAt": "1760450000000" },
+      { "phase": "thinking", "startedAt": 1.5 },
+      { "phase": "thinking", "startedAt": 9007199254740992 },
+      { "startedAt": 1760450000000 }
+    ],
+    "rejectedQueued": [
+      { "submissionId": "18", "mode": "followUp", "text": "Also add a shopping list." },
+      { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list.", "images": 1 },
+      { "submissionId": "18 19", "mode": "queue", "text": "Also add a shopping list." }
+    ],
+    "rejectedQueuedLists": [
+      [
+        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
+        { "submissionId": "18", "mode": "steer", "text": "Keep it vegetarian." }
+      ],
+      [
+        { "submissionId": "1", "mode": "queue", "text": "x" },
+        { "submissionId": "2", "mode": "queue", "text": "x" },
+        { "submissionId": "3", "mode": "queue", "text": "x" },
+        { "submissionId": "4", "mode": "queue", "text": "x" },
+        { "submissionId": "5", "mode": "queue", "text": "x" },
+        { "submissionId": "6", "mode": "queue", "text": "x" },
+        { "submissionId": "7", "mode": "queue", "text": "x" },
+        { "submissionId": "8", "mode": "queue", "text": "x" },
+        { "submissionId": "9", "mode": "queue", "text": "x" },
+        { "submissionId": "10", "mode": "queue", "text": "x" },
+        { "submissionId": "11", "mode": "queue", "text": "x" },
+        { "submissionId": "12", "mode": "queue", "text": "x" },
+        { "submissionId": "13", "mode": "queue", "text": "x" },
+        { "submissionId": "14", "mode": "queue", "text": "x" },
+        { "submissionId": "15", "mode": "queue", "text": "x" },
+        { "submissionId": "16", "mode": "queue", "text": "x" },
+        { "submissionId": "17", "mode": "queue", "text": "x" },
+        { "submissionId": "18", "mode": "queue", "text": "x" },
+        { "submissionId": "19", "mode": "queue", "text": "x" },
+        { "submissionId": "20", "mode": "queue", "text": "x" },
+        { "submissionId": "21", "mode": "queue", "text": "x" }
+      ]
+    ],
+    "textBounds": {
+      "note": "Each entry is `count` repetitions of `unit`; counts are Unicode code points, so an astral emoji counts once. Rejected entries must be refused and accepted entries must decode unchanged.",
+      "queuedText": {
+        "rejected": [
+          { "unit": "x", "count": 0 },
+          { "unit": "😀", "count": 32001 }
+        ],
+        "accepted": [
+          { "unit": "x", "count": 1 },
+          { "unit": "😀", "count": 32000 }
+        ]
+      },
+      "app": {
+        "rejected": [
+          { "unit": "😀", "count": 41 }
+        ],
+        "accepted": [
+          { "unit": "😀", "count": 40 }
+        ]
+      }
+    },
+    "rejectedChatActivity": [
+      { "level": "verbose", "wording": "follows" },
+      { "level": "quiet" },
+      { "level": "quiet", "wording": "follows", "extra": true }
+    ],
+    "rejectedNullLiterals": {
+      "note": "An optional key sent as the literal null is refused, never read as absent. Every decoder must refuse each sample.",
+      "activities": [
+        { "phase": "app", "app": null, "startedAt": 1760450000000 }
+      ],
+      "sessions": [
+        {
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_02",
+          "seq": 7,
+          "state": "running",
+          "interrupted": false,
+          "entries": [
+            { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
+          ],
+          "hasOlder": false,
+          "question": null,
+          "approval": null,
+          "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+          "queued": null
+        }
+      ],
+      "events": [
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": null } }
+      ],
+      "entries": [
+        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "label": null, "submissionId": "17" }
+      ]
     }
   }
 }

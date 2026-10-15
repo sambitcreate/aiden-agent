@@ -1,0 +1,20 @@
+{
+  "tasks": [
+    {
+      "id": 3,
+      "subject": "Preserve legacy None",
+      "status": "completed"
+    },
+    {
+      "id": 8,
+      "subject": "Trim outer whitespace",
+      "status": "pending"
+    },
+    {
+      "id": 12,
+      "subject": "Reject blank labels",
+      "status": "pending"
+    }
+  ],
+  "nextId": 13
+}

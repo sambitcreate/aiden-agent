@@ -15,20 +15,21 @@ import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
 import {
   buildGeminiTranscriptionRequest,
+  buildOpenAITranscriptionForm,
+  createCloudTranscriber,
+  createTranscribeRouter,
   GEMINI_INTERACTIONS_ENDPOINT,
   parseGeminiTranscriptionResponse,
+  startTranscriptionDeadline,
+  type TranscribeInput,
 } from "./transcription-core.js";
+import { transcribeLocalOggOpus } from "./local-speech.js";
+import { resolveVoiceProviderNow } from "./voice-provider-resolution.js";
+import { cloudLanguageHint } from "../../renderer/shared/voice-language.js";
 import {
   GEMINI_TRANSCRIPTION_MODEL,
   resolveCloudVoiceModel,
 } from "../../renderer/shared/voice-models.js";
-
-interface TranscribeInput {
-  audioBase64: string;
-  mimeType: string;
-  model?: string;
-  signal?: AbortSignal;
-}
 
 export async function recordTranscription(input: {
   provider: StoredProvider;
@@ -78,46 +79,56 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
   const model = resolveCloudVoiceModel("openai", input.model ?? settings.voiceModel);
 
   const bytes = Buffer.from(input.audioBase64, "base64");
-  const form = new FormData();
-  form.append("file", new Blob([bytes], { type: input.mimeType || "audio/webm" }), "audio.webm");
-  form.append("model", model);
+  const form = buildOpenAITranscriptionForm({
+    bytes,
+    mimeType: input.mimeType,
+    model,
+    language: cloudLanguageHint(settings.voiceLanguage),
+  });
 
-  let response: Response;
+  const deadline = startTranscriptionDeadline(bytes.byteLength, input.signal);
   try {
-    response = await fetch(`${baseUrl}/audio/transcriptions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-      signal: input.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}` },
+        body: form,
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      await recordTranscription({ provider, model, status: "failed" });
+      throw new Error(
+        `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+      );
+    }
+    try {
+      const decoded: unknown = await response.json();
+      const data =
+        decoded && typeof decoded === "object"
+          ? (decoded as { text?: unknown; usage?: unknown })
+          : {};
+      const text = typeof data.text === "string" ? data.text.trim() : "";
+      await recordTranscription({
+        provider,
+        model,
+        status: "completed",
+        tokens: openAITranscriptionTokens(data.usage),
+      });
+      return text;
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
   } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
-  }
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    await recordTranscription({ provider, model, status: "failed" });
-    throw new Error(
-      `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-    );
-  }
-  try {
-    const decoded: unknown = await response.json();
-    const data =
-      decoded && typeof decoded === "object"
-        ? (decoded as { text?: unknown; usage?: unknown })
-        : {};
-    const text = typeof data.text === "string" ? data.text.trim() : "";
-    await recordTranscription({
-      provider,
-      model,
-      status: "completed",
-      tokens: openAITranscriptionTokens(data.usage),
-    });
-    return text;
-  } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
+    throw deadline.failure(error);
+  } finally {
+    deadline.dispose();
   }
 }
 
@@ -130,52 +141,105 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
   const model = GEMINI_TRANSCRIPTION_MODEL;
   const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
+  const language = cloudLanguageHint((await configStore.getSettings()).voiceLanguage);
 
-  let response: Response;
+  const deadline = startTranscriptionDeadline(
+    Math.floor((input.audioBase64.length * 3) / 4),
+    input.signal,
+  );
   try {
-    response = await fetch(GEMINI_INTERACTIONS_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": key,
-      },
-      body: JSON.stringify(
-        buildGeminiTranscriptionRequest({
-          audioBase64: input.audioBase64,
-          mimeType: input.mimeType,
-          model,
-        }),
-      ),
-      signal: input.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(GEMINI_INTERACTIONS_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": key,
+        },
+        body: JSON.stringify(
+          buildGeminiTranscriptionRequest({
+            audioBase64: input.audioBase64,
+            mimeType: input.mimeType,
+            model,
+            language,
+          }),
+        ),
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      await recordTranscription({ provider, model, status: "failed" });
+      throw new Error(
+        `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+      );
+    }
+    try {
+      const data = parseGeminiTranscriptionResponse(await response.json());
+      await recordTranscription({
+        provider,
+        model,
+        status: "completed",
+        tokens: geminiTranscriptionTokens(data.usage),
+      });
+      return data.text;
+    } catch (error) {
+      await recordTranscription({ provider, model, status: "failed" });
+      throw error;
+    }
   } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
-    throw error;
+    throw deadline.failure(error);
+  } finally {
+    deadline.dispose();
   }
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    await recordTranscription({ provider, model, status: "failed" });
-    throw new Error(
-      `Transcription failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+}
+
+/**
+ * Cloud transcription of renderer-recorded audio. The renderer's provider must
+ * match what main resolves now (see createCloudTranscriber).
+ */
+export const transcribeCloud = createCloudTranscriber({
+  resolve: resolveVoiceProviderNow,
+  openai: transcribeOpenAI,
+  gemini: transcribeGemini,
+});
+
+async function transcribeLocalVoiceNote(
+  bytes: Uint8Array,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const record = (status: "completed" | "failed") =>
+    usageStore.record(
+      unreportedUsageRecord({
+        source: "voice-transcription",
+        providerId: "local-voice",
+        providerLabel: "On-device voice",
+        modelId,
+        local: true,
+        status,
+      }),
     );
-  }
   try {
-    const data = parseGeminiTranscriptionResponse(await response.json());
-    await recordTranscription({
-      provider,
-      model,
-      status: "completed",
-      tokens: geminiTranscriptionTokens(data.usage),
-    });
-    return data.text;
+    const text = await transcribeLocalOggOpus(bytes, modelId, signal);
+    await record("completed");
+    return text;
   } catch (error) {
-    await recordTranscription({ provider, model, status: "failed" });
+    await record("failed");
     throw error;
   }
 }
 
-export async function transcribe(input: TranscribeInput): Promise<string> {
-  const settings = await configStore.getSettings();
-  const provider = settings.voiceProvider ?? "openai";
-  return provider === "gemini" ? transcribeGemini(input) : transcribeOpenAI(input);
-}
+/**
+ * Transcribes encoded audio (Telegram voice notes) with the resolved voice
+ * provider, on-device first.
+ */
+export const transcribe = createTranscribeRouter({
+  resolve: resolveVoiceProviderNow,
+  local: { oggOpus: transcribeLocalVoiceNote },
+  openai: transcribeOpenAI,
+  gemini: transcribeGemini,
+});

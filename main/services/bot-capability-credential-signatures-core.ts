@@ -1,7 +1,11 @@
 import { createHmac } from "node:crypto";
 import type { Credential } from "@earendil-works/pi-ai";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
-import type { Provider } from "./types.js";
+import { mcpAuthorityConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpOAuthGrantIdentity, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
+import { piCredentialGrantIdentity } from "./pi-credential-store-core.js";
+import type { McpServer, Provider } from "./types.js";
 
 export interface BotProviderCredentialSignatureDependencies {
   readBuiltinCredential(providerId: string): Promise<Credential | undefined>;
@@ -46,7 +50,9 @@ export function createBotProviderCredentialSignatureCore(
           !stored ||
           (stored.type === "api_key" && !stored.key?.trim())
         ) return undefined;
-        credential = { source: "stored", value: stored };
+        // OAuth subscription logins refresh their access token in place; sign
+        // the grant, not the token, so a refresh is not a credential change.
+        credential = { source: "stored", value: piCredentialGrantIdentity(stored) };
       } else {
         credential = { source: "keyless", value: null };
       }
@@ -59,5 +65,63 @@ export function createBotProviderCredentialSignatureCore(
       connection: providerConnectionSnapshot(provider),
       credential: credential ?? null,
     });
+  };
+}
+
+/**
+ * MCP connection authority: server config (stdio env, headers), a preset API
+ * key, and the OAuth grant identity. OAuth access tokens and expiry are left
+ * out so a routine refresh keeps the same credential incarnation; see
+ * `mcpOAuthGrantIdentity` for what does change it.
+ */
+export function botMcpCredentialSignatureCore(
+  key: Uint8Array,
+  input: {
+    server: McpServer;
+    presetKey: unknown;
+    /** `"unreadable"`: a saved sign-in exists but secure storage cannot read it. */
+    oauthSession: McpOAuthSession | "unreadable" | null;
+  },
+): string {
+  return botCredentialSignature(key, "mcp", {
+    // Display fields are not credentials: a rename keeps the incarnation.
+    server: mcpAuthorityConnectionSnapshot(input.server),
+    presetKey: input.presetKey,
+    oauthSession:
+      input.oauthSession === "unreadable"
+        ? { unreadable: true }
+        : input.oauthSession
+          ? mcpOAuthGrantIdentity(input.oauthSession)
+          : null,
+  });
+}
+
+export interface BotMcpCredentialSignatureDependencies {
+  readPresetKey(server: McpServer): Promise<unknown>;
+  readOAuthSession(serverId: string): Promise<McpOAuthSession>;
+}
+
+/**
+ * Signatures are computed for every configured server at once, so one saved
+ * sign-in that secure storage cannot read must not fail the others. It signs
+ * as a distinct "unreadable" credential: never the previous grant's identity,
+ * so no Bot grant made against that grant stays valid, and the server's own
+ * connection still reports the storage error when it tries to use it.
+ */
+export function createBotMcpCredentialSignatureCore(
+  dependencies: BotMcpCredentialSignatureDependencies,
+) {
+  return async (server: McpServer, key: Uint8Array): Promise<string> => {
+    const presetKey = await dependencies.readPresetKey(server);
+    let oauthSession: McpOAuthSession | "unreadable" | null = null;
+    if (server.oauth) {
+      try {
+        oauthSession = await dependencies.readOAuthSession(server.id);
+      } catch (error) {
+        if (!(error instanceof McpOAuthCredentialStorageError)) throw error;
+        oauthSession = "unreadable";
+      }
+    }
+    return botMcpCredentialSignatureCore(key, { server, presetKey, oauthSession });
   };
 }

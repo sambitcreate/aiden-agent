@@ -13,7 +13,12 @@ data class AidenRemoteErrorEnvelope(
         val chatId: String? = null,
         val minimumClientVersion: String? = null,
         val limit: Int? = null,
-        val field: String? = null
+        val field: String? = null,
+        /** The winning decision a run-control loser receives with `approval_resolved`. */
+        val decision: String? = null,
+        /** The winning outcome a run-control loser receives with `question_already_resolved`. */
+        val outcome: String? = null,
+        val resolvedAt: String? = null
     )
 
     @Serializable

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CHAT_SESSION_ID_LIMITS,
@@ -9,22 +8,48 @@ import {
 } from "./chat-session-params.js";
 
 test("session command parsers accept only exact bounded chat selectors", () => {
-  assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1" }), {
-    chatId: "chat-1",
-    throughMessageId: undefined,
-  });
+  assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
+  // The legacy selector still means "fork after this reply".
   assert.deepEqual(parseChatCopyRequest({ chatId: "chat-1", throughMessageId: "message-1" }), {
     chatId: "chat-1",
-    throughMessageId: "message-1",
+    forkAt: { messageId: "message-1", position: "after" },
   });
+  for (const position of ["after", "before"] as const) {
+    assert.deepEqual(
+      parseChatCopyRequest({ chatId: "chat-1", messageId: "message-1", position }),
+      { chatId: "chat-1", forkAt: { messageId: "message-1", position } },
+    );
+  }
+  // A fork may ask for a summary; blank focus means no focus.
+  assert.deepEqual(
+    parseChatCopyRequest({
+      chatId: "chat-1", messageId: "message-1", position: "after", summary: { instructions: "  tests  " },
+    }),
+    { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: { instructions: "tests" } },
+  );
+  assert.deepEqual(
+    parseChatCopyRequest({ chatId: "chat-1", throughMessageId: "message-1", summary: { instructions: " " } }),
+    { chatId: "chat-1", forkAt: { messageId: "message-1", position: "after" }, summary: {} },
+  );
   assert.deepEqual(parseChatOnlyRequest({ chatId: "chat-1" }), { chatId: "chat-1" });
   for (const invalid of [
+    { chatId: "chat", summary: {} },
+    { chatId: "chat", messageId: "m", position: "after", summary: true },
+    { chatId: "chat", messageId: "m", position: "after", summary: { instructions: 1 } },
+    { chatId: "chat", messageId: "m", position: "after", summary: { focus: "x" } },
+    { chatId: "chat", messageId: "m", position: "after", summary: { instructions: "x".repeat(1_001) } },
     null,
     {},
     { chatId: "" },
     { chatId: "chat", path: "/tmp/private" },
     { chatId: "x".repeat(CHAT_SESSION_ID_LIMITS.chatCharacters + 1) },
     { chatId: "chat", throughMessageId: "" },
+    { chatId: "chat", messageId: "message-1" },
+    { chatId: "chat", position: "after" },
+    { chatId: "chat", messageId: "message-1", position: "at" },
+    { chatId: "chat", messageId: "", position: "before" },
+    { chatId: "chat", throughMessageId: "message-1", messageId: "message-1", position: "after" },
+    { chatId: "chat", throughMessageId: "message-1", position: "before" },
   ]) {
     assert.throws(() => parseChatCopyRequest(invalid));
   }
@@ -40,17 +65,6 @@ test("session command exact-key rejection stays bounded for hostile fields", () 
     Array.from({ length: 10_000 }, (_, index) => [`extra${index}`, true]),
   );
   assert.throws(() => parseChatOnlyRequest({ chatId: "chat", ...many }));
-});
-
-test("copied chat metadata uses the renderer notification contract", () => {
-  const handlers = readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
-  const broadcast = handlers.slice(
-    handlers.indexOf('ipcMain.broadcast("chats:metadata-updated"'),
-    handlers.indexOf("return copied;", handlers.indexOf('ipcMain.broadcast("chats:metadata-updated"')),
-  );
-  assert.match(broadcast, /chatId: copied\.id/u);
-  assert.match(broadcast, /title: copied\.title/u);
-  assert.doesNotMatch(broadcast, /\bid: copied\.id/u);
 });
 
 test("context pressure requests accept a bounded optional draft", () => {

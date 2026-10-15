@@ -2,7 +2,9 @@ package sbtbiswas.AidenOnTheGo.features.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenAttachmentKind
@@ -36,6 +38,29 @@ class AidenImageCarouselTest {
     }
 
     @Test
+    fun deckCountPillShowsOneBasedPositionOnlyForMultiImageDecks() {
+        assertNull(AidenImageCountBadge.label(0, 0))
+        assertNull(AidenImageCountBadge.label(0, 1))
+        assertEquals("1 / 4", AidenImageCountBadge.label(0, 4))
+        assertEquals("4 / 4", AidenImageCountBadge.label(3, 4))
+        // A stale selection after attachments shrink never reads past the end.
+        assertEquals("2 / 2", AidenImageCountBadge.label(5, 2))
+        assertEquals("1 / 2", AidenImageCountBadge.label(-1, 2))
+    }
+
+    @Test
+    fun galleryPageIndicatorStretchesExactlyOneDotWithoutChangingRowWidth() {
+        val pages = 5
+        val totals = (0 until pages).map { selected ->
+            val widths = (0 until pages).map { AidenImageCountBadge.dotWidth(it, selected) }
+            assertEquals(1, widths.count { it > AidenImageCountBadge.DotSize })
+            assertEquals(AidenImageCountBadge.ActiveDotWidth, widths[selected])
+            widths.fold(0.dp) { sum, width -> sum + width }
+        }
+        assertEquals(1, totals.toSet().size)
+    }
+
+    @Test
     fun imageAdmissionRejectsDuplicatesUnsupportedTypesAndOversize() {
         val valid = attachment("one", "image/png", AidenAttachmentKind.IMAGE, 1024)
         val duplicate = attachment("dupe", "image/jpeg", AidenAttachmentKind.IMAGE, 2048)
@@ -59,6 +84,27 @@ class AidenImageCarouselTest {
             aidenAttachmentThumbnailCacheKey(data, 960),
             aidenAttachmentThumbnailCacheKey(data, 2_560)
         )
+    }
+
+    @Test
+    fun visualSnapshotFrameTakesTheDecodedImagesOwnShape() {
+        // A 720×1200 CSS visual captured at 2x: the frame is as tall as the image, never a 4:3 box.
+        val tall = AidenVisualSnapshotFrame.aspectRatio(imageWidth = 1_440, imageHeight = 2_400, wide = false)
+        assertEquals(0.6f, tall, 0.0001f)
+        // Full width on a 360dp phone column gives a 600dp-tall row, so the image fills it with no letterbox.
+        assertEquals(600f, 360f / tall, 0.01f)
+        // A wide layout follows the image too, once it is known.
+        assertEquals(2f, AidenVisualSnapshotFrame.aspectRatio(2_000, 1_000, wide = true), 0.0001f)
+        assertEquals(2f, AidenVisualSnapshotFrame.aspectRatio(2_000, 1_000, wide = false), 0.0001f)
+    }
+
+    @Test
+    fun visualSnapshotFrameHoldsAPlaceholderShapeUntilTheImageDecodes() {
+        assertEquals(4f / 3f, AidenVisualSnapshotFrame.aspectRatio(null, null, wide = false), 0.0001f)
+        assertEquals(16f / 9f, AidenVisualSnapshotFrame.aspectRatio(null, null, wide = true), 0.0001f)
+        // Unusable dimensions are treated as undecoded.
+        assertEquals(4f / 3f, AidenVisualSnapshotFrame.aspectRatio(0, 800, wide = false), 0.0001f)
+        assertEquals(16f / 9f, AidenVisualSnapshotFrame.aspectRatio(800, -1, wide = true), 0.0001f)
     }
 
     private fun attachment(

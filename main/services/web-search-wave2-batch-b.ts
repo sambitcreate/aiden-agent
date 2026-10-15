@@ -24,7 +24,3 @@ export const WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES: Readonly<
   ollama: ollamaCloudWebSearchAdapterFactory,
   serper: serperWebSearchAdapterFactory,
 });
-
-/** Alias for integrations that name the map by its wave rather than batch. */
-export const WEB_SEARCH_WAVE2_ADAPTER_FACTORIES_BATCH_B =
-  WEB_SEARCH_WAVE2_BATCH_B_ADAPTER_FACTORIES;

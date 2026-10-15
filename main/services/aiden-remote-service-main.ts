@@ -1,18 +1,31 @@
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
+import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
+import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialRotation } from "./provider-credential-rotation.js";
+import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
+import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
+import { chatForkService } from "./chat-fork-service-main.js";
+import { forkSummaryService } from "./fork-summary-service-main.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, ipcMain, logger } from "../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification, onBroadcast } from "../platform.js";
+import { isAuxiliaryWindow } from "../windows/auxiliary-windows.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { recordRemoteRequestHealth } from "./diagnostic-health.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
 import { DataStore } from "./data-store.js";
+import {
+  aidenPairingRequestHostNoun,
+  createAidenPairingRequestNotifier,
+  createAidenPairingRequestSettingsStore,
+} from "./aiden-remote-pairing-request-host.js";
 import {
   AidenRemoteService,
   createAidenRemoteBonjourPublisher,
@@ -78,7 +91,6 @@ import { llmClient } from "./llm-client.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
 import { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
-import { createBotArchivedFileReadAuthority } from "./bot-archived-file-read-authority.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "./aiden-remote-workspace-owners.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
 import { workspaceWorktreeApplicationService } from "./workspace-worktree-application-service-main.js";
@@ -101,9 +113,25 @@ import { usageStore } from "./usage-store.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
+import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
+import { openConnectionSetup } from "./bot-connection-setup.js";
+import { botRoutineService } from "./scheduled-bot-routines-main.js";
+import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { botMemoryService } from "./bot-memory/bot-memory-main.js";
+import { botRoutineProposals } from "./bot-routine-proposals-main.js";
+import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
+import {
+  AidenRemoteBotSessionService,
+  projectBotSessionState,
+} from "./aiden-remote-bot-session.js";
+import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
+import { botQuestions } from "./bot-runtime/bot-questions-main.js";
+import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import {
+  BOT_DESKTOP_AUDIENCE_ID,
   botRuntimeAuthority,
   preflightBotTurnAuthority,
   resolveBotRuntimeCatalogSnapshot,
@@ -114,7 +142,6 @@ import {
 import {
   botCapabilityCatalog,
   botCapabilityStore,
-  botManagedWorkspace,
   resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
 import {
@@ -129,12 +156,20 @@ import {
   mergeBotInboxActivityPreviews,
 } from "./bot-inbox-projection.js";
 import { createMainBotAvatarApplicationAdapter } from "./bot-avatar-store-main.js";
-import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 import {
-  botFavoritesStore,
-  withBotFavoritesMutation,
-} from "./bot-favorites-main.js";
+  botRuntimeInventoryLeases,
+  readUnderFreshBotRuntimeInventoryLease,
+} from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
+import {
+  AidenRemoteHostFeedService,
+  type AidenRemoteHostFeedBot,
+} from "./aiden-remote-host-feed.js";
+import { hostRunRegistry } from "./host-runs-main.js";
+import { gitCachedRepositoryIdentity } from "./git.js";
+import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
+import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
 const STATE_FILE = "aiden-remote-v1.json";
@@ -241,7 +276,10 @@ async function authorizeRemoteRetainedBotChat(
   request: Readonly<AidenRemoteRetainedBotChatAuthorizationRequest>,
 ): Promise<boolean> {
   return botApplicationService.authorizeRetainedChat({
-    audienceId: request.deviceId,
+    // A paired desktop reading host-wide sees Bot chats as the host owner does.
+    audienceId: request.audience === "host-owner" && request.access === "read"
+      ? BOT_DESKTOP_AUDIENCE_ID
+      : request.deviceId,
     botId: request.botId,
     chatId: request.chatId,
     access: request.access,
@@ -254,6 +292,8 @@ export interface AidenRemoteRuntime {
   approvedRoots: AidenRemoteApprovedRootService;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
+  pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
+  respondQuestionFromHost(chatId: string, promptId: string, response: unknown): boolean;
   respondApprovalFromHost(
     chatId: string,
     approvalId: string,
@@ -342,8 +382,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     { version: 1, streams: [] },
     () => userData,
     {
-      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
+      // The journal budgets its compact JSON; allow the trailing newline.
+      maxBytes: MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES + 1,
       fileMode: 0o600,
+      compact: true,
       normalize: normalizeAidenRemoteStreamSnapshot,
       isSafe: (value) => {
         try {
@@ -396,15 +438,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         git: AidenRemoteGitService;
         schedules: AidenRemoteScheduleService;
         appControls: typeof remoteAppControls;
+        providers: AidenRemoteProviderService;
         memorySettings: AidenRemoteMemorySettingsService;
         usage: typeof usageStore;
         speech: AidenRemoteSpeechService;
         readAloud: AidenRemoteTtsService;
         bots?: AidenRemoteBotService;
-        botNotice?: {
-          status: typeof botApplicationService.noticeStatus;
-          acknowledge: typeof botApplicationService.acknowledgeNotice;
-        };
+        botSessions?: AidenRemoteBotSessionService;
       }>
     | undefined;
   let workspaceApiInstanceId: string | undefined;
@@ -412,7 +452,31 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeStreams: AidenRemoteStreamService | undefined;
   let activeChats: AidenRemoteChatService | undefined;
   let activeProgress: AidenRemoteChatProgressService | undefined;
+  let activeHostRuns: AidenRemoteHostRunService | undefined;
+  let activeHostFeed: AidenRemoteHostFeedService | undefined;
+  let activeBotSessions: AidenRemoteBotSessionService | undefined;
+  let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
+  const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
+    list: () => service.listPairingRequests(),
+    broadcast: () => ipcMain.broadcast("remote:pairing-requests-changed", {}),
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    focusApp: () => {
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => !candidate.isDestroyed() && !isAuxiliaryWindow(candidate),
+      );
+      if (!window) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+    hostNoun: aidenPairingRequestHostNoun(process.platform),
+    onError: (stage) => {
+      // Native errors can carry the device name; keep only the phase.
+      logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);
+    },
+  });
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
@@ -425,7 +489,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
+    pairingRequestSettings: createAidenPairingRequestSettingsStore(() => userData),
+    notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
+    hostPlatform: aidenRemoteHostPlatform(process.platform),
     workspaceApi: async (instanceId) => {
       if (!workspaceApi || workspaceApiInstanceId !== instanceId) {
         workspaceApiInstanceId = instanceId;
@@ -437,6 +504,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
             instanceId,
             state,
+            approvalStore: userData,
           });
           const models = new AidenRemoteModelService({
             listProviders: listConfiguredProviders,
@@ -525,6 +593,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               : {}),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
+            // Paired devices see visuals as snapshots, so turns follow Appearance.
+            inlineVisuals: async () =>
+              normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
             deviceSupportsQuestionPrompts: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
@@ -584,6 +655,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             readMarkers: {
               snapshot: () => chatReadMarkers.snapshot(),
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
+            },
+            forks: {
+              service: chatForkService,
+              admitWorkspace: (workspaceId) => {
+                const admission = workspaceMutationGate.admit(workspaceId);
+                return {
+                  isAborted: () => admission.signal.aborted,
+                  release: () => admission.release(),
+                };
+              },
+              summaries: {
+                retry: (chatId) => forkSummaryService.retry(chatId),
+                skip: (chatId) => forkSummaryService.skip(chatId),
+                cancel: (chatId) => forkSummaryService.cancel(chatId),
+              },
             },
           });
           activeChats = chats;
@@ -667,7 +753,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             inbox: {
               list: (deviceId, input) =>
                 createBotInboxProjectionService({
-                  listBots: () => botApplicationService.list(true),
+                  listBots: () => botApplicationService.list(),
                   listChatMetadata: () => chatStore.list(),
                   projectBatch: async (request) => {
                     const activities = await streams.projectChatActivities(
@@ -678,11 +764,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }).list(input),
             },
-            favorites: {
-              load: () => botFavoritesStore.load(),
-              save: (snapshot) => botFavoritesStore.save(snapshot),
+            deleteBot: async (botId) => {
+              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+              await (await botSessionRuntime()).deleteBot(botId);
             },
-            withFavoritesMutation: (action) => withBotFavoritesMutation(action),
+            sessionStates: async (botIds) => {
+              const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+              const runtime = await botSessionRuntime();
+              const rows = await mapWithConcurrency(botIds, 4, async (botId) =>
+                [botId, projectBotSessionState(await runtime.state(botId)).state] as const,
+              );
+              return new Map(rows);
+            },
             health: (botId) => projectBotHealth(botId),
             healthBatch: async (botIds) => {
               const snapshot = await botCapabilityCatalog.snapshot({
@@ -703,18 +796,22 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               providerId,
               modelId,
             }) => {
-              const inventoryLease = botRuntimeInventoryLeases.acquire();
-              try {
-                const defaultSelection = providerId === undefined || modelId === undefined
-                  ? await models.resolve()
-                  : undefined;
-                const retained = await botCapabilityStore.getBotBinding(botId);
-                const snapshot = await botCapabilityCatalog.snapshot({
-                  audienceId,
-                  botId,
-                  ...(retained ? { retainedBindings: [retained] } : {}),
+              // A routine credential write during the snapshot must not fail
+              // the phone's send; read again under a fresh lease instead.
+              const { lease: inventoryLease, value: { defaultSelection, snapshot } } =
+                await readUnderFreshBotRuntimeInventoryLease(botRuntimeInventoryLeases, async () => {
+                  const defaultSelection = providerId === undefined || modelId === undefined
+                    ? await models.resolve()
+                    : undefined;
+                  const retained = await botCapabilityStore.getBotBinding(botId);
+                  const snapshot = await botCapabilityCatalog.snapshot({
+                    audienceId,
+                    botId,
+                    ...(retained ? { retainedBindings: [retained] } : {}),
+                  });
+                  return { defaultSelection, snapshot };
                 });
-                inventoryLease.assertCurrent();
+              try {
                 const provider = snapshot.resources.providers.find((candidate) =>
                   providerId !== undefined
                     ? candidate.option.id === providerId
@@ -760,6 +857,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 throw error;
               }
             },
+            chatActivity: true,
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),
@@ -774,18 +872,59 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             ? new AidenRemoteBotFileService({
                 instanceId,
                 authority: botRuntimeAuthority,
-                archivedRead: createBotArchivedFileReadAuthority({
-                  bots: botStore,
-                  chats: chatStore,
-                  capabilities: botCapabilityStore,
-                  catalog: botCapabilityCatalog,
-                  managedWorkspace: botManagedWorkspace,
-                  mutationGate: botMutationGate,
-                  inventoryLeases: botRuntimeInventoryLeases,
-                }),
                 chats: chatStore,
               })
             : undefined;
+          // A rebuilt API must not leave the previous one's watches and streams open.
+          void activeBotSessions?.close();
+          const botSessions = bots
+            ? new AidenRemoteBotSessionService({
+                bots,
+                runtime: async () => {
+                  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+                  return botSessionRuntime();
+                },
+                routines: botRoutineService,
+                questions: botQuestions,
+                approvals: botApprovals,
+                turnIntents: botTurnIntents,
+                // The desktop feed's run start times: a phone opening mid-run sees the real elapsed time.
+                runStarts: botRunStarts,
+                onReport: (botId, error) => logger.warn("aiden-remote", `Bot ${botId} queued or placed messages could not be read for phones.`, error),
+                presets: {
+                  list: () => BOT_PRESETS,
+                  // The one process-wide starter the desktop uses: a Mac tap and a
+                  // phone tap converge on one Bot, and only the creator sends the self-intro.
+                  create: async (presetId, { audienceId }) => {
+                    const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
+                    const result = await botStarter().startFromPreset(presetId, {
+                      // Created for the phone's audience; the key is remembered by the shared starter.
+                      createBot: (bot, botId) => botApplicationService.createBot({ audienceId, botId, bot }),
+                    });
+                    return { botId: result.bot.id, created: result.created };
+                  },
+                },
+                connectCardStatus: async (botId, card) => {
+                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                  return connectCardStatus(botId, card);
+                },
+                connectionRequested: async ({ pluginId }) => {
+                  if (!openConnectionSetup(pluginId)) {
+                    throw new AidenRemoteServiceError("not_found", "Aiden can't connect that app.", 404);
+                  }
+                },
+                defaultTimezone: systemTimezone,
+                notifyBotsChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
+                // Contract revision 27: the desktop's own memory and proposal services.
+                memory: botMemoryService,
+                proposals: botRoutineProposals,
+                routineNotifications: createBotRoutineNotificationFeed({
+                  store: scheduleStore,
+                  botName: async (botId) => (await botStore.get(botId))?.name,
+                }),
+              })
+            : undefined;
+          activeBotSessions = botSessions;
           const git = new AidenRemoteGitService({
             application: workspaceEnvironmentApplicationService,
             owners: workspaceOwners,
@@ -813,6 +952,83 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
           });
+          const hostRuns = new AidenRemoteHostRunService({
+            registry: hostRunRegistry,
+            now: Date.now,
+            controls: {
+              cancel: (runId) => llmClient.cancel(runId, "user_stop"),
+              // A phone-owned approval settles through the stream service so its
+              // device records stay consistent; everything else settles directly.
+              approve: ({ chatId, approvalId, decision, scope }) =>
+                streams.respondApprovalFromHost(chatId, approvalId, decision, scope) ||
+                llmClient.approveAsHost(approvalId, decision, scope ? { scope } : undefined),
+              answer: ({ promptId, response }) => {
+                const outcome = llmClient.answerQuestionnaireAsHost(promptId, response);
+                if (outcome !== "rejected") streams.retireQuestionSettledByHost(promptId);
+                return outcome;
+              },
+              admitInput: (input) => llmClient.admitChatRunInput(input),
+            },
+          });
+          activeHostRuns = hostRuns;
+          detachHostFeed?.();
+          activeHostFeed?.close();
+          const hostFeed = new AidenRemoteHostFeedService({
+            now: Date.now,
+            source: {
+              read: async () => {
+                const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
+                  chats.hostFeedChats(),
+                  workspaceApplicationService.list(),
+                  bots ? bots.list() : Promise.resolve(undefined),
+                ]);
+                return {
+                  summaries,
+                  botChatIds,
+                  workspaces: workspaceRows.map((workspace) => {
+                    const repository = workspace.folderPath
+                      ? gitCachedRepositoryIdentity(workspace.folderPath)
+                      : undefined;
+                    return {
+                      ...projectAidenRemoteWorkspace(workspace),
+                      ...(repository ? { repository } : {}),
+                    };
+                  }),
+                  bots: (botList?.bots ?? []) as unknown as AidenRemoteHostFeedBot[],
+                };
+              },
+            },
+          });
+          activeHostFeed = hostFeed;
+          const hostFeedChannels = new Set([
+            "chats:changed",
+            "chats:metadata-updated",
+            "chats:activity-changed",
+            "chats:read-markers-changed",
+            "chats:fork-summary-changed",
+            "workspaces:changed",
+            "bots:changed",
+          ]);
+          const detachers = [
+            onBroadcast((channel) => {
+              if (hostFeedChannels.has(channel)) hostFeed.invalidate();
+            }),
+            chatStore.onIndexChanged(() => hostFeed.invalidate()),
+            configStore.onWorkspacesChanged(() => hostFeed.invalidate()),
+            hostRunRegistry.onChange((summary, removed) => hostFeed.noteRun(summary, removed)),
+          ];
+          detachHostFeed = () => {
+            for (const detach of detachers) detach();
+          };
+          const providers = new AidenRemoteProviderService({
+            get: (id) => configStore.getProvider(id),
+            save: saveProviderWithCredentialRotation,
+            recoverCredential: async (provider) => {
+              await reconcilePendingProviderCredentialRotation();
+              return Boolean(await secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))));
+            },
+            changed: () => ipcMain.broadcast("app:config-externally-changed", {}),
+          });
           const memorySettings = new AidenRemoteMemorySettingsService(configStore, publishAppControlsChanged);
           const speech = new AidenRemoteSpeechService();
           activeReadAloud?.close();
@@ -829,6 +1045,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             git,
             schedules,
             appControls: remoteAppControls,
+            providers,
             memorySettings,
             usage: usageStore,
             speech,
@@ -837,22 +1054,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               ? {
                   botFiles,
                   bots,
-                  botNotice: {
-                    status: (deviceId: string) =>
-                      botApplicationService.noticeStatus(deviceId),
-                    acknowledge: (
-                      deviceId: string,
-                      acknowledgement: Parameters<
-                        typeof botApplicationService.acknowledgeNotice
-                      >[1],
-                    ) =>
-                      botApplicationService.acknowledgeNotice(
-                        deviceId,
-                        acknowledgement,
-                      ),
-                  },
+                  botSessions,
                 }
               : {}),
+            hostFeed,
+            hostRuns,
             settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
               application: workspaceApplicationService,
@@ -882,6 +1088,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       activeReadAloud?.revokeDevice(deviceId);
       activeProgress?.revokeDevice(deviceId);
       simulatorShareRelay.revokeDevice(deviceId);
+      // Revocation drains host-wide subscriptions; it never cancels a run.
+      activeHostFeed?.revokeDevice(deviceId);
+      activeHostRuns?.revokeDevice(deviceId);
+      activeBotSessions?.revokeDevice(deviceId);
       const revoked = await revokeAidenRemoteRuntimeDevice({
         state,
         streams: activeStreams,
@@ -890,6 +1100,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       }, deviceId);
       // A relay admitted between the first close and the revocation fence is closed here.
       simulatorShareRelay.revokeDevice(deviceId);
+      activeHostFeed?.revokeDevice(deviceId);
+      activeHostRuns?.revokeDevice(deviceId);
+      activeBotSessions?.revokeDevice(deviceId);
       // Cleanup is intentionally idempotent: a retry after a crash between the
       // device tombstone and notice removal must still remove the acceptance.
       if (hostPlatformCapabilities().bots) {
@@ -898,6 +1111,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       return revoked;
     },
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
+    pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
+    respondQuestionFromHost: (chatId, promptId, response) =>
+      activeStreams?.respondQuestionFromHost(chatId, promptId, response) ?? false,
     respondApprovalFromHost: (chatId, approvalId, decision, scope) =>
       activeStreams?.respondApprovalFromHost(chatId, approvalId, decision, scope) ?? false,
   };

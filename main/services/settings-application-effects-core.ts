@@ -6,12 +6,20 @@ export interface SettingsEffects {
   cancelSkillWork(): Promise<void>;
   refreshCommands(): Promise<void>;
   reconfigureIdleUnload(): Promise<void>;
+  stopCacheWarmers(): void;
+  /** Live streams drop a cached grant on their next Computer Use call. */
+  revokeComputerUseGrants(): Promise<void>;
+  /** A disabled feature must not keep an attended session running in any window. */
+  stopLiveSessions(): Promise<void>;
   publishAppearance(saved: AppSettings): void;
   publishControls(): void;
 }
 /** Called after persistence by both Settings and conversational operations. */
 export function createSettingsApplicationEffects(effects: SettingsEffects) {
   return async (saved: AppSettings, patch: Partial<AppSettings>): Promise<void> => {
+    if (patch.cacheWarmingEnabled === false) effects.stopCacheWarmers();
+    if (patch.computerUseAlwaysAllow === false) await effects.revokeComputerUseGrants();
+    if (patch.aidenLiveEnabled === false) await effects.stopLiveSessions();
     if (patch.localVoiceIdleUnloadMinutes !== undefined) await effects.reconfigureIdleUnload();
     if (patch.skillsEnabled !== undefined) {
       effects.invalidateSkills();

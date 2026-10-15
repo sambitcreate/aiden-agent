@@ -2,7 +2,10 @@ package sbtbiswas.AidenOnTheGo
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import sbtbiswas.AidenOnTheGo.notifications.AgentRunActivityStatus
+import sbtbiswas.AidenOnTheGo.notifications.AgentRunBlockingStatus
 import sbtbiswas.AidenOnTheGo.notifications.AidenQuietOpenChat
 
 /** Quiet Open Chat decision table (iOS parity: AidenChatTests quiet-open
@@ -44,6 +47,7 @@ class AidenQuietOpenChatTest {
     fun foregroundChatStillPostsBlockingStatuses() {
         val blocking = listOf(
             AgentRunActivityStatus.WAITING_FOR_APPROVAL,
+            AgentRunActivityStatus.WAITING_FOR_ANSWER,
             AgentRunActivityStatus.FAILED
         )
         for (status in blocking) {
@@ -68,5 +72,44 @@ class AidenQuietOpenChatTest {
                 AidenQuietOpenChat.decision(status, isChatForegrounded = true)
             )
         }
+    }
+
+    @Test
+    fun waitingStreamReadsAsAnswerOnlyWhenALoneQuestionIsPending() {
+        assertEquals(
+            AgentRunActivityStatus.WAITING_FOR_ANSWER,
+            AgentRunBlockingStatus.status(hasPendingApproval = false, hasPendingQuestion = true)
+        )
+        assertEquals(
+            AgentRunActivityStatus.WAITING_FOR_APPROVAL,
+            AgentRunBlockingStatus.status(hasPendingApproval = true, hasPendingQuestion = false)
+        )
+        // An approval gates the tool call, so it wins when both are pending.
+        assertEquals(
+            AgentRunActivityStatus.WAITING_FOR_APPROVAL,
+            AgentRunBlockingStatus.status(hasPendingApproval = true, hasPendingQuestion = true)
+        )
+        // Snapshots not loaded yet: keep the wire's approval projection.
+        assertEquals(
+            AgentRunActivityStatus.WAITING_FOR_APPROVAL,
+            AgentRunBlockingStatus.status(hasPendingApproval = false, hasPendingQuestion = false)
+        )
+    }
+
+    @Test
+    fun approvalAndAnswerWaitsUseDistinctCopy() {
+        assertEquals(
+            "Needs your approval",
+            AgentRunBlockingStatus.activityLine(AgentRunActivityStatus.WAITING_FOR_APPROVAL)
+        )
+        assertEquals(
+            "Needs your answer",
+            AgentRunBlockingStatus.activityLine(AgentRunActivityStatus.WAITING_FOR_ANSWER)
+        )
+        assertNotEquals(
+            AgentRunActivityStatus.WAITING_FOR_APPROVAL.title,
+            AgentRunActivityStatus.WAITING_FOR_ANSWER.title
+        )
+        assertNull(AgentRunBlockingStatus.activityLine(AgentRunActivityStatus.RESPONDING))
     }
 }

@@ -1,27 +1,42 @@
+import { registerMcpProviderAuthHandler } from "./mcp-provider-auth.js";
+import { buildMcpPresetStates } from "./mcp-preset-states.js";
+import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mcp-provider-auth.js";
 // Phase-2 IPC handlers: Skills, MCP servers, Exa web search, and voice transcription.
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { publishAppControlsChanged } from "../services/app-controls-events-main.js";
 import { secrets } from "../services/secrets.js";
-import { mcpManager } from "../services/mcp.js";
+import { mcpManager, prewarmMcpServers } from "../services/mcp.js";
 import {
   authorizeMcpServer,
+  cancelMcpAuthorization,
+  clearOAuth,
   endReservedMcpAuthorization,
   hasOAuthTokens,
   reserveMcpAuthorization,
+  suspendMcpOAuthOperations,
 } from "../services/mcp-oauth.js";
+import { registerMcpControlHandlers, type McpDraftCredentials } from "./mcp-controls.js";
+import { mcpLiveStatus } from "../services/mcp-status-events.js";
+import { botsGrantingMcpServer, scheduledTasksUsingMcpServer } from "../services/mcp-dependents.js";
+import type { McpServer } from "../services/types.js";
+import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { resolveMcpConnectionCredentials } from "../services/mcp-connection-credentials.js";
+import { mcpStdioApprovals, resolveStoredMcpFieldSecrets, storedMcpEnvForApproval } from "../services/mcp-field-secrets.js";
+import { saveConfiguredMcpServer, sealPlaintextMcpServerFields } from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
 import {
   mutateCredentialForConfiguredMcp,
   mutateMcpWithCredentialCleanup,
+  reconcilePendingMcpCredentialCleanup,
   withConfiguredMcp,
 } from "../services/mcp-credential-cleanup.js";
 import {
-  mcpCredentialConnectionSnapshot,
+  mcpPresetKeyBinding,
   mcpRuntimeConnectionSnapshot,
+  sameMcpRuntimeConnection,
   pendingMcpCredentialCleanupForRemove,
-  pendingMcpCredentialCleanupForSave,
   replaceMcpCredentialAfterDisconnect,
 } from "../services/mcp-credential-cleanup-core.js";
 import {
@@ -32,14 +47,14 @@ import {
   presetServerId,
 } from "../services/mcp-presets.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
-import { transcribe } from "../services/transcription.js";
+import { transcribeCloud } from "../services/transcription.js";
 import { geminiLiveTranscription } from "../services/gemini-live-transcription.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
-import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
+import { mcpConfigurationLeases, withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
 import {
   webSearchCredentials,
   webSearchKeyPoolTracker,
@@ -73,6 +88,53 @@ import {
   webSearchRollout,
   webSearchSettingsForRollout,
 } from "../services/web-search-rollout.js";
+
+/** Credentials for a Settings draft test: never bound, saved, or borrowed across endpoints. */
+function draftCredentialResolver(credentials: McpDraftCredentials) {
+  return (draft: McpServer, isCurrent: () => boolean): Promise<McpServer> =>
+    resolveMcpConnectionCredentials(draft, {
+      // Stored env/header values only go where the saved server already connects.
+      resolveFieldSecrets: async (server) => {
+        if (!credentials.savedDestination) {
+          throw new Error("Enter the header and environment values again to test a changed connection.");
+        }
+        await reconcilePendingMcpCredentialCleanup();
+        return resolveStoredMcpFieldSecrets(server);
+      },
+      presetKey: async (server, binding) => {
+        if (credentials.apiKey) return credentials.apiKey;
+        if (!credentials.matchesSaved) return null;
+        // A pending credential cleanup must finish before a saved key is read.
+        await reconcilePendingMcpCredentialCleanup();
+        return secrets.getProviderKey(presetSecretId(server.id), binding);
+      },
+      isCurrent,
+      missingKey: (name) => `${name} needs an API key — paste one to test the connection.`,
+    });
+}
+
+async function mcpServerDependents(serverId: string) {
+  const [{ scheduleStore }, { botStore }, { botCapabilityStore }, { BotCapabilityUnavailableError }] =
+    await Promise.all([
+      import("../services/schedule-store.js"),
+      import("../services/bot-store.js"),
+      import("../services/bot-capability-services-main.js"),
+      import("../services/bot-capability-store-core.js"),
+    ]);
+  const [tasks, bots] = await Promise.all([scheduleStore.list(), botStore.list()]);
+  return {
+    schedules: scheduledTasksUsingMcpServer(serverId, tasks),
+    bots: await botsGrantingMcpServer(serverId, bots, async (botId) => {
+      try {
+        return await botCapabilityStore.getBotBinding(botId);
+      } catch (error) {
+        // A Bot without a stored policy (or a store still starting) grants nothing.
+        if (error instanceof BotCapabilityUnavailableError) return undefined;
+        throw error;
+      }
+    }),
+  };
+}
 
 interface ActiveVoiceTranscription {
   controller: AbortController;
@@ -290,33 +352,28 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("mcp:list", async () => configStore.listMcpServers());
   // Built-in provider catalog with per-preset connection state. Preset API keys
   // live in the encrypted secrets store ("mcp:<serverId>"), never in config.json.
-  ipcMain.handle("mcp:presets", async () => {
-    const servers = await configStore.listMcpServers();
-    return Promise.all(
-      MCP_PRESETS.map(async (preset) => {
-        const serverId = presetServerId(preset.id);
-        const existing = servers.find((s) => s.id === serverId && s.presetId === preset.id);
-        if (existing) assertMcpPresetServer(existing);
-        const ready =
-          preset.auth.kind === "apiKey"
-            ? Boolean(
-                existing &&
-                (await secrets.getOrBindLegacyProviderKey(
-                  presetSecretId(serverId),
-                  JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
-                )),
-              )
-            : await hasOAuthTokens(serverId, existing?.url ?? preset.url);
-        return {
-          preset,
-          serverId,
-          configured: Boolean(existing),
-          enabled: existing?.enabled ?? true,
-          ready,
-        };
-      }),
-    );
-  });
+  ipcMain.handle("mcp:presets", async () =>
+    buildMcpPresetStates({
+      presets: MCP_PRESETS,
+      servers: await configStore.listMcpServers(),
+      serverIdFor: (preset) => presetServerId(preset.id),
+      validate: (server) => {
+        assertMcpPresetServer(server);
+      },
+      isReady: async (preset, serverId, existing) =>
+        preset.auth.kind === "apiKey"
+          ? Boolean(
+              existing &&
+              (await secrets.getOrBindLegacyProviderKey(
+                presetSecretId(serverId),
+                mcpPresetKeyBinding(existing),
+              )),
+            )
+          : !mcpLiveStatus.needsSignIn(serverId) &&
+            hasOAuthTokens(serverId, existing?.url ?? preset.url, existing?.authServerMetadataUrl, existing?.oauthClientName),
+      needsSignIn: (preset, serverId) => preset.auth.kind === "oauth" && mcpLiveStatus.needsSignIn(serverId),
+    }),
+  );
   // Save or clear a preset's API key. Empty key clears; the key is never returned.
   ipcMain.handle("mcp:setPresetKey", async (event, serverId: unknown, key: unknown) => {
     const owner = rendererDocumentOwner(
@@ -330,7 +387,7 @@ export function registerPhase2Handlers(): void {
       throw new Error("This MCP preset does not accept an API key.");
     }
     const value = typeof key === "string" ? key.trim() : "";
-    await mutateCredentialForConfiguredMcp(
+    const configured = await mutateCredentialForConfiguredMcp(
       id,
       (configured) =>
         replaceMcpCredentialAfterDisconnect(
@@ -341,18 +398,19 @@ export function registerPhase2Handlers(): void {
                 await secrets.setProviderKey(
                   presetSecretId(id),
                   value,
-                  JSON.stringify(mcpCredentialConnectionSnapshot(configured)),
+                  mcpPresetKeyBinding(configured),
                   isCurrent,
                 );
               else await secrets.deleteKey(presetSecretId(id), isCurrent);
             });
           },
-        ),
+        ).then(() => configured),
       isCurrent,
     );
+    if (value) prewarmMcpServers([configured]);
     return { hasKey: Boolean(value) };
   });
-  ipcMain.handle("mcp:save", async (event, server: unknown) => {
+  ipcMain.handle("mcp:save", async (event, server: unknown, options: unknown) => {
     const owner = rendererDocumentOwner(
       event,
       () => new Error("MCP changes must come from the active application document."),
@@ -360,17 +418,17 @@ export function registerPhase2Handlers(): void {
     const isCurrent = () => !owner.isDestroyed();
     const parsed = parseMcpServer(server);
     assertMcpPresetServer(parsed);
-    return mutateMcpWithCredentialCleanup(
-      parsed.id,
-      (current) => pendingMcpCredentialCleanupForSave(current, parsed),
-      async () => {
-        await mcpManager.disconnect(parsed.id);
-        return withMcpConfigurationPublication(parsed.id, () =>
-          configStore.saveMcpServer(parsed, isCurrent),
-        );
-      },
-      isCurrent,
-    );
+    // Only the editor, which shows the command, approves a local server to run.
+    const flags = typeof options === "object" && options !== null ? options as { approveLaunch?: unknown; fromEditor?: unknown } : {};
+    const approveLaunch = flags.approveLaunch === true;
+    // Editor saves (sign-in and provider consent included) may carry kept
+    // values to an address the person changed there; other saves cannot.
+    const fromEditor = flags.fromEditor === true;
+    const saved = await saveConfiguredMcpServer(parsed, isCurrent, { approveLaunch, fromEditor });
+    if (approveLaunch) mcpManager.clearFailure(saved.id);
+    // Saving (or enabling) connects in the background so the next turn is warm.
+    prewarmMcpServers([saved]);
+    return saved;
   });
   ipcMain.handle("mcp:remove", async (event, id: unknown) => {
     const owner = rendererDocumentOwner(
@@ -387,9 +445,12 @@ export function registerPhase2Handlers(): void {
         await withMcpConfigurationPublication(serverId, () =>
           configStore.removeMcpServer(serverId, isCurrent),
         );
+        await mcpManager.forget(serverId);
       },
       isCurrent,
     );
+    await mcpStdioApprovals.forget(serverId);
+    mcpLiveStatus.forget(serverId);
   });
   ipcMain.handle("mcp:status", async (event, server: unknown) => {
     const owner = rendererDocumentOwner(
@@ -409,7 +470,8 @@ export function registerPhase2Handlers(): void {
         );
         return {
           ...status,
-          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
+          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url, parsed.authServerMetadataUrl, parsed.oauthClientName) : undefined,
+          ...(parsed.oauth && mcpLiveStatus.needsSignIn(parsed.id) ? { needsSignIn: true } : {}),
         };
       },
       () => !owner.isDestroyed(),
@@ -440,8 +502,10 @@ export function registerPhase2Handlers(): void {
         mcpRuntimeConnectionSnapshot(parsed),
         async () => {
           await mcpManager.disconnect(parsed.id);
-          await authorizeMcpServer(parsed, () => !owner.isDestroyed(), ownerAbort.signal, reserved);
+          // Sign-in reaches the server with its stored header values.
+          await authorizeMcpServer(await resolveStoredMcpFieldSecrets(parsed), () => !owner.isDestroyed(), ownerAbort.signal, reserved);
           reserved = undefined;
+          prewarmMcpServers([parsed]);
           return { authorized: true };
         },
         () => !owner.isDestroyed(),
@@ -454,14 +518,93 @@ export function registerPhase2Handlers(): void {
       stopWatching();
     }
   });
+  registerMcpProviderAuthHandler<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("MCP credential approval requires the active application document.")),
+    publish: (parsed, allowed, isCurrent) => mutateCredentialForConfiguredMcp(parsed.id, async (configured) => {
+      if (!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(parsed), mcpRuntimeConnectionSnapshot(configured))) throw new Error("This MCP server configuration changed. Try again.");
+      const admission = mcpConfigurationLeases.acquire(parsed.id);
+      await mcpManager.disconnect(parsed.id);
+      admission.assertCurrent();
+      await withMcpConfigurationPublication(parsed.id, () => {
+        const publication = mcpConfigurationLeases.acquire(parsed.id);
+        return setMcpProviderAuthGrant(parsed, allowed, () => isCurrent() && !publication.signal.aborted);
+      });
+    }, isCurrent),
+  });
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
     const server = (await configStore.listMcpServers()).find((item) => item.id === serverId);
-    return { authorized: await hasOAuthTokens(serverId, server?.url) };
+    return {
+      authorized: await hasOAuthTokens(serverId, server?.url, server?.authServerMetadataUrl, server?.oauthClientName),
+      needsSignIn: mcpLiveStatus.needsSignIn(serverId),
+      providerAuthorized: server ? await hasMcpProviderAuthGrant(server) : false,
+    };
   });
+  registerMcpControlHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("MCP changes must come from the active application document.")),
+    configured: async (serverId) => (await configStore.listMcpServers()).find((server) => server.id === serverId),
+    cancelAuthorization: cancelMcpAuthorization,
+    signOut: (server, isCurrent) =>
+      mutateCredentialForConfiguredMcp(
+        server.id,
+        async () => {
+          // Supersede background refresh writers and fence leases so calls in
+          // flight fail as superseded instead of using the cleared session.
+          const release = suspendMcpOAuthOperations(server.id);
+          try {
+            await mcpManager.disconnect(server.id);
+            await clearOAuth(server.id, isCurrent);
+          } finally {
+            release();
+          }
+          mcpLiveStatus.clearAuthFailure(server.id);
+        },
+        isCurrent,
+      ),
+    testDraft: (server, credentials, isCurrent) =>
+      mcpManager.status(server, isCurrent, mcpManager.statusGeneration(server.id), draftCredentialResolver(credentials)),
+    admitSaved: (saved, operation, isCurrent) =>
+      withConfiguredMcp(saved.id, mcpRuntimeConnectionSnapshot(saved), operation, isCurrent),
+    signInState: async (server) => ({
+      authorized: await hasOAuthTokens(server.id, server.url, server.authServerMetadataUrl, server.oauthClientName),
+      needsSignIn: mcpLiveStatus.needsSignIn(server.id),
+    }),
+    dependents: mcpServerDependents,
+    liveStatus: () => mcpLiveStatus.snapshot(),
+    toolList: (serverId) => mcpLiveStatus.tools(serverId),
+    pendingLaunchApprovals: async () => {
+      const pending = [];
+      for (const server of await configStore.listMcpServers()) {
+        if (server.transport !== "stdio" || (await mcpStdioApprovals.isApproved(server))) continue;
+        pending.push({
+          serverId: server.id,
+          fingerprint: mcpStdioLaunchFingerprint(server),
+          command: server.command ?? "",
+          args: server.args ?? [],
+          // Unapproved servers keep env in config.json, so the person sees exactly
+          // what would run; a stored value referenced under another name is unusable.
+          env: await storedMcpEnvForApproval(server),
+        });
+      }
+      return pending;
+    },
+    approveLaunch: async (server, fingerprint) => {
+      if (!(await mcpStdioApprovals.approveShown(server, fingerprint))) return false;
+      // Approved: its env values can now move into the keychain (the approval follows them).
+      await sealPlaintextMcpServerFields([server.id]);
+      mcpManager.clearFailure(server.id);
+      prewarmMcpServers();
+      return true;
+    },
+    launchApproved: (server) => mcpStdioApprovals.isApproved(server),
+  });
+  mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.
   ipcMain.handle("mcp:reconnect", async () => {
     await mcpManager.closeAll();
+    prewarmMcpServers();
   });
 
   // ── Web Search settings and credentials ─────────────────────────────
@@ -613,23 +756,31 @@ export function registerPhase2Handlers(): void {
       mimeType: unknown,
       model: unknown,
       operationId: unknown,
+      provider: unknown,
     ) => {
       const owner = rendererDocumentOwner(
         event,
         () => new Error("Voice transcription must come from the active application document."),
       );
+      // Recorded audio is resolved in the renderer; on-device audio never comes here.
+      if (provider !== "openai" && provider !== "gemini") {
+        throw new Error("Invalid cloud voice provider.");
+      }
       const key = voiceOperationKey(owner, operationId);
       activeVoiceTranscriptions.get(key)?.controller.abort();
       const controller = new AbortController();
       const removeOwnerInvalidation = owner.onInvalidated(() => controller.abort());
       activeVoiceTranscriptions.set(key, { controller, removeOwnerInvalidation });
       try {
-        return await transcribe({
-          audioBase64: asString(audioBase64, "audioBase64"),
-          mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
-          model: typeof model === "string" ? model : undefined,
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
-        });
+        return await transcribeCloud(
+          {
+            audioBase64: asString(audioBase64, "audioBase64"),
+            mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
+            model: typeof model === "string" ? model : undefined,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+          },
+          provider,
+        );
       } finally {
         removeOwnerInvalidation();
         if (activeVoiceTranscriptions.get(key)?.controller === controller) {

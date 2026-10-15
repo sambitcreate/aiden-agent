@@ -19,6 +19,7 @@ import {
   unreportedUsageRecord,
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
+import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.js";
 
 function assistantText(content: AssistantMessage["content"]): string {
   return content
@@ -32,7 +33,8 @@ export async function cleanupDictationTranscript(transcript: string): Promise<st
   const original = transcript.trim();
   if (!original) return transcript;
   const settings = await configStore.getSettings();
-  const providerId = settings.lastProviderId;
+  // Cleanup runs outside any chat, so an agent-backed default cannot serve it.
+  const providerId = unattendedFallbackProviderId(settings.lastProviderId);
   const modelId = settings.lastModel;
   if (!providerId || !modelId) return original;
 

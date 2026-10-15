@@ -193,3 +193,40 @@ export function createPortableConfigWatcher(
 
   return { refresh };
 }
+
+/**
+ * Leading-edge throttle with one trailing call: the first trigger runs now,
+ * triggers inside the interval collapse into a single run when it ends. A
+ * focus storm therefore costs at most two re-reads per interval, and an edit
+ * made just before the last focus is still picked up by the trailing run.
+ */
+export function createThrottledTrigger(
+  run: () => void,
+  intervalMs: number,
+): { trigger(): void; dispose(): void } {
+  let lastRunAt = Number.NEGATIVE_INFINITY;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fire = () => {
+    lastRunAt = Date.now();
+    run();
+  };
+  return {
+    trigger() {
+      if (timer !== undefined) return;
+      const wait = lastRunAt + intervalMs - Date.now();
+      if (wait <= 0) {
+        fire();
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = undefined;
+        fire();
+      }, wait);
+      timer.unref?.();
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
+}

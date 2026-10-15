@@ -1,10 +1,10 @@
 /** Ollama Cloud web-search adapter (API-key mode only). */
 
+import { isRecord, normalizeWebSearchSourceUrl } from "./web-search-adapter-kit.js";
 import {
   createWebSearchJsonAdapter,
   normalizeWebSearchApiKey,
   normalizeWebSearchJsonInput,
-  requireWebSearchApiKey,
   type WebSearchJsonAdapterDefinition,
   type WebSearchJsonAdapterOptions,
   type WebSearchJsonRawResult,
@@ -23,10 +23,6 @@ export interface OllamaCloudWebSearchApiKeyCredential {
 }
 
 export type OllamaCloudWebSearchCredential = OllamaCloudWebSearchApiKeyCredential | string;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function credentialValue(value: unknown): string {
   if (typeof value === "string") return normalizeWebSearchApiKey("ollama", value);
@@ -78,19 +74,6 @@ export function buildOllamaCloudWebSearchRequest(
   return buildRequestValues(queryValue, numResultsValue, credential);
 }
 
-function normalizedSourceUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || /\p{Cc}/u.test(value)) return undefined;
-  try {
-    const url = new URL(value.trim());
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Parse Ollama Cloud's `{ results: [{ title, url, content }] }` envelope. */
 export function parseOllamaCloudWebSearchResponse(
   payload: unknown,
@@ -105,7 +88,7 @@ export function parseOllamaCloudWebSearchResponse(
   const seen = new Set<string>();
   for (const item of payload.results) {
     if (!isRecord(item)) continue;
-    const url = normalizedSourceUrl(item.url);
+    const url = normalizeWebSearchSourceUrl(item.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     results.push({
@@ -138,19 +121,3 @@ export function createOllamaCloudWebSearchAdapter(
 }
 
 export const ollamaCloudWebSearchAdapterFactory = createOllamaCloudWebSearchAdapter;
-
-/** Validate the provider request credential at a call site without I/O. */
-export function requireOllamaCloudWebSearchApiKey(request: WebSearchAdapterRequest): string {
-  return requireWebSearchApiKey(request, "ollama");
-}
-
-// Keep concise aliases for callers that refer to the hosted provider as Ollama.
-export const OLLAMA_WEB_SEARCH_ORIGIN = OLLAMA_CLOUD_WEB_SEARCH_ORIGIN;
-export const OLLAMA_WEB_SEARCH_ENDPOINT = OLLAMA_CLOUD_WEB_SEARCH_ENDPOINT;
-export const buildOllamaWebSearchRequest = buildOllamaCloudWebSearchRequest;
-export const parseOllamaWebSearchResponse = parseOllamaCloudWebSearchResponse;
-export const createOllamaWebSearchAdapter = createOllamaCloudWebSearchAdapter;
-export const ollamaWebSearchAdapterFactory = ollamaCloudWebSearchAdapterFactory;
-export const requireOllamaWebSearchApiKey = requireOllamaCloudWebSearchApiKey;
-export type OllamaWebSearchApiKeyCredential = OllamaCloudWebSearchApiKeyCredential;
-export type OllamaWebSearchCredential = OllamaCloudWebSearchCredential;

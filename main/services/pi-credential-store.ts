@@ -1,6 +1,9 @@
 import * as path from "path";
 import { app, logger } from "../platform.js";
-import { EncryptedPiCredentialStore } from "./pi-credential-store-core.js";
+import {
+  EncryptedPiCredentialStore,
+  piCredentialChangeFencesBotAuthority,
+} from "./pi-credential-store-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 import { secureStorage } from "./secure-storage.js";
 
@@ -19,6 +22,14 @@ export const piCredentialStore = new EncryptedPiCredentialStore({
       error: error.message,
     });
   },
-  beforeWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
-  afterWritePublish: () => invalidateBotRuntimeInventoryAuthority("provider_credential"),
+  // A Pi OAuth refresh runs inside a model request, possibly a Bot's own turn.
+  // Fence Bot authority only when the grant itself changes (login, logout,
+  // account or API-key change), never for an in-place token refresh, and never
+  // for an `aiden-internal:*` slot (image keys, Model Pad), which no Bot uses.
+  beforeWritePublish: (change) => {
+    if (piCredentialChangeFencesBotAuthority(change)) invalidateBotRuntimeInventoryAuthority("provider_credential");
+  },
+  afterWritePublish: (change) => {
+    if (piCredentialChangeFencesBotAuthority(change)) invalidateBotRuntimeInventoryAuthority("provider_credential");
+  },
 });

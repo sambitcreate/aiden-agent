@@ -9,14 +9,14 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { homedir } from "node:os";
 import { open } from "node:fs/promises";
-import { resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
+import { createBotMcpScopeCache, resolveBotMcpInventory } from "../../../main/services/bot-mcp-inventory.js";
 import { resolveBotCapabilitySkills } from "../../../main/services/bot-skill-inventory.js";
-import { exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
-import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
+import { botMcpLiveToolMatchesGrant, exactBotMcpToolNames } from "../../../main/services/bot-tool-authority.js";
+import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { createCliMcpPool, mcpCredentialSignature } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { join } from "node:path";
-import { mkdir, lstat, chmod, realpath, stat, rm } from "node:fs/promises";
+import { mkdir, lstat, chmod, rm } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createHmac } from "node:crypto";
 import { createBotStore } from "../../../main/services/bot-store-core.js";
@@ -38,6 +38,7 @@ import { buildBotFileTools, type BotFileToolLocation } from "../../../main/servi
 import { buildPinnedCodingTools } from "../../../main/services/coding-tools.js";
 import { protectAdmittedBotTool } from "../../../main/services/bot-tool-authority.js";
 import type { AidenRemoteStateDocument } from "../../../main/services/aiden-remote-state.js";
+import { verifyApprovedRootIdentity } from "../../../main/services/aiden-remote-approved-roots.js";
 import type { BotAccessUpdate, BotChatAccessUpdate, BotNoticeAcknowledgement } from "../../../renderer/shared/bot-capabilities.js";
 import type { BotCreateInput, BotUpdateInput } from "../../../renderer/shared/bots.js";
 import { JsonStore, readJson } from "./state.ts";
@@ -74,9 +75,9 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const checkpoint = createBotCapabilityStateCheckpoint({ root, keyStore,
     anchor: checkpointFile<string>(agentDir, "bot-anchor.json"), bootstrapMarker: checkpointFile<BotCapabilityBootstrapMarkerState>(agentDir, "bot-bootstrap.json"),
     inspectInitialBootstrap: async () => {
-      const bots = await botStore.list(true), chats = (await daemon.chatStore.list()).filter((chat) => chat.botId);
-      if (!bots.length && !chats.length) return "clean";
-      return chats.every((chat) => bots.some((bot) => bot.id === chat.botId)) ? "legacy" : "deny";
+      const botIds = await botStore.storedIds(), chats = (await daemon.chatStore.list()).filter((chat) => chat.botId);
+      if (!botIds.length && !chats.length) return "clean";
+      return chats.every((chat) => botIds.includes(chat.botId!)) ? "legacy" : "deny";
     },
   });
   const capabilities = createBotCapabilityStore({ root, checkpoint });
@@ -106,6 +107,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       },
     });
   }
+  const mcpScopeCache = createBotMcpScopeCache({ generation: () => inventoryLeases.revision() });
   const catalog = createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: () => keyStore.load(), loadNoticeStatus: (id) => capabilities.noticeStatus(id),
     listProviders: () => listCliProviders(agentDir),
@@ -115,7 +117,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     })).digest("hex"),
     listMcpServers: mcp.listServers,
     inspectMcpScopes: (signal) => resolveBotMcpInventory(signal, { listServers: mcp.listServers, inspectTools: mcp.inspectTools,
-      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations }),
+      credentialSignature: (server) => mcpCredentialSignature(agentDir, server), incarnations, scopeCache: mcpScopeCache }),
     listSkills: (target) => skills(target?.botId),
     listApprovedLocations: async () => approvedRoots().map((item) => ({ sourceId: item.id, label: item.label, available: true,
       scopeFingerprint: botCapabilityFactsFingerprint({ device: item.device, inode: item.inode, policyRevision: item.policyRevision }) })),
@@ -138,7 +140,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases });
   let rootFingerprint = JSON.stringify(approvedRoots());
   const watcher = watch(agentDir, (_event, filename) => {
-    if (["auth.json", "models.json", "mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
+    if (["auth.json", "models.json", "aiden-mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
     if (String(filename) === "remote.json") {
       try { const next = JSON.stringify(approvedRoots()); if (next !== rootFingerprint) { rootFingerprint = next; inventoryLeases.invalidate("inventory_changed"); } }
       catch { inventoryLeases.invalidate("inventory_changed"); }
@@ -152,10 +154,10 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     for (const grant of authority.files.approvedLocations) {
       const candidate = approvedRoots().find((item) => item.id === grant.sourceId);
       if (!candidate) throw new Error("The approved Bot folder is unavailable.");
-      const canonical = await realpath(candidate.folderPath), info = await stat(canonical, { bigint: true });
-      if (canonical !== candidate.folderPath || !info.isDirectory() || info.dev.toString() !== candidate.device || info.ino.toString() !== candidate.inode ||
-        botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
-      locations.push({ id: candidate.id, label: candidate.label, root: canonical, expectedIdentity: { device: candidate.device, inode: candidate.inode } });
+      // A remount can renumber the volume; the tool pin uses the live device.
+      const live = await verifyApprovedRootIdentity(candidate, agentDir);
+      if (!live || botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
+      locations.push({ id: candidate.id, label: candidate.label, root: live.root, expectedIdentity: { device: live.device, inode: live.inode } });
     }
     const selected = locations.length ? buildBotFileTools({ defaultLocation: locations[0], additionalLocations: locations.slice(1) }) : [];
     if (authority.shell.enabled) selected.push(buildPinnedCodingTools(authority.workingDirectory).find((tool) => tool.name === "run_command")!);
@@ -163,14 +165,17 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     const snapshot = await catalog.snapshotForRuntime({ botId: authority.botId, signal: admission.signal,
       retainedBindings: retained ? [retained] : undefined, retainedProviders: [authority.provider, ...(authority.visionProvider ? [authority.visionProvider] : [])] });
     const servers = await mcp.listServers();
-    const names = exactBotMcpToolNames(authority, snapshot.resources.connections, (id, name) => {
-      const server = servers.find((item) => item.id === id);
-      if (!server) throw new Error("Selected MCP server disappeared.");
-      return mcpAgentToolName(server, name);
-    });
+    const built: Awaited<ReturnType<typeof mcp.agentTools>> = [];
     for (const server of servers.filter((item) => authority.connections.some((grant) => grant.sourceId === item.id))) {
-      selected.push(...(await mcp.agentTools(server, admission.signal)).filter((tool) => names.has(tool.name)));
+      built.push(...(await mcp.agentTools(server, admission.signal)));
     }
+    // Joined by MCP identity, so the built tools' real names are what is granted.
+    const names = exactBotMcpToolNames(authority, snapshot.resources.connections, built);
+    // A same-identity tool is not enough: the live tool must carry the grant's exact schema and effect.
+    selected.push(...built.filter((tool) => {
+      const grant = names.get(tool.name);
+      return grant !== undefined && botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool));
+    }));
     const currentSkills = await skills(authority.botId);
     for (const grant of authority.skills) {
       const published = snapshot.resources.skills.find((skill) => skill.option.available && skill.sourceId === grant.sourceId && skill.exactFingerprint === grant.exactFingerprint);
@@ -209,7 +214,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async instructions(admission: BotRuntimeAuthorityAdmission) {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
-      if (!bot || bot.archivedAt) throw new Error("Bot is unavailable.");
+      if (!bot) throw new Error("Bot is unavailable.");
       return `You are ${bot.name}. Follow these Bot instructions within the granted tools and access:\n${bot.instructions}`;
     },
     async preflight(input: { audienceId: string; botId: string; chatId: string; providerId: string; model: string }) {
@@ -221,19 +226,17 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = "cli:local";
       switch (action) {
-        case "list": return application.list(args.includes("--archived"));
+        case "list": return application.list();
         case "get": return application.get(id);
         case "catalog": return application.capabilityCatalog(audienceId, id);
         case "notice": return application.noticeStatus(audienceId);
         case "acknowledge": return application.acknowledgeNotice(audienceId, JSON.parse(id) as BotNoticeAcknowledgement);
         case "create": return application.createBot({ audienceId, ...readJson<{ bot: BotCreateInput; access?: BotAccessUpdate }>(id, undefined!) });
         case "update": return application.updateBot(readJson<BotUpdateInput>(id, undefined!));
-        case "archive": return application.archiveBot({ botId: id, expectedRevision: input });
-        case "restore": return application.restoreBot({ botId: id, expectedRevision: input });
         case "access": return input ? application.updateBotAccess({ audienceId, botId: id, ...readJson<{ expectedRevision: string; access: BotAccessUpdate }>(input, undefined!) }) : application.getBotAccess(id);
         case "chat": return application.createChat({ audienceId, botId: id, ...readJson<{ providerId: string; model: string }>(input, undefined!) });
         case "chat-access": return application.updateChatAccess({ audienceId, ...readJson<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, undefined!) });
-        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|archive|restore|access|chat|chat-access");
+        default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access");
       }
     },
   };

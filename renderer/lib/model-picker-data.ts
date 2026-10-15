@@ -1,28 +1,21 @@
-import type { ModelBenchmarkMetric, ModelInfo, ModelRanking, Provider } from "./types";
+import type { ModelBenchmarkMetric, ModelInfo, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
 import {
-  modelPadGridPoints,
-  modelPadGridSize,
+  modelPadGridSizeForPlacements,
+  modelPadPlacementKind,
+  modelPadPlacementSourceLabel,
+  placedVisibleModelPadValues,
   reflowVisibleModelPadPlacements,
+  type ModelPadCapabilitySuggestion,
   type ModelPadPlacement,
+  type ModelPadPlacementKind,
 } from "./model-pad-layout";
 import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import { isModelHidden, type HiddenModelsByProvider } from "../shared/model-visibility";
 import { isNonChatModel } from "../shared/model-eligibility";
-
-export type { ModelRanking } from "./types";
-
-export const PINNED_MODELS_KEY = "aiden-agent.pinnedModels";
-export { BASE_MODEL_PAD_GRID_SIZE as BASE_MODEL_GRID_SIZE } from "./model-pad-layout";
-export { modelPadGridSize as modelGridSize } from "./model-pad-layout";
+import { modelIdLeaf } from "../shared/model-catalog-provider";
 
 const FORMAT_RE = /[\s._-](MLX|GGUF|GGML|FP16|BF16|F16|INT8|AWQ|GPTQ|Q\d(?:_[A-Z0-9]+)*)$/i;
-const FAST_VARIANT_RE =
-  /(?:^|[\s._/-])(nano|tiny|mini|small|haiku|flash|lite|instant)(?:$|[\s._/-])/i;
-const DEEP_VARIANT_RE =
-  /(?:^|[\s._/-])(reasoner|reasoning|thinking|think|deep|high|xhigh)(?:$|[\s._/-])/i;
-const CAPABLE_VARIANT_RE = /(?:^|[\s._/-])(sonnet|opus|pro|ultra|max|large)(?:$|[\s._/-])/i;
-const PARAMETER_COUNT_RE = /(?:^|[\s._/-])(\d+(?:\.\d+)?)b(?:$|[\s._/-])/i;
 
 export interface ModelEntry {
   value: string;
@@ -34,7 +27,65 @@ export interface ModelEntry {
   providerArtwork?: Provider["artwork"];
   isLocal: boolean;
   info?: ModelInfo;
-  ranking?: ModelRanking;
+}
+
+/** Why a Pad model has no benchmark scores. */
+export type BenchmarkCoverageGapReason = "local" | "no-row";
+
+export interface BenchmarkCoverage {
+  /** Placed, visible models. */
+  pad: { matched: number; total: number };
+  /** Every visible chat model. */
+  visible: { matched: number; total: number };
+  /** Placed, visible models without a score, in entry order. */
+  unmatchedPad: Array<{
+    value: string;
+    label: string;
+    providerLabel: string;
+    reason: BenchmarkCoverageGapReason;
+  }>;
+}
+
+function hasBenchmarkScore(entry: ModelEntry): boolean {
+  const scores = entry.info?.benchmark;
+  return [scores?.intelligence, scores?.coding, scores?.agentic].some(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+}
+
+/** How many Pad and visible models the cached benchmark snapshot covers. */
+export function benchmarkCoverage(
+  entries: readonly ModelEntry[],
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+): BenchmarkCoverage {
+  const placed = new Set(
+    placedVisibleModelPadValues(
+      placements,
+      entries.map((entry) => entry.value),
+    ),
+  );
+  const coverage: BenchmarkCoverage = {
+    pad: { matched: 0, total: 0 },
+    visible: { matched: 0, total: entries.length },
+    unmatchedPad: [],
+  };
+  for (const entry of entries) {
+    const matched = hasBenchmarkScore(entry);
+    if (matched) coverage.visible.matched += 1;
+    if (!placed.has(entry.value)) continue;
+    coverage.pad.total += 1;
+    if (matched) {
+      coverage.pad.matched += 1;
+    } else {
+      coverage.unmatchedPad.push({
+        value: entry.value,
+        label: entry.label,
+        providerLabel: entry.providerLabel,
+        reason: entry.isLocal ? "local" : "no-row",
+      });
+    }
+  }
+  return coverage;
 }
 
 /** Return benchmark-score percentiles with average ranks for ties. */
@@ -72,17 +123,18 @@ export interface ExplicitModelSelection {
   model: string;
 }
 
-export type PositionConfidence = "personal" | "suggested" | "benchmark" | "estimated" | "unranked";
-
 export interface PositionedModel extends ModelEntry {
   /** Left (fast) to right (more deliberate), normalized to 0...1. */
   x: number;
   /** Bottom (everyday) to top (more capable), normalized to 0...1. */
   y: number;
-  confidence: PositionConfidence;
-  positionSource: string;
+  /** Marker kind shared by every Pad surface. */
+  placementKind: ModelPadPlacementKind;
+  /** How the marker announces its placement source (see `modelPadPlacementSourceLabel`). */
+  placementSourceLabel: string;
   capabilityLabel: "Everyday" | "Capable" | "Advanced";
-  paceLabel: "Faster" | "Balanced" | "Deliberate";
+  /** "Pace unmeasured" when the horizontal spot is neutral spread, not a pace. */
+  paceLabel: "Faster" | "Balanced" | "Deliberate" | "Pace unmeasured";
 }
 
 export interface ModelPoint {
@@ -121,10 +173,26 @@ export function parseModel(name: string): { label: string; format: string | null
   };
 }
 
+/** Flattens per-provider catalog answers into the `provider::model` lookup the picker uses. */
+export function modelInfoByValue(
+  providers: readonly Provider[],
+  infoByProvider: Readonly<
+    Record<string, Readonly<Record<string, ModelInfo | undefined>> | undefined>
+  >,
+): Record<string, ModelInfo | undefined> {
+  const infoByValue: Record<string, ModelInfo | undefined> = {};
+  for (const provider of providers) {
+    const data = infoByProvider[provider.id];
+    for (const modelId of provider.models) {
+      infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
+    }
+  }
+  return infoByValue;
+}
+
 export function createModelEntries(
   providers: Provider[],
   infoByValue: Readonly<Record<string, ModelInfo | undefined>> = {},
-  rankingsByValue: Readonly<Record<string, ModelRanking | undefined>> = {},
 ): ModelEntry[] {
   const orderedProviders = providers
     .filter(isUsable)
@@ -156,7 +224,6 @@ export function createModelEntries(
         providerArtwork: provider.artwork,
         isLocal: local,
         info,
-        ranking: rankingsByValue[value] ?? info?.ranking,
       });
     }
   }
@@ -171,6 +238,79 @@ export function visibleModelEntries(
   return entries.filter((entry) => !isModelHidden(hidden, entry.providerId, entry.model));
 }
 
+/**
+ * The model behind an entry, independent of the provider that serves it: the last path
+ * segment (date stamp kept) of the catalog's canonical id when known, else of the model
+ * id, lowercased. Display-only: it links duplicate routes visually and never changes routing.
+ */
+export function modelIdentityKey(entry: Pick<ModelEntry, "model" | "info">): string {
+  return modelIdLeaf(canonicalModelId(entry) ?? entry.model);
+}
+
+function canonicalModelId(entry: Pick<ModelEntry, "info">): string | undefined {
+  return entry.info?.canonicalModelId?.trim().toLowerCase() || undefined;
+}
+
+/** Same identity, from different providers, and never two different canonical ids. */
+function isSiblingRoute(entry: ModelEntry, other: ModelEntry): boolean {
+  if (other.value === entry.value || other.providerId === entry.providerId) return false;
+  const a = canonicalModelId(entry);
+  const b = canonicalModelId(other);
+  return !(a && b && a !== b);
+}
+
+/**
+ * Other providers' routes to the same model, keyed by entry value. Pass visible entries
+ * only; an entry never links to itself or to another model of its own provider, and
+ * entries without a sibling are absent.
+ */
+export function modelSiblings(entries: readonly ModelEntry[]): Map<string, ModelEntry[]> {
+  const groups = new Map<string, ModelEntry[]>();
+  for (const entry of entries) {
+    const key = modelIdentityKey(entry);
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
+  }
+  const siblings = new Map<string, ModelEntry[]>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const entry of group) {
+      const others = group.filter((other) => isSiblingRoute(entry, other));
+      if (others.length > 0) siblings.set(entry.value, others);
+    }
+  }
+  return siblings;
+}
+
+/** "Also via A", "Also via A, B" or "Also via A, B +n" for an entry's sibling routes. */
+export function alsoViaLabel(siblings: readonly ModelEntry[] | undefined): string | undefined {
+  const providers = alsoViaProviders(siblings);
+  return providers ? `Also via ${providers}` : undefined;
+}
+
+/** The providers part of {@link alsoViaLabel} ("OpenRouter, Azure +2"), for mid-sentence use. */
+export function alsoViaProviders(siblings: readonly ModelEntry[] | undefined): string | undefined {
+  const providers = [...new Set((siblings ?? []).map((entry) => entry.providerLabel))];
+  if (providers.length === 0) return undefined;
+  const named = providers.slice(0, 2).join(", ");
+  const rest = providers.length - 2;
+  return `${named}${rest > 0 ? ` +${rest}` : ""}`;
+}
+
+/** A model named with its provider, since one model can be reachable through several. */
+export function modelPlacementLabel(entry: Pick<ModelEntry, "label" | "providerLabel">): string {
+  return `${entry.label} from ${entry.providerLabel}`;
+}
+
+/** Models by provider, then by name. */
+export function sortModelsByProviderAndName(entries: readonly ModelEntry[]): ModelEntry[] {
+  return [...entries].sort(
+    (left, right) =>
+      left.providerLabel.localeCompare(right.providerLabel) || left.label.localeCompare(right.label),
+  );
+}
+
 /** Group only text-generating models while preserving the configured provider order. */
 export function createChatModelProviders(
   providers: Provider[],
@@ -178,14 +318,8 @@ export function createChatModelProviders(
     Record<string, Readonly<Record<string, ModelInfo | undefined>> | undefined>
   > = {},
 ): ChatModelProvider[] {
-  const infoByValue: Record<string, ModelInfo | undefined> = {};
-  for (const provider of providers) {
-    for (const [model, info] of Object.entries(infoByProvider[provider.id] ?? {})) {
-      infoByValue[encodeSelection(provider.id, model)] = info;
-    }
-  }
   const modelsByProvider = new Map<string, string[]>();
-  for (const entry of createModelEntries(providers, infoByValue)) {
+  for (const entry of createModelEntries(providers, modelInfoByValue(providers, infoByProvider))) {
     const models = modelsByProvider.get(entry.providerId) ?? [];
     models.push(entry.model);
     modelsByProvider.set(entry.providerId, models);
@@ -229,138 +363,145 @@ export function orderModelEntries(entries: ModelEntry[], pinned: string[]): Mode
   return [...pinnedEntries, ...entries.filter((entry) => !pinnedSet.has(entry.value))];
 }
 
-function clamp(value: number, min = 0.08, max = 0.92): number {
-  return Math.min(max, Math.max(min, value));
+/** Recent rows the picker list shows at most. */
+export const MAX_RECENT_MODEL_ROWS = 3;
+
+/**
+ * The recent models the list shows: still-visible entries in recency order,
+ * excluding the current model and pinned models (they are already prominent),
+ * at most {@link MAX_RECENT_MODEL_ROWS}.
+ */
+export function recentModelsForList(
+  entries: readonly ModelEntry[],
+  recent: readonly string[],
+  { selectedValue, pinned }: { selectedValue: string; pinned: readonly string[] },
+): ModelEntry[] {
+  const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+  const skipped = new Set([selectedValue, ...pinned]);
+  const rows: ModelEntry[] = [];
+  for (const value of recent) {
+    if (rows.length >= MAX_RECENT_MODEL_ROWS) break;
+    const entry = byValue.get(value);
+    if (!entry || skipped.has(value)) continue;
+    rows.push(entry);
+    skipped.add(value);
+  }
+  return rows;
 }
 
-function isPercentile(value: number): boolean {
-  return Number.isFinite(value) && value >= 0 && value <= 1;
+/** How many models one Pad quick start (or batch of suggestions) adds at most. */
+export const MODEL_PAD_QUICK_START_LIMIT = 8;
+
+/**
+ * Models for the empty Pad's "Add pinned & recent" quick start: visible models
+ * not already on the Pad, pinned ones first and then recent ones (each in
+ * stored order), without repeats, up to `limit`.
+ */
+export function pinnedAndRecentQuickStart(
+  entries: readonly ModelEntry[],
+  {
+    pinned,
+    recent,
+    placements,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    pinned: readonly string[];
+    recent: readonly string[];
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    limit?: number;
+  },
+): ModelEntry[] {
+  const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+  const chosen = new Map<string, ModelEntry>();
+  for (const value of [...pinned, ...recent]) {
+    if (chosen.size >= limit) break;
+    const entry = byValue.get(value);
+    if (entry && !placements[value] && !chosen.has(value)) chosen.set(value, entry);
+  }
+  return [...chosen.values()];
 }
 
-function labelsFor(x: number, y: number): Pick<PositionedModel, "capabilityLabel" | "paceLabel"> {
+/**
+ * The most capable visible models not yet on the Pad that have a percentile
+ * for the current benchmark metric, highest first (ties keep entry order), up
+ * to `limit`.
+ */
+export function topBenchmarkSuggestions(
+  entries: readonly ModelEntry[],
+  percentiles: ReadonlyMap<string, number>,
+  {
+    placements,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    limit?: number;
+  },
+): ModelPadCapabilitySuggestion[] {
+  const candidates = entries.flatMap((entry) => {
+    const capabilityPercentile = percentiles.get(entry.value);
+    return placements[entry.value] || capabilityPercentile === undefined
+      ? []
+      : [{ value: entry.value, capabilityPercentile }];
+  });
+  return candidates
+    .sort((left, right) => right.capabilityPercentile - left.capabilityPercentile)
+    .slice(0, limit);
+}
+
+/**
+ * Models to preview as benchmark suggestions: visible, unplaced models with a
+ * percentile for the current metric. Scored pinned models come first, then
+ * scored recent ones, then the most capable of the rest; each once, up to `limit`.
+ */
+export function previewBenchmarkSuggestions(
+  entries: readonly ModelEntry[],
+  percentiles: ReadonlyMap<string, number>,
+  {
+    placements,
+    pinned,
+    recent,
+    limit = MODEL_PAD_QUICK_START_LIMIT,
+  }: {
+    placements: Readonly<Record<string, ModelPadPlacement>>;
+    pinned: readonly string[];
+    recent: readonly string[];
+    limit?: number;
+  },
+): ModelPadCapabilitySuggestion[] {
+  const scored = topBenchmarkSuggestions(entries, percentiles, {
+    placements,
+    limit: Number.POSITIVE_INFINITY,
+  });
+  const scoredByValue = new Map(scored.map((suggestion) => [suggestion.value, suggestion]));
+  const preferred = pinnedAndRecentQuickStart(entries, {
+    pinned,
+    recent,
+    placements,
+    limit: Number.POSITIVE_INFINITY,
+  }).flatMap((entry) => scoredByValue.get(entry.value) ?? []);
+  const chosen = new Set(preferred.map((suggestion) => suggestion.value));
+  return [...preferred, ...scored.filter((suggestion) => !chosen.has(suggestion.value))].slice(
+    0,
+    limit,
+  );
+}
+
+function labelsFor(
+  x: number,
+  y: number,
+  xSource: ModelPadPlacement["xSource"],
+): Pick<PositionedModel, "capabilityLabel" | "paceLabel"> {
   return {
     capabilityLabel: y >= 0.68 ? "Advanced" : y >= 0.4 ? "Capable" : "Everyday",
-    paceLabel: x <= 0.34 ? "Faster" : x <= 0.66 ? "Balanced" : "Deliberate",
+    paceLabel:
+      xSource === "neutral"
+        ? "Pace unmeasured"
+        : x <= 0.34
+          ? "Faster"
+          : x <= 0.66
+            ? "Balanced"
+            : "Deliberate",
   };
-}
-
-function estimatePosition(
-  entry: ModelEntry,
-): Omit<PositionedModel, keyof ModelEntry | "capabilityLabel" | "paceLabel"> {
-  const ranking = entry.ranking;
-  if (
-    ranking &&
-    isPercentile(ranking.capabilityPercentile) &&
-    isPercentile(ranking.responseTimePercentile)
-  ) {
-    return {
-      x: clamp(ranking.responseTimePercentile),
-      y: clamp(ranking.capabilityPercentile),
-      confidence: "benchmark",
-      positionSource: ranking.source,
-    };
-  }
-
-  let x = 0.5;
-  let y = 0.5;
-  let signals = 0;
-  const model = `${entry.model} ${entry.info?.parameterCount ?? ""}`.toLowerCase();
-
-  if (FAST_VARIANT_RE.test(model)) {
-    x -= 0.22;
-    y -= 0.14;
-    signals += 1;
-  }
-  if (DEEP_VARIANT_RE.test(model)) {
-    x += 0.24;
-    y += 0.16;
-    signals += 1;
-  }
-  if (CAPABLE_VARIANT_RE.test(model)) {
-    x += 0.1;
-    y += 0.12;
-    signals += 1;
-  }
-
-  const parameterMatch = model.match(PARAMETER_COUNT_RE);
-  if (parameterMatch) {
-    const billions = Number(parameterMatch[1]);
-    if (billions >= 100) {
-      x += 0.2;
-      y += 0.18;
-    } else if (billions >= 60) {
-      x += 0.14;
-      y += 0.12;
-    } else if (billions >= 30) {
-      x += 0.08;
-      y += 0.07;
-    } else if (billions <= 4) {
-      x -= 0.18;
-      y -= 0.16;
-    } else if (billions <= 8) {
-      x -= 0.12;
-      y -= 0.1;
-    }
-    signals += 1;
-  }
-
-  if (signals === 0) {
-    return {
-      x,
-      y,
-      confidence: "unranked",
-      positionSource: entry.isLocal
-        ? "Benchmark unavailable · local speed depends on this device"
-        : "Benchmark unavailable · placed near the balanced midpoint",
-    };
-  }
-
-  return {
-    x: clamp(x),
-    y: clamp(y),
-    confidence: "estimated",
-    positionSource: entry.isLocal
-      ? "Estimated from model size or variant · speed depends on this device"
-      : "Estimated from the model variant name",
-  };
-}
-
-export function positionModels(entries: ModelEntry[]): PositionedModel[] {
-  const models = entries.map((entry) => ({ ...entry, ...estimatePosition(entry) }));
-  const gridSize = modelPadGridSize(models.length);
-  const availableCells = modelPadGridPoints(gridSize);
-  const confidenceOrder: Record<PositionConfidence, number> = {
-    personal: 0,
-    suggested: 1,
-    benchmark: 2,
-    estimated: 3,
-    unranked: 4,
-  };
-  const assignments = new Map<string, ModelPoint>();
-
-  for (const model of [...models].sort(
-    (a, b) =>
-      confidenceOrder[a.confidence] - confidenceOrder[b.confidence] ||
-      (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
-  )) {
-    let closestIndex = 0;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < availableCells.length; index += 1) {
-      const cell = availableCells[index];
-      const candidateDistance = (cell.x - model.x) ** 2 + (cell.y - model.y) ** 2;
-      if (candidateDistance < closestDistance) {
-        closestIndex = index;
-        closestDistance = candidateDistance;
-      }
-    }
-    const [cell] = availableCells.splice(closestIndex, 1);
-    assignments.set(model.value, cell);
-  }
-
-  return models.map((model) => {
-    const cell = assignments.get(model.value) ?? model;
-    return { ...model, ...cell, ...labelsFor(cell.x, cell.y) };
-  });
 }
 
 /** Saved personal positions are the only models shown on the user-owned Pad. */
@@ -368,32 +509,26 @@ export function positionSavedModels(
   entries: ModelEntry[],
   placements: Readonly<Record<string, ModelPadPlacement>>,
 ): PositionedModel[] {
+  const visibleValues = entries.map((entry) => entry.value);
   const snappedPlacements = reflowVisibleModelPadPlacements(
     placements,
-    entries.map((entry) => entry.value),
-    modelPadGridSize(entries.length),
+    visibleValues,
+    modelPadGridSizeForPlacements(placements, visibleValues),
   );
   return entries.flatMap((entry) => {
     const placement = snappedPlacements[entry.value];
     if (!placement) return [];
     const x = Math.min(1, Math.max(0, placement.x));
     const y = Math.min(1, Math.max(0, placement.y));
+    const placementKind = modelPadPlacementKind(placement);
     return [
       {
         ...entry,
         x,
         y,
-        confidence:
-          placement.xSource === "user" && placement.ySource === "user"
-            ? ("personal" as const)
-            : ("suggested" as const),
-        positionSource:
-          placement.xSource === "user" && placement.ySource === "user"
-            ? "Personal placement"
-            : placement.xSource === "neutral" && placement.ySource === "benchmark"
-              ? "Benchmark capability · pace unmeasured"
-              : "Benchmark suggestion",
-        ...labelsFor(x, y),
+        placementKind,
+        placementSourceLabel: modelPadPlacementSourceLabel(placement),
+        ...labelsFor(x, y, placement.xSource),
       },
     ];
   });
@@ -403,11 +538,18 @@ function distance(a: ModelPoint, b: ModelPoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * How far (in normalized Pad units, the space of model x/y) a pointer may be from a
+ * model and still preview or choose it. Points in empty areas of the Pad pick nothing.
+ */
+export const MODEL_PAD_CAPTURE_RADIUS = 0.2;
+
 export function nearestModel(
   models: PositionedModel[],
   point: ModelPoint,
   currentValue?: string,
   hysteresis = 0.025,
+  maxDistance = Number.POSITIVE_INFINITY,
 ): PositionedModel | undefined {
   if (models.length === 0) return undefined;
   let nearest = models[0];
@@ -419,11 +561,14 @@ export function nearestModel(
       nearestDistance = candidateDistance;
     }
   }
+  if (nearestDistance > maxDistance) return undefined;
 
   const current = currentValue ? models.find((model) => model.value === currentValue) : undefined;
   if (current && current.value !== nearest.value) {
     const currentDistance = distance(current, point);
-    if (currentDistance - nearestDistance < hysteresis) return current;
+    if (currentDistance <= maxDistance && currentDistance - nearestDistance < hysteresis) {
+      return current;
+    }
   }
   return nearest;
 }
@@ -433,8 +578,8 @@ export function findDirectionalModel(
   currentValue: string | undefined,
   direction: ModelDirection,
 ): PositionedModel | undefined {
-  if (models.length === 0) return undefined;
-  const current = models.find((model) => model.value === currentValue) ?? models[0];
+  const current = models.find((model) => model.value === currentValue);
+  if (!current) return undefined;
 
   const candidates = models.filter((model) => {
     if (model.value === current.value) return false;

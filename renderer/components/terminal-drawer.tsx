@@ -3,11 +3,13 @@
 // resized, or hidden without leaving the chat.
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import type { GhosttyTerminalSurface } from "../lib/ghostty-terminal/surface";
 import { ghosttyThemeFromCss } from "../lib/ghostty-terminal/theme";
 import {
   Minus,
   PanelBottomClose,
+  PanelRightOpen,
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
@@ -16,12 +18,16 @@ import {
 } from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { browserApi, onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
-import { browserLinkCommand } from "../lib/browser-links";
+import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { useLinkOpener } from "../lib/link-opener";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+
+export const TERMINAL_PANEL_EVENT = "aiden:terminal-panel";
+const PLACEMENT_KEY = "aiden-agent.terminal-placement";
+type TerminalPlacement = "bottom" | "side";
 
 const MIN_DRAWER_HEIGHT = 152;
 const MAX_DRAWER_RATIO = 0.5;
@@ -40,6 +46,13 @@ interface Layout {
 
 interface TerminalContextValue {
   open: boolean;
+  requestedOpen: boolean;
+  placement: TerminalPlacement;
+  sideTarget: HTMLDivElement | null;
+  setSideTarget: (target: HTMLDivElement | null) => void;
+  setSidePresented: (presented: boolean) => void;
+  moveTo: (placement: TerminalPlacement) => void;
+  hide: () => void;
   sessions: TerminalSession[];
   activeId: string | undefined;
   layout: Layout;
@@ -128,6 +141,10 @@ function terminalTheme() {
 export function WorkspaceTerminalProvider({ children }: { children: React.ReactNode }) {
   const { active } = useActiveWorkspace();
   const [open, setOpen] = React.useState(false);
+  const [placement, setPlacement] = React.useState<TerminalPlacement>(() => localStorage.getItem(PLACEMENT_KEY) === "side" ? "side" : "bottom");
+  const [sideTarget, setSideTarget] = React.useState<HTMLDivElement | null>(null);
+  const [sidePresented, setSidePresented] = React.useState(false);
+  const hide = React.useCallback(() => setOpen(false), []);
   const [sessions, setSessions] = React.useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = React.useState<string>();
   const [layout, setLayout] = React.useState<Layout>({ direction: "single", ids: [] });
@@ -147,7 +164,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
 
   // A terminal belongs to its workspace. Switching folders never leaves an
   // invisible shell running in the previous folder.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (workspaceRef.current !== active?.id) {
       workspaceRef.current = active?.id;
       clearSessions();
@@ -180,6 +197,10 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       }
       try {
         const session = await terminalApi.create(active.id);
+        if (workspaceRef.current !== active.id) {
+          await terminalApi.close(session.id).catch(() => undefined);
+          return undefined;
+        }
         // Surface once when the preferred shell was unavailable and a fallback
         // launched the terminal — the user should know their $SHELL is broken.
         if (session.preferredShellSkipped) {
@@ -236,12 +257,25 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     );
   }, []);
 
+  const moveTo = React.useCallback((next: TerminalPlacement) => {
+    setPlacement(next);
+    localStorage.setItem(PLACEMENT_KEY, next);
+    setOpen(true);
+    window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: next === "side" ? "show" : "bottom" }));
+    if (!sessionsRef.current.length) void newTerminal();
+  }, [newTerminal]);
+
   const toggle = React.useCallback(() => {
+    if (placement === "side" && (!open || !sidePresented)) {
+      moveTo("side");
+      return;
+    }
     if (open) {
       const hadTerminalFocus =
         document.activeElement instanceof Element &&
         document.activeElement.closest(".terminal-drawer");
       setOpen(false);
+      if (placement === "side") window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: "hide" }));
       if (hadTerminalFocus)
         requestAnimationFrame(() =>
           document.querySelector<HTMLElement>("[data-terminal-toggle]")?.focus(),
@@ -251,11 +285,13 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     } else {
       void newTerminal();
     }
-  }, [newTerminal, open, sessions.length]);
+  }, [newTerminal, open, sessions.length, placement, sidePresented, moveTo]);
 
   const value = React.useMemo<TerminalContextValue>(
     () => ({
-      open,
+      open: open && (placement === "bottom" || sidePresented),
+      requestedOpen: open,
+      placement, sideTarget, setSideTarget, setSidePresented, moveTo, hide,
       sessions,
       activeId,
       layout,
@@ -272,6 +308,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       close,
     }),
     [
+      placement, sideTarget, sidePresented, moveTo, hide,
       active?.folderPath,
       active?.permission,
       activeId,
@@ -295,6 +332,15 @@ export function useWorkspaceTerminal(): TerminalContextValue {
   return context;
 }
 
+export function TerminalSideTarget({ presented }: { presented: boolean }) {
+  const { setSideTarget, setSidePresented } = useWorkspaceTerminal();
+  React.useLayoutEffect(() => {
+    setSidePresented(presented);
+    return () => setSidePresented(false);
+  }, [presented, setSidePresented]);
+  return <div ref={setSideTarget} className="h-full min-h-0" />;
+}
+
 function TerminalViewport({
   session,
   active,
@@ -315,6 +361,13 @@ function TerminalViewport({
   const activeRef = React.useRef(active);
   onUnavailableRef.current = onUnavailable;
   activeRef.current = active;
+
+  const { openLink, canOpen } = useLinkOpener();
+  // openLink/canOpen change identity when the saved preference loads or
+  // changes; read them through a ref so the terminal (and its scrollback)
+  // isn't torn down and rebuilt just because the preference changed.
+  const linkOpenerRef = React.useRef({ openLink, canOpen });
+  linkOpenerRef.current = { openLink, canOpen };
 
   React.useEffect(() => {
     const host = hostRef.current;
@@ -347,17 +400,12 @@ function TerminalViewport({
             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
             return true;
           },
-          canActivateLink: (url) =>
-            browserLinkCommand(url, { metaKey: false, ctrlKey: false }) !== null,
+          canActivateLink: (url) => linkOpenerRef.current.canOpen(url),
           onLinkActivate: (url, event) => {
-            const command = browserLinkCommand(url, event);
-            if (command) {
-              void browserApi
-                .command(session.workspaceId, command)
-                .catch((error: unknown) =>
-                  toast.error(error instanceof Error ? error.message : "Could not open this link."),
-                );
-            }
+            linkOpenerRef.current.openLink(url, {
+              modifiers: { metaKey: event.metaKey, ctrlKey: event.ctrlKey },
+              workspaceId: session.workspaceId,
+            });
           },
         });
         const mount = hostRef.current;
@@ -462,8 +510,15 @@ function TerminalViewport({
 }
 
 export function TerminalDrawer() {
-  const { open, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
+  const { open, requestedOpen, placement, sideTarget, moveTo, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
     useWorkspaceTerminal();
+  const bottomTargetRef = React.useRef<HTMLDivElement>(null);
+  const [portalHost] = React.useState(() => { const node = document.createElement("div"); node.className = "h-full min-h-0"; return node; });
+  React.useLayoutEffect(() => {
+    const target = placement === "side" ? sideTarget : bottomTargetRef.current;
+    target?.appendChild(portalHost);
+    return () => { portalHost.remove(); };
+  }, [placement, sideTarget, portalHost]);
   const [height, setHeight] = React.useState(initialHeight);
   const toggleShortcut = useShortcutLabel("terminal.toggle");
   const toggleShortcutBinding = useShortcutBinding("terminal.toggle");
@@ -533,19 +588,19 @@ export function TerminalDrawer() {
     }
   };
 
-  // Keep the surface only for its short exit curve, then remove it so a closed
-  // terminal cannot leave a phantom painted region at the bottom of the chat.
-  if (!present) return null;
-
-  return (
+  // Keep the renderer attached to one portal host across docking and hiding.
+  // The hidden container releases layout without resetting the terminal screen.
+  const content = (
     <section
       inert={!open ? true : undefined}
       aria-hidden={!open ? true : undefined}
       data-state={open ? "open" : "closed"}
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
-      style={{ "--terminal-drawer-height": `${height}px` } as React.CSSProperties}
+      data-placement={placement}
+      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined } as React.CSSProperties}
     >
       <div
+        hidden={placement === "side"}
         role="separator"
         aria-label="Resize terminal drawer"
         aria-orientation="horizontal"
@@ -647,6 +702,7 @@ export function TerminalDrawer() {
             >
               <Minus />
             </Button>
+            <Button variant="transparent" size="small" iconOnly onClick={() => moveTo(placement === "side" ? "bottom" : "side")} aria-label={placement === "side" ? "Move terminal to bottom" : "Move terminal to side panel"} title={placement === "side" ? "Move to bottom" : "Move to side panel"}><PanelRightOpen /></Button>
             <Button
               variant="transparent"
               size="small"
@@ -682,7 +738,7 @@ export function TerminalDrawer() {
               >
                 <TerminalViewport
                   session={session}
-                  active={activeId === session.id}
+                  active={open && activeId === session.id}
                   onFocus={() => select(session.id)}
                   onUnavailable={() => close(session.id)}
                   clearEpoch={activeId === session.id ? clearEpoch : 0}
@@ -708,4 +764,8 @@ export function TerminalDrawer() {
       </div>
     </section>
   );
+  return <>
+    <div ref={bottomTargetRef} className="shrink-0" hidden={placement !== "bottom" || !present} />
+    {createPortal(content, portalHost)}
+  </>;
 }

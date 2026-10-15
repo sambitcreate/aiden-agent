@@ -90,6 +90,23 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
+    static let chatMessagesWindowFeature = "chat-messages-window-v1"
+    static let chatMessagesWindowMetadataFeature = "chat-messages-window-metadata-v1"
+    static let chatForkFeature = "chat-fork-v1"
+    static let chatForkSummaryFeature = "chat-fork-summary-v1"
+    /// Contract revision 24: phones may observe and control runs started on
+    /// the Mac, in Telegram or by the scheduler.
+    static let phoneRunControlFeature = "phone-run-control-v1"
+    /// Contract revision 25: phones may view and control the Mac's shared
+    /// iOS Simulators after negotiating `simulators:mobile`.
+    static let mobileSimulatorsFeature = "mobile-simulators-v1"
+    /// Contract revision 30: the status line, Steer and Queue, Queued bubbles
+    /// and Chat activity, after negotiating `bot:activity`.
+    static let botActivityFeature = "bot-activity-v1"
+    /// Contract revision 28: assistant messages may carry `visuals`, each
+    /// shown as the Mac's snapshot at its tool step. The field is additive, so
+    /// the transcript renders visuals whenever a message carries them.
+    static let chatVisualsFeature = "chat-visuals-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -246,6 +263,71 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatReadStateFeature)
     }
 
+    /// `GET /chats/{chatId}/messages` pages that also carry the chat's
+    /// metadata (revisions 19 and 23). A revision-19 to 22 page has no title or
+    /// model, so refreshing from it would leave a desktop rename or model
+    /// change unseen; without both tokens the client keeps reading whole
+    /// transcripts through `GET /chats/{chatId}`.
+    var supportsChatMessagesWindow: Bool {
+        features.contains(Self.chatMessagesWindowFeature)
+            && features.contains(Self.chatMessagesWindowMetadataFeature)
+    }
+
+    /// `POST /chats/{id}/fork` and fork lineage (revision 21).
+    var supportsChatFork: Bool {
+        features.contains(Self.chatForkFeature)
+    }
+
+    /// Fork with summary and the `fork-summary` retry, skip, and cancel
+    /// actions. Meaningful only alongside chat-fork-v1.
+    var supportsChatForkSummary: Bool {
+        supportsChatFork && features.contains(Self.chatForkSummaryFeature)
+    }
+
+    /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
+    var supportsPhoneRunControl: Bool {
+        features.contains(Self.phoneRunControlFeature)
+    }
+
+    /// The Mac offers the phone simulator viewer (`simulators:mobile`).
+    var supportsMobileSimulators: Bool {
+        features.contains(Self.mobileSimulatorsFeature)
+    }
+
+    /// The Mac offers `bot:cards` (it lists the opt-in in its support
+    /// inventory wherever it serves Bot sessions), so this device may ask for
+    /// memory and routine proposal cards.
+    var supportsBotCards: Bool {
+        serverCapabilities?.contains(.botCards) == true
+    }
+
+    /// The Mac offers `bot:activity` (revision 30), so this device may ask for it.
+    var offersBotActivity: Bool {
+        serverCapabilities?.contains(.botActivity) == true
+    }
+
+    /// The Mac announces `bot-activity-v1`, whatever this device holds.
+    var announcesBotActivity: Bool {
+        features.contains(Self.botActivityFeature)
+    }
+
+    /// The Mac announces `bot-activity-v1` and this device holds `bot:activity`:
+    /// show the status line, Steer and Queue, Queued bubbles and Chat activity.
+    var supportsBotActivity: Bool {
+        announcesBotActivity && capabilities.contains(.botActivity)
+    }
+
+    /// This device both may and did negotiate foreign-run observation.
+    var canObserveForeignRuns: Bool {
+        supportsPhoneRunControl && capabilities.contains(.runsObserve)
+    }
+
+    /// This device may Stop, answer or steer a foreign run (per-chat grants
+    /// are still checked by the Mac).
+    var canControlForeignRuns: Bool {
+        canObserveForeignRuns && capabilities.contains(.runsControl)
+    }
+
     private static func isValidFeatureToken(_ value: String) -> Bool {
         guard (1...64).contains(value.utf8.count),
               let first = value.utf8.first,
@@ -390,6 +472,65 @@ struct AidenWorkspacePatch: Encodable, Equatable, Sendable {
     }
 }
 
+struct AidenProviderCreationModel: Encodable, Equatable, Sendable {
+    let id: String
+    let vision: Bool
+    let reasoning: Bool
+    let toolCall: Bool
+}
+
+struct AidenProviderCreation: Encodable, Equatable, Sendable {
+    let label: String
+    let baseUrl: String
+    let kind: String
+    let deployment: String
+    let needsKey: Bool
+    let apiKey: String?
+    let models: [AidenProviderCreationModel]
+    let confirmedForeground = true
+
+    var isValid: Bool { validationMessage == nil }
+
+    var validationMessage: String? {
+        func bounded(_ value: String, _ maximum: Int) -> Bool {
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf16.count <= maximum &&
+                !value.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+        }
+        guard bounded(label, 120) else { return "Enter a name of up to 120 characters without line breaks." }
+        guard bounded(baseUrl, 2048),
+              let url = URL(string: baseUrl), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            return "Enter an HTTP or HTTPS base URL without credentials, a query, or a fragment (up to 2,048 characters)."
+        }
+        guard ["openai", "anthropic"].contains(kind), ["local", "hosted"].contains(deployment) else { return "Choose an API format and deployment." }
+        guard needsKey ? bounded(apiKey ?? "", 4096) : apiKey == nil else { return "Enter an API key of up to 4,096 characters without line breaks, or turn off Requires API key." }
+        guard (1...32).contains(models.count), models.allSatisfy({ bounded($0.id, 128) }),
+              Set(models.map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }).count == models.count else {
+            return "Enter 1–32 unique model IDs, each up to 128 characters without line breaks."
+        }
+        return nil
+    }
+}
+
+struct AidenProviderCreationReceipt: Decodable, Equatable, Sendable {
+    let id: String
+    let label: String
+    let models: [String]
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        models = try values.decode([String].self, forKey: .models)
+        guard id.hasPrefix("custom:remote-"), id.count <= 128, !label.isEmpty, label.count <= 120,
+              (1...32).contains(models.count), Set(models).count == models.count,
+              models.allSatisfy({ !$0.isEmpty && $0.count <= 128 }) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid provider creation receipt."))
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case id, label, models }
+}
+
 struct AidenMemorySettings: Codable, Equatable, Sendable {
     let enabled: Bool
     let revision: String
@@ -467,11 +608,30 @@ enum AidenRemoteClientError: Error, LocalizedError {
 }
 
 struct AidenManualPairingResult {
-    let payload: AidenRemoteContractFixture.PairingPayload
-    let exchange: AidenRemoteContractFixture.PairingExchange
+    let payload: AidenRemotePairing.PairingPayload
+    let exchange: AidenRemotePairing.PairingExchange
+}
+
+private final class AidenConditionalResponseCache: @unchecked Sendable {
+    struct Entry { let etag: String; let data: Data }
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+    func entry(_ key: String) -> Entry? { lock.withLock { entries[key] } }
+    func store(_ key: String, etag: String?, data: Data) {
+        lock.withLock {
+            entries.removeValue(forKey: key)
+            guard let etag, etag.utf8.count <= 256, data.count <= 1_048_576 else { return }
+            if entries.count >= 32 || entries.values.reduce(0, { $0 + $1.data.count }) + data.count > 4_194_304 {
+                entries.removeAll()
+            }
+            entries[key] = Entry(etag: etag, data: data)
+        }
+    }
 }
 
 final class AidenRemoteClient: @unchecked Sendable {
+    // A client belongs to one credential scope; cached bytes never cross pairings.
+    private let conditionalResponses = AidenConditionalResponseCache()
     private struct EmptyRequest: Encodable {}
 
     private struct PairingExchangeRequest: Encodable {
@@ -522,6 +682,21 @@ final class AidenRemoteClient: @unchecked Sendable {
         let confirmedForeground = true
     }
 
+    private struct ChatForkRequest: Encodable {
+        struct Summary: Encodable {
+            let focus: String?
+        }
+
+        let messageId: String
+        let position: AidenChatForkPosition
+        /// Present only for Fork with summary; `{}` asks for an unfocused summary.
+        let summary: Summary?
+    }
+
+    private struct ChatForkSummaryCancelResponse: Decodable {
+        let cancelled: Bool
+    }
+
     private struct ApprovalRequest: Encodable {
         let decision: AidenApprovalDecision
         /// Omitted (not null) when absent so pre-revision-17 hosts accept it.
@@ -552,56 +727,135 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private let endpoint: URL
     private let credential: String?
+    /// Request/response calls, bounded by `SessionPolicy.interactive`.
     private let session: URLSession
+    /// Long-lived SSE streams, bounded by `SessionPolicy.stream`.
+    private let streamSession: URLSession
+    /// Sessions this client created. They hold their delegates strongly until
+    /// invalidated, so the client invalidates them when it is released.
+    private let ownedSessions: [URLSession]
+    /// Pinned trust for the simulator viewer's own stream session. Nil for
+    /// clients built around an injected session.
+    private let simulatorTransportTrust: AidenSimulatorTransportTrust?
 
     init(
         installation: AidenInstallation,
         credential: String,
         waitsForConnectivity: Bool = true,
-        requestTimeout: TimeInterval = 30
+        requestTimeout: TimeInterval = SessionPolicy.idleTimeout
     ) throws {
         guard let pairingTrust = installation.pairingTrust else {
             throw AidenRemoteClientError.missingTrustConfiguration
         }
         endpoint = installation.endpoint
         self.credential = credential
+        let trustPolicy = try AidenServerTrustPolicy(pairingTrust: pairingTrust)
         session = Self.makePinnedSession(
             endpoint: installation.endpoint,
             fingerprint: installation.serverSpkiSha256,
-            trustPolicy: try AidenServerTrustPolicy(pairingTrust: pairingTrust),
+            trustPolicy: trustPolicy,
+            policy: .interactive,
             waitsForConnectivity: waitsForConnectivity,
             requestTimeout: requestTimeout
         )
+        streamSession = Self.makePinnedSession(
+            endpoint: installation.endpoint,
+            fingerprint: installation.serverSpkiSha256,
+            trustPolicy: trustPolicy,
+            policy: .stream,
+            waitsForConnectivity: waitsForConnectivity,
+            requestTimeout: requestTimeout
+        )
+        ownedSessions = [session, streamSession]
+        simulatorTransportTrust = AidenSimulatorTransportTrust(
+            host: installation.endpoint.host ?? "",
+            port: installation.endpoint.port,
+            fingerprint: installation.serverSpkiSha256,
+            policy: trustPolicy
+        )
     }
 
-    init(endpoint: URL, credential: String?, session: URLSession) {
+    init(endpoint: URL, credential: String?, session: URLSession, streamSession: URLSession? = nil) {
         self.endpoint = endpoint
         self.credential = credential
         self.session = session
+        self.streamSession = streamSession ?? session
+        ownedSessions = []
+        simulatorTransportTrust = nil
+    }
+
+    private init(endpoint: URL, ownedSession: URLSession) {
+        self.endpoint = endpoint
+        credential = nil
+        session = ownedSession
+        streamSession = ownedSession
+        ownedSessions = [ownedSession]
+        simulatorTransportTrust = nil
+    }
+
+    deinit {
+        // Let in-flight work finish, then release the sessions and their
+        // delegates. Without this every replaced client leaks both.
+        ownedSessions.forEach { $0.finishTasksAndInvalidate() }
+    }
+
+    /// Timeouts per call type. The idle timeout doubles as stream liveness:
+    /// the server sends an SSE heartbeat comment every 15 s on both transcript
+    /// and progress streams, so a stream with no bytes for two heartbeats is
+    /// treated as dead and reconnects through the normal recovery path.
+    enum SessionPolicy: Equatable {
+        case interactive
+        case stream
+
+        static let idleTimeout: TimeInterval = 30
+
+        /// Total time one task may take, including waiting for connectivity.
+        var resourceTimeout: TimeInterval {
+            switch self {
+            case .interactive: 5 * 60
+            case .stream: 60 * 60
+            }
+        }
+
+        func configuration(
+            waitsForConnectivity: Bool,
+            requestTimeout: TimeInterval = SessionPolicy.idleTimeout
+        ) -> URLSessionConfiguration {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.waitsForConnectivity = waitsForConnectivity
+            configuration.timeoutIntervalForRequest = requestTimeout
+            configuration.timeoutIntervalForResource = max(requestTimeout, resourceTimeout)
+            configuration.httpCookieAcceptPolicy = .never
+            configuration.httpShouldSetCookies = false
+            return configuration
+        }
     }
 
     static func pair(
-        payload: AidenRemoteContractFixture.PairingPayload,
+        payload: AidenRemotePairing.PairingPayload,
         deviceName: String,
         deviceType: AidenDeviceType,
         clientVersion: String,
         acceptsBotCapabilities: Bool = AppConfig.botFirstMobileEnabled,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
-    ) async throws -> AidenRemoteContractFixture.PairingExchange {
+    ) async throws -> AidenRemotePairing.PairingExchange {
         let payload = try payload.validated(at: now)
         let bootstrap = payload.bootstrap
-        let session: URLSession
+        let client: AidenRemoteClient
         if let injectedSession {
-            session = injectedSession
+            client = AidenRemoteClient(endpoint: bootstrap.endpoint, credential: nil, session: injectedSession)
         } else {
-            session = makePinnedSession(
+            client = AidenRemoteClient(
                 endpoint: bootstrap.endpoint,
-                fingerprint: bootstrap.serverSpkiSha256,
-                trustPolicy: try AidenServerTrustPolicy(pairingTrust: payload.trust)
+                ownedSession: makePinnedSession(
+                    endpoint: bootstrap.endpoint,
+                    fingerprint: bootstrap.serverSpkiSha256,
+                    trustPolicy: try AidenServerTrustPolicy(pairingTrust: payload.trust),
+                    policy: .interactive
+                )
             )
         }
-        let client = AidenRemoteClient(endpoint: bootstrap.endpoint, credential: nil, session: session)
         let request = PairingExchangeRequest(
             secret: bootstrap.secret,
             deviceName: deviceName,
@@ -610,7 +864,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             acceptsDisplayName: true,
             acceptsBotCapabilities: acceptsBotCapabilities
         )
-        let exchange: AidenRemoteContractFixture.PairingExchange
+        let exchange: AidenRemotePairing.PairingExchange
         do {
             exchange = try await client.send(
                 method: "POST",
@@ -675,14 +929,15 @@ final class AidenRemoteClient: @unchecked Sendable {
         endpoint: URL,
         session injectedSession: URLSession? = nil,
         now: Date = Date()
-    ) async throws -> AidenRemoteContractFixture.PairingPayload {
+    ) async throws -> AidenRemotePairing.PairingPayload {
         let normalizedCode = try normalizeManualPairingCode(code)
         guard isCanonicalAidenEndpoint(endpoint) else {
             throw AidenRemoteClientError.invalidEndpoint
         }
-        let session = injectedSession ?? makeSealedBootstrapSession(endpoint: endpoint)
-        let client = AidenRemoteClient(endpoint: endpoint, credential: nil, session: session)
-        let sealed: AidenRemoteContractFixture.ManualPairingBootstrap = try await client.send(
+        let client = injectedSession.map {
+            AidenRemoteClient(endpoint: endpoint, credential: nil, session: $0)
+        } ?? AidenRemoteClient(endpoint: endpoint, ownedSession: makeSealedBootstrapSession(endpoint: endpoint))
+        let sealed: AidenRemotePairing.ManualPairingBootstrap = try await client.send(
             method: "POST",
             path: ["pairing", "manual-bootstrap"],
             body: EmptyRequest(),
@@ -770,7 +1025,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke, .appControlsRead, .appControlsRespond,
+            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
+            .appControlsRead, .appControlsRespond,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -903,6 +1160,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    func createProvider(_ input: AidenProviderCreation, idempotencyKey: UUID) async throws -> AidenProviderCreationReceipt {
+        try await send(method: "POST", path: ["providers"], body: input,
+                       headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
+    }
+
     func memorySettings() async throws -> AidenMemorySettings {
         try await send(method: "GET", path: ["memory", "settings"])
     }
@@ -1004,6 +1266,32 @@ final class AidenRemoteClient: @unchecked Sendable {
         return value
     }
 
+    /// One page of a chat's visible messages, oldest first. Without `before`
+    /// the page ends at the newest message; otherwise it ends just before that
+    /// message. A `before` the Mac no longer has is `409 revision_conflict`.
+    func messagesWindow(
+        chatId: String,
+        before: String? = nil,
+        limit: Int = AidenChatMessagesWindow.defaultLimit
+    ) async throws -> AidenChatMessagesWindow {
+        guard (1...AidenChatMessagesWindow.maximumLimit).contains(limit) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        let value: AidenChatMessagesWindow = try await send(
+            method: "GET",
+            path: ["chats", chatId, "messages"],
+            query: query
+        )
+        guard value.chatId == chatId,
+              value.messages.count <= limit,
+              before.map({ cursor in !value.messages.contains { $0.id == cursor } }) ?? true else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return value
+    }
+
     func createChat(
         workspaceId: String,
         providerId: String? = nil,
@@ -1039,6 +1327,83 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: ["If-Match": revision],
             acceptedStatus: [204]
         )
+    }
+
+    /// Fork a chat at a settled message (contract revision 21). `after` keeps
+    /// the chosen reply; `before` cuts just before the chosen prompt and
+    /// returns it as `prefill` to edit and resend. A summary focus is sent
+    /// only for Fork with summary; pass an empty string for an unfocused
+    /// summary and nil for a plain fork.
+    func forkChat(
+        chatId: String,
+        revision: String,
+        messageId: String,
+        position: AidenChatForkPosition,
+        summaryFocus: String? = nil,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatForkResult {
+        try validateRemoteIdentifier(chatId)
+        try validateRemoteIdentifier(messageId)
+        try validateRevision(revision)
+        let summary = summaryFocus.map { raw -> ChatForkRequest.Summary in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ChatForkRequest.Summary(focus: trimmed.isEmpty ? nil : trimmed)
+        }
+        // The Mac measures in UTF-16 code units, so match it exactly.
+        if let focus = summary?.focus,
+           focus.utf16.count > AidenChatForkSummary.maximumFocusLength {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let result: AidenChatForkResult = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork"],
+            body: ChatForkRequest(messageId: messageId, position: position, summary: summary),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            acceptedStatus: [201]
+        )
+        // The fork is a new chat that records this source and cut point.
+        guard result.chat.id != chatId,
+              let lineage = result.chat.forkedFrom,
+              lineage.chatId == chatId,
+              lineage.messageId == messageId,
+              lineage.position == position,
+              position == .before || result.prefill == nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    /// Ask the Mac to try a failed fork summary again.
+    func retryForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "retry")
+    }
+
+    /// Continue the fork without its summary; queued messages then send.
+    func skipForkSummary(chatId: String) async throws -> AidenChat {
+        try await forkSummaryAction(chatId: chatId, action: "skip")
+    }
+
+    /// Stop a pending fork summary. Returns false when none was running.
+    func cancelForkSummary(chatId: String) async throws -> Bool {
+        try validateRemoteIdentifier(chatId)
+        let response: ChatForkSummaryCancelResponse = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", "cancel"]
+        )
+        return response.cancelled
+    }
+
+    private func forkSummaryAction(chatId: String, action: String) async throws -> AidenChat {
+        try validateRemoteIdentifier(chatId)
+        let chat: AidenChat = try await send(
+            method: "POST",
+            path: ["chats", chatId, "fork-summary", action]
+        )
+        guard chat.id == chatId else { throw AidenRemoteClientError.invalidResponse }
+        return chat
     }
 
     /// Report that the user viewed a chat, clearing its unread marker on every
@@ -1122,12 +1487,8 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     // MARK: - Bots
 
-    func bots(includeArchived: Bool = false) async throws -> AidenBotList {
-        try await send(
-            method: "GET",
-            path: ["bots"],
-            query: [URLQueryItem(name: "includeArchived", value: includeArchived ? "true" : "false")]
-        )
+    func bots() async throws -> AidenBotList {
+        try await send(method: "GET", path: ["bots"])
     }
 
     func bot(id: String) async throws -> AidenBotDetail {
@@ -1165,33 +1526,17 @@ final class AidenRemoteClient: @unchecked Sendable {
         return try validatedBotDetail(detail, expectedID: id)
     }
 
-    func archiveBot(id: String, revision: String) async throws -> AidenBotDetail {
+    /// Permanently erases a Bot (`bot-delete-v1`). A 404 means the Bot is
+    /// already gone, which is the outcome the caller asked for.
+    func deleteBot(id: String, revision: String) async throws {
         try validateBotIdentifier(id)
         try validateRevision(revision)
-        let response: AidenBotArchiveResponse = try await send(
+        try await sendWithoutResponse(
             method: "DELETE",
             path: ["bots", id],
-            headers: ["If-Match": revision]
+            headers: ["If-Match": revision],
+            acceptedStatus: [204, 404]
         )
-        return try validatedBotDetail(response.bot, expectedID: id)
-    }
-
-    func restoreBot(
-        id: String,
-        revision: String,
-        idempotencyKey: UUID = UUID()
-    ) async throws -> AidenBotDetail {
-        try validateBotIdentifier(id)
-        try validateRevision(revision)
-        let response: AidenBotRestoreResponse = try await send(
-            method: "POST",
-            path: ["bots", id, "restore"],
-            headers: [
-                "If-Match": revision,
-                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
-            ]
-        )
-        return try validatedBotDetail(response.bot, expectedID: id)
     }
 
     func botConversations(
@@ -1273,67 +1618,261 @@ final class AidenRemoteClient: @unchecked Sendable {
         return response
     }
 
-    func botChatAccess(chatId: String) async throws -> AidenBotChatAccessView {
-        try validateRemoteIdentifier(chatId)
-        let response: AidenBotChatAccessView = try await send(
-            method: "GET",
-            path: ["chats", chatId, "capabilities"]
-        )
-        guard response.chatId == chatId else {
-            throw AidenRemoteClientError.invalidResponse
+    // MARK: Contract revision 25: durable Bot sessions
+
+    func botSession(botId: String) async throws -> AidenBotSession {
+        try validateBotIdentifier(botId)
+        let session: AidenBotSession = try await send(method: "GET", path: ["bots", botId, "session"])
+        guard session.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return session
+    }
+
+    /// The Bot's live session stream. The first frame is always a snapshot;
+    /// every frame must name this Bot.
+    func botSessionEvents(botId: String) -> AsyncThrowingStream<AidenBotSessionEvent, Error> {
+        do {
+            try validateBotIdentifier(botId)
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
         }
-        return response
-    }
-
-    func updateBotChatAccess(
-        chatId: String,
-        revision: String,
-        update: AidenBotChatAccessUpdate
-    ) async throws -> AidenBotChatAccessView {
-        try validateRemoteIdentifier(chatId)
-        try validateRevision(revision)
-        let response: AidenBotChatAccessView = try await send(
-            method: "PATCH",
-            path: ["chats", chatId, "capabilities"],
-            body: update,
-            headers: ["If-Match": revision]
-        )
-        guard response.chatId == chatId else {
-            throw AidenRemoteClientError.invalidResponse
+        return sseStream(
+            path: ["bots", botId, "session", "events"],
+            after: 0,
+            parser: AidenBotSessionSSEParser()
+        ) { event in
+            guard event.botId == botId else { throw AidenRemoteClientError.invalidResponse }
         }
-        return response
     }
 
-    func botFavorites() async throws -> AidenBotFavorites {
-        try await send(method: "GET", path: ["bot-favorites"])
-    }
-
-    func updateBotFavorites(
-        _ update: AidenBotFavoritesUpdateRequest,
-        revision: String
-    ) async throws -> AidenBotFavorites {
-        try validateRevision(revision)
+    func sendBotMessage(
+        botId: String,
+        request: AidenBotMessageRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotMessageReceipt {
+        try validateBotIdentifier(botId)
         return try await send(
-            method: "PATCH",
-            path: ["bot-favorites"],
-            body: update,
-            headers: ["If-Match": revision]
+            method: "POST",
+            path: ["bots", botId, "messages"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201, 202]
         )
     }
 
-    func botAccessNotice() async throws -> AidenBotNoticeStatus {
-        try await send(method: "GET", path: ["bot-access-notice"])
+    func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("resume", botId: botId, idempotencyKey: idempotencyKey)
     }
 
-    func acknowledgeBotAccessNotice(
-        _ acknowledgement: AidenBotNoticeAcknowledgement,
-        idempotencyKey: UUID = UUID()
-    ) async throws -> AidenBotNoticeStatus {
+    func dismissBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("dismiss", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    func stopBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("stop", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    /// Answers the Bot's waiting A–E question. The request UUID is the idempotency key,
+    /// so a retried answer replays the same receipt.
+    func answerBotQuestion(
+        botId: String,
+        waitId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotQuestionAnswerReceipt {
+        try validateBotIdentifier(botId)
+        let receipt: AidenBotQuestionAnswerReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "questions", waitId, "answer"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    private func botSessionAction(
+        _ action: String,
+        botId: String,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, action],
+            body: AidenBotSessionActionRequest(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 202]
+        )
+    }
+
+    // MARK: Routines (`bot-routines-v1`)
+
+    func botRoutines(botId: String) async throws -> [AidenBotRoutine] {
+        try validateBotIdentifier(botId)
+        let list: AidenBotRoutineList = try await send(method: "GET", path: ["bots", botId, "routines"])
+        guard list.routines.allSatisfy({ $0.botId == botId }) else { throw AidenRemoteClientError.invalidResponse }
+        return list.routines
+    }
+
+    func createBotRoutine(
+        botId: String,
+        request: AidenBotRoutineCreateRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutine {
+        try validateBotIdentifier(botId)
+        let routine: AidenBotRoutine = try await send(
+            method: "POST",
+            path: ["bots", botId, "routines"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201]
+        )
+        guard routine.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return routine
+    }
+
+    func updateBotRoutine(
+        botId: String,
+        routineId: String,
+        revision: String,
+        request: AidenBotRoutineUpdateRequest
+    ) async throws -> AidenBotRoutine {
+        try validateBotIdentifier(botId)
+        try validateSafeIdentifier(routineId, maximumScalars: 160)
+        try validateRevision(revision)
+        let routine: AidenBotRoutine = try await send(
+            method: "PATCH",
+            path: ["bots", botId, "routines", routineId],
+            body: request,
+            headers: ["If-Match": revision]
+        )
+        guard routine.botId == botId, routine.id == routineId else { throw AidenRemoteClientError.invalidResponse }
+        return routine
+    }
+
+    func deleteBotRoutine(botId: String, routineId: String, revision: String) async throws {
+        try validateBotIdentifier(botId)
+        try validateSafeIdentifier(routineId, maximumScalars: 160)
+        try validateRevision(revision)
+        try await sendWithoutResponse(
+            method: "DELETE",
+            path: ["bots", botId, "routines", routineId],
+            headers: ["If-Match": revision],
+            acceptedStatus: [204]
+        )
+    }
+
+    // MARK: Connection requests and presets
+
+    func requestBotConnection(
+        botId: String,
+        request: AidenBotConnectionRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotConnectionRequestReceipt {
+        try validateBotIdentifier(botId)
+        let receipt: AidenBotConnectionRequestReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "connection-requests"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 202]
+        )
+        guard receipt.pluginId == request.pluginId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    // MARK: Memory (`bot-memory-v1`) and proactivity (`bot-proactive-v1`)
+
+    func botMemory(botId: String) async throws -> AidenBotMemory {
+        try validateBotIdentifier(botId)
+        let view: AidenBotMemory = try await send(method: "GET", path: ["bots", botId, "memory"])
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return view
+    }
+
+    /// One person edit. The error bodies carry no view, so a failed edit is
+    /// followed by a fresh `botMemory` read.
+    func editBotMemory(
+        botId: String,
+        request: AidenBotMemoryEditRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotMemory {
+        try validateBotIdentifier(botId)
+        let response: AidenBotMemoryEditResponse = try await send(
+            method: "POST",
+            path: ["bots", botId, "memory", "edits"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard response.view.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return response.view
+    }
+
+    func respondToBotRoutineProposal(
+        botId: String,
+        proposalId: String,
+        request: AidenBotRoutineProposalRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotRoutineProposalRespondResult {
+        try validateBotIdentifier(botId)
+        try AidenBotProactiveWire.validateProposalID(proposalId)
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "routine-proposals", proposalId, "respond"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+    }
+
+    func botRoutineSuggestions(botId: String) async throws -> [AidenBotRoutineSuggestion] {
+        try validateBotIdentifier(botId)
+        let list: AidenBotRoutineSuggestionList = try await send(
+            method: "GET",
+            path: ["bots", botId, "routine-suggestions"]
+        )
+        return list.suggestions
+    }
+
+    /// Finished Bot routine runs since `since` (the previous feed's `now`).
+    func botRoutineNotifications(since: String?) async throws -> AidenBotRoutineNotificationFeed {
+        if let since {
+            // The cursor is a timestamp the Mac sent earlier; never forward
+            // anything else in the query.
+            guard (1...64).contains(since.unicodeScalars.count),
+                  since.unicodeScalars.allSatisfy({ scalar in
+                      switch scalar.value {
+                      case 48...58, 65...90, 97...122, 43, 45, 46: true
+                      default: false
+                      }
+                  }) else {
+                throw AidenRemoteClientError.invalidResponse
+            }
+        }
+        return try await send(
+            method: "GET",
+            path: ["bots", "routine-notifications"],
+            query: since.map { [URLQueryItem(name: "since", value: $0)] } ?? []
+        )
+    }
+
+    func botPresets() async throws -> [AidenBotPreset] {
+        let list: AidenBotPresetList = try await send(method: "GET", path: ["bot-presets"])
+        return list.presets
+    }
+
+    func createBotFromPreset(
+        _ request: AidenBotPresetCreateRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotPresetCreateResult {
         try await send(
             method: "POST",
-            path: ["bot-access-notice", "acknowledgement"],
-            body: acknowledgement,
-            headers: idempotencyHeaders(idempotencyKey)
+            path: ["bots", "from-preset"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200, 201]
         )
     }
 
@@ -1941,22 +2480,136 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// as their stream identity and carry direct task/agent snapshots.
     func progressEvents(
         chatId: String,
-        after sequence: Int
+        after sequence: Int,
+        epoch: String? = nil,
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in }
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
         eventStream(
             path: ["chats", chatId, "progress", "events"],
             expectedStreamId: chatId,
             progressOnly: true,
-            after: sequence
+            after: sequence,
+            headers: epoch.map { ["Aiden-Progress-Epoch": $0] } ?? [:],
+            onOpen: onOpen
         )
+    }
+
+    // MARK: Contract revision 24: phone run observation and control
+
+    /// Attaches to the chat's newest run, wherever it started. Every frame
+    /// must name the same run as the first.
+    func currentRunEvents(chatId: String) -> AsyncThrowingStream<AidenRemoteRunEvent, Error> {
+        let identity = AidenRunStreamIdentity()
+        return sseStream(
+            path: ["chats", chatId, "runs", "current", "events"],
+            after: 0,
+            parser: AidenRunSSEParser()
+        ) { event in
+            try identity.check(event)
+        }
+    }
+
+    /// Resumes one run after `sequence` (the last fully delivered event).
+    func runEvents(runId: String, after sequence: Int) -> AsyncThrowingStream<AidenRemoteRunEvent, Error> {
+        let identity = AidenRunStreamIdentity(runId: runId)
+        return sseStream(
+            path: ["runs", runId, "events"],
+            after: sequence,
+            parser: AidenRunSSEParser()
+        ) { event in
+            try identity.check(event)
+        }
+    }
+
+    func cancelRun(id: String, idempotencyKey: UUID = UUID()) async throws -> AidenRemoteRunCancelResult {
+        let result: AidenRemoteRunCancelResult = try await send(
+            method: "POST",
+            path: ["runs", id, "cancel"],
+            body: AidenEmptyObject(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [202]
+        )
+        guard result.runId == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    /// A phone may always deny; allowing an approval the Mac marked
+    /// `canAllow: false` is refused with `capability_denied`. A loser receives
+    /// `409 approval_resolved` carrying the winning decision and `resolvedAt`.
+    func respondToRunApproval(
+        runId: String,
+        approvalId: String,
+        decision: AidenApprovalDecision,
+        scope: AidenApprovalScope? = nil,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenRemoteRunApprovalResult {
+        let result: AidenRemoteRunApprovalResult = try await send(
+            method: "POST",
+            path: ["runs", runId, "approvals", approvalId, "respond"],
+            body: ApprovalRequest(decision: decision, scope: decision == .allow ? scope : nil),
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+        guard result.runId == runId, result.approvalId == approvalId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
+    }
+
+    func respondToRunQuestion(
+        runId: String,
+        promptId: String,
+        request: AidenQuestionRespondRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenRemoteRunQuestionResult {
+        let result: AidenRemoteRunQuestionResult = try await send(
+            method: "POST",
+            path: ["runs", runId, "questions", promptId, "respond"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey)
+        )
+        guard result.runId == runId, result.promptId == promptId else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return result
     }
 
     private func eventStream(
         path: [String],
         expectedStreamId: String?,
         progressOnly: Bool,
-        after sequence: Int
+        after sequence: Int,
+        headers: [String: String] = [:],
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in }
     ) -> AsyncThrowingStream<AidenRemoteStreamEvent, Error> {
+        sseStream(path: path, after: sequence, parser: AidenSSEParser(), headers: headers, onOpen: onOpen) { event in
+            if let expectedStreamId, event.streamId != expectedStreamId {
+                throw AidenRemoteClientError.invalidResponse
+            }
+            if progressOnly,
+               event.type != .taskUpdate,
+               event.type != .agentsUpdate,
+               event.type != .appControlsChanged {
+                // The progress channel uses SSE comments for keep-alive.
+                // A protocol heartbeat belongs to the transcript channel.
+                throw AidenRemoteClientError.invalidResponse
+            }
+            if !progressOnly,
+               event.type == .taskUpdate || event.type == .agentsUpdate || event.type == .appControlsChanged {
+                // Progress snapshots are a separate chat-scoped channel;
+                // never let one enter the parent turn cursor.
+                throw AidenRemoteClientError.invalidResponse
+            }
+        }
+    }
+
+    private func sseStream<Parser: AidenSSEEventParsing>(
+        path: [String],
+        after sequence: Int,
+        parser initialParser: Parser,
+        headers: [String: String] = [:],
+        onOpen: @escaping @Sendable (Bool) async -> Void = { _ in },
+        validate validateEvent: @escaping @Sendable (Parser.Event) throws -> Void
+    ) -> AsyncThrowingStream<Parser.Event, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -1968,11 +2621,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                         path: path,
                         query: query,
                         body: nil,
-                        headers: sequence > 0 ? ["Last-Event-ID": String(sequence)] : [:],
+                        headers: headers.merging(sequence > 0 ? ["Last-Event-ID": String(sequence)] : [:]) { _, new in new },
                         authenticated: true
                     )
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    let (bytes, response) = try await session.bytes(for: request)
+                    let (bytes, response) = try await streamSession.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw AidenRemoteClientError.invalidResponse
                     }
@@ -1988,46 +2641,17 @@ final class AidenRemoteClient: @unchecked Sendable {
                         throw AidenRemoteClientError.unexpectedStatus(httpResponse.statusCode)
                     }
 
-                    func yield(_ event: AidenRemoteStreamEvent) throws {
-                        if let expectedStreamId, event.streamId != expectedStreamId {
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if progressOnly,
-                           event.type != .taskUpdate,
-                           event.type != .agentsUpdate,
-                           event.type != .appControlsChanged {
-                            // The progress channel uses SSE comments for keep-alive.
-                            // A protocol heartbeat belongs to the transcript channel.
-                            throw AidenRemoteClientError.invalidResponse
-                        }
-                        if !progressOnly,
-                           event.type == .taskUpdate || event.type == .agentsUpdate || event.type == .appControlsChanged {
-                            // Progress snapshots are a separate chat-scoped channel;
-                            // never let one enter the parent turn cursor.
-                            throw AidenRemoteClientError.invalidResponse
-                        }
+                    await onOpen(httpResponse.value(forHTTPHeaderField: "Aiden-Progress-Resumed") == "true")
+
+                    func yield(_ event: Parser.Event) throws {
+                        try validateEvent(event)
                         continuation.yield(event)
                     }
 
-                    var parser = AidenSSEParser()
-                    var lineBytes: [UInt8] = []
-                    lineBytes.reserveCapacity(512)
-                    for try await byte in bytes {
-                        try Task.checkCancellation()
-                        if byte == 0x0A {
-                            if lineBytes.last == 0x0D { lineBytes.removeLast() }
-                            guard let line = String(bytes: lineBytes, encoding: .utf8) else {
-                                throw AidenRemoteClientError.invalidResponse
-                            }
-                            lineBytes.removeAll(keepingCapacity: true)
-                            if let event = try parser.consume(line: line) {
-                                try yield(event)
-                            }
-                        } else {
-                            lineBytes.append(byte)
-                            guard lineBytes.count <= AidenRemoteProtocol.maxSSEFrameBytes else {
-                                throw AidenSSEParserError.frameTooLarge
-                            }
+                    var parser = initialParser
+                    try await AidenSSELineDecoder.forEachLine(in: bytes) { line in
+                        if let event = try parser.consume(line: line) {
+                            try yield(event)
                         }
                     }
                     // EOF is not an SSE frame delimiter. Discard the pending
@@ -2066,8 +2690,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         endpoint: URL,
         fingerprint: String,
         trustPolicy: AidenServerTrustPolicy,
+        policy: SessionPolicy,
         waitsForConnectivity: Bool = true,
-        requestTimeout: TimeInterval = 30
+        requestTimeout: TimeInterval = SessionPolicy.idleTimeout
     ) -> URLSession {
         let delegate = AidenPinnedServerSessionDelegate(
             expectedHost: endpoint.host ?? "",
@@ -2075,12 +2700,10 @@ final class AidenRemoteClient: @unchecked Sendable {
             expectedFingerprint: fingerprint,
             trustPolicy: trustPolicy
         )
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.waitsForConnectivity = waitsForConnectivity
-        configuration.timeoutIntervalForRequest = requestTimeout
-        configuration.timeoutIntervalForResource = 60 * 60
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.httpShouldSetCookies = false
+        let configuration = policy.configuration(
+            waitsForConnectivity: waitsForConnectivity,
+            requestTimeout: requestTimeout
+        )
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
@@ -2107,7 +2730,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         acceptedStatus: Set<Int> = [200],
         maximumResponseBytes: Int = AidenRemoteProtocol.maxJSONBodyBytes
     ) async throws -> Response {
-        let request = try makeRequest(
+        var request = try makeRequest(
             method: method,
             path: path,
             query: query,
@@ -2115,13 +2738,22 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
-        let (data, response) = try await boundedData(
+        let cacheKey = request.url!.absoluteString
+        let cached = method == "GET" && authenticated ? conditionalResponses.entry(cacheKey) : nil
+        if let cached { request.setValue(cached.etag, forHTTPHeaderField: "If-None-Match") }
+        let (receivedData, response) = try await boundedData(
             for: request,
             maximumBytes: maximumResponseBytes
         )
-        try validate(response: response, data: data, acceptedStatus: acceptedStatus)
+        let unchanged = (response as? HTTPURLResponse)?.statusCode == 304 && cached != nil
+        let data = unchanged ? cached!.data : receivedData
+        try validate(response: response, data: receivedData, acceptedStatus: unchanged ? acceptedStatus.union([304]) : acceptedStatus)
         do {
-            return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
+            let decoded = try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
+            if method == "GET", authenticated, !unchanged {
+                conditionalResponses.store(cacheKey, etag: (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag"), data: data)
+            }
+            return decoded
         } catch {
             AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
             throw AidenRemoteClientError.invalidResponse
@@ -2408,6 +3040,108 @@ final class AidenRemoteClient: @unchecked Sendable {
 }
 
 
+// MARK: - Contract revision 26: mobile simulator viewer
+
+extension AidenRemoteClient {
+    private struct SimulatorDeviceRequest: Encodable {
+        let deviceId: String
+    }
+
+    /// Booting a simulator can take tens of seconds.
+    static let simulatorOpenTimeout: TimeInterval = 120
+
+    /// `GET /simulators?chatId=` never starts the hub and adds
+    /// `chatDeviceIds`. Without a chat it is an explicit user action that may
+    /// start an installed hub on the Mac (Retry).
+    func simulators(chatId: String? = nil) async throws -> AidenSimulatorListing {
+        var query: [URLQueryItem] = []
+        if let chatId {
+            try validateRemoteIdentifier(chatId)
+            query = [URLQueryItem(name: "chatId", value: chatId)]
+        }
+        return try await send(method: "GET", path: ["simulators"], query: query)
+    }
+
+    func openSimulator(deviceId: String) async throws -> AidenSimulatorDevice {
+        try validateSimulatorDeviceId(deviceId)
+        let response: AidenSimulatorOpenResponse = try await send(
+            method: "POST",
+            path: ["simulators", "open"],
+            body: SimulatorDeviceRequest(deviceId: deviceId),
+            timeoutInterval: Self.simulatorOpenTimeout
+        )
+        guard response.device.id == deviceId else { try rejectContractResponse() }
+        return response.device
+    }
+
+    /// The caller must have confirmed the shutdown with the user.
+    func shutdownSimulator(deviceId: String) async throws {
+        try validateSimulatorDeviceId(deviceId)
+        let _: AidenSimulatorShutdownResponse = try await send(
+            method: "POST",
+            path: ["simulators", "shutdown"],
+            body: SimulatorDeviceRequest(deviceId: deviceId)
+        )
+    }
+
+    /// The hub relay's MJPEG stream for one device. Start it before the input
+    /// socket: serve-sim accepts input only while screen capture runs.
+    func simulatorStreamRequest(deviceId: String) throws -> URLRequest {
+        try validateSimulatorDeviceId(deviceId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["simulators", "hub", "vendor", "serve-sim", "helper", deviceId, "stream.mjpeg"],
+            query: [],
+            body: nil,
+            headers: ["Accept": "multipart/x-mixed-replace, image/jpeg"],
+            authenticated: true
+        )
+        request.timeoutInterval = AidenSimulatorTransport.idleTimeout
+        return request
+    }
+
+    /// The helper input socket for one device. It carries the bearer and
+    /// protocol headers and never an `Origin` (the relay refuses browser origins).
+    func simulatorInputRequest(deviceId: String) throws -> URLRequest {
+        try validateSimulatorDeviceId(deviceId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["simulators", "hub", "vendor", "serve-sim", "helper", "ws"],
+            query: [URLQueryItem(name: "device", value: deviceId)],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        guard let url = request.url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https" else {
+            throw AidenRemoteClientError.invalidEndpoint
+        }
+        components.scheme = "wss"
+        guard let socketURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
+        request.url = socketURL
+        request.setValue(nil, forHTTPHeaderField: "Accept")
+        request.setValue(nil, forHTTPHeaderField: "Origin")
+        request.timeoutInterval = AidenSimulatorTransport.idleTimeout
+        return request
+    }
+
+    /// A pinned session for one viewer's stream and socket, with the same
+    /// trust as this client. The caller closes it when the viewer goes away.
+    func makeSimulatorTransport() throws -> AidenSimulatorTransport {
+        guard let simulatorTransportTrust else {
+            throw AidenRemoteClientError.missingTrustConfiguration
+        }
+        return AidenSimulatorTransport(trust: simulatorTransportTrust)
+    }
+
+    private func validateSimulatorDeviceId(_ value: String) throws {
+        guard AidenSimulatorDevice.isValidIdentifier(value) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+    }
+}
+
 // Playback-only contract. TODO: mobile enablement/configuration is a future feature.
 struct AidenReadAloudSource: Codable, Sendable {
     let chatId: String
@@ -2487,5 +3221,30 @@ extension AidenRemoteClient {
     }
     func readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int) async throws -> AidenReadAloudAudio {
         try await send(method: "GET", path: ["chats", chatId, "read-aloud", "audio", jobId, String(segment), String(offset)], maximumResponseBytes: 100_000)
+    }
+}
+
+/// Parsers whose frames `AidenRemoteClient` can stream.
+protocol AidenSSEEventParsing: Sendable {
+    associatedtype Event: Sendable
+    mutating func consume(line: String) throws -> Event?
+}
+
+
+private struct AidenEmptyObject: Encodable {}
+
+/// Pins a run stream to one run: the current-run route adopts the first
+/// frame's run, and every later frame must name it.
+private final class AidenRunStreamIdentity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runId: String?
+
+    init(runId: String? = nil) { self.runId = runId }
+
+    func check(_ event: AidenRemoteRunEvent) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let runId, runId != event.runId { throw AidenRemoteClientError.invalidResponse }
+        runId = event.runId
     }
 }

@@ -6,6 +6,7 @@ enum AidenProviderIconResolver {
         "amazon-bedrock",
         "ant-ling",
         "anthropic",
+        "antigravity",
         "apple-foundation-models",
         "azure-openai-responses",
         "cerebras",
@@ -58,6 +59,7 @@ enum AidenProviderIconResolver {
     ]
 
     private static let aliases = [
+        "azure": "azure-openai-responses",
         "gemini": "google",
         "lm-studio": "lmstudio",
         "moonshot": "moonshotai",

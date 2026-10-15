@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.EventListener
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.ResponseBody
 import okio.ForwardingSource
 import okio.buffer
@@ -31,7 +32,9 @@ import org.junit.Before
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
@@ -47,6 +50,57 @@ class AidenRemoteClientTest {
     private lateinit var server: MockWebServer
     private lateinit var client: AidenRemoteClient
     private lateinit var httpClient: OkHttpClient
+
+    @Test
+    fun qrAndSetupCodePairingIdentifyAndroidAndRejectOlderHostsWithoutIdentityFallback() = runBlocking {
+        val endpoint = "https://desktop.test/api/aiden/v1"
+        val expires = Instant.now().plusSeconds(120).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+        val payload = AidenPairingPayload(bootstrap = AidenPairingBootstrap(instanceId = "desktop", endpoint = endpoint,
+            serverSpkiSha256 = "sha256/" + "A".repeat(43) + "=", secret = "S".repeat(32), expiresAt = expires), trust = AidenPairingTrust("system"))
+        val code = "0123456789ABCDEFGHJK"
+        val sessionId = "pairing_" + "P".repeat(32)
+        val salt = ByteArray(32) { it.toByte() }
+        val nonce = ByteArray(12) { (it + 32).toByte() }
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(salt, "HmacSHA256"))
+        val prk = mac.doFinal(code.toByteArray(Charsets.US_ASCII))
+        mac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+        val key = mac.doFinal(("aiden-manual-pairing-v1\n$sessionId").toByteArray() + byteArrayOf(1))
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.GCMParameterSpec(128, nonce))
+        cipher.updateAAD("aiden-manual-pairing-v1\n$sessionId\n$expires".toByteArray())
+        val encrypted = cipher.doFinal(Json.encodeToString(payload).toByteArray())
+        fun b64(bytes: ByteArray) = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        val sealed = AidenManualPairingBootstrap(sessionId = sessionId, expiresAt = expires, salt = b64(salt), nonce = b64(nonce),
+            ciphertext = b64(encrypted.dropLast(16).toByteArray()), tag = b64(encrypted.takeLast(16).toByteArray()))
+        val exchange = AidenPairingExchange(instanceId = "desktop", deviceId = "phone", credential = "credential", capabilities = emptyList(), endpoint = endpoint, serverSpkiSha256 = payload.bootstrap.serverSpkiSha256)
+        for (manual in listOf(false, true)) for (oldHost in listOf(false, true)) {
+            val requests = mutableListOf<Pair<String, String>>()
+            val transport = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                val buffer = okio.Buffer(); request.body!!.writeTo(buffer)
+                requests.add(request.url.encodedPath to buffer.readUtf8())
+                val bootstrap = request.url.encodedPath.endsWith("/manual-bootstrap")
+                val body = if (bootstrap) Json.encodeToString(sealed) else if (oldHost)
+                    """{"error":{"code":"invalid_request","message":"Unsupported device type","requestId":"pair","retryable":false}}"""
+                    else Json.encodeToString(exchange)
+                okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1).code(if (!bootstrap && oldHost) 400 else 200)
+                    .message("pairing").body(body.toResponseBody()).build()
+            }.build()
+            try {
+                if (manual) AidenRemoteClient.pair(manualCode = code, endpoint = endpoint, deviceName = "Phone", deviceType = AidenDeviceType.ANDROID_PHONE, customOkHttpClient = transport)
+                else AidenRemoteClient.pair(payload, "Tablet", AidenDeviceType.ANDROID_TABLET, customOkHttpClient = transport)
+                assertFalse("An older host must require an update", oldHost)
+            } catch (error: sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.AndroidPairingUnsupported) {
+                assertTrue(oldHost)
+                assertTrue(error.message!!.contains("Update Aiden Agent"))
+            }
+            val sent = requests.filter { it.first.endsWith("/exchange") }
+            assertEquals("Never retry using an Apple identity", 1, sent.size)
+            assertEquals("android", Json.parseToJsonElement(sent.single().second).jsonObject["deviceType"]!!.jsonPrimitive.content)
+            assertEquals(if (manual) 2 else 1, requests.size)
+        }
+    }
 
     @Before
     fun setup() {
@@ -76,6 +130,33 @@ class AidenRemoteClientTest {
     @After
     fun teardown() {
         server.shutdown()
+    }
+
+    @Test
+    fun quietProgressResumeCarriesEpochAndReportsOpenWithoutASnapshot() = runBlocking {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setHeader("Aiden-Progress-Resumed", "true"))
+        val opened = AtomicBoolean(false)
+        val events = client.progressEvents("chat-1", after = 42, epoch = "epoch-original", onOpen = { opened.set(it) }).toList()
+        assertTrue(events.isEmpty())
+        assertTrue(opened.get())
+        val request = server.takeRequest()
+        assertEquals("epoch-original", request.getHeader("Aiden-Progress-Epoch"))
+        assertEquals("42", request.getHeader("Last-Event-ID"))
+    }
+
+    @Test
+    fun conditionalReadsReuseBytesOnlyWithinTheSameCredentialClient() = runBlocking {
+        val body = """{"protocolVersion":1,"instanceId":"test_instance","name":"Home","capabilities":["server:read"],"serverCapabilities":["server:read"],"appVersion":"1","connectionMode":"lan","serverTime":"2026-10-06T00:00:00Z"}"""
+        server.enqueue(MockResponse().setBody(body).setHeader("ETag", "W/\"snapshot\""))
+        server.enqueue(MockResponse().setResponseCode(304))
+        assertEquals("Home", client.server().name)
+        assertEquals("Home", client.server().name)
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+        assertEquals("W/\"snapshot\"", server.takeRequest().getHeader("If-None-Match"))
+        val replacement = AidenRemoteClient(server.url("/api/aiden/v1").toString(), "replacement", httpClient)
+        server.enqueue(MockResponse().setResponseCode(304))
+        try { replacement.server(); fail("Unsolicited 304 must not recover another credential's cached bytes") } catch (_: AidenRemoteClientException.Server) { }
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
     }
 
     @Test
@@ -122,6 +203,34 @@ class AidenRemoteClientTest {
         val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
         assertEquals("operation_fixture_01", body.getValue("operationId").jsonPrimitive.content)
         assertEquals("false", body.getValue("value").jsonPrimitive.content)
+    }
+
+    @Test
+    fun providerCreationSendsExplicitVisionAndWriteOnlyKey() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"""))
+        val key = UUID.fromString("10000000-0000-4000-8000-000000000001")
+        val input = AidenProviderCreation("Private", "https://models.example.test/v1", needsKey = true,
+            apiKey = "synthetic-provider-key", models = listOf(AidenProviderCreationModel("vision", vision = true)))
+        assertTrue(input.isValid)
+        assertFalse(input.toString().contains("synthetic-provider-key"))
+        val receipt = client.createProvider(input, key)
+        assertEquals(listOf("vision"), receipt.models)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/providers", request.path)
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("true", body.getValue("confirmedForeground").jsonPrimitive.content)
+        assertEquals("synthetic-provider-key", body.getValue("apiKey").jsonPrimitive.content)
+        assertEquals("true", body.getValue("models").jsonArray[0].jsonObject.getValue("vision").jsonPrimitive.content)
+        assertFalse(input.copy(baseUrl = "https://user:secret@example.test/v1").isValid)
+        assertFalse(input.copy(models = emptyList()).isValid)
+        assertFalse(input.copy(apiKey = "a".repeat(4097)).isValid)
+        assertFalse(input.copy(baseUrl = "https://models.example.test/" + "a".repeat(2048)).isValid)
+        assertFalse(input.copy(models = listOf(AidenProviderCreationModel("model\nnext"))).isValid)
+        assertFalse(input.copy(label = "private\tname").isValid)
+        assertTrue(input.copy(apiKey = "a".repeat(4096)).isValid)
+        assertTrue(input.copy(needsKey = false, apiKey = null).isValid)
     }
 
     @Test
@@ -592,13 +701,13 @@ class AidenRemoteClientTest {
         // 1. Bot list
         server.enqueue(
             MockResponse().setResponseCode(200).setBody("""
-                {"bots":[],"maxBots":256,"favorites":{"botIds":[],"revision":"fav_0"}}
+                {"bots":[],"maxBots":256}
             """.trimIndent())
         )
-        val bots = client.bots(includeArchived = true)
+        val bots = client.bots()
         val listRequest = server.takeRequest()
         assertEquals("GET", listRequest.method)
-        assertEquals("/api/aiden/v1/bots?includeArchived=true", listRequest.path)
+        assertEquals("/api/aiden/v1/bots", listRequest.path)
         assertEquals(0, bots.bots.size)
 
         // 2. Update bot identity with If-Match
@@ -732,6 +841,32 @@ class AidenRemoteClientTest {
         assertEquals("30d", usage.range)
         assertEquals(15, usage.totals.requests)
         assertEquals(2350, usage.totals.tokens.total)
+    }
+
+    @Test
+    fun testMacSpeechStatusDecodesSixModelsWithAdditiveFieldsAndVerifyPhase() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""
+            {
+              "engine":{"ready":true,"error":null},
+              "selectedModelId":"parakeet-v3",
+              "models":[
+              {"id":"parakeet-v3","name":"Parakeet TDT 0.6B v3","description":"Fast and accurate across 25 European languages.","sizeLabel":"487 MB","quant":"int8","languagesLabel":"25 languages","accuracy":0.88,"speed":0.79,"recommended":true,"installed":true,"languages":["bg","hr","cs"],"capabilities":{"autoDetect":true,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"parakeet-v2","name":"Parakeet TDT 0.6B v2","description":"English only, and the most accurate model for English.","sizeLabel":"482 MB","quant":"int8","languagesLabel":"English","accuracy":0.89,"speed":0.85,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"canary-180m-flash","name":"Canary 180M Flash","description":"Small and very fast. English, German, Spanish and French, with translation to English.","sizeLabel":"154 MB","quant":"int8","languagesLabel":"English, German, Spanish, French","accuracy":0.88,"speed":0.98,"recommended":false,"installed":false,"languages":["en","de","es","fr"],"capabilities":{"autoDetect":false,"languageHint":true,"translateToEnglish":true,"maxWindowSeconds":null},"license":{"name":"CC-BY-4.0 (NVIDIA)","url":"https://creativecommons.org/licenses/by/4.0/"}},
+              {"id":"whisper-turbo","name":"Whisper Large v3 Turbo","description":"Broadest language coverage. Slower than the others.","sizeLabel":"564 MB","quant":"int8","languagesLabel":"99 languages","accuracy":0.88,"speed":0.35,"recommended":false,"installed":false,"languages":["en","zh","de"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (OpenAI Whisper)","url":"https://github.com/openai/whisper/blob/main/LICENSE"},"download":{"id":"whisper-turbo","percentage":90,"phase":"verify","status":"downloading"}},
+              {"id":"sense-voice","name":"SenseVoice Small","description":"Fast Chinese, Cantonese, English, Japanese and Korean.","sizeLabel":"163 MB","quant":"int8","languagesLabel":"Chinese, Cantonese, English, Japanese, Korean","accuracy":0.81,"speed":0.98,"recommended":false,"installed":false,"languages":["zh","yue","en","ja","ko"],"capabilities":{"autoDetect":true,"languageHint":true,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"FunASR Model License 1.1","url":"https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE","attribution":"SenseVoice Small, Alibaba FunAudioLLM"}},
+              {"id":"moonshine-base-en","name":"Moonshine Base","description":"Tiny English model for Macs with little free memory.","sizeLabel":"111 MB","quant":"int8","languagesLabel":"English","accuracy":0.8,"speed":0.99,"recommended":false,"installed":false,"languages":["en"],"capabilities":{"autoDetect":false,"languageHint":false,"translateToEnglish":false,"maxWindowSeconds":30},"license":{"name":"MIT (Moonshine English models)","url":"https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"}}
+            ],
+              "input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}
+            }
+        """.trimIndent()))
+        val status = client.speechStatus()
+        assertEquals(6, status.models.size)
+        assertEquals("487 MB", status.models.first().sizeLabel)
+        val whisper = status.models.single { it.id == "whisper-turbo" }
+        assertEquals("verify", whisper.download?.phase)
+        assertEquals(90, whisper.download?.percentage)
+        assertNull(status.models.first().download)
     }
 
     @Test
@@ -1038,5 +1173,311 @@ class AidenRemoteClientTest {
         } finally {
             AidenDiagnostics.testSink = null
         }
+    }
+
+    // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
+
+    @Test
+    fun testPhoneRunCapabilitiesAreNegotiableButNeverInventedByTheMac() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","runs:observe","runs:control"]}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","runs:observe","runs:admin"]}"""
+        ))
+
+        val granted = client.updateDeviceCapabilities(
+            listOf(AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL)
+        )
+        assertTrue(granted.containsAll(AidenRemoteCapability.PHONE_RUNS))
+        assertEquals(
+            listOf("runs:observe", "runs:control"),
+            Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+                .getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+
+        val failure = runCatching {
+            client.updateDeviceCapabilities(listOf(AidenRemoteCapability.RUNS_OBSERVE))
+        }.exceptionOrNull()
+        assertNotNull("An unknown grant in the response must be rejected.", failure)
+    }
+
+    @Test
+    fun testForeignRunControlUsesRunScopedRoutesBodiesAndIdempotencyKeys() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"runId":"run-1","chatId":"chat-1","state":"running","cancelRequested":true}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","approvalId":"approval-1","decision":"allow","scope":"chat","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","approvalId":"approval-1","decision":"deny","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"runId":"run-1","promptId":"prompt-1","outcome":"answered","resolvedAt":"2026-10-05T10:00:00.000Z"}"""
+        ))
+        server.enqueue(MockResponse().setResponseCode(409).setBody(
+            """{"error":{"code":"approval_resolved","message":"Another controller already resolved this approval.","requestId":"r1","retryable":false,"details":{"decision":"allow","resolvedAt":"2026-10-05T10:00:00.000Z"}}}"""
+        ))
+
+        val cancelKey = UUID.randomUUID()
+        assertTrue(client.cancelRun("run-1", cancelKey).cancelRequested)
+        assertEquals(AidenApprovalScope.CHAT, client.respondToRunApproval("run-1", "approval-1", AidenApprovalDecision.ALLOW, AidenApprovalScope.CHAT).scope)
+        assertEquals(AidenApprovalDecision.DENY, client.respondToRunApproval("run-1", "approval-1", AidenApprovalDecision.DENY, AidenApprovalScope.ALWAYS).decision)
+        assertEquals("answered", client.respondToRunQuestion("run-1", "prompt-1", AidenQuestionRespondRequest(cancelled = true, answers = emptyList()), UUID.randomUUID()).outcome)
+
+        val requests = (0 until 4).map { server.takeRequest() }
+        assertEquals(
+            listOf(
+                "/api/aiden/v1/runs/run-1/cancel",
+                "/api/aiden/v1/runs/run-1/approvals/approval-1/respond",
+                "/api/aiden/v1/runs/run-1/approvals/approval-1/respond",
+                "/api/aiden/v1/runs/run-1/questions/prompt-1/respond"
+            ),
+            requests.map { it.path }
+        )
+        assertTrue(requests.all { it.method == "POST" })
+        assertEquals(cancelKey.toString().lowercase(), requests[0].getHeader("Idempotency-Key"))
+        assertTrue(requests.all { request ->
+            val key = request.getHeader("Idempotency-Key") ?: return@all false
+            key == key.lowercase() && runCatching { UUID.fromString(key) }.isSuccess
+        })
+        assertEquals(emptyMap<String, Any>(), Json.parseToJsonElement(requests[0].body.readUtf8()).jsonObject)
+        assertEquals("chat", Json.parseToJsonElement(requests[1].body.readUtf8()).jsonObject.getValue("scope").jsonPrimitive.content)
+        // A deny never carries a remembered scope.
+        assertEquals(setOf("decision"), Json.parseToJsonElement(requests[2].body.readUtf8()).jsonObject.keys)
+
+        try {
+            client.respondToRunApproval("run-1", "approval-2", AidenApprovalDecision.ALLOW)
+            fail("A loser must surface the first-responder conflict.")
+        } catch (error: AidenRemoteClientException.Server) {
+            assertEquals("Answered on Mac: allowed", AidenForeignRunResolution.loser(error)?.notice)
+        }
+    }
+
+    @Test
+    fun testCurrentRunStreamAttachesToOneExternallyStartedRun() = runBlocking {
+        fun frame(run: String, sequence: Int, type: String, payload: String): String =
+            "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"$run\",\"sequence\":$sequence,\"timestamp\":\"2026-10-05T10:00:0${sequence}Z\",\"type\":\"$type\",\"terminal\":false,\"payload\":$payload}\n\n"
+        val started = frame("run-mac", 1, "run.started", """{"runId":"run-mac","chatId":"chat-1","origin":"scheduler"}""")
+        val text = frame("run-mac", 2, "text_delta", """{"text":"From the Mac"}""")
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream").setBody(started + text))
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream")
+                .setBody(started + text + frame("run-other", 3, "text_delta", """{"text":"x"}"""))
+        )
+
+        val events = client.currentRunEvents("chat-1").toList()
+        assertEquals(listOf("run-mac", "run-mac"), events.map { it.runId })
+        assertEquals(AidenRemoteRunEvent.Kind.Started("chat-1", "scheduler"), events.first().kind)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/api/aiden/v1/chats/chat-1/runs/current/events", request.path)
+
+        // A frame naming another run cannot slip into the attached run's feed.
+        val received = mutableListOf<AidenRemoteRunEvent>()
+        try {
+            client.currentRunEvents("chat-1").collect { received.add(it) }
+            fail("A second run identity must end the stream.")
+        } catch (_: AidenRemoteContractException.InvalidStreamIdentity) {
+        }
+        assertEquals(2, received.size)
+    }
+
+    private fun contractFixture(): kotlinx.serialization.json.JsonObject = Json.parseToJsonElement(
+        javaClass.classLoader!!.getResource("contract.json")!!.readText()
+    ).jsonObject
+
+    @Test
+    fun testForkWithSummaryPostsTheFixtureRequestAndParsesThePendingFork() = runBlocking {
+        val fixture = contractFixture().getValue("chatFork").jsonObject.getValue("fork").jsonObject
+        server.enqueue(MockResponse().setResponseCode(201).setBody(fixture.getValue("response").toString()))
+        val key = UUID.fromString("00000000-0000-4000-8000-000000000021")
+
+        val result = client.forkChat(
+            id = "chat_fixture_source_01",
+            revision = "chat_revision_source_7",
+            messageId = "message_fixture_source_assistant_01",
+            position = AidenChatForkPosition.AFTER,
+            withSummary = true,
+            summaryFocus = "  the protocol decisions \n",
+            idempotencyKey = key
+        )
+        val request = server.takeRequest()
+
+        assertEquals("POST", request.method)
+        assertEquals("/api/aiden/v1/chats/chat_fixture_source_01/fork", request.path)
+        assertEquals("chat_revision_source_7", request.getHeader("If-Match"))
+        assertEquals(key.toString(), request.getHeader("Idempotency-Key"))
+        assertEquals(fixture.getValue("request"), Json.parseToJsonElement(request.body.readUtf8()))
+
+        assertEquals("chat_fixture_fork_01", result.chat.id)
+        assertNull(result.prefill)
+        val lineage = result.chat.forkedFrom!!
+        assertEquals("chat_fixture_source_01", lineage.chatId)
+        assertEquals(AidenChatForkPosition.AFTER, lineage.position)
+        val summary = lineage.summary!!
+        assertEquals(AidenChatForkSummaryState.PENDING, summary.state)
+        assertEquals("message_fixture_fork_assistant_01", summary.afterMessageId)
+        assertEquals("the protocol decisions", summary.focus)
+        assertTrue(summary.holdsTurns)
+    }
+
+    @Test
+    fun testEditInForkOmitsTheSummaryAndReturnsThePrefill() = runBlocking {
+        val fixture = contractFixture().getValue("chatFork").jsonObject.getValue("editFork").jsonObject
+        server.enqueue(MockResponse().setResponseCode(201).setBody(fixture.getValue("response").toString()))
+
+        val result = client.forkChat(
+            id = "chat_fixture_source_01",
+            revision = "chat_revision_source_7",
+            messageId = "message_fixture_source_user_02",
+            position = AidenChatForkPosition.BEFORE,
+            summaryFocus = "ignored without a summary"
+        )
+        val request = server.takeRequest()
+
+        assertEquals(fixture.getValue("request"), Json.parseToJsonElement(request.body.readUtf8()))
+        assertNotNull(UUID.fromString(request.getHeader("Idempotency-Key")))
+        assertNull(result.chat.forkedFrom!!.summary)
+        assertEquals(AidenChatForkPosition.BEFORE, result.chat.forkedFrom!!.position)
+        val prefill = result.prefill!!
+        assertEquals("Now check the error codes.", prefill.text)
+        assertEquals(listOf("codes.txt"), prefill.attachments.map { it.name })
+    }
+
+    @Test
+    fun testForkWithBlankFocusAsksForAnUnfocusedSummary() = runBlocking {
+        val response = contractFixture().getValue("chatFork").jsonObject.getValue("fork").jsonObject.getValue("response")
+        server.enqueue(MockResponse().setResponseCode(201).setBody(response.toString()))
+
+        client.forkChat(
+            "chat_fixture_source_01", "chat_revision_source_7", "message_fixture_source_assistant_01",
+            AidenChatForkPosition.AFTER, withSummary = true, summaryFocus = "   "
+        )
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+
+        assertEquals(Json.parseToJsonElement("{}"), body.getValue("summary"))
+    }
+
+    @Test
+    fun testForkRejectsAResponseThatIsTheSourceChat() = runBlocking {
+        val response = contractFixture().getValue("chatFork").jsonObject.getValue("fork").jsonObject.getValue("response")
+        server.enqueue(MockResponse().setResponseCode(201).setBody(response.toString()))
+
+        try {
+            client.forkChat("chat_fixture_fork_01", "rev", "message_fixture_source_assistant_01", AidenChatForkPosition.AFTER)
+            fail("A fork must be a new chat")
+        } catch (_: AidenRemoteClientException.InvalidResponse) {
+        }
+    }
+
+    @Test
+    fun testForkSummaryActionsPostToTheirRoutes() = runBlocking {
+        val chatFork = contractFixture().getValue("chatFork").jsonObject
+        val forkChat = chatFork.getValue("fork").jsonObject.getValue("response").jsonObject.getValue("chat").toString()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(forkChat))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(forkChat))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(chatFork.getValue("summaryCancel").toString()))
+
+        assertEquals("chat_fixture_fork_01", client.retryForkSummary("chat_fixture_fork_01").id)
+        assertEquals("chat_fixture_fork_01", client.skipForkSummary("chat_fixture_fork_01").id)
+        assertTrue(client.cancelForkSummary("chat_fixture_fork_01").cancelled)
+
+        val requests = List(3) { server.takeRequest() }
+        assertEquals(listOf("POST", "POST", "POST"), requests.map { it.method })
+        assertEquals(
+            listOf(
+                "/api/aiden/v1/chats/chat_fixture_fork_01/fork-summary/retry",
+                "/api/aiden/v1/chats/chat_fixture_fork_01/fork-summary/skip",
+                "/api/aiden/v1/chats/chat_fixture_fork_01/fork-summary/cancel"
+            ),
+            requests.map { it.path }
+        )
+    }
+
+    @Test
+    fun testFetchedForkDecodesEverySummaryState() = runBlocking {
+        val chatFork = contractFixture().getValue("chatFork").jsonObject
+        val forkChat = chatFork.getValue("fork").jsonObject.getValue("response").jsonObject.getValue("chat").jsonObject
+        val lineage = forkChat.getValue("forkedFrom").jsonObject
+        val pending = lineage.getValue("summary")
+        val summaries = listOf(pending) + chatFork.getValue("summaryStates").jsonArray
+        for (summary in summaries) {
+            val chat = kotlinx.serialization.json.JsonObject(
+                forkChat + ("forkedFrom" to kotlinx.serialization.json.JsonObject(lineage + ("summary" to summary)))
+            )
+            server.enqueue(MockResponse().setResponseCode(200).setBody(chat.toString()))
+        }
+
+        val decoded = summaries.map { client.chat("chat_fixture_fork_01").forkedFrom!!.summary!! }
+
+        assertEquals(
+            listOf(AidenChatForkSummaryState.PENDING, AidenChatForkSummaryState.READY, AidenChatForkSummaryState.FAILED),
+            decoded.map { it.state }
+        )
+        assertTrue(decoded.all { it.afterMessageId == "message_fixture_fork_assistant_01" })
+        assertTrue(decoded.all { it.focus == "the protocol decisions" })
+        val (pendingSummary, ready, failed) = decoded
+        assertNull(pendingSummary.text)
+        assertNull(pendingSummary.error)
+        assertEquals("The review settled on revision 21 and kept every route additive.", ready.text)
+        assertNull(ready.error)
+        assertFalse("A ready summary lets turns through", ready.holdsTurns)
+        assertEquals("The summary could not be generated.", failed.error)
+        assertNull(failed.text)
+        assertTrue("A failed summary holds turns until retried or skipped", failed.holdsTurns)
+    }
+
+    @Test
+    fun testForkErrorsExplainABusyOrChangedSource() = runBlocking {
+        fun errorBody(code: String) =
+            """{"error":{"code":"$code","message":"server text","requestId":"request-fork","retryable":false}}"""
+        server.enqueue(MockResponse().setResponseCode(409).setBody(errorBody("operation_in_progress")))
+        server.enqueue(MockResponse().setResponseCode(409).setBody(errorBody("revision_conflict")))
+
+        val busy = runCatching {
+            client.forkChat("chat_fixture_source_01", "rev", "message_fixture_source_assistant_01", AidenChatForkPosition.AFTER)
+        }.exceptionOrNull()!!
+        val changed = runCatching {
+            client.forkChat("chat_fixture_source_01", "rev", "message_fixture_source_assistant_01", AidenChatForkPosition.AFTER)
+        }.exceptionOrNull()!!
+
+        assertFalse(AidenChatForkErrors.isRevisionConflict(busy))
+        assertEquals("This chat is busy on your Mac. Try forking again in a moment.", AidenChatForkErrors.forkMessage(busy))
+        assertTrue(AidenChatForkErrors.isRevisionConflict(changed))
+        assertEquals(
+            "This chat changed on your Mac. Check the latest messages and try again.",
+            AidenChatForkErrors.forkMessage(changed)
+        )
+    }
+
+    @Test
+    fun testLineageIsOptionalAndSummaryRowsCarryOnlyTheLineage() = runBlocking {
+        val fixture = contractFixture()
+        // An older Mac's chat has no lineage.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture.getValue("chat").toString()))
+        val olderChat = client.chat(fixture.getValue("chat").jsonObject.getValue("id").jsonPrimitive.content)
+        server.takeRequest()
+        assertNull(olderChat.forkedFrom)
+
+        val page = fixture.getValue("chatSummaries").jsonObject
+        val rows = page.getValue("summaries").jsonArray
+        val forkedRow = kotlinx.serialization.json.JsonObject(
+            rows[0].jsonObject + (
+                "forkedFrom" to Json.parseToJsonElement(
+                    """{"chatId":"chat_fixture_source_01","messageId":"message_fixture_source_user_02","position":"before","at":"2026-08-18T19:06:00.000Z"}"""
+                )
+            )
+        )
+        val forkedPage = kotlinx.serialization.json.JsonObject(
+            page + ("summaries" to kotlinx.serialization.json.JsonArray(listOf(forkedRow, rows[1])))
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody(forkedPage.toString()))
+
+        val summaries = client.chatSummaryPage().summaries
+        assertEquals("chat_fixture_source_01", summaries[0].forkedFrom?.chatId)
+        assertEquals(AidenChatForkPosition.BEFORE, summaries[0].forkedFrom?.position)
+        assertNull(summaries[1].forkedFrom)
     }
 }

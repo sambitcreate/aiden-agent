@@ -1,7 +1,7 @@
-import { entryLabel, sessionName } from "@earendil-works/pi-agent-core";
-import type { JsonValue } from "@earendil-works/pi-agent-core";
-import { JsonlSessionRepo, TODO_CONTEXT } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { entryLabel, sessionName } from "./pi-legacy-harness.js";
+import type { JsonValue } from "./pi-legacy-harness.js";
+import { JsonlSessionRepo, TODO_CONTEXT } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import { constants as fsConstants } from "node:fs";
 import { open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";

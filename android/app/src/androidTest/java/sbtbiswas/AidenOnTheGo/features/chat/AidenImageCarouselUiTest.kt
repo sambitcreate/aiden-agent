@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ExifInterface
 import java.util.Base64
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.*
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import android.graphics.Color
@@ -14,6 +15,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -146,6 +151,64 @@ class AidenImageCarouselUiTest {
         compose.onNodeWithText("2 of 3").assertExists()
         compose.onNodeWithContentDescription("Close image viewer").assertExists()
         saveCapture("aiden-image-gallery.png", "aiden_image_gallery")
+    }
+
+    @Test
+    fun anImageStillLoadingShowsItsShapedPlaceholderAndNoSpinner() {
+        val attachment = AidenMessageAttachment(
+            id = "pending-image",
+            name = "pending.png",
+            mimeType = "image/png",
+            kind = AidenAttachmentKind.IMAGE,
+            size = 1_024
+        )
+        val never = CompletableDeferred<ByteArray?>()
+        compose.setContent {
+            AidenTheme {
+                AidenMessageImageAttachments(
+                    attachments = listOf(attachment),
+                    edge = AidenMessageMediaEdge.LEADING,
+                    loadData = { never.await() }
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Loading pending.png").assertExists()
+        compose.onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertDoesNotExist()
+    }
+
+    @Test
+    fun anImageDecodedOnceRendersAtOnceWhenItsRowIsShownAgain() {
+        val bytes = png(0, Color.rgb(31, 178, 145))
+        val attachment = AidenMessageAttachment(
+            id = "decoded-once-image",
+            name = "decoded.png",
+            mimeType = "image/png",
+            kind = AidenAttachmentKind.IMAGE,
+            size = bytes.size
+        )
+        var remounted by mutableStateOf(false)
+        val never = CompletableDeferred<ByteArray?>()
+        compose.setContent {
+            AidenTheme {
+                // A different call site is a fresh composition, like a row scrolled back in.
+                if (!remounted) {
+                    AidenMessageImageAttachments(listOf(attachment), AidenMessageMediaEdge.LEADING) { bytes }
+                } else {
+                    AidenMessageImageAttachments(listOf(attachment), AidenMessageMediaEdge.LEADING) { never.await() }
+                }
+            }
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithContentDescription("decoded.png").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        remounted = true
+        compose.waitForIdle()
+
+        // The bytes are not reloaded, yet the image is already there.
+        compose.onNodeWithContentDescription("decoded.png").assertExists()
+        compose.onNodeWithContentDescription("Loading decoded.png").assertDoesNotExist()
     }
 
     private fun png(index: Int, color: Int): ByteArray {

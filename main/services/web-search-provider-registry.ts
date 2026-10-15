@@ -9,7 +9,6 @@
 
 import {
   buildExaMcpRequest,
-  exaMcpHttpError,
   exaMcpTransportError,
   parseExaMcpResponse,
   type ExaCredential,
@@ -465,14 +464,7 @@ export function webSearchAdapterFactory(providerId: unknown): WebSearchAdapterFa
     : undefined;
 }
 
-export const getWebSearchAdapterFactory = webSearchAdapterFactory;
-
 export function webSearchAdapterAvailable(providerId: unknown): boolean {
   return webSearchAdapterFactory(providerId) !== undefined;
 }
 
-export const isWebSearchAdapterAvailable = webSearchAdapterAvailable;
-
-/** Closed HTTP status mapping kept available for transport-focused tests. */
-export const mapExaHttpError = (status: unknown): WebSearchError =>
-  asWebSearchError(exaMcpHttpError(status).category);

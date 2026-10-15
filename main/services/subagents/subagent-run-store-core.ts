@@ -88,6 +88,7 @@ function strictSnapshot(value: unknown): SubagentRunSnapshotV1 {
     snapshot.label,
     snapshot.taskPreview,
     snapshot.modelId,
+    snapshot.providerId,
     snapshot.activity,
     snapshot.latestText,
     snapshot.terminalMarkdown,
@@ -540,7 +541,10 @@ function hasStableIdentity(existing: SubagentRunSnapshotV1, next: SubagentRunSna
     existing.label === next.label &&
     existing.taskPreview === next.taskPreview &&
     existing.startedAt === next.startedAt &&
-    existing.modelId === next.modelId
+    existing.modelId === next.modelId &&
+    existing.providerId === next.providerId &&
+    existing.thinkingLevel === next.thinkingLevel &&
+    existing.modelSelection === next.modelSelection
   );
 }
 

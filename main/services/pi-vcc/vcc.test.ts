@@ -1,7 +1,7 @@
 import { InMemorySessionRepo } from "../pi-session-repository-port.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareCompaction } from "@earendil-works/pi-agent-core";
+import { prepareCompaction } from "../pi-legacy-harness.js";
 import { createModels, fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { createPiSessionPort } from "../pi-session-port.js";
 import { PiCompactionCoordinator } from "../pi-compaction-core.js";

@@ -1,10 +1,25 @@
 import type { ModelBenchmarkScores } from "./types.js";
+import { modelIdLeaf, openRouterAuthor } from "../../renderer/shared/model-catalog-provider.js";
 
 export const OPENROUTER_BENCHMARK_ENDPOINT =
+  "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=500";
+/**
+ * The fixed endpoint earlier builds requested. New requests never use it; caches
+ * those builds stored with it stay readable offline.
+ */
+export const OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT =
   "https://openrouter.ai/api/v1/benchmarks?source=artificial-analysis&max_results=100";
+/** Every fixed endpoint a stored cache may name: an explicit allow-list, nothing else. */
+const KNOWN_OPENROUTER_BENCHMARK_ENDPOINTS: ReadonlySet<unknown> = new Set([
+  OPENROUTER_BENCHMARK_ENDPOINT,
+  OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT,
+]);
+export type OpenRouterBenchmarkEndpoint =
+  | typeof OPENROUTER_BENCHMARK_ENDPOINT
+  | typeof OPENROUTER_BENCHMARK_PREVIOUS_ENDPOINT;
 export const OPENROUTER_BENCHMARK_SOURCE_URL = "https://artificialanalysis.ai";
 export const OPENROUTER_BENCHMARK_LICENSE = "CC BY 4.0" as const;
-export const MAX_OPENROUTER_BENCHMARK_MODELS = 100;
+export const MAX_OPENROUTER_BENCHMARK_MODELS = 500;
 
 export interface OpenRouterBenchmarkModel {
   modelPermaslug: string;
@@ -19,13 +34,15 @@ export interface OpenRouterBenchmarkCache {
   source: {
     name: "OpenRouter Benchmarks";
     datasetSource: "artificial-analysis";
-    endpoint: typeof OPENROUTER_BENCHMARK_ENDPOINT;
+    endpoint: OpenRouterBenchmarkEndpoint;
     sourceUrl: typeof OPENROUTER_BENCHMARK_SOURCE_URL;
     version: "v1";
     citation: string;
     license: typeof OPENROUTER_BENCHMARK_LICENSE;
     asOf: string;
     fetchedAt: string;
+    /** Response rows dropped because they shared a permaslug with another row. */
+    skippedAmbiguous: number;
   };
   models: OpenRouterBenchmarkModel[];
 }
@@ -37,6 +54,8 @@ export interface ModelsDevBenchmarkIdentity {
   modelId: string;
   /** Exact display name from the same bundled models.dev record. */
   name: string;
+  /** models.dev `reasoning` flag; picks a reasoning variant when no base row exists. */
+  reasoning?: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -113,21 +132,65 @@ function parseModel(value: unknown, index: number): OpenRouterBenchmarkModel {
   return parsed;
 }
 
-function parseModels(value: unknown): OpenRouterBenchmarkModel[] {
+const MODEL_COUNT_ERROR = `OpenRouter benchmark data must contain between 1 and ${MAX_OPENROUTER_BENCHMARK_MODELS} models.`;
+
+function parseRows(value: unknown): OpenRouterBenchmarkModel[] {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
     value.length > MAX_OPENROUTER_BENCHMARK_MODELS
   ) {
-    throw new Error("OpenRouter benchmark data must contain between 1 and 100 models.");
+    throw new Error(MODEL_COUNT_ERROR);
   }
-  const models = value.map(parseModel);
-  if (
-    new Set(models.map((model) => model.modelPermaslug.toLocaleLowerCase())).size !== models.length
-  ) {
-    throw new Error("OpenRouter benchmark data contains duplicate model identifiers.");
+  return value.map(parseModel);
+}
+
+function permaslugOccurrences(models: readonly OpenRouterBenchmarkModel[]): Map<string, number> {
+  const occurrences = new Map<string, number>();
+  for (const model of models) {
+    const key = model.modelPermaslug.toLowerCase();
+    occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+  }
+  return occurrences;
+}
+
+/**
+ * Parse every response row, then drop all rows whose permaslug appears more than
+ * once: a shared permaslug cannot say which row belongs to the model, so none does.
+ */
+function parseResponseModels(value: unknown): {
+  models: OpenRouterBenchmarkModel[];
+  skippedAmbiguous: number;
+  uniqueModels: number;
+} {
+  const parsed = parseRows(value);
+  const occurrences = permaslugOccurrences(parsed);
+  const models = parsed.filter(
+    (model) => occurrences.get(model.modelPermaslug.toLowerCase()) === 1,
+  );
+  if (models.length === 0) throw new Error(MODEL_COUNT_ERROR);
+  return {
+    models,
+    skippedAmbiguous: parsed.length - models.length,
+    uniqueModels: occurrences.size,
+  };
+}
+
+/** A cache Aiden wrote already dropped ambiguous rows, so a duplicate means it is corrupt. */
+function parseCachedModels(value: unknown): OpenRouterBenchmarkModel[] {
+  const models = parseRows(value);
+  for (const count of permaslugOccurrences(models).values()) {
+    if (count > 1) throw new Error("OpenRouter benchmark cache contains duplicate permaslugs.");
   }
   return models;
+}
+
+function skippedCount(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("OpenRouter benchmark cache skipped-row count is invalid.");
+  }
+  return value;
 }
 
 /** Normalize one authenticated OpenRouter Data API response for durable device-local use. */
@@ -147,11 +210,13 @@ export function buildOpenRouterBenchmarkCache(
   if (!hasRequiredAttribution(citation)) {
     throw new Error("OpenRouter benchmark response has an invalid citation.");
   }
-  const models = parseModels(response.data);
+  const { models, skippedAmbiguous, uniqueModels } = parseResponseModels(response.data);
+  // OpenRouter documents model_count as the number of unique models, so it must
+  // cover every distinct permaslug returned, counting each ambiguous group once.
   if (
     typeof meta.model_count !== "number" ||
     !Number.isSafeInteger(meta.model_count) ||
-    meta.model_count < models.length
+    meta.model_count < uniqueModels
   ) {
     throw new Error("OpenRouter benchmark response model count is invalid.");
   }
@@ -167,6 +232,7 @@ export function buildOpenRouterBenchmarkCache(
       license: OPENROUTER_BENCHMARK_LICENSE,
       asOf: timestamp(meta.as_of, "meta.as_of"),
       fetchedAt: timestamp(fetchedAt, "fetchedAt"),
+      skippedAmbiguous,
     },
     models,
   };
@@ -182,7 +248,7 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     !source ||
     source.name !== "OpenRouter Benchmarks" ||
     source.datasetSource !== "artificial-analysis" ||
-    source.endpoint !== OPENROUTER_BENCHMARK_ENDPOINT ||
+    !KNOWN_OPENROUTER_BENCHMARK_ENDPOINTS.has(source.endpoint) ||
     source.sourceUrl !== OPENROUTER_BENCHMARK_SOURCE_URL ||
     source.version !== "v1" ||
     source.license !== OPENROUTER_BENCHMARK_LICENSE
@@ -198,15 +264,17 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     source: {
       name: "OpenRouter Benchmarks",
       datasetSource: "artificial-analysis",
-      endpoint: OPENROUTER_BENCHMARK_ENDPOINT,
+      endpoint: source.endpoint as OpenRouterBenchmarkEndpoint,
       sourceUrl: OPENROUTER_BENCHMARK_SOURCE_URL,
       version: "v1",
       citation,
       license: OPENROUTER_BENCHMARK_LICENSE,
       asOf: timestamp(source.asOf, "source.asOf"),
       fetchedAt: timestamp(source.fetchedAt, "source.fetchedAt"),
+      // Caches written before this count existed read as none skipped.
+      skippedAmbiguous: skippedCount(source.skippedAmbiguous),
     },
-    models: parseModels(
+    models: parseCachedModels(
       Array.isArray(cache.models)
         ? cache.models.map((value) => {
             const model = record(value);
@@ -223,24 +291,6 @@ export function parseOpenRouterBenchmarkCache(value: unknown): OpenRouterBenchma
     ),
   };
 }
-
-const OPENROUTER_AUTHOR: Readonly<Record<string, string>> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  google: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "x-ai",
-  mistral: "mistralai",
-  minimax: "minimax",
-  zai: "z-ai",
-  "zai-coding-cn": "z-ai",
-  xiaomi: "xiaomi",
-  nvidia: "nvidia",
-};
 
 function benchmarkScores(
   cache: OpenRouterBenchmarkCache,
@@ -264,37 +314,181 @@ function splitPermaslug(value: string): { author: string; modelId: string } | nu
   const slash = value.indexOf("/");
   if (slash <= 0 || slash === value.length - 1) return null;
   return {
-    author: value.slice(0, slash).toLocaleLowerCase(),
-    modelId: value.slice(slash + 1).toLocaleLowerCase(),
+    author: value.slice(0, slash).toLowerCase(),
+    modelId: value.slice(slash + 1).toLowerCase(),
   };
-}
-
-function modelIdLeaf(value: string): string {
-  const slash = value.lastIndexOf("/");
-  return (slash >= 0 ? value.slice(slash + 1) : value).toLocaleLowerCase();
 }
 
 function withoutBenchmarkReleaseStamp(value: string): string {
   return value.replace(/-(?:19|20)\d{6}$/u, "");
 }
 
-function normalizedCatalogName(value: string): string {
-  let name = value.trim();
-  while (/\s*\([^()]*\)\s*$/u.test(name)) {
-    name = name.replace(/\s*\([^()]*\)\s*$/u, "").trim();
-  }
-  return name
+type BenchmarkVariant = "reasoning" | "non-reasoning";
+
+const VARIANT_WORDS: ReadonlyMap<string, BenchmarkVariant> = new Map([
+  ["reasoning", "reasoning"],
+  ["thinking", "reasoning"],
+  ["nonreasoning", "non-reasoning"],
+  ["nonthinking", "non-reasoning"],
+  ["nothinking", "non-reasoning"],
+]);
+const NEGATING_WORDS = new Set(["no", "non"]);
+
+function catalogWords(value: string): string[] {
+  return value
     .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/gu, "");
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter(Boolean);
 }
 
+/** Remove reasoning-variant words ("Thinking", "non-reasoning", "no thinking"). */
+function withoutVariantWords(
+  words: readonly string[],
+  variants: Set<BenchmarkVariant>,
+): string[] {
+  const rest: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const next = words[index + 1];
+    const variant = VARIANT_WORDS.get(word);
+    if (NEGATING_WORDS.has(word) && next !== undefined && VARIANT_WORDS.get(next) === "reasoning") {
+      variants.add("non-reasoning");
+      index += 1;
+    } else if (variant) {
+      variants.add(variant);
+    } else {
+      rest.push(word);
+    }
+  }
+  return rest;
+}
+
+interface CatalogIdentity {
+  base: string;
+  variant: BenchmarkVariant | null;
+}
+
+function identityFrom(
+  base: string,
+  variants: ReadonlySet<BenchmarkVariant>,
+): CatalogIdentity | null {
+  // Conflicting markers cannot name one variant, so the name matches nothing.
+  if (!base || variants.size > 1) return null;
+  return { base, variant: variants.values().next().value ?? null };
+}
+
+/**
+ * Normalize a display name to its base name plus reasoning variant. Trailing
+ * parentheticals ("(max)", "(Reasoning, Max Effort)") are dropped from the base
+ * but still contribute their variant, so "X (Reasoning)" and "X (Non-reasoning)"
+ * stay distinct.
+ */
+function catalogNameIdentity(
+  value: string,
+  variants = new Set<BenchmarkVariant>(),
+): CatalogIdentity | null {
+  let name = value.trim();
+  let match: RegExpMatchArray | null;
+  while ((match = name.match(/\s*\(([^()]*)\)\s*$/u))) {
+    withoutVariantWords(catalogWords(match[1]), variants);
+    name = name.slice(0, match.index).trim();
+  }
+  return identityFrom(withoutVariantWords(catalogWords(name), variants).join(""), variants);
+}
+
+function catalogIdentityKey(identity: CatalogIdentity): string {
+  return `${identity.variant ?? "base"}:${identity.base}`;
+}
+
+interface IndexedBenchmark {
+  model: OpenRouterBenchmarkModel;
+  /** Position in `cache.models`, so multi-key lookups keep source order. */
+  position: number;
+  /** Lowercased permaslug author, or null when the permaslug has no author/model split. */
+  author: string | null;
+}
+
+interface BenchmarkIndex {
+  byPermaslug: Map<string, IndexedBenchmark[]>;
+  byName: Map<string, IndexedBenchmark[]>;
+  byStampedLeaf: Map<string, IndexedBenchmark[]>;
+}
+
+function pushIndexed(map: Map<string, IndexedBenchmark[]>, key: string, entry: IndexedBenchmark) {
+  const list = map.get(key);
+  if (list) list.push(entry);
+  else map.set(key, [entry]);
+}
+
+// Parsed caches are replaced, never mutated, so each object is indexed once.
+const benchmarkIndexes = new WeakMap<OpenRouterBenchmarkCache, BenchmarkIndex>();
+
+function benchmarkIndex(cache: OpenRouterBenchmarkCache): BenchmarkIndex {
+  let index = benchmarkIndexes.get(cache);
+  if (index) return index;
+  index = { byPermaslug: new Map(), byName: new Map(), byStampedLeaf: new Map() };
+  cache.models.forEach((model, position) => {
+    const parsed = splitPermaslug(model.modelPermaslug);
+    const entry: IndexedBenchmark = { model, position, author: parsed?.author ?? null };
+    pushIndexed(index.byPermaslug, model.modelPermaslug.toLowerCase(), entry);
+    if (parsed === null) return;
+    const name = catalogNameIdentity(model.displayName);
+    if (name) pushIndexed(index.byName, catalogIdentityKey(name), entry);
+    pushIndexed(index.byStampedLeaf, withoutBenchmarkReleaseStamp(parsed.modelId), entry);
+  });
+  benchmarkIndexes.set(cache, index);
+  return index;
+}
+
+function eligibleBenchmarks(
+  candidates: ReadonlyArray<readonly IndexedBenchmark[] | undefined>,
+  author: string | undefined,
+): Set<IndexedBenchmark> {
+  const matches = new Set<IndexedBenchmark>();
+  for (const list of candidates) {
+    for (const entry of list ?? []) {
+      if (entry.author !== null && (author === undefined || entry.author === author)) {
+        matches.add(entry);
+      }
+    }
+  }
+  return matches;
+}
+
+function onlyBenchmark(matches: Set<IndexedBenchmark>): OpenRouterBenchmarkModel | undefined {
+  return matches.size === 1 ? matches.values().next().value?.model : undefined;
+}
+
+/** Exactly one eligible record across the candidate lists, or nothing. */
 function uniqueBenchmark(
-  models: readonly OpenRouterBenchmarkModel[],
-  predicate: (model: OpenRouterBenchmarkModel) => boolean,
+  candidates: ReadonlyArray<readonly IndexedBenchmark[] | undefined>,
+  author: string | undefined,
 ): OpenRouterBenchmarkModel | undefined {
-  const matches = models.filter(predicate);
-  return matches.length === 1 ? matches[0] : undefined;
+  return onlyBenchmark(eligibleBenchmarks(candidates, author));
+}
+
+/**
+ * Match by normalized display name. A model whose name or ID carries a variant
+ * marker matches only that variant; an unmarked model takes the base row, or,
+ * when the source lists only variants, the one its models.dev reasoning flag
+ * names. Every step needs exactly one eligible row.
+ */
+function benchmarkByCatalogName(
+  index: BenchmarkIndex,
+  identity: ModelsDevBenchmarkIdentity,
+  author: string | undefined,
+): OpenRouterBenchmarkModel | undefined {
+  const variants = new Set<BenchmarkVariant>();
+  withoutVariantWords(catalogWords(modelIdLeaf(identity.modelId)), variants);
+  const name = catalogNameIdentity(identity.name, variants);
+  if (!name) return undefined;
+  if (name.variant) return uniqueBenchmark([index.byName.get(catalogIdentityKey(name))], author);
+
+  const baseRows = eligibleBenchmarks([index.byName.get(catalogIdentityKey(name))], author);
+  if (baseRows.size > 0 || identity.reasoning === undefined) return onlyBenchmark(baseRows);
+  const variant: BenchmarkVariant = identity.reasoning ? "reasoning" : "non-reasoning";
+  return uniqueBenchmark([index.byName.get(catalogIdentityKey({ ...name, variant }))], author);
 }
 
 /**
@@ -309,30 +503,23 @@ export function openRouterBenchmarkForModelsDevIdentity(
   cache: OpenRouterBenchmarkCache,
   identity: ModelsDevBenchmarkIdentity,
 ): ModelBenchmarkScores | undefined {
-  const author = identity.author?.toLocaleLowerCase();
-  const exactId = identity.modelId.toLocaleLowerCase();
+  const author = identity.author?.toLowerCase();
   const leaf = modelIdLeaf(identity.modelId);
-  const eligible = cache.models.filter((model) => {
-    const parsed = splitPermaslug(model.modelPermaslug);
-    return parsed !== null && (author === undefined || parsed.author === author);
-  });
+  const index = benchmarkIndex(cache);
 
-  const exact = uniqueBenchmark(eligible, (model) => {
-    const permaslug = model.modelPermaslug.toLocaleLowerCase();
-    return permaslug === exactId || (author !== undefined && permaslug === `${author}/${leaf}`);
-  });
+  const exact = uniqueBenchmark(
+    [
+      index.byPermaslug.get(identity.modelId.toLowerCase()),
+      author === undefined ? undefined : index.byPermaslug.get(`${author}/${leaf}`),
+    ],
+    author,
+  );
   if (exact) return benchmarkScores(cache, exact);
 
-  const catalogName = normalizedCatalogName(identity.name);
-  const byName = catalogName
-    ? uniqueBenchmark(eligible, (model) => normalizedCatalogName(model.displayName) === catalogName)
-    : undefined;
+  const byName = benchmarkByCatalogName(index, identity, author);
   if (byName) return benchmarkScores(cache, byName);
 
-  const byStampedId = uniqueBenchmark(eligible, (model) => {
-    const parsed = splitPermaslug(model.modelPermaslug);
-    return parsed !== null && withoutBenchmarkReleaseStamp(parsed.modelId) === leaf;
-  });
+  const byStampedId = uniqueBenchmark([index.byStampedLeaf.get(leaf)], author);
   return byStampedId ? benchmarkScores(cache, byStampedId) : undefined;
 }
 
@@ -342,19 +529,20 @@ export function openRouterBenchmarkForModel(
   providerId: string,
   modelId: string,
 ): ModelBenchmarkScores | undefined {
-  const author = OPENROUTER_AUTHOR[providerId];
+  const author = openRouterAuthor(providerId);
   const candidates = [
     ...(providerId === "openrouter" || modelId.includes("/") ? [modelId] : []),
-    ...(author && !modelId.toLocaleLowerCase().startsWith(`${author}/`)
+    ...(author && !modelId.toLowerCase().startsWith(`${author}/`)
       ? [`${author}/${modelId}`]
       : []),
   ];
   if (candidates.length === 0) return undefined;
-  const model = cache.models.find((entry) =>
-    candidates.some(
-      (candidate) => entry.modelPermaslug.toLocaleLowerCase() === candidate.toLocaleLowerCase(),
-    ),
-  );
-  if (!model) return undefined;
-  return benchmarkScores(cache, model);
+  const index = benchmarkIndex(cache);
+  // The earliest record in source order wins, as the former linear scan did.
+  let first: IndexedBenchmark | undefined;
+  for (const candidate of candidates) {
+    const hit = index.byPermaslug.get(candidate.toLowerCase())?.[0];
+    if (hit && (first === undefined || hit.position < first.position)) first = hit;
+  }
+  return first ? benchmarkScores(cache, first.model) : undefined;
 }

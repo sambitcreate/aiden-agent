@@ -1,8 +1,10 @@
 import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, type AppImageIdentity } from "./app-updater-linux.js";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import electronUpdater, {
-  type CancellationToken as UpdaterCancellationToken,
+import type {
+  AppUpdater,
+  CancellationToken as UpdaterCancellationToken,
 } from "electron-updater";
 
 import { app, dialog, logger } from "../platform.js";
@@ -24,41 +26,69 @@ import {
 const INITIAL_CHECK_DELAY_MS = 15_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DOWNLOAD_STALL_TIMEOUT_MS = 2 * 60 * 1_000;
-const { CancellationToken } = electronUpdater;
-class GuardedAppImageUpdater extends electronUpdater.AppImageUpdater {
-  private originalImage: AppImageIdentity | undefined;
-  private readonly installHandoff = new AppUpdateInstallHandoff();
+type ElectronUpdaterModule = typeof import("electron-updater");
+type GuardedAppImageUpdater = InstanceType<ReturnType<typeof defineGuardedAppImageUpdater>>;
 
-  override install(isSilent = false, isForceRunAfter = false): boolean {
-    return this.installHandoff.recordInstall(() => super.install(isSilent, isForceRunAfter));
-  }
-
-  quitAndInstallWithResult(): boolean {
-    return this.installHandoff.run(() => this.quitAndInstall(false, true));
-  }
-
-  pinCurrentImage(): void {
-    this.originalImage = appImageIdentity(process.env.APPIMAGE!);
-  }
-
-  protected override doInstall(options: { isForceRunAfter: boolean }): boolean {
-    if (!this.originalImage || !this.installerPath) return false;
-    const sha512 = this.downloadedUpdateHelper?.downloadedFileInfo?.sha512;
-    if (!sha512) return false;
-    const destination = replaceAppImageAtomically({
-      current: this.originalImage,
-      installer: this.installerPath,
-      sha512,
-      eligible: () => process.env.APPIMAGE === this.originalImage?.path && supportsAppUpdates(),
-    });
-    // Upstream download/checksum behavior is retained; replace without shell tools
-    // and preserve the current filename. A normal quit needs no helper execution.
-    if (options.isForceRunAfter) void this.spawnLog(destination, [], { ...process.env, APPIMAGE_SILENT_INSTALL: "true" });
-    return true;
-  }
+// electron-updater is loaded on first use, not at module evaluation: it is
+// only reachable from start() (after the main window) or a user update action,
+// so it stays off the startup path. It is CommonJS, so a synchronous require
+// keeps the install handoff synchronous.
+let loadedUpdaterModule: ElectronUpdaterModule | null = null;
+function electronUpdaterModule(): ElectronUpdaterModule {
+  loadedUpdaterModule ??= createRequire(import.meta.url)("electron-updater") as ElectronUpdaterModule;
+  return loadedUpdaterModule;
 }
-// Never let electron-updater select a DEB/RPM installer from package-type.
-const autoUpdater = process.platform === "linux" ? new GuardedAppImageUpdater() : electronUpdater.autoUpdater;
+
+function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule) {
+  return class GuardedAppImageUpdater extends AppImageUpdater {
+    private originalImage: AppImageIdentity | undefined;
+    private readonly installHandoff = new AppUpdateInstallHandoff();
+
+    override install(isSilent = false, isForceRunAfter = false): boolean {
+      return this.installHandoff.recordInstall(() => super.install(isSilent, isForceRunAfter));
+    }
+
+    quitAndInstallWithResult(): boolean {
+      return this.installHandoff.run(() => this.quitAndInstall(false, true));
+    }
+
+    pinCurrentImage(): void {
+      this.originalImage = appImageIdentity(process.env.APPIMAGE!);
+    }
+
+    protected override doInstall(options: { isForceRunAfter: boolean }): boolean {
+      if (!this.originalImage || !this.installerPath) return false;
+      const sha512 = this.downloadedUpdateHelper?.downloadedFileInfo?.sha512;
+      if (!sha512) return false;
+      const destination = replaceAppImageAtomically({
+        current: this.originalImage,
+        installer: this.installerPath,
+        sha512,
+        eligible: () => process.env.APPIMAGE === this.originalImage?.path && supportsAppUpdates(),
+      });
+      // Upstream download/checksum behavior is retained; replace without shell tools
+      // and preserve the current filename. A normal quit needs no helper execution.
+      if (options.isForceRunAfter) void this.spawnLog(destination, [], { ...process.env, APPIMAGE_SILENT_INSTALL: "true" });
+      return true;
+    }
+  };
+}
+
+let loadedAutoUpdater: AppUpdater | null = null;
+let guardedAppImageUpdater: GuardedAppImageUpdater | null = null;
+function updater(): AppUpdater {
+  if (loadedAutoUpdater) return loadedAutoUpdater;
+  const updaterModule = electronUpdaterModule();
+  // Never let electron-updater select a DEB/RPM installer from package-type.
+  if (process.platform === "linux") {
+    const GuardedUpdater = defineGuardedAppImageUpdater(updaterModule);
+    guardedAppImageUpdater = new GuardedUpdater();
+    loadedAutoUpdater = guardedAppImageUpdater;
+  } else {
+    loadedAutoUpdater = updaterModule.autoUpdater;
+  }
+  return loadedAutoUpdater;
+}
 
 export function supportsAppUpdates(): boolean {
   return shouldEnableAppUpdates({
@@ -101,7 +131,7 @@ export class AppUpdateService {
   private readonly controller = new AppUpdateController({
     checkForUpdates: async () => {
       try {
-        const result = await autoUpdater.checkForUpdates();
+        const result = await updater().checkForUpdates();
         return result
           ? {
               isUpdateAvailable: result.isUpdateAvailable,
@@ -160,8 +190,9 @@ export class AppUpdateService {
   installDownloadedUpdateAndRestart(): boolean {
     if (!this.canInstallDownloadedUpdate()) return false;
     try {
+      const autoUpdater = updater();
       autoUpdater.autoRunAppAfterInstall = true;
-      if (autoUpdater instanceof GuardedAppImageUpdater) return autoUpdater.quitAndInstallWithResult();
+      if (guardedAppImageUpdater) return guardedAppImageUpdater.quitAndInstallWithResult();
       autoUpdater.quitAndInstall(false, true);
       return true;
     } catch (error) {
@@ -172,8 +203,9 @@ export class AppUpdateService {
 
   start(): void {
     if (this.disposed || this.started || !supportsAppUpdates()) return;
-    if (autoUpdater instanceof GuardedAppImageUpdater) {
-      try { autoUpdater.pinCurrentImage(); }
+    const autoUpdater = updater();
+    if (guardedAppImageUpdater) {
+      try { guardedAppImageUpdater.pinCurrentImage(); }
       catch { return; }
     }
     this.started = true;
@@ -281,11 +313,11 @@ export class AppUpdateService {
   }
 
   private async downloadUpdateWithWatchdog(): Promise<unknown> {
-    const cancellation = new CancellationToken();
+    const cancellation = new (electronUpdaterModule().CancellationToken)();
     this.activeDownloadCancellation = cancellation;
     this.armDownloadStallWatchdog();
     try {
-      return await autoUpdater.downloadUpdate(cancellation);
+      return await updater().downloadUpdate(cancellation);
     } finally {
       this.clearDownloadStallWatchdog();
       if (this.activeDownloadCancellation === cancellation) {
@@ -339,7 +371,8 @@ export class AppUpdateService {
     this.clearDownloadStallWatchdog();
     this.activeDownloadCancellation?.cancel();
     this.activeDownloadCancellation = null;
-    if (this.started) {
+    if (this.started && loadedAutoUpdater) {
+      const autoUpdater = loadedAutoUpdater;
       autoUpdater.off("download-progress", this.downloadProgressHandler);
       autoUpdater.off("update-downloaded", this.updateDownloadedHandler);
     }

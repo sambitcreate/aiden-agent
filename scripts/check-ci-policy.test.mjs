@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { AREA_NAMES } from "./ci-changes.mjs";
 import { REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
@@ -39,9 +40,12 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(gate.env.CI_CHANGES_JSON, "${{ toJSON(needs.changes.outputs) }}");
   for (const [name, rule] of Object.entries(REQUIRED_JOB_RULES)) {
     assert.ok(jobs[name], name);
-    if (rule.area) {
-      assert.equal(jobs[name].needs, "changes", name);
-      assert.equal(jobs[name].if, `\${{ needs.changes.outputs.${rule.area} == 'true' }}`, name);
+    if (rule.areas) {
+      // Every area that can select a job must appear in its run condition, so
+      // the aggregate never treats a selected job's skip as intentional.
+      assert.ok([jobs[name].needs].flat().includes("changes"), name);
+      const condition = rule.areas.map((area) => `needs.changes.outputs.${area} == 'true'`).join(" || ");
+      assert.equal(jobs[name].if, `\${{ ${condition} }}`, name);
     } else {
       assert.equal(jobs[name].if, undefined, name);
     }
@@ -50,6 +54,20 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
   assert.equal(filter.env.FORCE_FULL, "${{ github.event_name == 'push' && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
+  assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES].toSorted());
+  // Linux packaging still follows its own area, but the branch ruleset
+  // requires its per-arch checks. A skipped matrix job reports under the
+  // unexpanded name, so the job always starts and every step carries the gate.
+  const linuxGate = "needs.changes.outputs.linux == 'true'";
+  assert.equal(jobs.linux.if, undefined);
+  assert.ok([jobs.linux.needs].flat().includes("changes"));
+  for (const step of jobs.linux.steps) {
+    if (String(step.if ?? "").includes("failure()")) continue;
+    assert.ok(String(step.if ?? "").includes(linuxGate), step.name);
+  }
+  assert.deepEqual(jobs["linux-rpm"].needs, ["changes", "linux"]);
+  assert.equal(jobs["linux-rpm"].if, `\${{ ${linuxGate} }}`);
+  assert.ok(jobs.catalog.steps.some((step) => step.run === "npm run test:model-catalog"));
 });
 
 test("Android keeps validation and publishes installable artifacts only on main", async () => {
@@ -115,9 +133,9 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
     /- name: Upload baseline-verified RPM for Fedora acceptance\n[\s\S]*?(?=\n {6}- name:|$)/u,
   )?.[0];
   assert.ok(uploadStep, "Baseline RPM upload step is missing");
-  assert.match(uploadStep, /if: matrix\.arch == 'x64'/u);
+  assert.match(uploadStep, /if: \$\{\{ needs\.changes\.outputs\.linux == 'true' && matrix\.arch == 'x64' \}\}/u);
   assert.match(uploadStep, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
-  assert.match(rpmJob, /^ {4}needs: linux$/mu);
+  assert.match(rpmJob, /^ {4}needs: \[changes, linux\]$/mu);
   assert.match(rpmJob, /actions\/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e/u);
   assert.match(
     rpmJob,
@@ -201,17 +219,33 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
-  assert.ok(jobs.ios.steps.some((step) => step.run?.includes("xcodebuild build-for-testing")));
-  const simulator = jobs["ios-simulator"];
-  const simulatorTest = simulator.steps.find((step) => step.run?.includes("xcodebuild test"));
-  const simulatorResults = simulator.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const iosBuilds = jobs.ios.steps.filter((step) => step.run?.includes("xcodebuild build-for-testing"));
+  assert.ok(iosBuilds.some((step) => step.run.includes("generic/platform=iOS")), "device build must stay covered");
+  const simulatorTest = jobs.ios.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
+  const simulatorResults = jobs.ios.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.ok(jobs.ios.steps.indexOf(simulatorTest) > jobs.ios.steps.indexOf(iosBuilds.at(-1)));
   assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
   assert.equal(simulatorTest["continue-on-error"], undefined);
   assert.equal(simulatorResults.if, "failure()");
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
   assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
   assert.equal(simulatorResults.with["retention-days"], 7);
-  assert.equal(jobs.verify.steps.filter((step) => step.run === "npm run build").length, 1);
+  // One job builds the production bundles; E2E shards and verify reuse them.
+  const builders = Object.entries(jobs)
+    .filter(([, job]) => job.steps?.some((step) => step.run === "npm run build"))
+    .map(([name]) => name);
+  assert.deepEqual(builders, ["build"]);
+  const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  // Downloads follow the producer output, even when only a consumer is rerun
+  // and its github.run_attempt differs from the successful build's attempt.
+  assert.equal(jobs.build.outputs["artifact-name"], bundle.with.name);
+  assert.equal(bundle.with.name, "${{ steps.bundle.outputs.name }}");
+  assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
+  for (const consumer of ["e2e", "verify"]) {
+    assert.ok(jobs[consumer].needs.includes("build"), consumer);
+    const download = jobs[consumer].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+    assert.equal(download?.with.name, "${{ needs.build.outputs.artifact-name }}", consumer);
+  }
   assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u);
@@ -220,13 +254,16 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(!jobs.verify.steps.some((step) => step.run === "npm test"));
 });
 
-test("model catalog workflow verifies read-only and publishes with isolated credentials", async () => {
+test("model catalog workflow verifies read-only and publishes through a checked pull request", async () => {
   const workflow = await readFile(catalogWorkflowUrl, "utf8");
+  const { permissions, jobs } = parse(workflow);
 
   assert.match(workflow, /branches:\s*\n\s*- main/u);
   assert.match(workflow, /workflow_dispatch:/u);
-  assert.match(workflow, /permissions:\s*\n\s*contents: read/u);
-  assert.doesNotMatch(workflow, /contents: write/u);
+  // Only the publish job may write, and only to open and auto-merge its pull request.
+  assert.deepEqual(permissions, { contents: "read" });
+  assert.equal(jobs.refresh.permissions, undefined);
+  assert.deepEqual(jobs.publish.permissions, { contents: "write", "pull-requests": "write" });
   assert.match(workflow, /group: model-catalog-refresh-main/u);
   assert.match(workflow, /cancel-in-progress: true/u);
   assert.match(workflow, /author_email.*41898282\+github-actions\[bot\]@users\.noreply\.github\.com/u);
@@ -247,7 +284,38 @@ test("model catalog workflow verifies read-only and publishes with isolated cred
   assert.match(workflow, /publish:\s*\n\s*needs: refresh\s*\n\s*if: github\.ref == 'refs\/heads\/main' && /u);
   assert.match(workflow, /git merge-base --is-ancestor "\$BASE_SHA" FETCH_HEAD/u);
   assert.match(workflow, /publish:[\s\S]*\n {4}environment: model-catalog\n[\s\S]*CATALOG_DEPLOY_KEY/u);
-  assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" HEAD:main/u);
+  // The snapshot goes to a fresh automation branch that CI runs on, never straight to main.
+  assert.match(workflow, /branch="automation\/models-dev-catalog-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/u);
+  assert.match(workflow, /git push "git@github\.com:\$\{GITHUB_REPOSITORY\}\.git" "HEAD:refs\/heads\/\$\{branch\}"/u);
+  assert.doesNotMatch(workflow, /HEAD:main|--force|push -f/u);
+  assert.match(workflow, /gh pr merge --repo "\$GITHUB_REPOSITORY" --auto --merge/u);
+  const ci = parse(await readFile(workflowUrl, "utf8"));
+  assert.ok(ci.on.push.branches.includes("automation/models-dev-catalog-*"));
+
+  // A job-token merge starts no push workflows, so a follow-up run gives main
+  // its own CI after each catalog merge.
+  assert.ok("workflow_dispatch" in ci.on);
+  const baseline = parse(await readFile(new URL("../.github/workflows/model-catalog-main-baseline.yml", import.meta.url), "utf8"));
+  // The schedule catches a catalog merge that lands after the fast path stops waiting.
+  assert.deepEqual(baseline.on.workflow_run, { workflows: ["CI"], types: ["completed"] });
+  assert.ok(Array.isArray(baseline.on.schedule) && baseline.on.schedule.length === 1);
+  assert.deepEqual(baseline.permissions, { contents: "read" });
+  // Job permissions replace the workflow's, so the compare API needs contents: read here.
+  assert.deepEqual(baseline.jobs.dispatch.permissions, { actions: "write", contents: "read", "pull-requests": "read" });
+  assert.match(baseline.jobs.dispatch.if, /github\.event_name == 'schedule'/u);
+  assert.match(baseline.jobs.dispatch.if, /conclusion == 'success'/u);
+  // Coverage means a main CI run tested a commit containing the catalog merge
+  // (commit ancestry, not run timestamps), and catalog merges are found by title
+  // and branch prefix rather than among the newest-created PRs.
+  const dispatchScript = baseline.jobs.dispatch.steps[0].run;
+  assert.match(dispatchScript, /compare\/\$merge_sha\.\.\.\$run_sha/u);
+  assert.match(dispatchScript, /"identical" \|\| "\$status" == "ahead"/u);
+  assert.match(dispatchScript, /in:title "chore: refresh models\.dev catalog" sort:updated-desc/u);
+  assert.doesNotMatch(dispatchScript, /createdAt/u);
+  // A failed comparison stops the job instead of dispatching CI on every run.
+  assert.match(dispatchScript, /if ! status="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/compare\/[^\n]*\n[^\n]*\n\s*exit 1/u);
+  assert.match(baseline.jobs.dispatch.if, /startsWith\(github\.event\.workflow_run\.head_branch, 'automation\/models-dev-catalog-'\)/u);
+  assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
 
 test("Pullfrog allows aggregate release reviews to finish", async () => {
@@ -379,4 +447,40 @@ test("foreground Electron smoke is a required package command in desktop verific
   assert.ok(smoke, "Desktop CI must execute the foreground runtime assertions");
   assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
   assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
+});
+
+
+test("Linux required contexts exist for scoped PRs and fail closed", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  const gate = jobs["linux-required"];
+  assert.equal(gate.name, "Linux ${{ matrix.arch }}");
+  assert.equal(gate.if, "${{ always() }}");
+  assert.deepEqual(gate.strategy.matrix.arch, ["x64", "arm64"]);
+  assert.deepEqual(gate.needs, ["changes", "linux"]);
+  assert.notEqual(jobs.linux.name, gate.name);
+  const step = gate.steps[0];
+  assert.deepEqual(step.env, {
+    CHANGES_RESULT: "${{ needs.changes.result }}",
+    LINUX_SELECTED: "${{ needs.changes.outputs.linux }}",
+    LINUX_RESULT: "${{ needs.linux.result }}",
+  });
+  for (const [detection, selected, result, expected] of [
+    ["success", "false", "skipped", 0],
+    // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
+    ["success", "false", "success", 0],
+    ["success", "true", "success", 0],
+    ["success", "true", "failure", 1],
+    ["success", "true", "cancelled", 1],
+    ["success", "true", "skipped", 1],
+    ["failure", "false", "skipped", 1],
+    ["cancelled", "false", "skipped", 1],
+    ["success", "", "skipped", 1],
+    ["success", "false", "failure", 1],
+  ]) {
+    const run = spawnSync("bash", ["-e", "-c", step.run], {
+      env: { ...process.env, CHANGES_RESULT: detection, LINUX_SELECTED: selected, LINUX_RESULT: result },
+      encoding: "utf8",
+    });
+    assert.equal(run.status, expected, `${detection}/${selected}/${result}: ${run.stdout}${run.stderr}`);
+  }
 });

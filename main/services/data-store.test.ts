@@ -73,3 +73,24 @@ for (const protectedPublication of [false, true]) {
     });
   }
 }
+
+test("a compact store writes single-line JSON and still loads an indented file", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-compact-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "journal.json");
+  const previous = { version: 1, streams: [{ id: "stream-1", events: [1, 2, 3] }] };
+  // Written by an earlier release with indentation.
+  await fs.writeFile(file, `${JSON.stringify(previous, null, 2)}\n`);
+
+  const compact = new DataStore("journal.json", { version: 1, streams: [] as unknown[] }, () => directory, {
+    compact: true,
+  });
+  assert.deepEqual(await compact.load(), previous);
+  assert.equal(await compact.loadedFromCorruptFile(), false);
+
+  const next = { version: 1, streams: [{ id: "stream-2", events: [4] }] };
+  await compact.save(next);
+  const written = await fs.readFile(file, "utf-8");
+  assert.equal(written, `${JSON.stringify(next)}\n`);
+  assert.deepEqual(await new DataStore("journal.json", { version: 1, streams: [] as unknown[] }, () => directory).load(), next);
+});

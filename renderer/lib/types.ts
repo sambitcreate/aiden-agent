@@ -1,10 +1,12 @@
+import type { McpExposure } from "../shared/mcp-exposure";
 import type { CustomModelOptions } from "../shared/custom-model-options";
-import type { CompactionEngine } from "../shared/compaction";
+import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { ChatOwnerV1 } from "../shared/chat-visibility";
 import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -15,6 +17,7 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
+import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
 import type {
   BoundedNonSecretProviderConfig,
@@ -47,6 +50,7 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
+import type { ModelPadMetric, ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -85,6 +89,8 @@ export interface Provider {
   needsKey: boolean;
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
   deployment?: ProviderDeployment;
+  /** Explicit opt-in for an existing llama-server native classifier endpoint. */
+  llamaCppClassifierEnabled?: boolean;
   isPreset?: boolean;
   /** Pi owns this provider's endpoint, models, auth, and transport. */
   isBuiltin?: boolean;
@@ -271,6 +277,7 @@ export type GitHubPullRequestAvailability =
   | "no-pull-request"
   | "not-github"
   | "unsupported"
+  | "rate-limited"
   | "error";
 
 export interface GitHubPullRequestCheck {
@@ -305,6 +312,8 @@ export interface GitHubPullRequestSummary {
 export interface GitHubPullRequestStatus {
   availability: GitHubPullRequestAvailability;
   message?: string;
+  /** Epoch ms when a "rate-limited" read may be retried. */
+  retryAt?: number;
   pullRequest?: GitHubPullRequestSummary;
 }
 
@@ -528,15 +537,8 @@ export interface Attachment {
   text?: string;
 }
 
-export interface ModelRanking {
-  capabilityPercentile: number;
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
-
-export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
+/** One of the benchmark scores (defined with the Pad preferences that persist it). */
+export type ModelBenchmarkMetric = ModelPadMetric;
 
 export interface ModelBenchmarkScores {
   source: "openrouter";
@@ -551,10 +553,17 @@ export interface ModelBenchmarkScores {
   agentic?: number;
 }
 
+/** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
+export interface ModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export type ModelMetadataSource =
   | "local"
   | "provider"
-  | "artificial-analysis"
   | "models-dev"
   | "fallback";
 
@@ -577,8 +586,11 @@ export interface ModelInfo {
   inputModalities?: string[];
   knowledge?: string;
   releaseDate?: string;
-  ranking?: ModelRanking;
   benchmark?: ModelBenchmarkScores;
+  /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
+  cost?: ModelCost;
+  /** models.dev canonical model id for the matched row. Display-only. */
+  canonicalModelId?: string;
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }
@@ -587,6 +599,8 @@ export interface ModelInsightsStatus {
   hasKey: boolean;
   ready: boolean;
   cachedModelCount: number;
+  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
+  skippedAmbiguousCount: number;
   fetchedAt?: string;
   asOf?: string;
   citation?: string;
@@ -617,6 +631,10 @@ export interface ChatMessage {
   attachments?: Attachment[];
   appPanels?: import("../shared/app-controls").AppControlPanel[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
+  htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
+  imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
+  uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
+  visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
@@ -633,12 +651,19 @@ export interface ChatMeta {
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  /** Set when this chat was created by Fork. */
+  forkedFrom?: ChatForkLineageV1;
+  /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
+  owner?: ChatOwnerV1;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface Chat extends ChatMeta {
-  computerUseEnabled?: boolean;
+  /** The user granted Computer Use for this chat. */
+  computerUseAllowed?: boolean;
+  /** A Computer Use access request is waiting for macOS setup; offer Continue. */
+  computerUsePendingContinue?: boolean;
   /** Main-owned crash stage exists and must be recovered before another chat mutation. */
   imageArtifactRecoveryPending?: boolean;
   /** Main-owned image staging could not be opened or quarantined automatically. */
@@ -757,9 +782,20 @@ export interface McpServer {
   url?: string;
   headers?: Record<string, string>;
   oauth?: boolean;
+  /** Explicit authorization-server metadata document for custom remote OAuth connections. */
+  authServerMetadataUrl?: string;
+  oauthClientName?: string;
+  /** Built-in provider reference; requires separate device-local consent before use. */
+  authProvider?: string;
+  /** Optional bounded server description used for tool discovery. */
+  description?: string;
   /** Set when this record came from the built-in preset catalog. */
   presetId?: string;
   enabled: boolean;
+  /** How the model reaches this server's tools (default `auto`); see renderer/shared/mcp-exposure.ts. */
+  exposure?: McpExposure;
+  /** Raw remote tool names withheld from every model surface. */
+  hiddenTools?: string[];
 }
 
 export type McpPresetAuth =
@@ -793,6 +829,12 @@ export interface McpPresetState {
   enabled: boolean;
   /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
   ready: boolean;
+  /** OAuth presets: the stored sign-in was rejected and must be renewed. */
+  needsSignIn?: boolean;
+  /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
+  error?: string;
+  /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
+  invalidRecord?: boolean;
 }
 
 export interface Skill {
@@ -873,9 +915,23 @@ export interface AppSettings {
   appControlPolicy?: import("../shared/app-controls").AppControlPolicy;
   remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  /** Explicit opt-in to paid cache refreshes during active foreground runs. */
+  cacheWarmingEnabled?: boolean;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
+  modelPadPlacements?: ModelPadPlacements;
+  /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
+  pinnedModels?: string[];
+  /**
+   * Presentation-only model history: distinct `provider::model` values, newest
+   * first (at most 5). Machine-local; never part of the portable config.
+   */
+  recentModels?: string[];
+  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
+  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
@@ -885,6 +941,9 @@ export interface AppSettings {
   voiceModel?: string;
   geminiUsageScope?: GeminiUsageScope;
   localVoiceModel?: string;
+  voiceLanguage?: string;
+  voiceTranslateToEnglish?: boolean;
+  voiceTrimSilence?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
@@ -905,6 +964,12 @@ export interface AppSettings {
   providerThinkingByModel?: Record<string, Record<string, GenerationThinkingLevel>>;
   showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
+  /** Skip the per-chat Computer Use access card in every chat. */
+  computerUseAlwaysAllow?: boolean;
+  /** Aiden Live (voice and on-screen actions). Omitted means enabled. */
+  aidenLiveEnabled?: boolean;
+  /** Show the idle Live button. Omitted means shown; active sessions always show it. */
+  aidenLiveButtonVisible?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
@@ -1071,6 +1136,15 @@ export interface LocalVoiceModel {
   speed: number; // 0..1
   recommended: boolean;
   installed: boolean;
+  /** ISO 639 codes the model can transcribe. */
+  languages: string[];
+  capabilities: {
+    autoDetect: boolean;
+    languageHint: boolean;
+    translateToEnglish: boolean;
+    maxWindowSeconds: number | null;
+  };
+  license: { name: string; url: string; attribution?: string };
 }
 
 /** State of the bundled on-device (sherpa-onnx) engine. */
@@ -1079,7 +1153,15 @@ export interface EngineStatus {
   error: string | null;
 }
 
-export type { McpStatus } from "../shared/mcp-status";
+export type {
+  McpDependent,
+  McpLiveState,
+  McpLiveStatus,
+  McpServerDependents,
+  McpStatus,
+  McpToolSummary,
+  McpPendingLaunchApproval,
+} from "../shared/mcp-status";
 
 export interface ChatStartParams {
   chatId: string;
@@ -1091,6 +1173,8 @@ export interface ChatStartParams {
   thinkingLevel?: GenerationThinkingLevel;
   /** Host-owned /visualize instruction for this turn. */
   visualize?: boolean;
+  /** Settings → Appearance → Inline visuals for this turn. */
+  inlineVisuals?: import("../shared/appearance").InlineVisualsMode;
 }
 
 export interface ApprovalRequest {

@@ -1,38 +1,13 @@
 import {
-  AudioWaveform,
-  Bot,
   Blocks,
-  Lightbulb,
-  CalendarClock,
-  ChartBar,
-  ChartScatter,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Command,
-  Eye,
-  FileDiff,
-  Files,
-  FolderGit2,
-  GitBranch,
-  Globe2,
   Lock,
   LoaderCircle,
-  MessageSquare,
-  Mic2,
-  MousePointer2,
   Network,
-  Palette,
-  Plug,
-  Send,
-  ShieldCheck,
-  SquareTerminal,
-  Smartphone,
   UserRound,
-  UsersRound,
-  Wand2,
-  type LucideIcon,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -41,8 +16,10 @@ import { ProviderIcon } from "./provider-icon";
 import { ProviderEditor } from "./settings/provider-editor";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { CodexProviderSettings } from "./settings/codex-provider-settings";
+import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
-import { appApi, profileApi, providersApi } from "../lib/ipc";
+import { appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
+import { useBrowserSurfaceBlocker } from "../lib/link-opener";
 import {
   clearLegacyOnboardingCompletion,
   markOnboardingComplete,
@@ -52,6 +29,7 @@ import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
   makeOnboardingProvider,
+  visibleOnboardingFeatures,
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
 import {
@@ -59,6 +37,7 @@ import {
   getOnboardingMoreProviders,
   isOnboardingBuiltinProviderReady,
   onboardingBuiltinProviderSetupLabel,
+  onboardingChatGptSelection,
 } from "../lib/pi-provider-display";
 import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
@@ -69,49 +48,24 @@ import {
   type OnboardingSnapshot,
 } from "../shared/onboarding";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { OnboardingBotsStep } from "./onboarding-bots-step";
+import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
 
-type Step = "profile" | "provider" | "tour";
-const steps: Step[] = ["profile", "provider", "tour"];
+type Step = "profile" | "provider" | "bots" | "tour";
+const steps: Step[] = ["profile", "provider", "bots", "tour"];
 const stepLabels: Readonly<Record<Step, string>> = {
   profile: "Your profile",
   provider: "Model provider",
+  bots: "Your first Bot",
   tour: "Ready to go",
 };
 
-const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
+/** "Meet Your First Bot" appears only with the Bots capability and no Bots yet. */
+function onboardingFlowSteps(botsStepVisible: boolean): Step[] {
+  return botsStepVisible ? steps : steps.filter((item) => item !== "bots");
+}
 
-const FEATURE_ILLUSTRATIONS = {
-  workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
-  computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
-  browser: new URL("../assets/onboarding/features/browser.png", import.meta.url).href,
-  subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
-  filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
-  reviewDiffs: new URL("../assets/onboarding/features/review-diffs.png", import.meta.url).href,
-  terminal: new URL("../assets/onboarding/features/terminal.png", import.meta.url).href,
-  gitWorkflows: new URL("../assets/onboarding/features/git-workflows.png", import.meta.url).href,
-  workspaces: new URL("../assets/onboarding/features/workspaces-worktrees.png", import.meta.url)
-    .href,
-  models: new URL("../assets/onboarding/features/model-freedom.png", import.meta.url).href,
-  modelPad: new URL("../assets/onboarding/features/model-pad.png", import.meta.url).href,
-  thinking: new URL("../assets/onboarding/features/thinking-controls.png", import.meta.url).href,
-  vision: new URL("../assets/onboarding/features/attachments-vision.png", import.meta.url).href,
-  webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
-  skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
-  mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
-  geminiLive: new URL("../assets/onboarding/features/gemini-live.png", import.meta.url).href,
-  bots: new URL("../assets/onboarding/features/bots.png", import.meta.url).href,
-  schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
-    .href,
-  voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
-  chatControls: new URL("../assets/onboarding/features/chat-controls.png", import.meta.url).href,
-  commands: new URL("../assets/onboarding/features/command-palette.png", import.meta.url).href,
-  usage: new URL("../assets/onboarding/features/usage-profile.png", import.meta.url).href,
-  permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
-  themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
-  telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
-    .href,
-  aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url).href,
-} as const;
+const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 
 const providerChoices: Array<{
   id: OnboardingProviderChoice;
@@ -155,318 +109,15 @@ const providerChoices: Array<{
   {
     id: "custom",
     title: "Other Custom Provider",
-    description: "Connect your endpoint, choose models, and customize their capabilities.",
+    description: "Connect your endpoint, then set its capabilities and effort selector in Model options.",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Connect a private server and choose models and capabilities in More options.",
+    description: "Connect a private server. Set its capabilities and effort selector in Model options.",
     iconProviderId: "tailscale",
   },
 ];
-
-type FeatureGroupId = "create" | "extend" | "control";
-type FeatureBentoSize = "hero" | "tall" | "standard" | "wide";
-type FeatureBentoId = keyof typeof FEATURE_ILLUSTRATIONS;
-
-interface FeatureBento {
-  id: FeatureBentoId;
-  group: FeatureGroupId;
-  title: string;
-  description: string;
-  icon: LucideIcon;
-  imageUrl: string;
-  size: FeatureBentoSize;
-}
-
-const featureGroups: ReadonlyArray<{ id: FeatureGroupId; title: string }> = [
-  { id: "create", title: "Build in your workspace" },
-  { id: "extend", title: "Choose and extend" },
-  { id: "control", title: "Automate and stay in control" },
-];
-
-const featureBentos: FeatureBento[] = [
-  {
-    id: "chatControls", group: "control", title: "Settings in chat",
-    description: "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; paired host controls start off until you allow them in Appearance.",
-    icon: MessageSquare, imageUrl: FEATURE_ILLUSTRATIONS.chatControls, size: "standard",
-  },
-  {
-    id: "workspace",
-    group: "create",
-    title: "Workspace Agent",
-    description:
-      "Read, search, edit, and run commands in your workspace. Queue follow-ups, edit them, or steer the next response. Aiden follows your global and workspace AGENTS.md guidance, refreshing it between model turns.",
-    icon: MessageSquare,
-    imageUrl: FEATURE_ILLUSTRATIONS.workspace,
-    size: "hero",
-  },
-  {
-    id: "computerUse",
-    group: "create",
-    title: "Computer Use",
-    description: "Inspect and operate Mac apps when you opt in, with approval before every action.",
-    icon: MousePointer2,
-    imageUrl: FEATURE_ILLUSTRATIONS.computerUse,
-    size: "tall",
-  },
-  {
-    id: "subagents",
-    group: "create",
-    title: "Native Subagents",
-    description:
-      "Delegate research, plans, reviews, or coding to a child agent. Implementer writes and commands follow your workspace permission.",
-    icon: UsersRound,
-    imageUrl: FEATURE_ILLUSTRATIONS.subagents,
-    size: "standard",
-  },
-  {
-    id: "browser",
-    group: "create",
-    title: "Browser & Annotations",
-    description:
-      "Browse beside your chat, select page elements as context, and let Aiden use the same tabs. Browser profiles keep their own local sign-ins; Incognito is temporary. Manage agent access in Browser settings.",
-    icon: Globe2,
-    imageUrl: FEATURE_ILLUSTRATIONS.browser,
-    size: "standard",
-  },
-  {
-    id: "filesEditor",
-    group: "create",
-    title: "Files & Text Editor",
-    description: "Browse, search, edit, and safely save workspace text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
-    icon: Files,
-    imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
-    size: "standard",
-  },
-  {
-    id: "reviewDiffs",
-    group: "create",
-    title: "Review & Diffs",
-    description: "Inspect staged, unstaged, and branch-to-branch diffs before you commit.",
-    icon: FileDiff,
-    imageUrl: FEATURE_ILLUSTRATIONS.reviewDiffs,
-    size: "standard",
-  },
-  {
-    id: "terminal",
-    group: "create",
-    title: "Integrated Terminal",
-    description:
-      "Run a workspace shell in tabs or split panes, then reopen it with sanitized local history.",
-    icon: SquareTerminal,
-    imageUrl: FEATURE_ILLUSTRATIONS.terminal,
-    size: "standard",
-  },
-  {
-    id: "gitWorkflows",
-    group: "create",
-    title: "Git Workflows",
-    description:
-      "Switch branches, create reviewed commits, push with stale-state guards, and link or open pull requests right from the chat.",
-    icon: GitBranch,
-    imageUrl: FEATURE_ILLUSTRATIONS.gitWorkflows,
-    size: "wide",
-  },
-  {
-    id: "workspaces",
-    group: "create",
-    title: "Workspaces & Worktrees",
-    description:
-      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
-    icon: FolderGit2,
-    imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
-    size: "wide",
-  },
-  {
-    id: "models",
-    group: "extend",
-    title: "Model Freedom",
-    description:
-      "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or custom endpoints with model and capability controls.",
-    icon: Blocks,
-    imageUrl: FEATURE_ILLUSTRATIONS.models,
-    size: "hero",
-  },
-  {
-    id: "modelPad",
-    group: "extend",
-    title: "Personal Model Pad",
-    description:
-      "Arrange favorite models on your own map; an optional benchmark-only OpenRouter key never imports its model catalog. Live catalog checks happen only when you choose provider setup or Update model catalogs; ordinary browsing stays offline.",
-    icon: ChartScatter,
-    imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
-    size: "tall",
-  },
-  {
-    id: "thinking",
-    group: "extend",
-    title: "Thinking Controls",
-    description: "Tune supported models' reasoning effort and follow thinking as it streams.",
-    icon: Lightbulb,
-    imageUrl: FEATURE_ILLUSTRATIONS.thinking,
-    size: "standard",
-  },
-  {
-    id: "vision",
-    group: "extend",
-    title: "Attachments & Vision",
-    description:
-      "Attach images directly to vision models, explicitly choose an image-understanding companion for a text-only Bot, and let the workspace agent show raster images inline.",
-    icon: Eye,
-    imageUrl: FEATURE_ILLUSTRATIONS.vision,
-    size: "standard",
-  },
-  {
-    id: "webSearch",
-    group: "extend",
-    title: "Web Search",
-    description:
-      "Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings.",
-    icon: Globe2,
-    imageUrl: FEATURE_ILLUSTRATIONS.webSearch,
-    size: "standard",
-  },
-  {
-    id: "skills",
-    group: "extend",
-    title: "Reusable Skills",
-    description: "Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
-    icon: Wand2,
-    imageUrl: FEATURE_ILLUSTRATIONS.skills,
-    size: "wide",
-  },
-  {
-    id: "mcp",
-    group: "extend",
-    title: "MCP Connectors",
-    description: "Connect MCP services to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
-    icon: Plug,
-    imageUrl: FEATURE_ILLUSTRATIONS.mcp,
-    size: "wide",
-  },
-  {
-    id: "geminiLive",
-    group: "control",
-    title: "Aiden Live",
-    description:
-      "Talk to Aiden, share screen context, and approve each app action one at a time from the new orb.",
-    icon: AudioWaveform,
-    imageUrl: FEATURE_ILLUSTRATIONS.geminiLive,
-    size: "hero",
-  },
-  {
-    id: "bots",
-    group: "control",
-    title: "Reusable Bots",
-    description:
-      "Create reusable teammates with durable instructions, one persistent chat, explicit image understanding, access controls, and Telegram control.",
-    icon: Bot,
-    imageUrl: FEATURE_ILLUSTRATIONS.bots,
-    size: "standard",
-  },
-  {
-    id: "schedules",
-    group: "control",
-    title: "Scheduled Automations",
-    description:
-      "Ask Aiden in any chat to schedule recurring work, review its unattended access, then run, change, or pause it anytime.",
-    icon: CalendarClock,
-    imageUrl: FEATURE_ILLUSTRATIONS.schedules,
-    size: "tall",
-  },
-  {
-    id: "voice",
-    group: "control",
-    title: "Voice & Dictation",
-    description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. Keep audio on-device with Parakeet, or explicitly connect cloud transcription and review what it can access.",
-    icon: Mic2,
-    imageUrl: FEATURE_ILLUSTRATIONS.voice,
-    size: "standard",
-  },
-  {
-    id: "commands",
-    group: "control",
-    title: "Command Palette",
-    description: "Use Command-K or / for app commands, and $ to attach a reusable skill.",
-    icon: Command,
-    imageUrl: FEATURE_ILLUSTRATIONS.commands,
-    size: "standard",
-  },
-  {
-    id: "telegram",
-    group: "control",
-    title: "Aiden in Telegram",
-    description:
-      "Use models, skills, files, and voice from your paired account. Queue follow-ups, steer a running response, interrupt a turn, or stop pending work.",
-    icon: Send,
-    imageUrl: FEATURE_ILLUSTRATIONS.telegram,
-    size: "standard",
-  },
-  {
-    id: "aidenOnTheGo",
-    group: "control",
-    title: "Aiden On The Go",
-    description: "Connect your phone or tablet with a guided setup and one-time code.",
-    icon: Smartphone,
-    imageUrl: FEATURE_ILLUSTRATIONS.aidenOnTheGo,
-    size: "standard",
-  },
-  {
-    id: "usage",
-    group: "control",
-    title: "Private Usage Profile",
-    description: "See on-device activity, token mix, cost coverage, and your top models.",
-    icon: ChartBar,
-    imageUrl: FEATURE_ILLUSTRATIONS.usage,
-    size: "standard",
-  },
-  {
-    id: "permissions",
-    group: "control",
-    title: "Permissioned by Default",
-    description: "Choose No access, Ask first, or Full per workspace; keys stay encrypted.",
-    icon: ShieldCheck,
-    imageUrl: FEATURE_ILLUSTRATIONS.permissions,
-    size: "wide",
-  },
-  {
-    id: "themes",
-    group: "control",
-    title: "Themes & Accessibility",
-    description: "Pick a theme and follow the system, light, or dark appearance.",
-    icon: Palette,
-    imageUrl: FEATURE_ILLUSTRATIONS.themes,
-    size: "wide",
-  },
-];
-
-const FEATURE_LAYOUTS: Readonly<Record<FeatureBentoSize, string>> = {
-  hero: "col-span-4 row-span-2 max-[560px]:col-span-2 max-[420px]:col-span-1",
-  tall: "col-span-2 row-span-2 max-[560px]:col-span-1 max-[420px]:col-span-1",
-  standard: "col-span-2 max-[560px]:col-span-1 max-[420px]:col-span-1",
-  wide: "col-span-3 max-[560px]:col-span-2 max-[420px]:col-span-1",
-};
-
-const FEATURE_IMAGE_LAYOUTS: Readonly<Record<FeatureBentoSize, string>> = {
-  hero: "-right-3 -top-3 h-[116%] w-[72%] object-right",
-  tall: "left-1/2 top-1 h-[72%] w-[92%] -translate-x-1/2 object-center",
-  standard: "right-1 top-1 size-[76px] object-center",
-  wide: "right-1 top-0 h-full w-[46%] object-right",
-};
-
-function FeatureBentoVisual({ feature }: { feature: FeatureBento }) {
-  return (
-    <img
-      alt=""
-      aria-hidden="true"
-      draggable={false}
-      src={feature.imageUrl}
-      className={`pointer-events-none absolute object-contain ${FEATURE_IMAGE_LAYOUTS[feature.size]}`}
-    />
-  );
-}
 
 function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   return (
@@ -491,24 +142,18 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   );
 }
 
-export function OnboardingFlow() {
+export function OnboardingFlow({
+  onOpenBotChat,
+}: {
+  /** Opens a Bot's chat; called once onboarding finishes after Start Chat. */
+  onOpenBotChat?(botId: string): void;
+} = {}) {
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
-  const visibleFeatureBentos = React.useMemo(() => {
-    const visible: FeatureBento[] = [];
-    for (const feature of featureBentos) {
-      if (!capabilities.computerUse && feature.id === "computerUse") continue;
-      if (!capabilities.bots && feature.id === "bots") continue;
-      visible.push(
-        feature.id === "commands" && capabilities.platform === "linux"
-          ? { ...feature, description: "Use Ctrl-K or / for app commands, and $ to attach a reusable skill." }
-          : feature.id === "models" && capabilities.platform === "linux"
-            ? { ...feature, description: "Choose from 30+ Pi providers, ChatGPT sign-in, or local and private endpoints." }
-            : feature,
-      );
-    }
-    return visible;
-  }, [capabilities.bots, capabilities.computerUse, capabilities.platform]);
+  const visibleFeatureBentos = React.useMemo(
+    () => visibleOnboardingFeatures(onboardingFeatures, { bots: capabilities.bots, computerUse: capabilities.computerUse, platform: capabilities.platform }),
+    [capabilities.bots, capabilities.computerUse, capabilities.platform],
+  );
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
   // Main-owned state is authoritative. Block the workbench until it has been
@@ -517,6 +162,9 @@ export function OnboardingFlow() {
   const [stateReady, setStateReady] = React.useState(false);
   const [onboardingLoadError, setOnboardingLoadError] = React.useState<string | null>(null);
   const [index, setIndex] = React.useState(0);
+  const [botsStepVisible, setBotsStepVisible] = React.useState(false);
+  const capabilitiesRef = React.useRef(capabilities);
+  capabilitiesRef.current = capabilities;
   const [name, setName] = React.useState("");
   const [choice, setChoice] = React.useState<OnboardingProviderChoice | null>("openai-signin");
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
@@ -553,7 +201,27 @@ export function OnboardingFlow() {
         onboardingSnapshotRef.current = snapshot;
         readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
         setProviderSkipped(false);
-        setIndex(onboardingStepIndex(snapshot));
+        // Only a first run that is still open can reach the Bots step; completed
+        // launches never read the Bot store here.
+        const botsVisible =
+          shouldOpenOnboarding(snapshot.outcome) &&
+          capabilitiesRef.current.bots &&
+          (await botsApi.list().then(
+            (bots) => bots.length === 0,
+            () => false,
+          ));
+        if (loadGenerationRef.current !== generation) return;
+        const reached = onboardingStepIndex(snapshot);
+        const resumeStep: Step =
+          reached === 0
+            ? "profile"
+            : reached === 1
+              ? "provider"
+              : snapshot.lastSatisfiedStep === "provider" && botsVisible
+                ? "bots"
+                : "tour";
+        setBotsStepVisible(botsVisible);
+        setIndex(onboardingFlowSteps(botsVisible).indexOf(resumeStep));
         setOpen(shouldOpenOnboarding(snapshot.outcome));
         if (snapshot.profileReady && !profileInitializedRef.current) {
           const current = await profileApi.get();
@@ -589,23 +257,35 @@ export function OnboardingFlow() {
     return () => cancelAnimationFrame(frame);
   }, [index, open]);
 
+  /** The starter Bot Start Chat made; its chat opens when onboarding finishes. */
+  const startedBotIdRef = React.useRef<string | null>(null);
+
+  // While this overlay is drawn over the app, links behind it (e.g. in a
+  // provider editor) must go straight to the system browser, never prompt or
+  // open a tab hidden behind the overlay.
+  useBrowserSurfaceBlocker(open);
+
   if (!open) return null;
-  const step = steps[index];
+  const visibleSteps = onboardingFlowSteps(botsStepVisible);
+  const step = visibleSteps[index];
+  const afterProviderIndex = visibleSteps.indexOf(botsStepVisible ? "bots" : "tour");
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
+  const openAiLoginProvider = providers.data?.find((provider) => provider.id === "openai" && provider.isBuiltin);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
-  const codexReady =
-    codexStatus.data?.configured === true &&
-    codexStatus.data.needsAttention === false &&
-    codexStatus.data.models.length > 0;
+  const chatGptSelection = onboardingChatGptSelection(openAiLoginProvider, codexStatus.data);
+  const nextBlockedReason =
+    stateReady && step === "provider" && choice === "openai-signin" && !chatGptSelection
+      ? "Sign in with ChatGPT to continue, or choose another connection."
+      : undefined;
   const canContinue = !stateReady
     ? false
     : step === "profile"
       ? name.trim().length > 0
       : step === "provider"
         ? choice === "openai-signin"
-          ? codexReady
+          ? Boolean(chatGptSelection)
           : hasProviderChoice
         : true;
 
@@ -622,7 +302,24 @@ export function OnboardingFlow() {
     onboardingSnapshotRef.current = snapshot;
     readyProviderIdRef.current = providerId;
     setProviderSkipped(false);
-    setIndex(2);
+    setIndex(afterProviderIndex);
+  };
+
+  const finishBotsStep = async (startedBotId?: string) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const snapshot = await appApi.setOnboardingProgress("bots");
+      onboardingSnapshotRef.current = snapshot;
+      startedBotIdRef.current = startedBotId ?? null;
+      setIndex(visibleSteps.indexOf("tour"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't save onboarding progress.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const validateHostedApiKey = async () => {
@@ -657,7 +354,6 @@ export function OnboardingFlow() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Couldn't validate that API key.";
       setProviderError(message);
-      toast.error(message);
     } finally {
       setDiscovering(false);
       savingRef.current = false;
@@ -673,7 +369,7 @@ export function OnboardingFlow() {
     setShowMoreProviders(false);
     setProviderSkipped(true);
     readyProviderIdRef.current = null;
-    setIndex(2);
+    setIndex(afterProviderIndex);
   };
 
   const openCustomProvider = () =>
@@ -727,13 +423,12 @@ export function OnboardingFlow() {
         return;
       }
       if (choice === "openai-signin") {
-        const model = codexStatus.data?.models[0]?.id;
-        if (!codexReady || !model) {
+        if (!chatGptSelection) {
           setProviderError("Complete ChatGPT sign-in before continuing.");
           return;
         }
-        persistModelSelection("openai-codex", model);
-        await completeProviderStep("openai-codex");
+        persistModelSelection(chatGptSelection.providerId, chatGptSelection.model);
+        await completeProviderStep(chatGptSelection.providerId);
         return;
       }
       if (choice === "custom") {
@@ -771,7 +466,6 @@ export function OnboardingFlow() {
           } catch (error) {
             const message = `Couldn't reach ${selected.title}: ${error instanceof Error ? error.message : String(error)}`;
             setProviderError(message);
-            toast.error(message);
             return;
           } finally {
             setDiscovering(false);
@@ -781,7 +475,6 @@ export function OnboardingFlow() {
             const message =
               "Endpoint reached, but no chat models were found. Load one in the server, then try again.";
             setProviderError(message);
-            toast.info(message);
             return;
           }
           providerToSave = {
@@ -807,7 +500,6 @@ export function OnboardingFlow() {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Couldn't add that provider.";
         setProviderError(message);
-        toast.error(message);
       } finally {
         setDiscovering(false);
         savingRef.current = false;
@@ -828,6 +520,9 @@ export function OnboardingFlow() {
       onboardingSnapshotRef.current = snapshot;
       markOnboardingComplete();
       setOpen(false);
+      const startedBotId = startedBotIdRef.current;
+      startedBotIdRef.current = null;
+      if (startedBotId) onOpenBotChat?.(startedBotId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Aiden couldn't finish onboarding.");
     } finally {
@@ -862,7 +557,7 @@ export function OnboardingFlow() {
               </Text>
             </div>
             <ol className="space-y-2" aria-label="Setup progress">
-              {steps.map((item, itemIndex) => (
+              {visibleSteps.map((item, itemIndex) => (
                 <li
                   key={item}
                   aria-current={itemIndex === index ? "step" : undefined}
@@ -892,12 +587,12 @@ export function OnboardingFlow() {
                 className="hidden size-8 max-[760px]:block"
               />
               <Text variant="small-strong" color="secondary">
-                Step {index + 1} of {steps.length}
+                Step {index + 1} of {visibleSteps.length}
               </Text>
             </div>
             {step === "provider" ? (
               <Button
-                className="no-drag h-7 px-2"
+                className="no-drag relative z-10 h-7 px-2"
                 size="small"
                 variant="transparent"
                 disabled={!stateReady || saving}
@@ -905,11 +600,7 @@ export function OnboardingFlow() {
               >
                 Skip provider
               </Button>
-            ) : (
-              <Text variant="small" color="tertiary">
-                Profile and provider setup required
-              </Text>
-            )}
+            ) : null}
           </header>
 
           <main
@@ -1007,6 +698,14 @@ export function OnboardingFlow() {
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
                 </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
+                </Text>
+                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
+                  Image generation uses its own keys, added later in Settings → Image Generation. The connection you
+                  choose here is never used for images.
+                </Text>
                 <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices
                     .filter((item) =>
@@ -1061,7 +760,19 @@ export function OnboardingFlow() {
                 </div>
                 {choice === "openai-signin" ? (
                   <div className="mt-3">
-                    <CodexProviderSettings layer="onboarding" />
+                    <OnboardingOpenAiLogin
+                      available={openAiLoginProvider?.authMethods?.some((method) => method.type === "oauth" && method.canLogin) === true}
+                      disabled={saving}
+                      onConnect={() => {
+                        if (openAiLoginProvider) setSettingUpProvider(openAiLoginProvider);
+                      }}
+                    />
+                    <details className="mt-3">
+                      <summary className="cursor-pointer rounded-control text-small text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+                        Existing Codex connection
+                      </summary>
+                      <CodexProviderSettings layer="onboarding" />
+                    </details>
                   </div>
                 ) : null}
                 <button
@@ -1098,7 +809,6 @@ export function OnboardingFlow() {
                   <div
                     id="onboarding-more-providers"
                     data-onboarding-more-providers
-                    aria-live="polite"
                     className="mt-2 rounded-card bg-well p-2"
                   >
                     <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
@@ -1251,6 +961,13 @@ export function OnboardingFlow() {
               </div>
             ) : null}
 
+            {stateReady && step === "bots" ? (
+              <OnboardingBotsStep
+                onStarted={(bot) => void finishBotsStep(bot.id)}
+                onSkip={() => void finishBotsStep()}
+              />
+            ) : null}
+
             {stateReady && step === "tour" ? (
               <div>
                 {providerSkipped ? (
@@ -1280,89 +997,13 @@ export function OnboardingFlow() {
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
                       Phone and tablet access starts off. After setup, choose Connect a device in
-                      Settings → Aiden On The Go; Aiden must stay running, and Tailscale is
-                      optional.
+                      Settings → Connections; Aiden must stay running, and Tailscale is
+                      optional. Paired computers can switch between verified local-network and Tailscale
+                      routes. If delivery is uncertain, review the saved request before choosing Retry.
                     </Text>
                   </div>
                 </div>
-                <div
-                  data-onboarding-bento
-                  data-onboarding-feature-count={visibleFeatureBentos.length}
-                  className="mt-5 space-y-7 pb-1"
-                >
-                  {featureGroups.map((group) => {
-                    const features = visibleFeatureBentos.filter(
-                      (feature) => feature.group === group.id,
-                    );
-                    const headingId = `onboarding-feature-group-${group.id}`;
-                    return (
-                      <section key={group.id} aria-labelledby={headingId}>
-                        <div className="mb-2.5 flex items-center justify-between gap-3 px-0.5">
-                          <Text id={headingId} as="h3" variant="small-strong" color="secondary">
-                            {group.title}
-                          </Text>
-                          <Text variant="small" color="tertiary" className="text-mini">
-                            {features.length} features
-                          </Text>
-                        </div>
-                        <div className="grid auto-rows-[118px] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[112px] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
-                          {features.map((feature) => {
-                            const Icon = feature.icon;
-                            return (
-                              <article
-                                key={feature.id}
-                                aria-label={`${feature.title}. ${feature.description}`}
-                                className={`group relative overflow-hidden rounded-card bg-well shadow-control outline-none transition-[background-color,box-shadow] duration-150 hover:bg-control-hover hover:shadow-control-hover focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
-                              >
-                                <div
-                                  aria-hidden="true"
-                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0"
-                                >
-                                  <FeatureBentoVisual feature={feature} />
-                                  <Text
-                                    variant="small-strong"
-                                    className={`absolute bottom-3 left-3 right-3 block leading-4 ${
-                                      feature.size === "hero"
-                                        ? "max-w-[42%]"
-                                        : feature.size === "tall"
-                                          ? "text-center"
-                                          : feature.size === "standard"
-                                            ? "max-w-[calc(100%_-_80px)]"
-                                            : "max-w-[54%]"
-                                    }`}
-                                  >
-                                    {feature.title}
-                                  </Text>
-                                </div>
-                                <div
-                                  aria-hidden="true"
-                                  className="absolute inset-0 bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
-                                >
-                                  <Icon
-                                    aria-hidden="true"
-                                    className="absolute right-3 top-3 size-4 text-accent"
-                                  />
-                                  <div className="absolute bottom-3 left-3 right-3">
-                                    <Text variant="small-strong" className="block leading-4">
-                                      {feature.title}
-                                    </Text>
-                                    <Text
-                                      variant="small"
-                                      color="secondary"
-                                      className="mt-1 block text-small leading-4"
-                                    >
-                                      {feature.description}
-                                    </Text>
-                                  </div>
-                                </div>
-                              </article>
-                            );
-                          })}
-                        </div>
-                      </section>
-                    );
-                  })}
-                </div>
+                <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
               </div>
             ) : null}
           </main>
@@ -1378,23 +1019,38 @@ export function OnboardingFlow() {
             >
               <ChevronLeft /> Back
             </Button>
-            <Button
-              variant="accent"
-              pressFeedback
-              disabled={!stateReady || !canContinue || saving}
-              onClick={() => void next()}
-            >
-              {discovering
-                ? choice === "openai-key" || choice === "anthropic"
-                  ? "Validating key…"
-                  : "Discovering models…"
-                : saving && step === "provider"
-                  ? "Adding provider…"
-                  : step === "tour"
-                    ? "Start using Aiden"
-                    : "Next"}{" "}
-              <ChevronRight />
-            </Button>
+            <div className="flex min-w-0 items-center gap-3">
+              {nextBlockedReason ? (
+                <Text
+                  id="onboarding-next-blocked-reason"
+                  variant="small"
+                  color="secondary"
+                  className="min-w-0 text-right max-[520px]:hidden"
+                >
+                  {nextBlockedReason}
+                </Text>
+              ) : null}
+              {step !== "bots" ? (
+                <Button
+                  variant="accent"
+                  pressFeedback
+                  disabled={!stateReady || !canContinue || saving}
+                  aria-describedby={nextBlockedReason ? "onboarding-next-blocked-reason" : undefined}
+                  onClick={() => void next()}
+                >
+                  {discovering
+                    ? choice === "openai-key" || choice === "anthropic"
+                      ? "Validating key…"
+                      : "Discovering models…"
+                    : saving && step === "provider"
+                      ? "Adding provider…"
+                      : step === "tour"
+                        ? "Start using Aiden"
+                        : "Next"}{" "}
+                  <ChevronRight />
+                </Button>
+              ) : null}
+            </div>
           </footer>
         </div>
       </section>

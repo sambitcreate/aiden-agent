@@ -1,21 +1,45 @@
 // Markdown renderer for assistant messages. Streaming-safe (re-renders on each
 // delta) and styled with semantic tokens so it respects light/dark.
-// Supports GFM tables, LaTeX (KaTeX), and rich code blocks (syntax highlighting,
-// syntax highlighting and per-block copy) via the CodeBlock component.
+// Supports GFM tables, LaTeX (KaTeX, loaded on demand), and rich code blocks
+// (syntax highlighting and per-block copy) via the CodeBlock component.
 
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { cn } from "../lib/ui-utils";
+import {
+  contentMayContainMath,
+  loadMarkdownMath,
+  markdownMathPlugins,
+  markdownMathVersion,
+  subscribeMarkdownMath,
+} from "../lib/markdown-math";
 import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE } from "../lib/rich-link";
 import { CodeBlock } from "./code-block";
 import { RichLink } from "./rich-link";
 
+/**
+ * Model-written Markdown inside a native visual. Remote images never load (they
+ * show as alt text), and an https link goes to the owner, which asks first.
+ */
+export interface RestrictedMarkdown {
+  openLink: (href: string) => void;
+  /** Links stay visible but cannot act (a draft is still streaming). */
+  inert: boolean;
+}
+
 interface MarkdownProps {
   content: string;
   richLinks?: boolean;
+  restricted?: RestrictedMarkdown;
+}
+
+interface MarkdownContentProps extends MarkdownProps {
+  /**
+   * The text is a streamed prefix: a code fence it leaves open stays plain
+   * until it closes, instead of being highlighted again on every release.
+   */
+  streaming?: boolean;
 }
 
 export const MARKDOWN_CLASSNAME = cn(
@@ -40,6 +64,7 @@ export const MARKDOWN_CLASSNAME = cn(
 interface MarkdownNode {
   type?: string;
   url?: string;
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
   data?: {
     hProperties?: Record<string, unknown>;
     [key: string]: unknown;
@@ -70,15 +95,65 @@ function remarkRichLinkLimit() {
   };
 }
 
+const FENCE_OPENER = /^ {0,3}(`{3,}|~{3,})/u;
+
+/** True when a fenced code node's source has no closing fence yet. */
+function fenceIsOpen(source: string): boolean {
+  const marker = FENCE_OPENER.exec(source)?.[1];
+  if (!marker) return false;
+  const lines = source.replace(/\n$/u, "").split("\n");
+  if (lines.length < 2) return true;
+  const closing = lines[lines.length - 1]!.trim();
+  const closes =
+    closing.length >= marker.length && [...closing].every((character) => character === marker[0]);
+  return !closes;
+}
+
+/** Marks a trailing code fence that the streamed text has not closed yet. */
+function remarkOpenFence() {
+  return (tree: MarkdownNode, file: { value: unknown }) => {
+    const last = tree.children?.[tree.children.length - 1];
+    const start = last?.position?.start?.offset;
+    const end = last?.position?.end?.offset;
+    if (last?.type !== "code" || start === undefined || end === undefined) return;
+    if (!fenceIsOpen(String(file.value).slice(start, end))) return;
+    last.data = last.data ?? {};
+    last.data.hProperties = { ...last.data.hProperties, "data-open-fence": "true" };
+  };
+}
+
+/**
+ * Plugin lists for one message. Math plugins join only when the content has a
+ * `$` and KaTeX has loaded; the first such message starts the load.
+ */
+function useMarkdownPlugins(content: string, richLinks: boolean, streaming = false) {
+  const needsMath = contentMayContainMath(content);
+  React.useSyncExternalStore(subscribeMarkdownMath, markdownMathVersion, markdownMathVersion);
+  React.useEffect(() => {
+    if (needsMath) void loadMarkdownMath();
+  }, [needsMath]);
+  const math = needsMath ? markdownMathPlugins() : null;
+  return {
+    remarkPlugins: [
+      remarkGfm,
+      ...(math ? [math.remark] : []),
+      ...(richLinks ? [remarkRichLinkLimit] : []),
+      ...(streaming ? [remarkOpenFence] : []),
+    ],
+    rehypePlugins: math ? [math.rehype] : [],
+  };
+}
+
 const components: Components = {
   // Unwrap <pre> — CodeBlock renders its own container/scroller.
   pre: ({ children }) => <>{children}</>,
-  code: ({ className, children }) => {
+  code: ({ className, children, ...props }) => {
     const match = /language-(\w+)/.exec(className || "");
     const text = String(children ?? "");
     const isBlock = !!match || text.includes("\n");
     if (isBlock) {
-      return <CodeBlock code={text} lang={match?.[1]} />;
+      const open = (props as { "data-open-fence"?: string })["data-open-fence"] === "true";
+      return <CodeBlock code={text} lang={match?.[1]} plain={open} />;
     }
     return (
       <code className="rounded-md bg-well px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>
@@ -105,25 +180,64 @@ const components: Components = {
   },
 };
 
+const RestrictedMarkdownContext = React.createContext<RestrictedMarkdown | null>(null);
+
+function isHttpsHref(href: string): boolean {
+  try {
+    return new URL(href).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** A restricted link is text unless it is https; an https one is a button that asks its owner. */
+function RestrictedLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const policy = React.useContext(RestrictedMarkdownContext);
+  if (!policy || !href || !isHttpsHref(href)) return <span>{children}</span>;
+  return (
+    <button
+      type="button"
+      disabled={policy.inert}
+      onClick={() => policy.openLink(href)}
+      className="m-0 cursor-pointer appearance-none border-0 bg-transparent p-0 [font:inherit] text-accent underline underline-offset-2 disabled:cursor-default disabled:text-secondary disabled:no-underline"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Same as `components`, except that nothing remote loads and no link navigates directly. */
+const restrictedComponents: Components = {
+  ...components,
+  img: ({ alt }) => (alt ? <span className="text-secondary">{alt}</span> : null),
+  a: ({ href, children }) => <RestrictedLink href={href}>{children}</RestrictedLink>,
+};
+
+const restrictedInlineComponents: Components = {
+  ...restrictedComponents,
+  p: ({ children }) => <>{children}</>,
+};
+
 export const MarkdownContent = React.memo(function MarkdownContent({
   content,
   richLinks = false,
-}: MarkdownProps) {
+  restricted,
+  streaming = false,
+}: MarkdownContentProps) {
+  const plugins = useMarkdownPlugins(content, richLinks, streaming);
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
-      rehypePlugins={[rehypeKatex]}
-      components={components}
-    >
-      {content}
-    </ReactMarkdown>
+    <RestrictedMarkdownContext.Provider value={restricted ?? null}>
+      <ReactMarkdown {...plugins} components={restricted ? restrictedComponents : components}>
+        {content}
+      </ReactMarkdown>
+    </RestrictedMarkdownContext.Provider>
   );
 });
 
-export const Markdown = React.memo(function Markdown({ content, richLinks = false }: MarkdownProps) {
+export const Markdown = React.memo(function Markdown({ content, richLinks = false, restricted }: MarkdownProps) {
   return (
     <div className={MARKDOWN_CLASSNAME}>
-      <MarkdownContent content={content} richLinks={richLinks} />
+      <MarkdownContent content={content} richLinks={richLinks} restricted={restricted} />
     </div>
   );
 });
@@ -136,14 +250,14 @@ const inlineComponents: Components = {
 export const MarkdownInline = React.memo(function MarkdownInline({
   content,
   richLinks = false,
+  restricted,
 }: MarkdownProps) {
+  const plugins = useMarkdownPlugins(content, richLinks);
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, ...(richLinks ? [remarkRichLinkLimit] : [])]}
-      rehypePlugins={[rehypeKatex]}
-      components={inlineComponents}
-    >
-      {content}
-    </ReactMarkdown>
+    <RestrictedMarkdownContext.Provider value={restricted ?? null}>
+      <ReactMarkdown {...plugins} components={restricted ? restrictedInlineComponents : inlineComponents}>
+        {content}
+      </ReactMarkdown>
+    </RestrictedMarkdownContext.Provider>
   );
 });

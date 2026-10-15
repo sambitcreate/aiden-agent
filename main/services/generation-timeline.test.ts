@@ -6,6 +6,8 @@ import {
   safeToolIssueDetails,
 } from "./generation-timeline.js";
 import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
+import { markMcpAgentTool, mcpToolActivityLabel } from "./mcp-tool-identity.js";
+import { mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -16,6 +18,51 @@ import {
 function toolSteps(timeline: GenerationTimeline): AgentToolStep[] {
   return timeline.steps.filter(isToolStep);
 }
+
+test("codemode and nested raw call IDs project to distinct renderer-safe activity identities", () => {
+  const projector = new GenerationTimelineProjector("generation-codemode", () => {});
+  projector.toolStarted("private-script", "codemode", { code: "private script source" });
+  projector.toolStarted("private-script/1", "read_file", { path: "README.md" });
+  projector.toolFinished("private-script/1", "completed");
+  projector.toolFinished("private-script", "completed");
+  const timeline = projector.finish("completed");
+  assert.deepEqual(toolSteps(timeline).map((step) => [step.id, step.toolCallId, step.toolName]), [
+    ["tool-1", "call-1", "codemode"], ["tool-2", "call-2", "read_file"],
+  ]);
+  assert.ok(parseGenerationTimeline(timeline));
+  assert.doesNotMatch(JSON.stringify(timeline), /private-script|private script source/u);
+});
+
+test("MCP tool steps carry the server/tool label while toolName and the wire shape stay unchanged", () => {
+  const mcpTool = (serverName: string, tool: { name: string; title?: string }, name: string) =>
+    markMcpAgentTool({ name, ...mcpAgentToolPresentation(serverName, tool) }, { serverId: serverName, toolName: tool.name });
+  const tools = [
+    mcpTool("GitHub", { name: "create_issue", title: "Create issue" }, "github__create_issue"),
+    mcpTool("S".repeat(64), { name: "t".repeat(64) }, "long__tool"),
+    // A host tool that happens to carry a label is not relabelled.
+    { name: "read_file", label: "Raw host label" },
+  ];
+  const projector = new GenerationTimelineProjector("generation-mcp", () => {});
+  projector.setToolLabels((toolName) => mcpToolActivityLabel(tools, toolName));
+  // Early pending step (toolcall_start) and its later adoption both keep the label.
+  projector.toolStarted("a", "github__create_issue", {});
+  projector.toolStarted("a", "github__create_issue", { title: "bug" });
+  projector.toolStarted("b", "long__tool", {});
+  projector.toolStarted("c", "read_file", { path: "README.md" });
+  projector.toolStarted("d", "other__unknown", {});
+  for (const id of ["a", "b", "c", "d"]) projector.toolFinished(id, "completed");
+  const timeline = projector.finish("completed");
+  const steps = toolSteps(timeline);
+  assert.deepEqual(steps.map((step) => [step.toolName, step.label]), [
+    ["github__create_issue", "GitHub/Create issue"],
+    ["long__tool", steps[1]!.label],
+    ["read_file", "Read file"],
+    ["other__unknown", "Other Unknown"],
+  ]);
+  assert.ok(steps[1]!.label.startsWith(`${"S".repeat(64)}/t`), steps[1]!.label);
+  assert.ok(steps[1]!.label.length <= 120, "labels stay within the native clients' 120-unit limit");
+  assert.ok(parseGenerationTimeline(timeline), "the relabelled timeline still parses on the shared contract");
+});
 
 test("keeps tool order stable when parallel calls finish out of order", () => {
   let now = 100;
@@ -193,10 +240,45 @@ test("projects display_image as a safe relative GUI artifact action", () => {
     label: "Render artifact",
     detail: "Dependencies",
   });
+  assert.deepEqual(safeToolDescriptor("render_ui", { title: "Q3 revenue", markup: "<Visual />" }), {
+    label: "Draw visual",
+    detail: "Q3 revenue",
+  });
   assert.deepEqual(safeToolDescriptor("display_image", { path: "/private/page.png" }), {
     label: "Display image",
     target: undefined,
   });
+});
+
+test("projects generate_image with only its model and a known aspect ratio, never the prompt", () => {
+  const descriptor = safeToolDescriptor("generate_image", {
+    provider: "fal",
+    model: "fal-ai/flux",
+    prompt: "SECRET PROMPT",
+    aspectRatio: "16:9",
+  });
+  assert.deepEqual(descriptor, { label: "Generate image", target: "fal/fal-ai/flux", detail: "16:9" });
+  assert.equal(JSON.stringify(descriptor).includes("SECRET"), false);
+  assert.deepEqual(safeToolDescriptor("generate_image", { prompt: "x", aspectRatio: "21:9" }), {
+    label: "Generate image",
+    target: undefined,
+    detail: undefined,
+  });
+  // Only known providers and plain model ids become targets.
+  for (const [provider, model] of [
+    ["openai", "dall-e-3"],
+    ["fal", "../secrets"],
+    ["fal", "fal-ai/flux prompt text"],
+    ["fal", "/abs"],
+    ["replicate", "a".repeat(300)],
+    ["openrouter", 42],
+  ]) {
+    assert.equal(safeToolDescriptor("generate_image", { provider, model }).target, undefined, `${provider}/${model}`);
+  }
+  assert.equal(
+    safeToolDescriptor("generate_image", { provider: "openrouter", model: "google/gemini-2.5-flash-image" }).target,
+    "openrouter/google/gemini-2.5-flash-image",
+  );
 });
 
 test("terminal cancellation settles active steps", () => {
@@ -274,6 +356,17 @@ test("safe tool descriptors retain only relative targets", () => {
   assert.deepEqual(safeToolDescriptor("read_file", { path: "/tmp/private.txt" }), {
     label: "Read file",
     target: undefined,
+  });
+});
+
+test("device tool rows name the simulator action and never keep the device ids", () => {
+  const args = { hostId: "local", deviceId: "5A1E2E00-0000-4000-8000-00000000E2E0" };
+  assert.deepEqual(safeToolDescriptor("device_list", {}), { label: "List simulators" });
+  assert.deepEqual(safeToolDescriptor("device_open", args), { label: "Open simulator" });
+  assert.deepEqual(safeToolDescriptor("device_screenshot", args), { label: "Screenshot simulator" });
+  assert.deepEqual(safeToolDescriptor("device_close", args), { label: "Close simulator" });
+  assert.deepEqual(safeToolDescriptor("device_close", { ...args, shutdown: true }), {
+    label: "Shut down simulator",
   });
 });
 
@@ -779,6 +872,38 @@ test("produced files require completed host mutation provenance and survive time
     (invalid.steps[0] as AgentToolStep).producedFile = { ...file, relativePath };
     assert.equal(parseGenerationTimeline(invalid), undefined);
   }
+});
+
+test("an answered questionnaire keeps its recap through timeline replay, and only there", () => {
+  const recap = {
+    version: 1,
+    outcome: "answered",
+    items: [{ question: "Which database?", header: "Database", kind: "option", answers: ["Postgres"] }],
+  };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status, details] of [
+    ["asked", "ask_user_question", "completed", recap],
+    ["other", "read_file", "completed", recap],
+    ["failed", "ask_user_question", "failed", recap],
+    ["forged", "ask_user_question", "completed", { ...recap, outcome: "dismissed" }],
+  ] as const) {
+    projector.toolStarted(id, tool, {});
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.finish("completed");
+  assert.deepEqual(
+    toolSteps(snapshot).map((step) => step.questionnaire),
+    [recap, undefined, undefined, undefined],
+  );
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+
+  // One malformed recap rejects the stored timeline rather than rendering it.
+  const tampered = structuredClone(snapshot);
+  toolSteps(tampered)[0]!.questionnaire!.items[0]!.answers = [];
+  assert.equal(parseGenerationTimeline(tampered), undefined);
+  const misplaced = structuredClone(snapshot);
+  toolSteps(misplaced)[1]!.questionnaire = toolSteps(snapshot)[0]!.questionnaire;
+  assert.equal(parseGenerationTimeline(misplaced), undefined);
 });
 
 test("form fill activity persists counts without source or field values", () => {

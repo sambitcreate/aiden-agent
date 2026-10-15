@@ -35,6 +35,14 @@ data class AidenStreamPendingQuestion(
     val expiresAt: Instant
 )
 
+/** Contract revision 24: a question prompt on a run this phone did not start. */
+data class AidenRemoteRunQuestion(
+    val promptId: String,
+    val questions: List<AidenRemoteQuestion>,
+    val toolCallId: String,
+    val expiresAt: Instant?
+)
+
 data class AidenStreamQuestionSnapshot(
     val question: AidenStreamPendingQuestion?
 )
@@ -142,6 +150,20 @@ object AidenQuestionContractCodec {
         )
     }
 
+    /** Contract revision 24: a run question prompt. Unlike a phone-owned
+     * stream prompt it names its tool call, and `expiresAt` is present only
+     * when the host set one. */
+    fun parseRunQuestion(element: JsonElement, label: String = "run question"): AidenRemoteRunQuestion {
+        val obj = element.asObject(label)
+        assertExactKeys(obj, setOf("promptId", "questions", "toolCallId", "expiresAt"), label)
+        return AidenRemoteRunQuestion(
+            promptId = obj.requiredString("promptId", label, AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH),
+            questions = parseQuestions(obj.requiredArray("questions", label), label),
+            toolCallId = obj.requiredString("toolCallId", label, AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH),
+            expiresAt = if (obj.containsKey("expiresAt")) obj.requiredInstant("expiresAt", label) else null
+        )
+    }
+
     fun parseRespondRequest(element: JsonElement, label: String = "Question respond request"): AidenQuestionRespondRequest {
         val obj = element.asObject(label)
         assertExactKeys(obj, setOf("cancelled", "answers"), label)
@@ -203,7 +225,8 @@ object AidenQuestionContractCodec {
         }
     }
 
-    private fun parseQuestions(array: JsonArray, label: String): List<AidenRemoteQuestion> {
+    /** The shared `ask_user_question` question list; the Bot session reads it too. */
+    internal fun parseQuestions(array: JsonArray, label: String): List<AidenRemoteQuestion> {
         if (array.isEmpty() || array.size > AidenRemoteProtocol.MAX_QUESTION_COUNT) {
             invalid("$label.questions")
         }

@@ -1,25 +1,48 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.features.shared.AidenProviderIcon
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -27,6 +50,11 @@ import java.time.format.DateTimeParseException
 import java.util.Currency
 import java.util.Locale
 import kotlin.math.sqrt
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import sbtbiswas.AidenOnTheGo.R
+import androidx.annotation.StringRes
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
 
 data class AidenUsageHeatmapDay(val date: String, val tokens: Int)
 
@@ -60,6 +88,53 @@ fun aidenUsageDateRangeText(summary: AidenUsageSummary, locale: Locale = Locale.
     }
 }
 
+enum class AidenUsageTokenKind(@StringRes val label: Int) {
+    INPUT(R.string.usage_token_input),
+    OUTPUT(R.string.usage_token_output),
+    REASONING(R.string.usage_token_reasoning),
+    CACHE_READ(R.string.usage_token_cache_read)
+}
+
+fun aidenUsageTokenCount(tokens: AidenUsageTokens, kind: AidenUsageTokenKind): Int = when (kind) {
+    AidenUsageTokenKind.INPUT -> tokens.input
+    AidenUsageTokenKind.OUTPUT -> tokens.output
+    AidenUsageTokenKind.REASONING -> tokens.reasoning
+    AidenUsageTokenKind.CACHE_READ -> tokens.cacheRead
+}
+
+data class AidenUsageTokenSegment(val kind: AidenUsageTokenKind, val tokens: Int, val fraction: Float)
+
+/**
+ * Segments of the proportional token bar, in legend order. Kinds with no tokens are
+ * omitted, and the remaining fractions share the whole bar.
+ */
+fun aidenUsageTokenSegments(tokens: AidenUsageTokens): List<AidenUsageTokenSegment> {
+    val counts = AidenUsageTokenKind.entries
+        .map { kind -> kind to aidenUsageTokenCount(tokens, kind) }
+        .filter { (_, count) -> count > 0 }
+    val sum = counts.sumOf { (_, count) -> count.toLong() }
+    if (sum <= 0L) return emptyList()
+    return counts.map { (kind, count) ->
+        AidenUsageTokenSegment(kind, count, (count.toDouble() / sum.toDouble()).toFloat())
+    }
+}
+
+/** Tapping the selected day clears the inspection; tapping any other day selects it. */
+fun aidenUsageToggleSelectedDay(selectedDate: String?, tappedDate: String): String? =
+    if (selectedDate == tappedDate) null else tappedDate
+
+/** Daily-totals pill text: the inspected day and its tokens, or the default range label. */
+fun aidenUsageDayInspectionLabel(day: AidenUsageHeatmapDay?, locale: Locale = Locale.getDefault()): String {
+    if (day == null) return "Last 30 days"
+    val date = try {
+        LocalDate.parse(day.date).format(DateTimeFormatter.ofPattern("MMM d", locale))
+    } catch (_: DateTimeParseException) {
+        day.date
+    }
+    val count = NumberFormat.getIntegerInstance(locale).format(day.tokens)
+    return "$date · $count ${if (day.tokens == 1) "token" else "tokens"}"
+}
+
 @Composable
 fun AidenUsageSheet(
     summary: AidenUsageSummary,
@@ -73,6 +148,8 @@ fun AidenUsageSheet(
     }
     val heatmap = remember(summary) { aidenUsageHeatmapDays(summary) }
     val maximumDailyTokens = remember(heatmap) { (heatmap.maxOfOrNull { it.tokens } ?: 0).coerceAtLeast(1) }
+    var selectedDate by rememberSaveable(summary.startDate, summary.endDate) { mutableStateOf<String?>(null) }
+    val selectedDay = heatmap.firstOrNull { it.date == selectedDate }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding(),
@@ -86,14 +163,14 @@ fun AidenUsageSheet(
             ) {
                 Spacer(Modifier.size(48.dp))
                 Text(
-                    "Usage",
+                    stringResource(R.string.usage_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.foreground,
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Done", color = palette.accent)
+                TextButton(contentPadding = AidenButtonDefaults.TextContentPadding, onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(stringResource(R.string.action_done), color = palette.accent)
                 }
             }
         }
@@ -103,7 +180,7 @@ fun AidenUsageSheet(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.semantics(mergeDescendants = true) {}
             ) {
-                Text("Your Activity", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
+                Text(stringResource(R.string.usage_your_activity), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
                 Text(aidenUsageDateRangeText(summary), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
             }
         }
@@ -111,26 +188,27 @@ fun AidenUsageSheet(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 AidenUsageOverviewRow(
-                    first = AidenUsageOverviewMetric(Icons.Default.Bolt, integer.format(summary.totals.requests), "Requests"),
-                    second = AidenUsageOverviewMetric(Icons.Default.CalendarMonth, integer.format(summary.totals.activeDays), "Active days")
+                    first = AidenUsageOverviewMetric(Icons.Default.Bolt, integer.format(summary.totals.requests), stringResource(R.string.usage_requests)),
+                    second = AidenUsageOverviewMetric(Icons.Default.CalendarMonth, integer.format(summary.totals.activeDays), stringResource(R.string.usage_active_days))
                 )
                 AidenUsageOverviewRow(
-                    first = AidenUsageOverviewMetric(Icons.Default.LocalFireDepartment, aidenUsageDayCount(summary.totals.currentStreak), "Current streak"),
-                    second = AidenUsageOverviewMetric(Icons.Default.EmojiEvents, aidenUsageDayCount(summary.totals.longestStreak), "Longest streak")
+                    first = AidenUsageOverviewMetric(Icons.Default.LocalFireDepartment, aidenUsageDayCount(summary.totals.currentStreak), stringResource(R.string.usage_current_streak)),
+                    second = AidenUsageOverviewMetric(Icons.Default.EmojiEvents, aidenUsageDayCount(summary.totals.longestStreak), stringResource(R.string.usage_longest_streak))
                 )
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                val totalTokensDescription = stringResource(R.string.usage_total_tokens_cd, integer.format(summary.totals.tokens.total))
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 92.dp).padding(18.dp)
                             .semantics(mergeDescendants = true) {
-                                contentDescription = "${integer.format(summary.totals.tokens.total)} total tokens"
+                                contentDescription = totalTokensDescription
                             }
                     ) {
                         Icon(Icons.Default.Hub, null, tint = palette.accent, modifier = Modifier.size(34.dp))
                         Spacer(Modifier.width(14.dp))
                         Column {
                             Text(integer.format(summary.totals.tokens.total), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = palette.foreground)
-                            Text("Total tokens", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                            Text(stringResource(R.string.usage_total_tokens), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                         }
                     }
                 }
@@ -138,29 +216,36 @@ fun AidenUsageSheet(
         }
 
         item {
-            AidenUsageSection("Token activity") {
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+            AidenUsageSection(stringResource(R.string.usage_token_activity)) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.padding(18.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Daily totals", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
-                            Surface(color = palette.sidebar, shape = RoundedCornerShape(50)) {
-                                Text("Last 30 days", style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-                            }
+                            Text(stringResource(R.string.usage_daily_totals), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, modifier = Modifier.weight(1f))
+                            AidenUsageInspectionPill(selectedDay)
                         }
-                        AidenUsageHeatmap(heatmap, maximumDailyTokens)
+                        AidenUsageHeatmap(
+                            days = heatmap,
+                            maximumTokens = maximumDailyTokens,
+                            selectedDate = selectedDay?.date,
+                            onSelect = { date -> selectedDate = aidenUsageToggleSelectedDay(selectedDate, date) }
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Less", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            Text(stringResource(R.string.usage_legend_less), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                             repeat(5) { level ->
-                                Box(Modifier.size(14.dp).background(aidenUsageActivityColor(level, palette.accent, palette.sidebar), RoundedCornerShape(3.dp)))
+                                Box(Modifier.size(14.dp).background(aidenUsageActivityColor(level, palette.accent, palette.sidebar), MaterialTheme.shapes.extraSmall))
                             }
-                            Text("More", style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                            Text(stringResource(R.string.usage_legend_more), style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                         }
                         HorizontalDivider(color = palette.secondary.copy(alpha = .18f))
+                        AidenUsageTokenBar(summary.totals.tokens)
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            AidenUsageValueRow("Input", integer.format(summary.totals.tokens.input), palette.accent)
-                            AidenUsageValueRow("Output", integer.format(summary.totals.tokens.output), palette.success)
-                            AidenUsageValueRow("Reasoning", integer.format(summary.totals.tokens.reasoning), palette.warning)
-                            AidenUsageValueRow("Cache read", integer.format(summary.totals.tokens.cacheRead), palette.secondary)
+                            AidenUsageTokenKind.entries.forEach { kind ->
+                                AidenUsageValueRow(
+                                    stringResource(kind.label),
+                                    integer.format(aidenUsageTokenCount(summary.totals.tokens, kind)),
+                                    aidenUsageTokenColor(kind, palette)
+                                )
+                            }
                         }
                     }
                 }
@@ -168,16 +253,16 @@ fun AidenUsageSheet(
         }
 
         item {
-            AidenUsageSection("Activity insights") {
-                Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+            AidenUsageSection(stringResource(R.string.usage_activity_insights)) {
+                Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(horizontal = 18.dp)) {
-                        AidenUsageInsightRow("Completed requests", NumberFormat.getPercentInstance().format(aidenUsageRatio(summary.totals.completedRequests, summary.totals.requests)))
+                        AidenUsageInsightRow(stringResource(R.string.usage_completed_requests), NumberFormat.getPercentInstance().format(aidenUsageRatio(summary.totals.completedRequests, summary.totals.requests)))
                         AidenUsageDivider()
-                        AidenUsageInsightRow("Local model share", NumberFormat.getPercentInstance().format(aidenUsageRatio(summary.totals.localRequests, summary.totals.requests)))
+                        AidenUsageInsightRow(stringResource(R.string.usage_local_model_share), NumberFormat.getPercentInstance().format(aidenUsageRatio(summary.totals.localRequests, summary.totals.requests)))
                         AidenUsageDivider()
-                        AidenUsageInsightRow("Failed requests", integer.format(summary.totals.failedRequests))
+                        AidenUsageInsightRow(stringResource(R.string.usage_failed_requests), integer.format(summary.totals.failedRequests))
                         AidenUsageDivider()
-                        AidenUsageInsightRow("Hosted cost", summary.totals.hostedCostSummary)
+                        AidenUsageInsightRow(stringResource(R.string.usage_hosted_cost), summary.totals.hostedCostSummary)
                     }
                 }
             }
@@ -185,8 +270,8 @@ fun AidenUsageSheet(
 
         if (summary.models.isNotEmpty()) {
             item {
-                AidenUsageSection("Most used models") {
-                    Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                AidenUsageSection(stringResource(R.string.usage_most_used_models)) {
+                    Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(horizontal = 18.dp)) {
                             summary.models.take(5).forEachIndexed { index, model ->
                                 Row(
@@ -194,7 +279,7 @@ fun AidenUsageSheet(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
                                         .semantics(mergeDescendants = true) {}
                                 ) {
-                                    Surface(color = palette.sidebar, shape = RoundedCornerShape(10.dp), modifier = Modifier.size(34.dp)) {
+                                    Surface(color = palette.sidebar, shape = MaterialTheme.shapes.small, modifier = Modifier.size(34.dp)) {
                                         Box(contentAlignment = Alignment.Center) {
                                             AidenProviderIcon(
                                                 providerId = model.providerId,
@@ -208,10 +293,10 @@ fun AidenUsageSheet(
                                     Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
                                         Text(model.modelLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = palette.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(if (model.local) "${model.providerLabel} · Local" else model.providerLabel, style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(if (model.local) stringResource(R.string.usage_provider_local, model.providerLabel) else model.providerLabel, style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                     Spacer(Modifier.width(8.dp))
-                                    Text("${integer.format(model.requests)} runs", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                                    Text(stringResource(R.string.usage_model_runs, integer.format(model.requests)), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                                 }
                                 if (index < minOf(summary.models.size, 5) - 1) AidenUsageDivider()
                             }
@@ -225,14 +310,14 @@ fun AidenUsageSheet(
             Row(
                 verticalAlignment = Alignment.Top,
                 modifier = Modifier.fillMaxWidth()
-                    .background(palette.accent.copy(alpha = .08f), RoundedCornerShape(18.dp))
+                    .background(palette.accent.copy(alpha = .08f), MaterialTheme.shapes.large)
                     .padding(16.dp)
                     .semantics(mergeDescendants = true) {}
             ) {
                 Icon(Icons.Default.Shield, null, tint = palette.accent, modifier = Modifier.size(28.dp))
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    "Privacy-safe aggregates are recorded by Aiden Agent on your paired desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.",
+                    stringResource(R.string.usage_privacy_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
@@ -266,15 +351,16 @@ private fun AidenUsageOverviewRow(first: AidenUsageOverviewMetric, second: Aiden
 @Composable
 private fun AidenUsageOverviewCard(metric: AidenUsageOverviewMetric, modifier: Modifier) {
     val palette = AidenTheme.palette
-    Surface(color = palette.raised, shape = RoundedCornerShape(24.dp), modifier = modifier) {
+    val metricDescription = stringResource(R.string.usage_metric_cd, metric.value, metric.label)
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.extraLarge, modifier = modifier) {
         Column(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.heightIn(min = 118.dp).padding(16.dp)
-                .semantics(mergeDescendants = true) { contentDescription = "${metric.value}, ${metric.label}" }
+                .semantics(mergeDescendants = true) { contentDescription = metricDescription }
         ) {
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.size(30.dp).background(palette.accent.copy(alpha = .12f), RoundedCornerShape(9.dp))
+                modifier = Modifier.size(30.dp).background(palette.accent.copy(alpha = .12f), MaterialTheme.shapes.small)
             ) {
                 Icon(metric.icon, null, tint = palette.accent, modifier = Modifier.size(18.dp))
             }
@@ -296,17 +382,76 @@ private fun AidenUsageSection(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AidenUsageHeatmap(days: List<AidenUsageHeatmapDay>, maximumTokens: Int) {
+private fun AidenUsageInspectionPill(selectedDay: AidenUsageHeatmapDay?) {
     val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
+    val inspecting = selectedDay != null
+    val fill by animateColorAsState(
+        targetValue = if (inspecting) palette.accent.copy(alpha = .12f) else palette.sidebar,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "UsagePillFill"
+    )
+    val ink by animateColorAsState(
+        targetValue = if (inspecting) palette.accent else palette.secondary,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "UsagePillInk"
+    )
+    Surface(
+        color = fill,
+        shape = RoundedCornerShape(50),
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+    ) {
+        AnimatedContent(
+            targetState = aidenUsageDayInspectionLabel(selectedDay),
+            transitionSpec = {
+                fadeIn(AidenMotion.nonSpatial(reduceMotion)) togetherWith
+                    fadeOut(AidenMotion.nonSpatial(reduceMotion)) using
+                    SizeTransform(clip = false) { _, _ -> AidenMotion.spatial(reduceMotion) }
+            },
+            contentAlignment = Alignment.CenterEnd,
+            label = "UsagePillLabel"
+        ) { label ->
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (inspecting) FontWeight.SemiBold else FontWeight.Normal,
+                color = ink,
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AidenUsageHeatmap(
+    days: List<AidenUsageHeatmapDay>,
+    maximumTokens: Int,
+    selectedDate: String?,
+    onSelect: (String) -> Unit
+) {
+    val palette = AidenTheme.palette
+    val reduceMotion = aidenReduceMotion()
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         days.chunked(10).forEach { rowDays ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 rowDays.forEach { day ->
                     val normalized = (day.tokens.toDouble() / maximumTokens.toDouble()).coerceIn(0.0, 1.0)
                     val color = if (day.tokens <= 0) palette.sidebar else palette.accent.copy(alpha = (.22 + .78 * sqrt(normalized)).toFloat())
+                    val selected = day.date == selectedDate
+                    val roundness by animateFloatAsState(
+                        targetValue = if (selected) 1f else 0f,
+                        animationSpec = AidenMotion.spatial(reduceMotion),
+                        label = "UsageCellRoundness"
+                    )
+                    val shape = RoundedCornerShape(AidenUsageCellCorner(roundness))
+                    val cellDescription = pluralStringResource(R.plurals.usage_day_tokens_cd, day.tokens, day.date, day.tokens)
                     Box(
-                        Modifier.weight(1f).aspectRatio(1f).background(color, RoundedCornerShape(5.dp))
-                            .semantics { contentDescription = "${day.date}, ${day.tokens} tokens" }
+                        Modifier.weight(1f).aspectRatio(1f)
+                            .clip(shape)
+                            .background(color)
+                            .selectable(selected = selected, role = Role.Button, onClick = { onSelect(day.date) })
+                            .semantics { contentDescription = cellDescription }
                     )
                 }
                 repeat(10 - rowDays.size) { Spacer(Modifier.weight(1f).aspectRatio(1f)) }
@@ -315,10 +460,53 @@ private fun AidenUsageHeatmap(days: List<AidenUsageHeatmapDay>, maximumTokens: I
     }
 }
 
+/** Heatmap cell corner that eases from a 5.dp squircle (0) to a full circle (1). */
+private data class AidenUsageCellCorner(val roundness: Float) : CornerSize {
+    override fun toPx(shapeSize: Size, density: Density): Float {
+        val resting = with(density) { 5.dp.toPx() }
+        val circle = shapeSize.minDimension / 2f
+        return resting + (circle - resting) * roundness.coerceIn(0f, 1f)
+    }
+}
+
+@Composable
+private fun AidenUsageTokenBar(tokens: AidenUsageTokens) {
+    val palette = AidenTheme.palette
+    val segments = remember(tokens) { aidenUsageTokenSegments(tokens) }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(8.dp)
+            .semantics { hideFromAccessibility() }
+    ) {
+        if (segments.isEmpty()) {
+            Box(Modifier.fillMaxSize().background(palette.sidebar, MaterialTheme.shapes.extraSmall))
+        } else {
+            segments.forEach { segment ->
+                Box(
+                    Modifier
+                        .weight(segment.fraction.coerceAtLeast(0.02f))
+                        .fillMaxHeight()
+                        .background(aidenUsageTokenColor(segment.kind, palette), MaterialTheme.shapes.extraSmall)
+                )
+            }
+        }
+    }
+}
+
+private fun aidenUsageTokenColor(kind: AidenUsageTokenKind, palette: AidenPalette): Color = when (kind) {
+    AidenUsageTokenKind.INPUT -> palette.accent
+    AidenUsageTokenKind.OUTPUT -> palette.success
+    AidenUsageTokenKind.REASONING -> palette.warning
+    AidenUsageTokenKind.CACHE_READ -> palette.secondary
+}
+
 private fun aidenUsageActivityColor(level: Int, accent: Color, inactive: Color): Color =
     if (level <= 0) inactive else accent.copy(alpha = (.18 + level * .205).toFloat().coerceAtMost(1f))
 
-private fun aidenUsageDayCount(value: Int): String = if (value == 1) "1 day" else "$value days"
+@Composable
+private fun aidenUsageDayCount(value: Int): String = pluralStringResource(R.plurals.usage_day_count, value, value)
 
 @Composable
 private fun AidenUsageValueRow(label: String, value: String, color: Color) {

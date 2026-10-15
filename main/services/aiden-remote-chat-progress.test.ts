@@ -426,6 +426,71 @@ test("SSE is scoped by read grants, publishes fresh state on reconnect, and clos
   service.close();
 });
 
+test("a cursor from another host epoch hydrates despite colliding sequence numbers", async () => {
+  const firstHost = fixture().service;
+  const nextHost = fixture().service;
+  const grants = new Set(["tasks:read", "agents:read"] as const);
+  const before = new Response();
+  await firstHost.openEvents("device-1", "chat-1", grants, 0, before.wire);
+  const oldEpoch = (await firstHost.taskSnapshot("device-1", "chat-1")).epoch;
+  const cursor = Number([...before.chunks.join("").matchAll(/^id: (\d+)$/gmu)].pop()![1]);
+  before.emit("close");
+  const collision = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, 0, collision.wire);
+  collision.emit("close");
+  const restored = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, cursor, restored.wire, oldEpoch);
+  assert.equal(restored.chunks.length, 2, "a restart must deliver fresh task and roster state");
+  restored.emit("close");
+  const currentEpoch = (await nextHost.taskSnapshot("device-1", "chat-1")).epoch;
+  const currentCursor = Number([...restored.chunks.join("").matchAll(/^id: (\d+)$/gmu)].pop()![1]);
+  const resumed = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, currentCursor, resumed.wire, currentEpoch);
+  assert.equal(resumed.chunks.length, 0, "a current epoch resumes unchanged snapshots");
+  firstHost.close();
+  nextHost.close();
+});
+
+test("a reconnect cursor resumes without resending snapshots the device already received", async () => {
+  const { service, events } = fixture({
+    authorize: async (_deviceId, chatId) => ({
+      id: chatId,
+      latestGenerationId: "generation-1",
+    }),
+  });
+  const grants = new Set(["tasks:read", "agents:read"] as const);
+  const lastEventId = (response: Response) => {
+    const ids = [...response.chunks.join("").matchAll(/^id: (\d+)$/gmu)];
+    return Number(ids[ids.length - 1]![1]);
+  };
+  const first = new Response();
+  await service.openEvents("device-1", "chat-1", grants, 0, first.wire);
+  assert.equal(first.chunks.length, 2, "a fresh stream hydrates both projections");
+  const cursor = lastEventId(first);
+  first.emit("close");
+
+  const resumed = new Response();
+  await service.openEvents("device-1", "chat-1", grants, cursor, resumed.wire);
+  assert.deepEqual(resumed.chunks, [], "unchanged snapshots are not resent");
+  events.begin("chat-1", "generation-1");
+  events.durableTodo("chat-1", "generation-1", {
+    ...todo,
+    tasks: [{ ...todo.tasks[0]!, status: "completed" }],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const delta = resumed.chunks.join("");
+  assert.match(delta, /event: task_update/);
+  assert.match(delta, /"status":"completed"/);
+  resumed.emit("close");
+
+  // A cursor is bound to the device and chat that received it.
+  const otherDevice = new Response();
+  await service.openEvents("device-2", "chat-1", grants, cursor, otherDevice.wire);
+  assert.match(otherDevice.chunks.join(""), /event: task_update/);
+  assert.match(otherDevice.chunks.join(""), /event: agents_update/);
+  service.close();
+});
+
 test("disconnect removes the observer without ending Mac-owned work", async () => {
   const { service, events } = fixture();
   events.begin("chat-1", "generation-1");

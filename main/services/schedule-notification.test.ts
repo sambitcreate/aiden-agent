@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
@@ -183,6 +184,8 @@ async function executionHarness(
   } = {},
 ) {
   const records: ScheduledRun[] = [];
+  const clicks: Array<() => void> = [];
+  const navigations: string[] = [];
   const broadcasts: Array<{ channel: string; payload: unknown }> = [];
   const warnings: unknown[][] = [];
   const chat = { id: "chat-1", title: "Daily brief", updatedAt: 1 };
@@ -190,6 +193,7 @@ async function executionHarness(
   const notificationFailure = new Error("synthetic notification failure: PRIVATE_DETAIL");
   const ports: Record<string, unknown> = {
     "node:path": path,
+    "node:crypto": crypto,
     "../platform.js": {
       Notification: class {
         static isSupported() {
@@ -198,7 +202,8 @@ async function executionHarness(
         constructor() {
           if (options.notificationFailure === "create") throw notificationFailure;
         }
-        on() {
+        on(_event: string, listener: () => void) {
+          clicks.push(listener);
           return this;
         }
         show() {
@@ -222,6 +227,8 @@ async function executionHarness(
       },
     },
     "./schedule-guard.js": { assertAssistantScheduleExecutionBoundary() {} },
+    "./app-navigation.js": { requestAppPath: async (target: string) => void navigations.push(target) },
+
     "./schedule-script.js": {
       resolveScheduledScript: async () => "/synthetic/script.sh",
       runScheduledScript: async () => {
@@ -240,10 +247,25 @@ async function executionHarness(
       {
         name: "synthetic-execution-ports",
         setup(builder) {
+          // The Bot runtime is a dynamic import: a synthetic Bot that answers at once.
+          builder.onResolve({ filter: /scheduled-bot-routines-main/ }, () => ({
+            path: "bot-routine-ports",
+            namespace: "synthetic",
+          }));
+          builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({
+            loader: "js",
+            contents: `export const botRoutinePorts = () => ({
+              state: async () => ({ kind: "idle" }),
+              send: async () => ({ submissionId: "7", deduped: false }),
+              awaitReply: async () => ({ kind: "completed", text: "Your week looks calm." }),
+              markSilent: async () => {},
+            });`,
+          }));
           builder.onResolve({ filter: /.*/ }, (args) => {
             if (
               args.importer.endsWith("/schedule-execution.ts") &&
-              args.path !== "./schedule-notification.js"
+              args.path !== "./schedule-notification.js" &&
+              args.path !== "./scheduled-bot-routines.js"
             ) {
               return { path: args.path, external: true };
             }
@@ -271,8 +293,18 @@ async function executionHarness(
   const execution = createScheduleExecution(
     store as unknown as Parameters<typeof createScheduleExecution>[0],
   );
-  return { execution, records, broadcasts, warnings };
+  return { execution, records, broadcasts, warnings, clicks, navigations };
 }
+
+test("clicking a Bot routine's notification opens that Bot's chat", async () => {
+  const h = await executionHarness();
+  const run = await h.execution.run(task({ botId: "bot:planner", prompt: "Check my week." }));
+  assert.equal(run.result, "success", run.error);
+  assert.equal(h.clicks.length, 1, "the notification opens something when clicked");
+  h.clicks[0]!();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(h.navigations, ["/bots/bot%3Aplanner/chat"]);
+});
 
 for (const failure of ["create", "show"] as const) {
   test(`real execution preserves completed run and broadcast after notification ${failure} failure`, async () => {

@@ -11,11 +11,12 @@ import {
 } from "@earendil-works/pi-ai";
 
 import {
+  buildModel,
   resolveModelRuntimeWith,
   withPinnedBotProviderAuth,
   type ModelRuntimeDependencies,
 } from "./model-runtime-core.js";
-import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
+import { resolveProviderRuntimeLimits, CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
 const codexModel: Model<Api> = {
@@ -368,4 +369,76 @@ test("rejects stale legacy model selections before reading provider credentials"
     /no longer available for Custom OpenAI/u,
   );
   assert.equal(keyReads, 0);
+});
+
+
+test("custom effort presets serialize explicit thinking controls through the real Pi transport", async () => {
+  const { openAICompletionsApi } = await import("@earendil-works/pi-ai/api/openai-completions.lazy");
+  const { piThinkingLevelsForModel } = await import("./pi-model-metadata.js");
+  const { resolveGenerationThinkingLevel } = await import("./generation-runtime.js");
+  const cases = [
+    { preset: "glm", level: "off", nested: { enable_thinking: false } },
+    { preset: "glm", level: "low", nested: { enable_thinking: true, reasoning_effort: "low" } },
+    { preset: "glm", level: "high", nested: { enable_thinking: true, reasoning_effort: "high" } },
+    { preset: "glm", level: "max", nested: { enable_thinking: true, reasoning_effort: "max" } },
+    { preset: "openai", level: "off", effort: "none" },
+    { preset: "openai", level: "low", effort: "low" },
+    { preset: "openai", level: "medium", effort: "medium" },
+    { preset: "openai", level: "high", effort: "high" },
+    { preset: "openai", level: "xhigh", effort: "xhigh", selected: ["off", "xhigh", "max"] },
+    { preset: "openai", level: "max", effort: "max", selected: ["off", "xhigh", "max"] },
+    { preset: "glm", level: "medium", nested: { enable_thinking: true, reasoning_effort: "medium" }, selected: ["medium", "xhigh"] },
+    { preset: "glm", level: "xhigh", nested: { enable_thinking: true, reasoning_effort: "xhigh" }, selected: ["medium", "xhigh"] },
+  ] as const;
+  for (const entry of cases) {
+    const provider: StoredProvider = {
+      id: "custom:effort", kind: "openai", label: "Private server", baseUrl: "https://private.example.test/v1",
+      models: ["private-model"], needsKey: false,
+      modelMetadata: { "private-model": { source: "provider", overrides: { reasoning: true, effortControl: entry.preset, ...("selected" in entry ? { effortLevels: [...entry.selected] } : {}) } } },
+    };
+    const model = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+    assert.deepEqual(piThinkingLevelsForModel(model), "selected" in entry ? [...entry.selected] : entry.preset === "glm" ? ["off", "low", "high", "max"] : ["off", "low", "medium", "high"]);
+    assert.equal(resolveGenerationThinkingLevel(provider.id, model, entry.level), entry.level);
+    let payload: Record<string, unknown> | undefined;
+    let networkCalls = 0;
+    await openAICompletionsApi().streamSimple(model, normalizeContext({ messages: [
+      { role: "user", content: "Synthetic effort check", timestamp: 1 },
+    ] }), {
+      apiKey: "offline-fixture", reasoning: entry.level === "off" ? undefined : entry.level,
+      onPayload: (request) => { payload = request as Record<string, unknown>; throw new Error("captured before network"); },
+      fetch: async () => { networkCalls++; throw new Error("Unexpected network I/O"); },
+    }).result();
+    assert.ok(payload, `${entry.preset}/${entry.level} must construct a request`);
+    assert.equal(networkCalls, 0);
+    if ("nested" in entry) {
+      assert.deepEqual(payload.chat_template_kwargs, entry.nested);
+      assert.equal(payload.reasoning_effort, undefined, "Nested requests must not carry a conflicting top-level effort");
+    } else {
+      assert.equal(payload.reasoning_effort, entry.effort);
+      assert.equal(payload.chat_template_kwargs, undefined);
+    }
+  }
+});
+
+
+test("custom effort settings do not enable reasoning or alter other API formats implicitly", () => {
+  const provider: StoredProvider = {
+    id: "custom:effort", kind: "openai", label: "Private", baseUrl: "https://private.example.test/v1",
+    models: ["private-model"], needsKey: false,
+    modelMetadata: { "private-model": { source: "provider", overrides: { reasoning: false, effortControl: "glm" } } },
+  };
+  const disabled = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  assert.equal(disabled.reasoning, false);
+  assert.equal(disabled.compat, undefined);
+  assert.equal(disabled.thinkingLevelMap, undefined);
+  provider.modelMetadata!["private-model"].overrides = { reasoning: true, effortControl: "glm", effortLevels: [] };
+  const cleared = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  assert.equal(cleared.compat, undefined);
+  assert.equal(cleared.thinkingLevelMap, undefined);
+  provider.kind = "anthropic";
+  provider.modelMetadata!["private-model"].overrides!.reasoning = true;
+  const anthropic = buildModel(provider, "private-model", resolveProviderRuntimeLimits({}, provider, "private-model"));
+  assert.equal(anthropic.api, "anthropic-messages");
+  assert.equal(anthropic.compat, undefined);
+  assert.equal(anthropic.thinkingLevelMap, undefined);
 });

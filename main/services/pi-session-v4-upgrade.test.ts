@@ -3,8 +3,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { JsonlSessionRepo, TODO_CONTEXT, value } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { JsonlSessionRepo, TODO_CONTEXT, value } from "./pi-legacy-harness.js";
+import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import { createCurrentPiSessionRepository } from "./pi-session-repository-port.js";
 import { convertOldPiV4Journal, upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 

@@ -11,6 +11,7 @@ import {
   acceptanceCapabilityBaseUrl,
   acceptanceChatCompletionPath,
   acceptanceFixture,
+  acceptanceGateEvidence,
   acceptanceToolCall,
   evaluateAcceptanceRequests,
   openAiToolCallChunks,
@@ -152,14 +153,14 @@ function successfulRequests() {
   ];
 }
 
-test("packaged acceptance uses a local provider but seeds both Computer Use gates off", () => {
+test("packaged acceptance uses a local provider, seeds the beta off and the chat ungranted", () => {
   const capability = "a".repeat(43);
   const fixture = acceptanceFixture(43123, capability, 100);
   assert.equal(fixture.config.providers[0].baseUrl, `http://127.0.0.1:43123/${capability}/v1`);
   assert.equal(fixture.config.providers[0].needsKey, false);
   assert.equal(fixture.config.providers[0].modelMetadata["aiden-cua-acceptance"].vision, true);
   assert.equal(fixture.config.settings.computerUseEnabled, false);
-  assert.equal(fixture.chat.computerUseEnabled, false);
+  assert.equal(acceptanceGateEvidence(fixture.config, fixture.chat).accessGranted, false);
   assert.equal(fixture.config.workspaces[0].permission, "none");
 });
 
@@ -178,7 +179,7 @@ test("packaged acceptance loopback rejects requests without the run capability",
   const model = await startAcceptanceModel({
     capability,
     expectedTitles: [target.title],
-    readGates: async () => ({ globalEnabled: true, chatEnabled: true }),
+    readGates: async () => ({ globalEnabled: true, accessGranted: true }),
   });
   try {
     const response = await fetch(`http://127.0.0.1:${model.port}/v1/chat/completions`, {
@@ -438,7 +439,29 @@ test("packaged acceptance resolves and reuses one exact disposable TextEdit wind
   );
 });
 
-test("packaged acceptance scripts captures, two approvals, stale rejection, and cancellation", () => {
+test("Computer Use access needs the beta plus a chat grant or Always allow", () => {
+  const on = { settings: { computerUseEnabled: true } };
+  assert.deepEqual(acceptanceGateEvidence(on, {}), { globalEnabled: true, accessGranted: false });
+  assert.deepEqual(acceptanceGateEvidence(on, { computerUseAllowed: true }), {
+    globalEnabled: true,
+    accessGranted: true,
+  });
+  assert.equal(
+    acceptanceGateEvidence({ settings: { computerUseEnabled: true, computerUseAlwaysAllow: true } }, {})
+      .accessGranted,
+    true,
+  );
+  // A grant without the beta never runs.
+  assert.deepEqual(
+    acceptanceGateEvidence(
+      { settings: { computerUseEnabled: false, computerUseAlwaysAllow: true } },
+      { computerUseAllowed: true },
+    ),
+    { globalEnabled: false, accessGranted: false },
+  );
+});
+
+test("packaged acceptance scripts captures, type and save, stale rejection, and cancellation", () => {
   assert.deepEqual(
     Array.from({ length: 9 }, (_, index) => acceptanceToolCall(index, target).action),
     ["list_apps", "list_windows", "capture", "capture", "capture", "type", "key", "click", "wait"],

@@ -210,10 +210,6 @@ async function rotateBeforeAppend(target: string, incomingBytes: number): Promis
   activeSegmentStartedAtMs = Date.now();
 }
 
-export function subagentRuntimeDiagnosticLogPath(): string | null {
-  return diagnosticLogPath;
-}
-
 function boundedRecord(record: SubagentRuntimeFailureRecord): string {
   const diagnostics = record.diagnostics.slice(-4).map((diagnostic) => ({
     stage: diagnostic.stage,

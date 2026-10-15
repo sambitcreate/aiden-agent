@@ -22,6 +22,9 @@ test("the settings boundary revokes cached skill authority and settles active wo
     cancelSkillWork: async () => { await Promise.resolve(); events.push("cancel-active-work"); },
     refreshCommands: async () => { events.push("refresh-commands"); }, reconfigureIdleUnload: async () => { events.push("idle"); },
     publishAppearance: () => { events.push("appearance"); }, publishControls: () => { events.push("publish"); },
+    stopCacheWarmers: () => { events.push("stop-warmers"); },
+    revokeComputerUseGrants: async () => { events.push("revoke-computer-use"); },
+    stopLiveSessions: async () => { events.push("stop-live"); },
   });
   await effects({ skillsEnabled: false }, { skillsEnabled: false });
   assert.deepEqual(events, ["invalidate", "revoke", "cancel-active-work", "refresh-commands", "publish"]);
@@ -30,6 +33,13 @@ test("the settings boundary revokes cached skill authority and settles active wo
   assert.deepEqual(events, ["invalidate", "revoke", "refresh-commands", "publish"]);
   events.length = 0;
   await effects({ memoryEnabled: false }, { memoryEnabled: false });
+  assert.deepEqual(events, ["publish"]);
+  events.length = 0;
+  // Turning a feature off stops the work it owns; turning it on starts nothing.
+  await effects({}, { cacheWarmingEnabled: false, computerUseAlwaysAllow: false, aidenLiveEnabled: false });
+  assert.deepEqual(events, ["stop-warmers", "revoke-computer-use", "stop-live", "publish"]);
+  events.length = 0;
+  await effects({}, { cacheWarmingEnabled: true, computerUseAlwaysAllow: true, aidenLiveEnabled: true });
   assert.deepEqual(events, ["publish"]);
 });
 

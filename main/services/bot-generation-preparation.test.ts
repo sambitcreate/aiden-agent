@@ -10,7 +10,7 @@ const bot = {
   revision: "botrev:bot-1",
   name: "Researcher",
   instructions: "Be careful.",
-  avatar: "prism" as const,
+  avatar: { version: 1 as const, shape: "hex" as const, color: "sun" as const },
   createdAt: 1,
   updatedAt: 2,
 };

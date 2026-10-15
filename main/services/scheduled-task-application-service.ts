@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import type {
   AppSettings,
   McpServer,
@@ -117,9 +118,12 @@ export function createScheduledTaskApplicationService(
     }
   };
 
+  // Bot routines belong to their Bot's profile (bots:routines:*). They never
+  // appear in, or can be changed through, the generic automation surfaces
+  // shared by Electron and Aiden Remote.
   const get = async (id: string): Promise<ScheduledTask> => {
     const task = await dependencies.store.get(id);
-    if (!task) throw new Error(`Scheduled task ${id} not found.`);
+    if (!task || task.botId !== undefined) throw new Error(`Scheduled task ${id} not found.`);
     return task;
   };
 
@@ -187,7 +191,7 @@ export function createScheduledTaskApplicationService(
   };
 
   return {
-    list: () => dependencies.store.list(),
+    list: async () => (await dependencies.store.list()).filter((task) => task.botId === undefined),
     get,
     save,
     remove: (id: string, revision?: string, signal?: AbortSignal) =>
@@ -222,8 +226,9 @@ export function createScheduledTaskApplicationService(
       }
       return dependencies.listScripts({ workspaceRoot: workspace?.folderPath });
     },
+    // Servers switched off for the model cannot be chosen for a schedule.
     mcpServers: async () => (await dependencies.listMcpServers())
-      .filter((server) => server.enabled)
+      .filter((server) => server.enabled && mcpServerOffersTools(server))
       .map((server) => ({ id: server.id, name: server.name })),
     settings,
     updateSettings,

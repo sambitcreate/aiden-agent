@@ -1,7 +1,8 @@
 import * as React from "react";
 import { GripHorizontal, PanelRight, PictureInPicture2, X } from "lucide-react";
-import { browserFloatingContentBounds, browserFloatingFrame, resizeBrowserFloatingFrame, type BrowserFloatingEdge, type BrowserFloatingFrame as FloatingFrame, type BrowserFloatingSize } from "../lib/browser-floating-layout";
+import { browserFloatingFrame, resizeBrowserFloatingFrame, type BrowserFloatingEdge, type BrowserFloatingFrame as FloatingFrame, type BrowserFloatingSize } from "../lib/browser-floating-layout";
 import { Button } from "./ui";
+import { useFloatingContainerBounds } from "../lib/use-floating-container-bounds";
 
 const rememberedFrames = new Map<string, { width: number; position: { x: number; y: number } }>();
 const EDGES: BrowserFloatingEdge[] = ["north", "south", "east", "west", "northwest", "northeast", "southwest", "southeast"];
@@ -10,44 +11,10 @@ export function BrowserFloatingFrame({ frameKey, source, chromeHeight, pictureIn
   frameKey: string; source: BrowserFloatingSize; chromeHeight: number; pictureInPicture?: boolean;
   children: React.ReactNode; onDock: () => void; onClose: () => void; onPictureInPicture: () => void; onLayout: () => void;
 }) {
-  const [container, setContainer] = React.useState({ x: 0, y: 0, width: 0, height: 0 });
+  const container = useFloatingContainerBounds();
   const [preference, setPreference] = React.useState(() => rememberedFrames.get(frameKey));
   const gesture = React.useRef<{ pointerId: number; x: number; y: number; frame: FloatingFrame; edge: BrowserFloatingEdge | null } | null>(null);
   const frame = browserFloatingFrame({ source, container, chromeHeight, ...preference });
-  React.useLayoutEffect(() => {
-    const target = document.querySelector<HTMLElement>("[data-browser-floating-container]");
-    const workbench = target?.closest<HTMLElement>("[data-environment-surface-mode]");
-    let observed = new Set<HTMLElement>();
-    let animationFrame = 0;
-    const rect = (element: HTMLElement): FloatingFrame => {
-      const bounds = element.getBoundingClientRect();
-      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-    };
-    const measure = () => {
-      animationFrame = 0;
-      // ScrollArea's viewport excludes the terminal drawer; its absolute toolbar
-      // is removed separately. The outer workbench can also contain an overlaid
-      // Environment panel, so its full width is not the usable chat width.
-      const viewport = target?.querySelector<HTMLElement>("[data-scroll-top]") ?? target;
-      const toolbar = target?.querySelector<HTMLElement>("[data-toolbar]");
-      const composer = target?.querySelector<HTMLElement>('[data-browser-composer-inset="true"]');
-      const surfaces = Array.from(workbench?.querySelectorAll<HTMLElement>('[data-environment-surface][data-state="open"]') ?? []);
-      const nextObserved = new Set([target, viewport, toolbar, composer, ...surfaces].filter((element): element is HTMLElement => Boolean(element)));
-      for (const element of observed) if (!nextObserved.has(element)) observer.unobserve(element);
-      for (const element of nextObserved) if (!observed.has(element)) observer.observe(element);
-      observed = nextObserved;
-      const next = viewport ? browserFloatingContentBounds({ viewport: rect(viewport), toolbar: toolbar ? rect(toolbar) : undefined, composer: composer ? rect(composer) : undefined, sideSurfaces: surfaces.map(rect) }) : { x: 0, y: 0, width: 0, height: 0 };
-      setContainer((current) => Object.keys(next).every((key) => current[key as keyof typeof next] === next[key as keyof typeof next]) ? current : next);
-    };
-    const schedule = () => { if (!animationFrame) animationFrame = window.requestAnimationFrame(measure); };
-    const observer = new ResizeObserver(schedule);
-    measure();
-    const mutations = new MutationObserver(schedule);
-    if (workbench ?? target) mutations.observe((workbench ?? target)!, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-browser-composer-inset", "data-state", "style"] });
-    window.addEventListener("resize", schedule);
-    document.addEventListener("transitionend", schedule, true);
-    return () => { window.cancelAnimationFrame(animationFrame); observer.disconnect(); mutations.disconnect(); window.removeEventListener("resize", schedule); document.removeEventListener("transitionend", schedule, true); };
-  }, []);
   React.useLayoutEffect(onLayout, [frame.x, frame.y, frame.width, frame.height, container.x, container.y, onLayout]);
   const update = (next: FloatingFrame) => {
     const value = { width: next.width, position: { x: next.x, y: next.y } };

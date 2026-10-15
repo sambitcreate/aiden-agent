@@ -1,0 +1,247 @@
+/*
+ * Onboarding feature-tour art: stylized, cropped slices of Aiden's real surfaces.
+ *
+ * Every colour comes from the theme tokens in styles.css plus one Bot avatar
+ * tint per tile (`--oa-tint`, set inline by FeatureArtTile). Mixing the tint into
+ * the popover surface keeps each tile legible in light and dark and in every
+ * preset. Positions inside a vignette are structural and live inline in its TSX.
+ * Motion animates only transform and opacity and never runs under Reduce Motion
+ * (system or in-app), so the still pose is always the unanimated markup.
+ */
+@import "./create-art.css";
+@import "./extend-art.css";
+@import "./control-art.css";
+
+.oa-tile {
+  --oa-tint: var(--bot-avatar-lilac);
+  background: color-mix(in srgb, var(--oa-tint) 12%, var(--surface-popover));
+}
+.oa-tile:hover,
+.oa-tile:focus-visible {
+  background: color-mix(in srgb, var(--oa-tint) 18%, var(--surface-popover));
+}
+.dark .oa-tile { background: color-mix(in srgb, var(--oa-tint) 10%, var(--surface-popover)); }
+.dark .oa-tile:hover,
+.dark .oa-tile:focus-visible { background: color-mix(in srgb, var(--oa-tint) 15%, var(--surface-popover)); }
+
+.oa-art {
+  --oa-surface: color-mix(in srgb, var(--oa-tint) 7%, var(--surface-popover));
+  --oa-fill: color-mix(in srgb, var(--oa-tint) 28%, var(--surface-popover));
+  --oa-bar: color-mix(in srgb, var(--oa-tint) 58%, transparent);
+  --oa-bar-soft: color-mix(in srgb, var(--oa-tint) 34%, transparent);
+  --oa-ink: color-mix(in srgb, var(--oa-tint) 38%, var(--text-primary));
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-size: 8px;
+  line-height: 10px;
+}
+.dark .oa-art {
+  --oa-surface: color-mix(in srgb, var(--oa-tint) 7%, var(--surface-popover));
+  --oa-fill: color-mix(in srgb, var(--oa-tint) 20%, var(--surface-popover));
+  --oa-bar: color-mix(in srgb, var(--oa-tint) 50%, transparent);
+  --oa-bar-soft: color-mix(in srgb, var(--oa-tint) 28%, transparent);
+  --oa-ink: color-mix(in srgb, var(--oa-tint) 55%, var(--text-primary));
+}
+/* Standard and tall tiles keep their title clear with a soft crop at the bottom. */
+.oa-art[data-size="standard"] {
+  bottom: 26px;
+  -webkit-mask-image: linear-gradient(#000 74%, transparent);
+  mask-image: linear-gradient(#000 74%, transparent);
+}
+.oa-art[data-size="tall"] {
+  bottom: 34px;
+  -webkit-mask-image: linear-gradient(#000 84%, transparent);
+  mask-image: linear-gradient(#000 84%, transparent);
+}
+
+/* ---------- Primitives ---------- */
+.oa-window {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--oa-surface);
+  box-shadow: var(--elevation-control);
+}
+.oa-window[data-raised] { background: var(--surface-popover); box-shadow: var(--elevation-popover); }
+.oa-bar {
+  display: block;
+  flex: none;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--oa-bar);
+}
+.oa-bar[data-tone="soft"] { background: var(--oa-bar-soft); }
+.oa-bar[data-tone="ink"] { background: var(--oa-ink); }
+.oa-icon { width: 10px; height: 10px; flex: none; }
+.oa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--oa-fill);
+  color: var(--text-secondary);
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.oa-chip .oa-icon { width: 8px; height: 8px; }
+.oa-mono { font-family: var(--font-code-family); }
+.oa-strong { color: var(--text-primary); font-weight: 600; }
+.oa-add { color: var(--status-green); font-weight: 650; }
+.oa-del { color: var(--status-red); font-weight: 650; }
+.oa-row { display: flex; align-items: center; gap: 4px; }
+.oa-stack { display: grid; gap: 4px; align-content: start; }
+.oa-grow { flex: 1; min-width: 0; }
+.oa-separator-bottom { box-shadow: inset 0 -1px var(--border-separator); }
+.oa-separator-left { box-shadow: inset 1px 0 var(--border-separator); }
+.oa-lights { display: flex; gap: 3px; }
+.oa-lights i { width: 6px; height: 6px; border-radius: 50%; background: #ff5f57; }
+.oa-lights i:nth-child(2) { background: #febc2e; }
+.oa-lights i:nth-child(3) { background: #28c840; }
+.oa-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 17px;
+  padding: 0 8px;
+  border-radius: 8px;
+  corner-shape: squircle;
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.oa-button .oa-icon { width: 8px; height: 8px; }
+.oa-button[data-variant="primary"] { background: var(--accent); color: var(--accent-foreground); }
+.oa-button[data-variant="ghost"] { background: var(--oa-fill); color: var(--text-primary); }
+.oa-selected { background: var(--surface-list-selection); color: var(--text-primary); }
+.oa-radio {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-field);
+}
+.oa-radio[data-checked="true"] { background: var(--accent); box-shadow: none; }
+.oa-radio[data-checked="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 2.75px;
+  border-radius: 50%;
+  background: var(--accent-foreground);
+}
+.oa-toggle {
+  position: relative;
+  width: 18px;
+  height: 11px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-control-active);
+}
+.oa-toggle::after {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  left: 1.5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.oa-toggle[data-on="true"] { background: var(--accent); }
+.oa-toggle[data-on="true"]::after { left: 8.5px; }
+
+/* Composer */
+.oa-composer {
+  position: absolute;
+  height: 54px;
+  padding: 8px 10px;
+  border-radius: 18px;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-composer);
+}
+.oa-composer-text { font-size: 8.5px; line-height: 10px; color: var(--text-tertiary); }
+.oa-composer-bar {
+  position: absolute;
+  left: 9px;
+  right: 7px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+.oa-composer-bar .oa-chip { height: 14px; padding: 0 5px; background: transparent; }
+.oa-send {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.oa-send .oa-icon { width: 9px; height: 9px; }
+.oa-caret {
+  display: inline-block;
+  width: 1px;
+  height: 9px;
+  margin-left: 1px;
+  vertical-align: -1px;
+  background: var(--accent);
+}
+
+/* ---------- Motion vocabulary ----------
+ * Apply these classes (with an inline animationDelay to stagger) instead of
+ * writing new keyframes. Each loop holds the still pose for most of its cycle. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-caret,
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-blink { animation: oa-blink 1.1s steps(1) infinite; }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-type {
+    transform-origin: left center;
+    animation: oa-type 7s var(--motion-easing) infinite both;
+  }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pop { animation: oa-pop 7s var(--motion-easing) infinite both; }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-float { animation: oa-float 5s ease-in-out infinite alternate; }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: oa-pulse 2.4s ease-in-out infinite;
+  }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-bars {
+    transform-origin: center bottom;
+    animation: oa-bars 1.2s ease-in-out infinite alternate;
+  }
+  :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press { animation: oa-press 7s var(--motion-easing) infinite; }
+}
+@keyframes oa-blink { 50% { opacity: 0; } }
+@keyframes oa-type {
+  0% { opacity: 1; transform: scaleX(0); }
+  12%, 86% { opacity: 1; transform: scaleX(1); }
+  96%, 100% { opacity: 0; transform: scaleX(1); }
+}
+@keyframes oa-pop {
+  0% { opacity: 0; transform: translateY(4px); }
+  9%, 86% { opacity: 1; transform: none; }
+  96%, 100% { opacity: 0; transform: none; }
+}
+@keyframes oa-float { from { transform: translateY(0); } to { transform: translateY(-3px); } }
+@keyframes oa-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.3); }
+}
+@keyframes oa-bars { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
+@keyframes oa-press {
+  0%, 52% { transform: scale(1); }
+  56% { transform: scale(0.94); }
+  62%, 100% { transform: scale(1); }
+}

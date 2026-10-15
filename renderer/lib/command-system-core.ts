@@ -1,10 +1,12 @@
 import {
   COMMANDS,
   matchesAccelerator,
+  type CommandDefinition,
   type CommandId,
   type KeyboardEventLike,
   type KeyboardPlatform,
 } from "../shared/keybindings";
+import { isStudioPath, type StudioFeature } from "../shared/studio-routes";
 
 export interface CommandDispatchContext {
   editable: boolean;
@@ -43,7 +45,7 @@ export function workspaceCommandVisibility(pathname: string): {
   terminal: boolean;
 } {
   return {
-    environment: pathname !== "/settings",
+    environment: pathname !== "/settings" && !isStudioPath(pathname),
     terminal:
       pathname === "/" ||
       pathname.startsWith("/chat/") ||
@@ -74,4 +76,15 @@ export function resolveCommandForKeyEvent(
     return definition.id;
   }
   return null;
+}
+
+/** Commands the palette may list for these capabilities; gated commands are absent, not disabled. */
+export function paletteCommands(
+  capabilities: Readonly<Record<StudioFeature, boolean>>,
+): CommandDefinition[] {
+  return COMMANDS.filter(
+    (definition) =>
+      definition.showInPalette &&
+      (definition.requiresCapability === undefined || capabilities[definition.requiresCapability]),
+  );
 }

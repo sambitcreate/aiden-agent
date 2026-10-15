@@ -1,7 +1,10 @@
+import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
-import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
+import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { isLocalVoiceIdleUnloadMinutes } from "../../renderer/shared/dictation-preferences.js";
+import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js";
 // Splits Aiden's persisted configuration into a portable half and a
 // machine-local half, and migrates existing installs into that layout once.
 //
@@ -46,6 +49,12 @@ import {
   normalizeHiddenModelsByProvider,
   withProviderPolicyHidden,
 } from "../../renderer/shared/model-visibility.js";
+import {
+  normalizeModelPadPlacements,
+  normalizePinnedModels,
+  normalizeRecentModels,
+  normalizeModelPadMetric,
+} from "../../renderer/shared/model-pad-preferences.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
@@ -299,6 +308,7 @@ function isWorkspace(value: unknown): value is Workspace {
 
 export function isMcpServer(value: unknown): value is McpServer {
   if (!isRecord(value)) return false;
+  try { validateMcpServerMetadata(value); } catch { return false; }
   return (
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
@@ -388,6 +398,7 @@ function hasSensitiveProviderUrl(value: unknown): boolean {
 export function isPortableProvider(value: unknown): value is PortableProvider {
   if (!isRecord(value)) return false;
   const provider = value as Partial<PortableProvider>;
+  try { validateLocalClassifierPreference(provider); } catch { return false; }
   if (provider.customModelOptions !== undefined) {
     if (!isRecord(provider.customModelOptions)) return false;
     try {
@@ -557,6 +568,36 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
+type ModelPadPreferenceFields = {
+  modelPadPlacements?: unknown;
+  pinnedModels?: unknown;
+  recentModels?: unknown;
+  modelPadMetric?: unknown;
+};
+
+/**
+ * Model Pad placements, pins, recent models and the benchmark metric: invalid
+ * entries are dropped, wrong shapes removed. All of them live in machine-local
+ * settings.json, never in the portable config.json.
+ */
+function applyModelPadPreferences(
+  source: ModelPadPreferenceFields,
+  target: ModelPadPreferenceFields,
+): void {
+  const placements = normalizeModelPadPlacements(source.modelPadPlacements);
+  if (placements) target.modelPadPlacements = placements;
+  else delete target.modelPadPlacements;
+  const pins = normalizePinnedModels(source.pinnedModels);
+  if (pins) target.pinnedModels = pins;
+  else delete target.pinnedModels;
+  const recents = normalizeRecentModels(source.recentModels);
+  if (recents) target.recentModels = recents;
+  else delete target.recentModels;
+  const metric = normalizeModelPadMetric(source.modelPadMetric);
+  if (metric) target.modelPadMetric = metric;
+  else delete target.modelPadMetric;
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -574,6 +615,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "lastModel",
     "voiceModel",
     "localVoiceModel",
+    "voiceLanguage",
     "shortcutAccelerator",
     "dictationAccelerator",
     "scheduledDefaultTimezone",
@@ -595,11 +637,16 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSilenceStop",
     "dictationCleanup",
     "dictationSounds",
+    "voiceTranslateToEnglish",
+    "voiceTrimSilence",
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",
     "remoteAppControlsEnabled",
     "computerUseEnabled",
+    "computerUseAlwaysAllow",
+    "aidenLiveEnabled",
+    "aidenLiveButtonVisible",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
     "scheduledDefaultNotify",
@@ -665,6 +712,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, normalized);
   return {
     ...rest,
     settings: normalized as AppSettings,
@@ -675,6 +723,11 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
+  if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.compactionModelOverrides !== undefined) {
+    try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
+    catch { delete runtime.compactionModelOverrides; }
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) runtime.onboarding = onboarding;
   else delete runtime.onboarding;
@@ -691,6 +744,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
+  applyModelPadPreferences(settings, runtime);
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];
     if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) {
@@ -714,6 +768,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     !isLocalVoiceIdleUnloadMinutes(settings.localVoiceIdleUnloadMinutes)
   ) {
     delete runtime.localVoiceIdleUnloadMinutes;
+  }
+  if (settings.voiceLanguage !== undefined) {
+    const voiceLanguage = normalizeLanguageIntent(settings.voiceLanguage);
+    if (voiceLanguage) runtime.voiceLanguage = voiceLanguage;
+    else delete runtime.voiceLanguage;
   }
   if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete runtime.telegramAllowedUserId;
   if (!isGenerationThinkingLevel(settings.telegramThinkingLevel))
@@ -1030,7 +1089,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. |
+| \`mcpServers\` | MCP server definitions. Environment and header values are not stored here: each name keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Plugins. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1040,9 +1099,10 @@ from the UI.
 
 ## What is deliberately not here
 
-**API keys and OAuth tokens.** They are encrypted against this machine's keychain
-and stay in Aiden's application-support folder. After copying \`config.json\` to a
-new machine your providers appear with no key attached; re-enter them there.
+**API keys and OAuth tokens, plus MCP environment and header values.** They are
+encrypted against this machine's keychain and stay in Aiden's application-support
+folder. After copying \`config.json\` to a new machine your providers appear with no
+key attached and MCP servers ask for their values again; re-enter them there.
 
 **Model lists.** \`providers[].models\` is discovery output rather than
 configuration, so it is cached per machine and refilled when you refresh a
@@ -1201,6 +1261,8 @@ export function createPortableConfigStores(
     localRoot,
     {
       normalize: normalizeProviderModelCacheShape,
+      // Regenerated from provider model listings; a rescue copy would only litter.
+      preserveCorruptFile: false,
       beforeExternalCacheCommit: testHooks.beforeProviderModelExternalCacheCommit,
       beforeWritePublish: testHooks.beforeProviderModelWritePublish,
       afterWritePublish: testHooks.afterProviderModelWritePublish,
