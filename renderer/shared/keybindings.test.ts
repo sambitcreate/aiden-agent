@@ -245,6 +245,29 @@ test("a shortcut saved before New chat in… existed keeps Command+Shift+N", () 
   assert.equal(effectiveBinding("chat.newIn", untouched), "Command+Shift+N");
 });
 
+test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {
+  // Saved by an earlier build: New chat on Command+Shift+O, before Open folder… owned that default.
+  const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+O" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.deepEqual(
+    [effectiveBinding("chat.new", repaired), effectiveBinding("workspace.openFolder", repaired)],
+    ["Command+Shift+O", null],
+  );
+  assert.deepEqual(migrateLegacyKeybindings(saved), repaired, "startup repairs through the same path");
+  assert.equal(shouldPersistCanonicalKeybindings(saved, repaired), true, "the yield is saved once");
+  // Once saved, later repairs leave both choices alone, and the user can bind
+  // Open folder… to a free shortcut.
+  assert.deepEqual(repairKeybindingOverrides(repaired), repaired);
+  const rebound = applyKeybindingMutation(repaired, {
+    commandId: "workspace.openFolder",
+    binding: "Command+Alt+O",
+  });
+  assert.deepEqual(
+    [effectiveBinding("chat.new", rebound), effectiveBinding("workspace.openFolder", rebound)],
+    ["Command+Shift+O", "Command+Alt+O"],
+  );
+});
+
 test("catalog defaults remain conflict-free and avoid native role accelerators", () => {
   assert.doesNotThrow(() => validateEffectiveBindings(effectiveBindings(undefined)));
   assert.equal(effectiveBinding("sidebar.toggle", undefined), "Command+B");

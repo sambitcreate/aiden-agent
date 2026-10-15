@@ -906,7 +906,7 @@ export function migrateLegacyKeybindings(
  * defaults wins once: the new command is saved as disabled, as legacy values
  * win over newly introduced defaults in `migrateLegacyKeybindings`.
  */
-const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = ["chat.newIn"];
+const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = ["chat.newIn", "workspace.openFolder"];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
   for (const introduced of INTRODUCED_DEFAULT_COMMANDS) {
