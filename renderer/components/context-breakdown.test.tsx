@@ -139,6 +139,17 @@ test("the note says Aiden will compact when the runtime rule trips", () => {
   assert.match(screen.getByRole("note").textContent ?? "", /^Aiden will compact context before the next request\./u);
 });
 
+test("a running compaction leads the note, even when the runtime rule has tripped", () => {
+  render(<ContextBreakdown pressure={pressure({ shouldCompact: true, percentOfUsableInput: 101 })} compacting />);
+  const note = screen.getByRole("note").textContent ?? "";
+  assert.match(note, /^Compacting context…/u);
+  assert.doesNotMatch(note, /will compact|Healthy/u);
+  cleanup();
+
+  render(<ContextBreakdown pressure={pressure()} compacting />);
+  assert.match(screen.getByRole("note").textContent ?? "", /^Compacting context…/u);
+});
+
 test("the note reports how many earlier messages compaction could remove", () => {
   render(<ContextBreakdown pressure={pressure()} />);
   assert.match(screen.getByRole("note").textContent ?? "", /43 earlier messages could be compacted later\./u);

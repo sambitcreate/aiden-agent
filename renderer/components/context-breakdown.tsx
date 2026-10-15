@@ -75,7 +75,8 @@ function pluralMessages(count: number): string {
   return `${count} earlier ${count === 1 ? "message" : "messages"}`;
 }
 
-function compactionNote(pressure: ChatContextPressureV1, approaching: boolean): string {
+function compactionNote(pressure: ChatContextPressureV1, approaching: boolean, compacting: boolean): string {
+  if (compacting) return "Compacting context…";
   if (pressure.shouldCompact) return "Aiden will compact context before the next request.";
   const count = pressure.compressibleHistoryMessages;
   if (count === 0) return "Healthy. No earlier messages to compact yet.";
@@ -161,10 +162,17 @@ function DeferredFold({ deferred }: { deferred: DeferredContextCategory }) {
   );
 }
 
-export function ContextBreakdown({ pressure }: { pressure: ChatContextPressureV1 }): React.JSX.Element {
+export function ContextBreakdown({
+  pressure,
+  compacting = false,
+}: {
+  pressure: ChatContextPressureV1;
+  /** A compaction is running for this chat right now. */
+  compacting?: boolean;
+}): React.JSX.Element {
   const percent = contextPressurePercent(pressure);
   // Same presentation thresholds as the composer ContextMeter; shouldCompact stays the runtime rule.
-  const approaching = pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
   const contextWindow = pressure.contextWindow;
   const segments = usedSegments(pressure);
   const free = Math.max(0, pressure.inputBudgetTokens - pressure.contextTokens);
@@ -249,7 +257,7 @@ export function ContextBreakdown({ pressure }: { pressure: ChatContextPressureV1
       ))}
 
       <p role="note" className={cn("m-0 mt-3 text-small leading-snug", approaching ? "text-support-warning" : "text-tertiary")}>
-        {compactionNote(pressure, approaching)}
+        {compactionNote(pressure, approaching, compacting)}
         {deferred.length > 0 ? " Deferred tools load through tool search and aren't counted until used." : null}
       </p>
     </div>

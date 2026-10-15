@@ -1580,10 +1580,16 @@ function useMountedWhileOpen(open: boolean): boolean {
   return open || mounted;
 }
 
-function ContextSummaryMeter({ pressure }: { pressure: ChatContextPressureV1 }) {
+function ContextSummaryMeter({
+  pressure,
+  compacting,
+}: {
+  pressure: ChatContextPressureV1;
+  compacting: boolean;
+}) {
   const percent = contextPressurePercent(pressure);
-  // Same presentation threshold as the composer ContextMeter.
-  const approaching = pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  // Same presentation threshold as the composer ContextMeter; a running compaction is emphasized too.
+  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
   return (
     <>
       <span>{`${percent}%`}</span>
@@ -1627,6 +1633,7 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
   const environmentSummary = useEnvironmentSummary(workspace);
   const showFolder = useShowWorkspaceFolder(workspace);
   const pressure = panel.contextDetails?.pressure ?? null;
+  const compacting = Boolean(panel.contextDetails?.compacting);
   const subagentsVisible = panel.subagentsEnabled && panel.subagentViews.length > 0;
   const subagentSummary = subagentOverviewSummary(panel.subagentViews);
   const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
@@ -1744,15 +1751,14 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
       ),
     },
     context: {
-      summary: pressure ? <ContextSummaryMeter pressure={pressure} /> : undefined,
+      summary: pressure ? <ContextSummaryMeter pressure={pressure} compacting={compacting} /> : undefined,
       summaryLabel: pressure ? `${contextPressurePercent(pressure)} percent used` : undefined,
       headerAction: {
         kind: "sidebar",
         label: "Open Context in sidebar",
         onSelect: () => panel.showTools("context"),
-        disabled: toolsBlocked,
       },
-      children: pressure ? <ContextBreakdown pressure={pressure} /> : null,
+      children: pressure ? <ContextBreakdown pressure={pressure} compacting={compacting} /> : null,
     },
     subagents: {
       summary: subagentSummary.secondary,
@@ -1761,7 +1767,6 @@ function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boole
         kind: "sidebar",
         label: "Open Subagents in sidebar",
         onSelect: () => panel.showTools("subagents"),
-        disabled: toolsBlocked,
       },
       // The run list ticks elapsed time, so it only exists while the card is open.
       children: subagentsBodyMounted ? (
