@@ -66,25 +66,13 @@ interface StatLike {
 
 interface LinkStatLike extends StatLike {
   isSymbolicLink(): boolean;
-  dev: number | bigint;
-  ino: number | bigint;
+  isFile(): boolean;
 }
 
-/** The directory a clone claimed: whether Aiden made it, and its identity. */
-interface ClaimedDirectory {
-  created: boolean;
-  dev: string;
-  ino: string;
-}
-
-function isClaimedDirectory(stats: LinkStatLike, claim: ClaimedDirectory): boolean {
-  return (
-    !stats.isSymbolicLink() &&
-    stats.isDirectory() &&
-    String(stats.dev) === claim.dev &&
-    String(stats.ino) === claim.ino
-  );
-}
+/** Marks a staging folder as created by this clone; holds a random token. */
+const CLONE_OWNER_MARKER = ".aiden-clone-owner";
+/** Git clones into `<staging>/repo`; the user's destination is untouched until success. */
+const CLONE_STAGING_REPO = "repo";
 
 export interface WorkspaceIntakeDependencies {
   home: string;
@@ -92,8 +80,14 @@ export interface WorkspaceIntakeDependencies {
   /** Stat without following a final-component symlink. */
   lstat(target: string): Promise<LinkStatLike>;
   rename(from: string, to: string): Promise<void>;
-  /** An unguessable token for the cleanup quarantine name. */
+  /** Create a private (0700) uniquely named directory from a path prefix. */
+  mkdtemp(prefix: string): Promise<string>;
+  /** Create a new file; fails if anything already exists at the path. */
+  writeNewFile(target: string, content: string): Promise<void>;
+  readFile(target: string): Promise<string>;
+  /** An unguessable token for the staging owner marker. */
   randomId(): string;
+  logError(area: string, message: string, error: unknown): void;
   realpath(target: string): Promise<string>;
   readdir(target: string): Promise<string[]>;
   /** Make exactly one directory; the parent must already exist. */
@@ -373,54 +367,6 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     ...extra,
   });
 
-  /**
-   * Undo a failed clone, with deletion authority over exactly the directory
-   * Aiden claimed. The destination is first renamed to an unguessable sibling,
-   * so a later replacement of the pathname cannot redirect the cleanup; the
-   * renamed entry is then checked against the claimed identity without
-   * following symlinks. Anything else is put back untouched. Removal never
-   * follows symlinks inside the tree.
-   */
-  const cleanUpFailedClone = async (
-    destination: string,
-    claim: ClaimedDirectory,
-    stderrTail: string,
-  ): Promise<void> => {
-    // Something else filled the folder after Aiden claimed it: leave it alone.
-    if (/already exists and is not an empty directory/iu.test(stderrTail)) return;
-    const quarantine = path.join(path.dirname(destination), `.aiden-clone-cleanup-${deps.randomId()}`);
-    try {
-      await deps.rename(destination, quarantine);
-    } catch {
-      return;
-    }
-    const stillClaimed = async (): Promise<boolean> => {
-      try {
-        return isClaimedDirectory(await deps.lstat(quarantine), claim);
-      } catch {
-        return false;
-      }
-    };
-    if (!(await stillClaimed())) {
-      await deps.rename(quarantine, destination).catch(() => undefined);
-      return;
-    }
-    if (claim.created) {
-      await deps.removeTree(quarantine).catch(() => undefined);
-      return;
-    }
-    // An adopted empty folder: empty it again and put it back where it was.
-    try {
-      for (const entry of await deps.readdir(quarantine)) {
-        if (!(await stillClaimed())) break;
-        await deps.removeTree(path.join(quarantine, entry));
-      }
-    } catch {
-      // Best effort; the folder is restored below either way.
-    }
-    await deps.rename(quarantine, destination).catch(() => undefined);
-  };
-
   /** One key per folder however it is spelled: canonical parent plus folded name. */
   const destinationKey = async (destination: string): Promise<string> => {
     const name = path.basename(destination);
@@ -428,37 +374,96 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     return path.join(parent, caseInsensitivePaths ? name.toLowerCase() : name);
   };
 
-  /**
-   * Make the destination, or adopt it only if it is a real, empty folder.
-   * Records the directory's identity so cleanup can only touch this folder.
-   */
-  const claimDestination = async (
+  /** The destination must be absent or an empty real folder; a link is never followed. */
+  const checkDestination = async (
     destination: string,
-  ): Promise<{ ok: true; claim: ClaimedDirectory } | { ok: false; failure: CloneFailure }> => {
-    let created = true;
+  ): Promise<{ ok: true; state: "absent" | "empty" } | { ok: false; failure: CloneFailure }> => {
+    let stats: LinkStatLike;
     try {
-      await deps.mkdir(destination);
+      stats = await deps.lstat(destination);
     } catch (error) {
-      if (errnoCode(error) !== "EEXIST") {
-        return { ok: false, failure: fail("invalid-destination", "Aiden couldn't create the destination folder.") };
-      }
-      created = false;
+      if (errnoCode(error) === "ENOENT") return { ok: true, state: "absent" };
+      return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
     }
+    if (stats.isSymbolicLink()) {
+      return { ok: false, failure: fail("invalid-destination", "The destination is a link. Choose a real folder.") };
+    }
+    const occupied = fail("destination-exists", "The destination folder already exists and isn't empty.");
+    if (!stats.isDirectory()) return { ok: false, failure: occupied };
     try {
-      const stats = await deps.lstat(destination);
-      if (stats.isSymbolicLink()) {
-        return { ok: false, failure: fail("invalid-destination", "The destination is a link. Choose a real folder.") };
-      }
-      if (!stats.isDirectory() || (!created && (await deps.readdir(destination)).length > 0)) {
-        return {
-          ok: false,
-          failure: fail("destination-exists", "The destination folder already exists and isn't empty."),
-        };
-      }
-      return { ok: true, claim: { created, dev: String(stats.dev), ino: String(stats.ino) } };
+      if ((await deps.readdir(destination)).length > 0) return { ok: false, failure: occupied };
     } catch {
       return { ok: false, failure: fail("invalid-destination", "Aiden can't read the destination folder.") };
     }
+    return { ok: true, state: "empty" };
+  };
+
+  /** A private folder beside the destination, marked as this clone's own. */
+  const createStaging = async (parent: string): Promise<{ staging: string; token: string }> => {
+    const staging = await deps.mkdtemp(path.join(parent, ".aiden-clone-"));
+    const token = deps.randomId();
+    try {
+      await deps.writeNewFile(path.join(staging, CLONE_OWNER_MARKER), token);
+    } catch (error) {
+      await deps.rmdir(staging).catch(() => undefined);
+      throw error;
+    }
+    return { staging, token };
+  };
+
+  /**
+   * Delete a staging folder only when it still carries this clone's marker:
+   * a real directory holding a regular-file marker with the token. Anything
+   * else is left in place and logged. Removal never follows symlinks.
+   */
+  const removeStaging = async (staging: string, token: string): Promise<void> => {
+    const marker = path.join(staging, CLONE_OWNER_MARKER);
+    try {
+      const folder = await deps.lstat(staging);
+      const markerStats = await deps.lstat(marker);
+      if (
+        folder.isSymbolicLink() ||
+        !folder.isDirectory() ||
+        markerStats.isSymbolicLink() ||
+        !markerStats.isFile() ||
+        (await deps.readFile(marker)) !== token
+      ) {
+        throw new Error("The clone staging folder no longer carries Aiden's owner marker.");
+      }
+    } catch (error) {
+      deps.logError("workspace", "Left a clone staging folder Aiden could not verify as its own.", error);
+      return;
+    }
+    await deps.removeTree(staging).catch((error: unknown) => {
+      deps.logError("workspace", "Could not remove a clone staging folder.", error);
+    });
+  };
+
+  /**
+   * Move a finished clone into place. The destination must still be absent or
+   * an empty real folder; otherwise nothing of the user's is touched.
+   */
+  const publishClone = async (staging: string, destination: string): Promise<CloneFailure | undefined> => {
+    const appeared = fail(
+      "destination-exists",
+      "Something appeared in the destination folder during the clone, so the clone was discarded.",
+    );
+    const check = await checkDestination(destination);
+    if (!check.ok) return appeared;
+    if (check.state === "empty") {
+      try {
+        await deps.rmdir(destination);
+      } catch {
+        return appeared;
+      }
+    }
+    try {
+      // rename never replaces a non-empty folder, a file or a link with a directory.
+      await deps.rename(path.join(staging, CLONE_STAGING_REPO), destination);
+    } catch {
+      return appeared;
+    }
+    return undefined;
   };
 
   const clone = async (
@@ -487,17 +492,8 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
 
     const inspection = await inspectResolved(destination);
     if (inspection.kind === "invalid") return fail("invalid-destination", inspection.reason);
-    if (inspection.kind !== "creatable") {
-      let entries: string[];
-      try {
-        entries = await deps.readdir(destination);
-      } catch {
-        return fail("invalid-destination", "Aiden can't read the destination folder.");
-      }
-      if (entries.length > 0) {
-        return fail("destination-exists", "The destination folder already exists and isn't empty.");
-      }
-    }
+    const initial = await checkDestination(destination);
+    if (!initial.ok) return initial.failure;
 
     let key: string;
     try {
@@ -510,29 +506,36 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
     }
     activeDestinations.add(key);
     try {
-      const claim = await claimDestination(destination);
-      if (!claim.ok) return claim.failure;
-      if (options.signal.aborted) {
-        await cleanUpFailedClone(destination, claim.claim, "");
-        return fail("cancelled", "Clone cancelled.");
+      let staging: string;
+      let token: string;
+      try {
+        ({ staging, token } = await createStaging(path.dirname(destination)));
+      } catch {
+        return fail("invalid-destination", "Aiden couldn't create a folder for the clone there.");
       }
-      const outcome = await deps.runClone({
-        url: parsed.url,
-        destination,
-        cwd: path.dirname(destination),
-        signal: options.signal,
-        onProgress: (progress) => options.onProgress({ cloneId: options.cloneId, ...progress }),
-      });
-      if (!outcome.ok) {
-        await cleanUpFailedClone(destination, claim.claim, outcome.stderrTail);
-        if (outcome.reason === "cancelled") return fail("cancelled", "Clone cancelled.");
-        if (outcome.reason === "timeout") return fail("timeout", "The clone took too long and was stopped.");
-        const detail = cloneFailureDetail(outcome.stderrTail, deps.home);
-        if (outcome.reason === "spawn-failed") {
-          return fail("git-unavailable", "Aiden couldn't run Git. Install Git and try again.", detail ? { detail } : {});
+      try {
+        if (options.signal.aborted) return fail("cancelled", "Clone cancelled.");
+        const outcome = await deps.runClone({
+          url: parsed.url,
+          destination: path.join(staging, CLONE_STAGING_REPO),
+          cwd: staging,
+          signal: options.signal,
+          onProgress: (progress) => options.onProgress({ cloneId: options.cloneId, ...progress }),
+        });
+        if (!outcome.ok) {
+          if (outcome.reason === "cancelled") return fail("cancelled", "Clone cancelled.");
+          if (outcome.reason === "timeout") return fail("timeout", "The clone took too long and was stopped.");
+          const detail = cloneFailureDetail(outcome.stderrTail, deps.home);
+          if (outcome.reason === "spawn-failed") {
+            return fail("git-unavailable", "Aiden couldn't run Git. Install Git and try again.", detail ? { detail } : {});
+          }
+          const classified = classifyCloneFailure(outcome.stderrTail);
+          return fail(classified.code, classified.reason, detail ? { detail } : {});
         }
-        const classified = classifyCloneFailure(outcome.stderrTail);
-        return fail(classified.code, classified.reason, detail ? { detail } : {});
+        const published = await publishClone(staging, destination);
+        if (published) return published;
+      } finally {
+        await removeStaging(staging, token);
       }
       const registered = await register(destination);
       if (!registered.ok) {

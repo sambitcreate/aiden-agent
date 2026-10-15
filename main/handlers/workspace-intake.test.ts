@@ -80,7 +80,11 @@ async function setup(t: test.TestContext) {
     stat: (target) => fs.stat(target),
     lstat: (target) => fs.lstat(target),
     rename: (from, to) => fs.rename(from, to),
+    mkdtemp: (prefix) => fs.mkdtemp(prefix),
+    writeNewFile: (target, content) => fs.writeFile(target, content, { flag: "wx", mode: 0o600 }),
+    readFile: (target) => fs.readFile(target, "utf8"),
     randomId: () => randomUUID(),
+    logError: () => undefined,
     realpath: (target) => fs.realpath(target),
     readdir: (target) => fs.readdir(target),
     mkdir: async (target) => {

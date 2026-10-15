@@ -45,8 +45,7 @@ async function fixture(
   t: test.TestContext,
   options: {
     runClone?: WorkspaceIntakeDependencies["runClone"];
-    /** Runs before the service's own mkdir, to simulate a racing writer. */
-    beforeMkdir?: (target: string) => Promise<void>;
+    logError?: (error: unknown) => void;
     caseInsensitivePaths?: boolean;
   } = {},
 ) {
@@ -77,11 +76,14 @@ async function fixture(
     stat: (target) => fs.stat(target),
     lstat: (target) => fs.lstat(target),
     rename: (from, to) => fs.rename(from, to),
+    mkdtemp: (prefix) => fs.mkdtemp(prefix),
+    writeNewFile: (target, content) => fs.writeFile(target, content, { flag: "wx", mode: 0o600 }),
+    readFile: (target) => fs.readFile(target, "utf8"),
     randomId: () => randomUUID(),
+    logError: (_area, _message, error) => options.logError?.(error),
     realpath: (target) => fs.realpath(target),
     readdir: (target) => fs.readdir(target),
     mkdir: async (target) => {
-      await options.beforeMkdir?.(target);
       await fs.mkdir(target);
     },
     rmdir: (target) => fs.rmdir(target),
@@ -308,6 +310,7 @@ test("a real clone runs without hooks, reports progress and registers the worksp
   assert.equal(await fs.readFile(path.join(destination, "README.md"), "utf8"), "# Widget\n");
   assert.equal(git(destination, "remote", "get-url", "origin").trim(), FIXTURE_URL);
   assert.equal(await exists(marker), false, "clone hooks must not run");
+  assert.deepEqual(await stagingFolders(path.join(home, "projects")), [], "staging is removed");
   assert.ok(progress.length > 0, "progress events were reported");
   assert.ok(progress.every((event) => event.cloneId === "clone-test-0001" && event.phase.length > 0));
 });
@@ -358,30 +361,34 @@ test("clone refuses bad URLs and occupied destinations before running Git", asyn
   assert.equal(await exists(path.join(home, "widget")), false);
 });
 
-test("a failed clone removes what it created and keeps a folder that already existed", async (t) => {
+test("a failed clone removes only its staging folder and never writes the destination", async (t) => {
   const partialThenFail = async (request: GitCloneRequest) => {
-    await fs.mkdir(request.destination, { recursive: true });
-    await fs.mkdir(path.join(request.destination, ".git"));
+    await fs.mkdir(path.join(request.destination, ".git"), { recursive: true });
     await fs.writeFile(path.join(request.destination, ".git", "HEAD"), "partial");
     return {
       ok: false as const,
       reason: "exit" as const,
-      stderrTail: "Cloning into 'widget'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+      stderrTail: "Cloning into 'repo'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
     };
   };
   const { root, home, service, cloneRequests } = await fixture(t, { runClone: partialThenFail });
 
   const fresh = await service.clone({ url: "acme/widget" }, cloneOptions());
   assert.equal(!fresh.ok && fresh.code, "auth-failed");
-  assert.equal(cloneRequests[0]?.url, "https://github.com/acme/widget.git");
-  assert.equal(cloneRequests[0]?.cwd, home);
+  const request = cloneRequests[0];
+  assert.equal(request?.url, "https://github.com/acme/widget.git");
+  assert.equal(path.dirname(request?.cwd ?? ""), home, "staging sits beside the destination");
+  assert.match(path.basename(request?.cwd ?? ""), /^\.aiden-clone-/u);
+  assert.equal(request?.destination, path.join(request?.cwd ?? "", "repo"), "Git clones inside the staging folder");
   assert.equal(await exists(path.join(home, "widget")), false);
+  assert.deepEqual(await stagingFolders(home), []);
 
   const empty = path.join(root, "empty");
   await fs.mkdir(empty);
   const reused = await service.clone({ url: "acme/widget", destination: empty }, cloneOptions());
   assert.equal(!reused.ok && reused.code, "auth-failed");
-  assert.deepEqual(await fs.readdir(empty), [], "the pre-existing folder is emptied, not removed");
+  assert.deepEqual(await fs.readdir(empty), [], "an existing empty destination is left as it was");
+  assert.deepEqual(await stagingFolders(root), []);
 });
 
 test("clone never targets a .git folder, whatever the URL or destination", async (t) => {
@@ -401,114 +408,166 @@ test("clone never targets a .git folder, whatever the URL or destination", async
   assert.equal(await exists(path.join(home, ".git")), false);
 });
 
-test("a destination that appears after inspection is never deleted", async (t) => {
-  // A writer fills the folder between inspection and Aiden's mkdir.
-  const filled = await fixture(t, {
-    beforeMkdir: async (target) => {
-      await fs.mkdir(target);
-      await fs.writeFile(path.join(target, "theirs.txt"), "keep");
-    },
-    runClone: async () => assert.fail("Git must not run in a folder Aiden could not claim"),
-  });
-  const occupied = await filled.service.clone({ url: "acme/widget" }, cloneOptions());
-  assert.equal(!occupied.ok && occupied.code, "destination-exists");
-  assert.equal(await fs.readFile(path.join(filled.home, "widget", "theirs.txt"), "utf8"), "keep");
+/** A directory outside the clone whose contents must survive every case. */
+async function outsider(root: string): Promise<string> {
+  const dir = path.join(root, "unrelated");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "keep.txt"), "keep");
+  return dir;
+}
 
-  // The racing writer made an empty folder: Aiden adopts it, and a failed clone
-  // empties it again but leaves the folder Aiden did not create.
+async function stagingFolders(dir: string): Promise<string[]> {
+  return (await fs.readdir(dir)).filter((name) => name.startsWith(".aiden-clone-"));
+}
+
+const earlyEof = { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
+/** The user-visible destination for `acme/widget` in a fixture without ~/projects. */
+const visibleDestination = (request: GitCloneRequest) => path.join(path.dirname(request.cwd), "widget");
+
+test("a failed clone never touches whatever occupies the destination", async (t) => {
+  // The destination path becomes a link to unrelated data while Git runs.
+  const linked = await fixture(t, {
+    runClone: async (request) => {
+      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
+      return earlyEof;
+    },
+  });
+  const linkedResult = await linked.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!linkedResult.ok && linkedResult.code, "failed");
+  assert.equal(await fs.readFile(path.join(linked.root, "unrelated", "keep.txt"), "utf8"), "keep");
+  assert.equal((await fs.lstat(path.join(linked.home, "widget"))).isSymbolicLink(), true);
+  assert.deepEqual(await stagingFolders(linked.home), []);
+
+  // An adopted empty destination is swapped for a link: still untouched.
   const adopted = await fixture(t, {
-    beforeMkdir: (target) => fs.mkdir(target),
     runClone: async (request) => {
-      await fs.mkdir(path.join(request.destination, ".git"));
-      return { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
-    },
-  });
-  const failed = await adopted.service.clone({ url: "acme/widget" }, cloneOptions());
-  assert.equal(!failed.ok && failed.code, "failed");
-  assert.deepEqual(await fs.readdir(path.join(adopted.home, "widget")), []);
-
-  // Git itself found the folder non-empty (filled after Aiden's claim): nothing is touched.
-  const late = await fixture(t, {
-    runClone: async (request) => {
-      await fs.writeFile(path.join(request.destination, "theirs.txt"), "keep");
-      return {
-        ok: false as const,
-        reason: "exit" as const,
-        stderrTail: "fatal: destination path 'widget' already exists and is not an empty directory.\n",
-      };
-    },
-  });
-  await late.service.clone({ url: "acme/widget" }, cloneOptions());
-  assert.equal(await fs.readFile(path.join(late.home, "widget", "theirs.txt"), "utf8"), "keep");
-});
-
-test("failed-clone cleanup only deletes the directory it claimed, never through links", async (t) => {
-  /** A directory outside the clone whose contents must survive every case. */
-  const outsider = async (root: string) => {
-    const dir = path.join(root, "unrelated");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "keep.txt"), "keep");
-    return dir;
-  };
-  const earlyEof = { ok: false as const, reason: "exit" as const, stderrTail: "fatal: early EOF" };
-
-  // Reported repro: the claimed folder is swapped for a symlink while Git runs.
-  const swapped = await fixture(t, {
-    runClone: async (request) => {
-      const target = await outsider(path.dirname(path.dirname(request.destination)));
-      await fs.rmdir(request.destination);
-      await fs.symlink(target, request.destination);
+      await fs.rmdir(visibleDestination(request));
+      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
       return earlyEof;
     },
   });
-  const swappedResult = await swapped.service.clone({ url: "acme/widget" }, cloneOptions());
-  assert.equal(!swappedResult.ok && swappedResult.code, "failed");
-  assert.equal(await fs.readFile(path.join(swapped.root, "unrelated", "keep.txt"), "utf8"), "keep");
-  assert.equal((await fs.lstat(path.join(swapped.home, "widget"))).isSymbolicLink(), true, "the replacement is put back");
+  await fs.mkdir(path.join(adopted.home, "widget"));
+  await adopted.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(await fs.readFile(path.join(adopted.root, "unrelated", "keep.txt"), "utf8"), "keep");
 
-  // The same swap of an adopted (pre-existing, empty) folder.
-  const adoptedSwap = await fixture(t, {
-    beforeMkdir: (target) => fs.mkdir(target),
-    runClone: async (request) => {
-      const target = await outsider(path.dirname(path.dirname(request.destination)));
-      await fs.rmdir(request.destination);
-      await fs.symlink(target, request.destination);
-      return earlyEof;
-    },
-  });
-  await adoptedSwap.service.clone({ url: "acme/widget" }, cloneOptions());
-  assert.equal(await fs.readFile(path.join(adoptedSwap.root, "unrelated", "keep.txt"), "utf8"), "keep");
-
-  // Replaced by a different real directory: not the one claimed, so untouched.
+  // A different real directory with data takes the destination's place.
   const replaced = await fixture(t, {
     runClone: async (request) => {
-      await fs.rmdir(request.destination);
-      await fs.mkdir(request.destination);
-      await fs.writeFile(path.join(request.destination, "keep.txt"), "keep");
+      await fs.mkdir(visibleDestination(request));
+      await fs.writeFile(path.join(visibleDestination(request), "keep.txt"), "keep");
       return earlyEof;
     },
   });
   await replaced.service.clone({ url: "acme/widget" }, cloneOptions());
   assert.equal(await fs.readFile(path.join(replaced.home, "widget", "keep.txt"), "utf8"), "keep");
+  assert.deepEqual(await stagingFolders(replaced.home), []);
 
-  // A link the clone wrote inside its own folder is removed, not followed.
+  // Links the clone wrote inside staging are removed, never followed.
   const inner = await fixture(t, {
     runClone: async (request) => {
-      const target = await outsider(path.dirname(path.dirname(request.destination)));
-      await fs.mkdir(path.join(request.destination, ".git"));
+      const target = await outsider(path.dirname(path.dirname(request.cwd)));
+      await fs.mkdir(path.join(request.destination, ".git"), { recursive: true });
       await fs.symlink(target, path.join(request.destination, ".git", "escape"));
-      await fs.symlink(target, path.join(request.destination, "escape"));
+      await fs.symlink(target, path.join(request.cwd, "escape"));
       return earlyEof;
     },
   });
   await inner.service.clone({ url: "acme/widget" }, cloneOptions());
   assert.equal(await fs.readFile(path.join(inner.root, "unrelated", "keep.txt"), "utf8"), "keep");
-  assert.equal(await exists(path.join(inner.home, "widget")), false, "the claimed folder itself is removed");
-  assert.deepEqual(
-    (await fs.readdir(inner.home)).filter((name) => name.startsWith(".aiden-clone-cleanup-")),
-    [],
-    "no quarantine is left behind",
-  );
+  assert.equal(await exists(path.join(inner.home, "widget")), false);
+  assert.deepEqual(await stagingFolders(inner.home), []);
+});
+
+test("a staging folder that lost Aiden's owner marker is never deleted", async (t) => {
+  const marker = (request: GitCloneRequest) => path.join(request.cwd, ".aiden-clone-owner");
+  const cases: Array<[string, (request: GitCloneRequest) => Promise<void>]> = [
+    [
+      "staging swapped for another folder",
+      async (request) => {
+        await fs.rename(request.cwd, `${request.cwd}-aside`);
+        await fs.mkdir(request.cwd);
+        await fs.writeFile(path.join(request.cwd, "keep.txt"), "keep");
+      },
+    ],
+    [
+      "marker replaced by a link to a file holding the token",
+      async (request) => {
+        const copy = path.join(path.dirname(request.cwd), "token-copy");
+        await fs.writeFile(copy, await fs.readFile(marker(request), "utf8"));
+        await fs.rm(marker(request));
+        await fs.symlink(copy, marker(request));
+        await fs.writeFile(path.join(request.cwd, "keep.txt"), "keep");
+      },
+    ],
+    [
+      "marker rewritten with another token",
+      async (request) => {
+        await fs.writeFile(marker(request), "someone-else");
+        await fs.writeFile(path.join(request.cwd, "keep.txt"), "keep");
+      },
+    ],
+  ];
+  for (const [name, tamper] of cases) {
+    let staging = "";
+    const errors: unknown[] = [];
+    const { service } = await fixture(t, {
+      logError: (error) => errors.push(error),
+      runClone: async (request) => {
+        staging = request.cwd;
+        await tamper(request);
+        return earlyEof;
+      },
+    });
+    const result = await service.clone({ url: "acme/widget" }, cloneOptions());
+    assert.equal(!result.ok && result.code, "failed", name);
+    assert.equal(await fs.readFile(path.join(staging, "keep.txt"), "utf8"), "keep", name);
+    assert.equal(errors.length, 1, `${name}: the skipped cleanup is logged`);
+  }
+});
+
+test("a destination that appears during a successful clone is never overwritten", async (t) => {
+  const finishedClone = async (request: GitCloneRequest) => {
+    await fs.mkdir(path.join(request.destination, ".git"), { recursive: true });
+  };
+
+  const filled = await fixture(t, {
+    runClone: async (request) => {
+      await finishedClone(request);
+      await fs.mkdir(visibleDestination(request));
+      await fs.writeFile(path.join(visibleDestination(request), "theirs.txt"), "keep");
+      return { ok: true as const };
+    },
+  });
+  const filledResult = await filled.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!filledResult.ok && filledResult.code, "destination-exists");
+  assert.deepEqual(await fs.readdir(path.join(filled.home, "widget")), ["theirs.txt"]);
+  assert.deepEqual(await stagingFolders(filled.home), [], "the discarded clone is cleaned up");
+  assert.equal(filled.workspaces.length, 0);
+
+  const linked = await fixture(t, {
+    runClone: async (request) => {
+      await finishedClone(request);
+      await fs.symlink(await outsider(path.dirname(path.dirname(request.cwd))), visibleDestination(request));
+      return { ok: true as const };
+    },
+  });
+  const linkedResult = await linked.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.equal(!linkedResult.ok && linkedResult.code, "destination-exists");
+  assert.deepEqual(await fs.readdir(path.join(linked.root, "unrelated")), ["keep.txt"]);
+  assert.equal((await fs.lstat(path.join(linked.home, "widget"))).isSymbolicLink(), true);
+
+  // An empty folder, whether there before or created meanwhile, is replaced by the clone.
+  const adopted = await fixture(t, {
+    runClone: async (request) => {
+      await finishedClone(request);
+      return { ok: true as const };
+    },
+  });
+  await fs.mkdir(path.join(adopted.home, "widget"));
+  const adoptedResult = await adopted.service.clone({ url: "acme/widget" }, cloneOptions());
+  assert.ok(adoptedResult.ok, JSON.stringify(adoptedResult));
+  assert.equal(await exists(path.join(adopted.home, "widget", ".git")), true);
+  assert.deepEqual(await stagingFolders(adopted.home), []);
 });
 
 test("clone refuses a destination that is a symlink, even to an empty folder", async (t) => {
@@ -531,7 +590,7 @@ test("clones into aliases of one folder cannot run at the same time", async (t) 
       await new Promise<void>((resolve) => {
         release = resolve;
       });
-      await fs.mkdir(path.join(request.destination, ".git"));
+      await fs.mkdir(path.join(request.destination, ".git"), { recursive: true });
       return { ok: true as const };
     },
   });
