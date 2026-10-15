@@ -171,6 +171,33 @@ class AidenBotActivityContractTest {
         )
     }
 
+    // An optional key sent as the literal null is refused, never read as absent (as TS and iOS do).
+    @Test
+    fun everyNullLiteralSampleIsRefused() {
+        val samples = privacy.getValue("rejectedNullLiterals").jsonObject
+        fun refused(group: String, decode: (JsonElement) -> Any?) {
+            val list = samples.getValue(group).jsonArray
+            assertTrue(group, list.isNotEmpty())
+            for (sample in list) assertThrows("$group: $sample", Exception::class.java) { decode(sample) }
+        }
+        refused("activities") { json.decodeFromJsonElement(AidenBotSessionActivity.serializer(), it) }
+        refused("sessions") { json.decodeFromJsonElement(AidenBotSession.serializer(), it) }
+        refused("events") { json.decodeFromJsonElement(AidenBotSessionEvent.serializer(), it) }
+        refused("entries") { json.decodeFromJsonElement(AidenBotSessionEntry.serializer(), it) }
+        // The stream's own frame decoder refuses the frames too.
+        refused("events") {
+            AidenBotSessionEventStream.decodeFrame(json.encodeToString(JsonElement.serializer(), it).toByteArray(), "bot_fixture_01")
+        }
+        // Left out, the same keys are simply absent.
+        val session = samples.getValue("sessions").jsonArray[0].jsonObject
+        assertNull(json.decodeFromJsonElement(AidenBotSession.serializer(), JsonObject(session - "queued")).queued)
+        val entry = samples.getValue("entries").jsonArray[0].jsonObject
+        val read = json.decodeFromJsonElement(AidenBotSessionEntry.serializer(), JsonObject(entry - "label"))
+        assertEquals("17", (read as AidenBotSessionEntry.Message).submissionId)
+        val app = samples.getValue("activities").jsonArray[0].jsonObject
+        assertNull(json.decodeFromJsonElement(AidenBotSessionActivity.serializer(), JsonObject(app - "app" + ("phase" to JsonPrimitive("thinking")))).app)
+    }
+
     // Test 2b
     @Test
     fun textBoundsCountCodePointsNotUtf16Units() {

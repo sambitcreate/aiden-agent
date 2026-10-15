@@ -2,7 +2,9 @@ package sbtbiswas.AidenOnTheGo.models
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -19,6 +21,7 @@ import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonTransformingSerializer
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -40,6 +43,17 @@ import java.time.Instant
 // addressed by Bot id rather than chat id. Revision 27 adds the `memory_update` and
 // `routine_proposal` entries (`bot:cards` devices only) and skips entry types this build
 // can't read instead of refusing the whole session.
+
+/**
+ * Refuses an optional key the host sent as the literal null: the host leaves an absent value
+ * out, and TypeScript and iOS refuse `null` (fixture `botActivityPrivacy.rejectedNullLiterals`).
+ * The wire JSON's `explicitNulls = false` would otherwise read it as absent.
+ */
+internal fun JsonElement.refusingNullLiterals(field: String, vararg keys: String): JsonElement {
+    val body = this as? JsonObject ?: return this
+    for (key in keys) if (body[key] is JsonNull) throw AidenBotContractException.InvalidField("$field.$key")
+    return this
+}
 
 /** Strict codec for the revision-25 Bot DTOs: exact keys, no unknown fields, nulls omitted. */
 object AidenBotWireJson {
@@ -165,7 +179,9 @@ private fun validateState(state: AidenBotSessionState, interrupted: Boolean, blo
 sealed class AidenBotSessionEntry {
     abstract val id: String
 
-    @Serializable
+    @OptIn(ExperimentalSerializationApi::class)
+    @KeepGeneratedSerializer
+    @Serializable(with = AidenBotSessionMessageSerializer::class)
     @SerialName("message")
     data class Message(
         override val id: String,
@@ -305,6 +321,19 @@ sealed class AidenBotSessionEntry {
                 ?: throw AidenBotContractException.InvalidField("entry.type")
             return type.takeUnless { it in KNOWN_TYPES }
         }
+    }
+}
+
+/**
+ * A message entry, decoded strictly: `label` and `submissionId` may be left out but never sent
+ * as null. The discriminator is the sealed class's to read, so it is set aside here.
+ */
+object AidenBotSessionMessageSerializer :
+    JsonTransformingSerializer<AidenBotSessionEntry.Message>(AidenBotSessionEntry.Message.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        element.refusingNullLiterals("entry", "label", "submissionId")
+        val body = element as? JsonObject ?: return element
+        return if ("type" in body) JsonObject(body - "type") else body
     }
 }
 
@@ -451,7 +480,9 @@ data class AidenBotQuestionAnswerReceipt(val waitId: String) {
  * doing. Exactly `phase`, `app` and `startedAt` cross the wire; the strict wire JSON refuses
  * any other key. An unknown phase id still decodes and reads as Working.
  */
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotSessionActivitySerializer::class)
 data class AidenBotSessionActivity(
     val phase: String,
     val app: String? = null,
@@ -470,6 +501,12 @@ data class AidenBotSessionActivity(
         const val MAX_APP_LENGTH = 40
         private val PHASE_ID = Regex("^[a-z][a-z_]{0,31}$")
     }
+}
+
+/** `app` is left out for every phase but `app`, never sent as null. */
+object AidenBotSessionActivitySerializer :
+    JsonTransformingSerializer<AidenBotSessionActivity>(AidenBotSessionActivity.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
 }
 
 /** A message waiting for the running turn: STEER joins it, QUEUE runs after it. */
@@ -568,6 +605,8 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
     override fun deserialize(decoder: Decoder): AidenBotSession {
         val jsonDecoder = decoder as? JsonDecoder ?: throw SerializationException("Bot sessions are JSON only")
         val body = jsonDecoder.decodeJsonElement() as? JsonObject ?: throw AidenBotContractException.InvalidField("session")
+        // `activity` is null when nothing runs; `queued` is left out, never null.
+        body.refusingNullLiterals("session", "queued")
         val question = body["question"] ?: throw AidenBotContractException.InvalidField("question")
         val approval = body["approval"] ?: throw AidenBotContractException.InvalidField("approval")
         // Revision 27: entry types this build can't read are dropped; known ones stay strict.
