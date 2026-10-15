@@ -1,0 +1,26 @@
+{
+  "evidenceKind": "final-multipart-recovery-baseline-provenance",
+  "prerequisite": "prepare-context-active-prototype.py",
+  "patch": "docs/research/experiments/context-compaction-multipart-recovery.patch",
+  "patchSha256": "69f6cd06559ae0ebf3103b033ad07510ca5457cec0ae88e4c1e43831d4b30ade",
+  "stages": [
+    {
+      "source": "tmp/research/generation-context-before-scaling.ts",
+      "sourceSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
+      "output": "tmp/research/generation-context-before-scaling-final-marker.ts",
+      "outputSha256": "629adad876fd24c73c1c5a01635643f7d11fc1e97fbb197c8cc608f999b64910"
+    },
+    {
+      "source": "tmp/research/generation-context-before-active.ts",
+      "sourceSha256": "965a130046591bd565b59544f24534a0b0a753665758455f0b1553f379907acd",
+      "output": "tmp/research/generation-context-before-active-final-marker.ts",
+      "outputSha256": "cf1f93c31c978de927265bc613bd082da75688b4781206b6e268f8ff38c7dc5d"
+    },
+    {
+      "source": "tmp/research/generation-context-active-prototype.ts",
+      "sourceSha256": "ccf64f0558606e754d385da114bdd8b69589160ea0f0d0d2d00c18cb8f136c8a",
+      "output": "tmp/research/generation-context-active-prototype-final-marker.ts",
+      "outputSha256": "839a4346a4269635185219fb4f3f04e7d77e85510e88a4fd6cc6349769fd2acc"
+    }
+  ]
+}

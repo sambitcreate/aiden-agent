@@ -118,6 +118,22 @@ test("codemode bounds model-facing output and reports script failures", async ()
   assert.equal((await tool.execute("parent", { code: 'throw new Error("script failed");' })).isError, true);
 });
 
+test("codemode discloses omitted text after an exact output boundary", async () => {
+  const { tool } = fixture();
+  for (const prefix of ['text("x".repeat(32000));', 'text("x".repeat(16000)); text("y".repeat(16000));', 'text("x".repeat(32001));']) {
+    const result = await tool.execute("boundary", { code: `${prefix} text("TESTS FAILED"); text("additional detail");` });
+    const texts = result.content.filter((part) => part.type === "text").map((part) => part.text);
+    assert.equal(result.isError, false);
+    assert.equal(texts.filter((text) => text === "[Codemode text output truncated.]").length, 1,
+      "omitted observations must be disclosed even when the retained block was not sliced");
+    assert.equal(texts.filter((text) => text !== "[Codemode text output truncated.]").join("").length, 32000);
+  }
+  // Two items carry two 17-character "==> text i/2 <==" headers; together they fill the limit exactly.
+  const exact = await tool.execute("complete", { code: 'text("x".repeat(31966)); text("");' });
+  assert.equal(exact.content.some((part) => part.type === "text" && part.text.includes("truncated")), false,
+    "a completely retained observation must not be labeled truncated");
+});
+
 test("codemode keeps text() items apart and gathers console output after them", async () => {
   const { tool } = fixture();
   const result = await tool.execute("parent", { code: 'console.log("log one"); text("first"); console.warn("log two"); text("second");' });

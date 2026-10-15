@@ -1,0 +1,84 @@
+--- a/generation-context.ts
++++ b/generation-context.ts
+@@ -547,21 +547,36 @@
+   };
+ }
+ 
+-function removeOldHistoricalTurn(
++function removeOldHistoricalTurns(
+   messages: AgentMessage[],
+   preserveUserTurns: number,
++  usageAnchor: AgentMessage | undefined,
++  overBudget: (candidate: AgentMessage[]) => boolean,
+ ): number {
+-  const currentUser = lastUserIndex(messages);
+-  if (currentUser <= 0) return 0;
+   const userIndexes = messages
+     .map((message, index) => (message.role === "user" ? index : -1))
+     .filter((index) => index >= 0);
+   if (userIndexes.length <= preserveUserTurns) return 0;
+-  const nextUser = userIndexes[1];
+-  if (nextUser === undefined || nextUser > currentUser) return 0;
+   const firstUser = userIndexes[0];
+-  if (firstUser === undefined) return 0;
+-  const removed = nextUser - firstUser;
++  // System updates have already been consolidated before this stage. Removing
++  // complete oldest turns only decreases the unchanged token estimate, even
++  // when it drops the usage anchor. Find the same first fitting prefix without
++  // rescanning and splicing the whole transcript once per historical turn.
++  const prefix = messages.slice(0, firstUser);
++  let low = 1;
++  let high = userIndexes.length - preserveUserTurns;
++  // A repeated object reference can move indexOf(usageAnchor) to a later
++  // occurrence when a prefix is removed, making the estimate nonmonotone.
++  // Keep the original first-fitting scan for this uncommon in-memory shape.
++  if (usageAnchor && messages.indexOf(usageAnchor) !== messages.lastIndexOf(usageAnchor)) {
++    while (low < high && overBudget([...prefix, ...messages.slice(userIndexes[low])])) low += 1;
++  } else while (low < high) {
++    const middle = Math.floor((low + high) / 2);
++    const candidate = [...prefix, ...messages.slice(userIndexes[middle])];
++    if (overBudget(candidate)) low = middle + 1;
++    else high = middle;
++  }
++  const removed = userIndexes[low] - firstUser;
+   messages.splice(firstUser, removed);
+   return removed;
+ }
+@@ -800,7 +815,7 @@
+   }
+ 
+   let truncatedToolResults = 0;
+-  const transformed = retained.map((message) => {
++  let transformed = retained.map((message) => {
+     if (!isToolResult(message)) return message;
+     const truncated = truncateToolResult(message);
+     if (truncated.truncated) truncatedToolResults += 1;
+@@ -813,8 +828,8 @@
+   if (overBudget()) {
+     const currentSystem = getCurrentSystemMessage(transformed);
+     if (currentSystem) {
+-      transformed.splice(0, transformed.length, currentSystem,
+-        ...transformed.filter((message) => message.role !== "system"));
++      transformed = [currentSystem,
++        ...transformed.filter((message) => message.role !== "system")];
+     }
+   }
+   let removedHistoryMessages = 0;
+@@ -823,10 +838,13 @@
+   let usedContextFallback = false;
+ 
+   // Match OpenCode's preference for keeping the two newest user turns.
+-  while (overBudget()) {
+-    const removed = removeOldHistoricalTurn(transformed, 2);
+-    if (!removed) break;
+-    removedHistoryMessages += removed;
++  if (overBudget()) {
++    removedHistoryMessages += removeOldHistoricalTurns(
++      transformed,
++      2,
++      usageAnchor,
++      (candidate) => estimatedTotalTokens(candidate) > inputBudgetTokens,
++    );
+   }
+ 
+   if (overBudget()) {

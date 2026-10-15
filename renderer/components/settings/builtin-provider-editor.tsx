@@ -305,7 +305,7 @@ export function BuiltinProviderEditor({
         ) : null}
         {authLink ? (
           <Button asChild variant="filled" size="small" className="justify-self-start">
-            <a href={authLink} target="_blank" rel="noopener noreferrer">
+            <a href={authLink} target="_blank" rel="noopener noreferrer" data-link-target="external">
               Open sign-in page <ExternalLink className="size-3.5" />
             </a>
           </Button>

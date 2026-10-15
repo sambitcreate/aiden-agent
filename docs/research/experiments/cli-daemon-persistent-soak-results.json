@@ -1,0 +1,3170 @@
+{
+  "version": 1,
+  "evidenceKind": "offline-persistent-profile-lifecycle-soak",
+  "status": "passed",
+  "startedAt": "2026-10-11T20:46:26.167Z",
+  "durationSeconds": 4714,
+  "intervalSeconds": 45,
+  "maxCycles": 120,
+  "restartAfterCycles": null,
+  "node": "v22.22.3",
+  "forcedGcAvailable": true,
+  "counts": {
+    "cycles": 104,
+    "completedTurns": 210,
+    "requests": 420,
+    "binds": 210,
+    "shutdowns": 210,
+    "disposals": 210,
+    "restarts": 1,
+    "wholePromptChecks": 420,
+    "journalChecks": 210,
+    "compactionEntries": 0
+  },
+  "receipts": [
+    {
+      "cycle": 1,
+      "elapsedMs": 1533,
+      "maxRequestBytes": 6453,
+      "journals": {
+        "a": {
+          "entries": 11,
+          "bytes": 16559,
+          "compactions": 0,
+          "snapshots": 2,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 11,
+          "bytes": 16559,
+          "compactions": 0,
+          "snapshots": 2,
+          "status": "in_progress"
+        }
+      },
+      "rss": 197787648,
+      "heapTotal": 99139584,
+      "heapUsed": 60562448,
+      "external": 21173026,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 2,
+      "elapsedMs": 47009,
+      "maxRequestBytes": 6864,
+      "journals": {
+        "a": {
+          "entries": 15,
+          "bytes": 18312,
+          "compactions": 0,
+          "snapshots": 3,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 15,
+          "bytes": 18310,
+          "compactions": 0,
+          "snapshots": 3,
+          "status": "in_progress"
+        }
+      },
+      "rss": 166543360,
+      "heapTotal": 72925184,
+      "heapUsed": 61446688,
+      "external": 4176914,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 3,
+      "elapsedMs": 92500,
+      "maxRequestBytes": 7309,
+      "journals": {
+        "a": {
+          "entries": 19,
+          "bytes": 20091,
+          "compactions": 0,
+          "snapshots": 4,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 19,
+          "bytes": 20089,
+          "compactions": 0,
+          "snapshots": 4,
+          "status": "pending"
+        }
+      },
+      "rss": 167804928,
+      "heapTotal": 76070912,
+      "heapUsed": 62038328,
+      "external": 7523110,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 4,
+      "elapsedMs": 138173,
+      "maxRequestBytes": 7716,
+      "journals": {
+        "a": {
+          "entries": 23,
+          "bytes": 21836,
+          "compactions": 0,
+          "snapshots": 5,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 23,
+          "bytes": 21834,
+          "compactions": 0,
+          "snapshots": 5,
+          "status": "pending"
+        }
+      },
+      "rss": 169000960,
+      "heapTotal": 76857344,
+      "heapUsed": 62577760,
+      "external": 7467996,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 5,
+      "elapsedMs": 183627,
+      "maxRequestBytes": 8166,
+      "journals": {
+        "a": {
+          "entries": 27,
+          "bytes": 23624,
+          "compactions": 0,
+          "snapshots": 6,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 27,
+          "bytes": 23622,
+          "compactions": 0,
+          "snapshots": 6,
+          "status": "in_progress"
+        }
+      },
+      "rss": 169246720,
+      "heapTotal": 73973760,
+      "heapUsed": 62551464,
+      "external": 4176914,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 6,
+      "elapsedMs": 229111,
+      "maxRequestBytes": 8578,
+      "journals": {
+        "a": {
+          "entries": 31,
+          "bytes": 25378,
+          "compactions": 0,
+          "snapshots": 7,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 31,
+          "bytes": 25376,
+          "compactions": 0,
+          "snapshots": 7,
+          "status": "in_progress"
+        }
+      },
+      "rss": 169656320,
+      "heapTotal": 76857344,
+      "heapUsed": 62815528,
+      "external": 7484757,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 7,
+      "elapsedMs": 274591,
+      "maxRequestBytes": 9024,
+      "journals": {
+        "a": {
+          "entries": 35,
+          "bytes": 27158,
+          "compactions": 0,
+          "snapshots": 8,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 35,
+          "bytes": 27156,
+          "compactions": 0,
+          "snapshots": 8,
+          "status": "pending"
+        }
+      },
+      "rss": 168574976,
+      "heapTotal": 77381632,
+      "heapUsed": 62830192,
+      "external": 7526612,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 8,
+      "elapsedMs": 320076,
+      "maxRequestBytes": 9432,
+      "journals": {
+        "a": {
+          "entries": 39,
+          "bytes": 28904,
+          "compactions": 0,
+          "snapshots": 9,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 39,
+          "bytes": 28902,
+          "compactions": 0,
+          "snapshots": 9,
+          "status": "pending"
+        }
+      },
+      "rss": 168689664,
+      "heapTotal": 77643776,
+      "heapUsed": 62927072,
+      "external": 7438876,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 9,
+      "elapsedMs": 365546,
+      "maxRequestBytes": 9882,
+      "journals": {
+        "a": {
+          "entries": 43,
+          "bytes": 30692,
+          "compactions": 0,
+          "snapshots": 10,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 43,
+          "bytes": 30690,
+          "compactions": 0,
+          "snapshots": 10,
+          "status": "in_progress"
+        }
+      },
+      "rss": 168820736,
+      "heapTotal": 77643776,
+      "heapUsed": 62986456,
+      "external": 7489377,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 10,
+      "elapsedMs": 411028,
+      "maxRequestBytes": 10294,
+      "journals": {
+        "a": {
+          "entries": 47,
+          "bytes": 32446,
+          "compactions": 0,
+          "snapshots": 11,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 47,
+          "bytes": 32444,
+          "compactions": 0,
+          "snapshots": 11,
+          "status": "in_progress"
+        }
+      },
+      "rss": 169017344,
+      "heapTotal": 78168064,
+      "heapUsed": 63117968,
+      "external": 7492153,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 11,
+      "elapsedMs": 456700,
+      "maxRequestBytes": 10740,
+      "journals": {
+        "a": {
+          "entries": 51,
+          "bytes": 34226,
+          "compactions": 0,
+          "snapshots": 12,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 51,
+          "bytes": 34224,
+          "compactions": 0,
+          "snapshots": 12,
+          "status": "pending"
+        }
+      },
+      "rss": 169099264,
+      "heapTotal": 78168064,
+      "heapUsed": 63093592,
+      "external": 7495233,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 12,
+      "elapsedMs": 502152,
+      "maxRequestBytes": 11148,
+      "journals": {
+        "a": {
+          "entries": 55,
+          "bytes": 35972,
+          "compactions": 0,
+          "snapshots": 13,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 55,
+          "bytes": 35970,
+          "compactions": 0,
+          "snapshots": 13,
+          "status": "pending"
+        }
+      },
+      "rss": 169164800,
+      "heapTotal": 78430208,
+      "heapUsed": 63176928,
+      "external": 7499497,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 13,
+      "elapsedMs": 547627,
+      "maxRequestBytes": 11598,
+      "journals": {
+        "a": {
+          "entries": 59,
+          "bytes": 37760,
+          "compactions": 0,
+          "snapshots": 14,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 59,
+          "bytes": 37758,
+          "compactions": 0,
+          "snapshots": 14,
+          "status": "in_progress"
+        }
+      },
+      "rss": 168558592,
+      "heapTotal": 73711616,
+      "heapUsed": 58948016,
+      "external": 4166424,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 14,
+      "elapsedMs": 593091,
+      "maxRequestBytes": 12010,
+      "journals": {
+        "a": {
+          "entries": 63,
+          "bytes": 39514,
+          "compactions": 0,
+          "snapshots": 15,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 63,
+          "bytes": 39512,
+          "compactions": 0,
+          "snapshots": 15,
+          "status": "in_progress"
+        }
+      },
+      "rss": 169000960,
+      "heapTotal": 74760192,
+      "heapUsed": 59091968,
+      "external": 7495667,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 15,
+      "elapsedMs": 638540,
+      "maxRequestBytes": 12456,
+      "journals": {
+        "a": {
+          "entries": 67,
+          "bytes": 41294,
+          "compactions": 0,
+          "snapshots": 16,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 67,
+          "bytes": 41292,
+          "compactions": 0,
+          "snapshots": 16,
+          "status": "pending"
+        }
+      },
+      "rss": 169345024,
+      "heapTotal": 83148800,
+      "heapUsed": 59078656,
+      "external": 7500043,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 16,
+      "elapsedMs": 684006,
+      "maxRequestBytes": 12864,
+      "journals": {
+        "a": {
+          "entries": 71,
+          "bytes": 43040,
+          "compactions": 0,
+          "snapshots": 17,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 71,
+          "bytes": 43038,
+          "compactions": 0,
+          "snapshots": 17,
+          "status": "pending"
+        }
+      },
+      "rss": 171982848,
+      "heapTotal": 75022336,
+      "heapUsed": 59192392,
+      "external": 7506887,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 17,
+      "elapsedMs": 729479,
+      "maxRequestBytes": 13314,
+      "journals": {
+        "a": {
+          "entries": 75,
+          "bytes": 44828,
+          "compactions": 0,
+          "snapshots": 18,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 75,
+          "bytes": 44826,
+          "compactions": 0,
+          "snapshots": 18,
+          "status": "in_progress"
+        }
+      },
+      "rss": 172146688,
+      "heapTotal": 75284480,
+      "heapUsed": 59179512,
+      "external": 7509123,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 18,
+      "elapsedMs": 775202,
+      "maxRequestBytes": 13726,
+      "journals": {
+        "a": {
+          "entries": 79,
+          "bytes": 46582,
+          "compactions": 0,
+          "snapshots": 19,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 79,
+          "bytes": 46580,
+          "compactions": 0,
+          "snapshots": 19,
+          "status": "in_progress"
+        }
+      },
+      "rss": 172179456,
+      "heapTotal": 75284480,
+      "heapUsed": 59245432,
+      "external": 7558492,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 19,
+      "elapsedMs": 820662,
+      "maxRequestBytes": 14172,
+      "journals": {
+        "a": {
+          "entries": 83,
+          "bytes": 48362,
+          "compactions": 0,
+          "snapshots": 20,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 83,
+          "bytes": 48360,
+          "compactions": 0,
+          "snapshots": 20,
+          "status": "pending"
+        }
+      },
+      "rss": 172359680,
+      "heapTotal": 75546624,
+      "heapUsed": 59264552,
+      "external": 7514643,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 20,
+      "elapsedMs": 866217,
+      "maxRequestBytes": 14580,
+      "journals": {
+        "a": {
+          "entries": 87,
+          "bytes": 50108,
+          "compactions": 0,
+          "snapshots": 21,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 87,
+          "bytes": 50106,
+          "compactions": 0,
+          "snapshots": 21,
+          "status": "pending"
+        }
+      },
+      "rss": 172490752,
+      "heapTotal": 75546624,
+      "heapUsed": 59335184,
+      "external": 7519630,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 21,
+      "elapsedMs": 911679,
+      "maxRequestBytes": 15030,
+      "journals": {
+        "a": {
+          "entries": 91,
+          "bytes": 51896,
+          "compactions": 0,
+          "snapshots": 22,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 91,
+          "bytes": 51894,
+          "compactions": 0,
+          "snapshots": 22,
+          "status": "in_progress"
+        }
+      },
+      "rss": 172851200,
+      "heapTotal": 83673088,
+      "heapUsed": 58964904,
+      "external": 7505637,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 22,
+      "elapsedMs": 957151,
+      "maxRequestBytes": 15442,
+      "journals": {
+        "a": {
+          "entries": 95,
+          "bytes": 53650,
+          "compactions": 0,
+          "snapshots": 23,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 95,
+          "bytes": 53648,
+          "compactions": 0,
+          "snapshots": 23,
+          "status": "in_progress"
+        }
+      },
+      "rss": 173080576,
+      "heapTotal": 75284480,
+      "heapUsed": 59146960,
+      "external": 7528547,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 23,
+      "elapsedMs": 1002633,
+      "maxRequestBytes": 15888,
+      "journals": {
+        "a": {
+          "entries": 99,
+          "bytes": 55430,
+          "compactions": 0,
+          "snapshots": 24,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 99,
+          "bytes": 55428,
+          "compactions": 0,
+          "snapshots": 24,
+          "status": "pending"
+        }
+      },
+      "rss": 173129728,
+      "heapTotal": 83935232,
+      "heapUsed": 59101008,
+      "external": 7528419,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 24,
+      "elapsedMs": 1048121,
+      "maxRequestBytes": 16296,
+      "journals": {
+        "a": {
+          "entries": 103,
+          "bytes": 57176,
+          "compactions": 0,
+          "snapshots": 25,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 103,
+          "bytes": 57174,
+          "compactions": 0,
+          "snapshots": 25,
+          "status": "pending"
+        }
+      },
+      "rss": 174555136,
+      "heapTotal": 75808768,
+      "heapUsed": 59119128,
+      "external": 7660443,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 25,
+      "elapsedMs": 1093840,
+      "maxRequestBytes": 16748,
+      "journals": {
+        "a": {
+          "entries": 107,
+          "bytes": 58966,
+          "compactions": 0,
+          "snapshots": 26,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 107,
+          "bytes": 58964,
+          "compactions": 0,
+          "snapshots": 26,
+          "status": "in_progress"
+        }
+      },
+      "rss": 174981120,
+      "heapTotal": 83673088,
+      "heapUsed": 59013088,
+      "external": 7520727,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 26,
+      "elapsedMs": 1139326,
+      "maxRequestBytes": 17162,
+      "journals": {
+        "a": {
+          "entries": 111,
+          "bytes": 60722,
+          "compactions": 0,
+          "snapshots": 27,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 111,
+          "bytes": 60720,
+          "compactions": 0,
+          "snapshots": 27,
+          "status": "in_progress"
+        }
+      },
+      "rss": 176455680,
+      "heapTotal": 73449472,
+      "heapUsed": 59058072,
+      "external": 4165648,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 27,
+      "elapsedMs": 1184817,
+      "maxRequestBytes": 17610,
+      "journals": {
+        "a": {
+          "entries": 115,
+          "bytes": 62504,
+          "compactions": 0,
+          "snapshots": 28,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 115,
+          "bytes": 62502,
+          "compactions": 0,
+          "snapshots": 28,
+          "status": "pending"
+        }
+      },
+      "rss": 176521216,
+      "heapTotal": 83410944,
+      "heapUsed": 59143048,
+      "external": 7544274,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 28,
+      "elapsedMs": 1230300,
+      "maxRequestBytes": 18020,
+      "journals": {
+        "a": {
+          "entries": 119,
+          "bytes": 64252,
+          "compactions": 0,
+          "snapshots": 29,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 119,
+          "bytes": 64250,
+          "compactions": 0,
+          "snapshots": 29,
+          "status": "pending"
+        }
+      },
+      "rss": 176586752,
+      "heapTotal": 74235904,
+      "heapUsed": 59096632,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 29,
+      "elapsedMs": 1275791,
+      "maxRequestBytes": 18472,
+      "journals": {
+        "a": {
+          "entries": 123,
+          "bytes": 66042,
+          "compactions": 0,
+          "snapshots": 30,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 123,
+          "bytes": 66040,
+          "compactions": 0,
+          "snapshots": 30,
+          "status": "in_progress"
+        }
+      },
+      "rss": 176635904,
+      "heapTotal": 83673088,
+      "heapUsed": 59145296,
+      "external": 7552070,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 30,
+      "elapsedMs": 1321265,
+      "maxRequestBytes": 18886,
+      "journals": {
+        "a": {
+          "entries": 127,
+          "bytes": 67798,
+          "compactions": 0,
+          "snapshots": 31,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 127,
+          "bytes": 67796,
+          "compactions": 0,
+          "snapshots": 31,
+          "status": "in_progress"
+        }
+      },
+      "rss": 176865280,
+      "heapTotal": 75284480,
+      "heapUsed": 59267576,
+      "external": 7610510,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 31,
+      "elapsedMs": 1366731,
+      "maxRequestBytes": 19334,
+      "journals": {
+        "a": {
+          "entries": 131,
+          "bytes": 69580,
+          "compactions": 0,
+          "snapshots": 32,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 131,
+          "bytes": 69578,
+          "compactions": 0,
+          "snapshots": 32,
+          "status": "pending"
+        }
+      },
+      "rss": 176865280,
+      "heapTotal": 75546624,
+      "heapUsed": 59230216,
+      "external": 7619236,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 32,
+      "elapsedMs": 1412373,
+      "maxRequestBytes": 19744,
+      "journals": {
+        "a": {
+          "entries": 135,
+          "bytes": 71328,
+          "compactions": 0,
+          "snapshots": 33,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 135,
+          "bytes": 71326,
+          "compactions": 0,
+          "snapshots": 33,
+          "status": "pending"
+        }
+      },
+      "rss": 176865280,
+      "heapTotal": 83935232,
+      "heapUsed": 59279768,
+      "external": 7562634,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 33,
+      "elapsedMs": 1457852,
+      "maxRequestBytes": 20196,
+      "journals": {
+        "a": {
+          "entries": 139,
+          "bytes": 73118,
+          "compactions": 0,
+          "snapshots": 34,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 139,
+          "bytes": 73116,
+          "compactions": 0,
+          "snapshots": 34,
+          "status": "in_progress"
+        }
+      },
+      "rss": 177831936,
+      "heapTotal": 75546624,
+      "heapUsed": 59295912,
+      "external": 7568866,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 34,
+      "elapsedMs": 1503384,
+      "maxRequestBytes": 20610,
+      "journals": {
+        "a": {
+          "entries": 143,
+          "bytes": 74874,
+          "compactions": 0,
+          "snapshots": 35,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 143,
+          "bytes": 74872,
+          "compactions": 0,
+          "snapshots": 35,
+          "status": "in_progress"
+        }
+      },
+      "rss": 177930240,
+      "heapTotal": 75546624,
+      "heapUsed": 59360088,
+      "external": 7631178,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 35,
+      "elapsedMs": 1548886,
+      "maxRequestBytes": 21058,
+      "journals": {
+        "a": {
+          "entries": 147,
+          "bytes": 76656,
+          "compactions": 0,
+          "snapshots": 36,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 147,
+          "bytes": 76654,
+          "compactions": 0,
+          "snapshots": 36,
+          "status": "pending"
+        }
+      },
+      "rss": 177930240,
+      "heapTotal": 84459520,
+      "heapUsed": 59319240,
+      "external": 7573898,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 36,
+      "elapsedMs": 1594376,
+      "maxRequestBytes": 21468,
+      "journals": {
+        "a": {
+          "entries": 151,
+          "bytes": 78404,
+          "compactions": 0,
+          "snapshots": 37,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 151,
+          "bytes": 78402,
+          "compactions": 0,
+          "snapshots": 37,
+          "status": "pending"
+        }
+      },
+      "rss": 178110464,
+      "heapTotal": 75808768,
+      "heapUsed": 59485152,
+      "external": 7575310,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 37,
+      "elapsedMs": 1639868,
+      "maxRequestBytes": 21920,
+      "journals": {
+        "a": {
+          "entries": 155,
+          "bytes": 80194,
+          "compactions": 0,
+          "snapshots": 38,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 155,
+          "bytes": 80192,
+          "compactions": 0,
+          "snapshots": 38,
+          "status": "in_progress"
+        }
+      },
+      "rss": 178503680,
+      "heapTotal": 82100224,
+      "heapUsed": 59230784,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 38,
+      "elapsedMs": 1685359,
+      "maxRequestBytes": 22334,
+      "journals": {
+        "a": {
+          "entries": 159,
+          "bytes": 81950,
+          "compactions": 0,
+          "snapshots": 39,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 159,
+          "bytes": 81948,
+          "compactions": 0,
+          "snapshots": 39,
+          "status": "in_progress"
+        }
+      },
+      "rss": 178552832,
+      "heapTotal": 74235904,
+      "heapUsed": 59334240,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 39,
+      "elapsedMs": 1730860,
+      "maxRequestBytes": 22782,
+      "journals": {
+        "a": {
+          "entries": 163,
+          "bytes": 83732,
+          "compactions": 0,
+          "snapshots": 40,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 163,
+          "bytes": 83730,
+          "compactions": 0,
+          "snapshots": 40,
+          "status": "pending"
+        }
+      },
+      "rss": 178585600,
+      "heapTotal": 84459520,
+      "heapUsed": 59375056,
+      "external": 7573675,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 40,
+      "elapsedMs": 1776348,
+      "maxRequestBytes": 23192,
+      "journals": {
+        "a": {
+          "entries": 167,
+          "bytes": 85480,
+          "compactions": 0,
+          "snapshots": 41,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 167,
+          "bytes": 85478,
+          "compactions": 0,
+          "snapshots": 41,
+          "status": "pending"
+        }
+      },
+      "rss": 178601984,
+      "heapTotal": 74235904,
+      "heapUsed": 59527024,
+      "external": 4165648,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 41,
+      "elapsedMs": 1821852,
+      "maxRequestBytes": 23644,
+      "journals": {
+        "a": {
+          "entries": 171,
+          "bytes": 87270,
+          "compactions": 0,
+          "snapshots": 42,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 171,
+          "bytes": 87268,
+          "compactions": 0,
+          "snapshots": 42,
+          "status": "in_progress"
+        }
+      },
+      "rss": 178913280,
+      "heapTotal": 84721664,
+      "heapUsed": 59446272,
+      "external": 7581439,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 42,
+      "elapsedMs": 1867320,
+      "maxRequestBytes": 24058,
+      "journals": {
+        "a": {
+          "entries": 175,
+          "bytes": 89026,
+          "compactions": 0,
+          "snapshots": 43,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 175,
+          "bytes": 89024,
+          "compactions": 0,
+          "snapshots": 43,
+          "status": "in_progress"
+        }
+      },
+      "rss": 178946048,
+      "heapTotal": 75284480,
+      "heapUsed": 59609384,
+      "external": 7604526,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 43,
+      "elapsedMs": 1912803,
+      "maxRequestBytes": 24506,
+      "journals": {
+        "a": {
+          "entries": 179,
+          "bytes": 90808,
+          "compactions": 0,
+          "snapshots": 44,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 179,
+          "bytes": 90806,
+          "compactions": 0,
+          "snapshots": 44,
+          "status": "pending"
+        }
+      },
+      "rss": 178978816,
+      "heapTotal": 82886656,
+      "heapUsed": 59467528,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 44,
+      "elapsedMs": 1958272,
+      "maxRequestBytes": 24916,
+      "journals": {
+        "a": {
+          "entries": 183,
+          "bytes": 92556,
+          "compactions": 0,
+          "snapshots": 45,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 183,
+          "bytes": 92554,
+          "compactions": 0,
+          "snapshots": 45,
+          "status": "pending"
+        }
+      },
+      "rss": 179060736,
+      "heapTotal": 76070912,
+      "heapUsed": 59488384,
+      "external": 7613618,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 45,
+      "elapsedMs": 2003775,
+      "maxRequestBytes": 25368,
+      "journals": {
+        "a": {
+          "entries": 187,
+          "bytes": 94346,
+          "compactions": 0,
+          "snapshots": 46,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 187,
+          "bytes": 94344,
+          "compactions": 0,
+          "snapshots": 46,
+          "status": "in_progress"
+        }
+      },
+      "rss": 179109888,
+      "heapTotal": 74498048,
+      "heapUsed": 59396136,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 46,
+      "elapsedMs": 2049266,
+      "maxRequestBytes": 25782,
+      "journals": {
+        "a": {
+          "entries": 191,
+          "bytes": 96102,
+          "compactions": 0,
+          "snapshots": 47,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 191,
+          "bytes": 96100,
+          "compactions": 0,
+          "snapshots": 47,
+          "status": "in_progress"
+        }
+      },
+      "rss": 179109888,
+      "heapTotal": 83148800,
+      "heapUsed": 59555888,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 47,
+      "elapsedMs": 2094772,
+      "maxRequestBytes": 26230,
+      "journals": {
+        "a": {
+          "entries": 195,
+          "bytes": 97884,
+          "compactions": 0,
+          "snapshots": 48,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 195,
+          "bytes": 97882,
+          "compactions": 0,
+          "snapshots": 48,
+          "status": "pending"
+        }
+      },
+      "rss": 179257344,
+      "heapTotal": 75808768,
+      "heapUsed": 59611224,
+      "external": 7518738,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 48,
+      "elapsedMs": 2140280,
+      "maxRequestBytes": 26640,
+      "journals": {
+        "a": {
+          "entries": 199,
+          "bytes": 99632,
+          "compactions": 0,
+          "snapshots": 49,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 199,
+          "bytes": 99630,
+          "compactions": 0,
+          "snapshots": 49,
+          "status": "pending"
+        }
+      },
+      "rss": 179601408,
+      "heapTotal": 83410944,
+      "heapUsed": 59542984,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 49,
+      "elapsedMs": 2185769,
+      "maxRequestBytes": 27092,
+      "journals": {
+        "a": {
+          "entries": 203,
+          "bytes": 101422,
+          "compactions": 0,
+          "snapshots": 50,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 203,
+          "bytes": 101420,
+          "compactions": 0,
+          "snapshots": 50,
+          "status": "in_progress"
+        }
+      },
+      "rss": 179863552,
+      "heapTotal": 75808768,
+      "heapUsed": 59649144,
+      "external": 7519742,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 50,
+      "elapsedMs": 2231246,
+      "maxRequestBytes": 27507,
+      "journals": {
+        "a": {
+          "entries": 207,
+          "bytes": 103179,
+          "compactions": 0,
+          "snapshots": 51,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 207,
+          "bytes": 103177,
+          "compactions": 0,
+          "snapshots": 51,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180060160,
+      "heapTotal": 82886656,
+      "heapUsed": 59513920,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 51,
+      "elapsedMs": 2276718,
+      "maxRequestBytes": 27956,
+      "journals": {
+        "a": {
+          "entries": 211,
+          "bytes": 104962,
+          "compactions": 0,
+          "snapshots": 52,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 211,
+          "bytes": 104960,
+          "compactions": 0,
+          "snapshots": 52,
+          "status": "pending"
+        }
+      },
+      "rss": 180060160,
+      "heapTotal": 74498048,
+      "heapUsed": 59539144,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 52,
+      "elapsedMs": 2322197,
+      "maxRequestBytes": 28367,
+      "journals": {
+        "a": {
+          "entries": 215,
+          "bytes": 106711,
+          "compactions": 0,
+          "snapshots": 53,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 215,
+          "bytes": 106709,
+          "compactions": 0,
+          "snapshots": 53,
+          "status": "pending"
+        }
+      },
+      "rss": 180092928,
+      "heapTotal": 83148800,
+      "heapUsed": 59734576,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 53,
+      "elapsedMs": 2367696,
+      "maxRequestBytes": 28820,
+      "journals": {
+        "a": {
+          "entries": 219,
+          "bytes": 108502,
+          "compactions": 0,
+          "snapshots": 54,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 219,
+          "bytes": 108500,
+          "compactions": 0,
+          "snapshots": 54,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180092928,
+      "heapTotal": 82624512,
+      "heapUsed": 59613400,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 54,
+      "elapsedMs": 2413186,
+      "maxRequestBytes": 29235,
+      "journals": {
+        "a": {
+          "entries": 223,
+          "bytes": 110259,
+          "compactions": 0,
+          "snapshots": 55,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 223,
+          "bytes": 110257,
+          "compactions": 0,
+          "snapshots": 55,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180092928,
+      "heapTotal": 83148800,
+      "heapUsed": 59770024,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 55,
+      "elapsedMs": 2458667,
+      "maxRequestBytes": 29684,
+      "journals": {
+        "a": {
+          "entries": 227,
+          "bytes": 112042,
+          "compactions": 0,
+          "snapshots": 56,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 227,
+          "bytes": 112040,
+          "compactions": 0,
+          "snapshots": 56,
+          "status": "pending"
+        }
+      },
+      "rss": 180092928,
+      "heapTotal": 83148800,
+      "heapUsed": 59637544,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 56,
+      "elapsedMs": 2504141,
+      "maxRequestBytes": 30095,
+      "journals": {
+        "a": {
+          "entries": 231,
+          "bytes": 113791,
+          "compactions": 0,
+          "snapshots": 57,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 231,
+          "bytes": 113789,
+          "compactions": 0,
+          "snapshots": 57,
+          "status": "pending"
+        }
+      },
+      "rss": 180092928,
+      "heapTotal": 82886656,
+      "heapUsed": 59653200,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 57,
+      "elapsedMs": 2549626,
+      "maxRequestBytes": 30548,
+      "journals": {
+        "a": {
+          "entries": 235,
+          "bytes": 115582,
+          "compactions": 0,
+          "snapshots": 58,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 235,
+          "bytes": 115580,
+          "compactions": 0,
+          "snapshots": 58,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180125696,
+      "heapTotal": 82886656,
+      "heapUsed": 59745872,
+      "external": 4165648,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 58,
+      "elapsedMs": 2595110,
+      "maxRequestBytes": 30963,
+      "journals": {
+        "a": {
+          "entries": 239,
+          "bytes": 117339,
+          "compactions": 0,
+          "snapshots": 59,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 239,
+          "bytes": 117337,
+          "compactions": 0,
+          "snapshots": 59,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180322304,
+      "heapTotal": 85245952,
+      "heapUsed": 59783816,
+      "external": 7645718,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 59,
+      "elapsedMs": 2640622,
+      "maxRequestBytes": 31412,
+      "journals": {
+        "a": {
+          "entries": 243,
+          "bytes": 119122,
+          "compactions": 0,
+          "snapshots": 60,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 243,
+          "bytes": 119120,
+          "compactions": 0,
+          "snapshots": 60,
+          "status": "pending"
+        }
+      },
+      "rss": 180322304,
+      "heapTotal": 83148800,
+      "heapUsed": 59782672,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 60,
+      "elapsedMs": 2686123,
+      "maxRequestBytes": 31823,
+      "journals": {
+        "a": {
+          "entries": 247,
+          "bytes": 120871,
+          "compactions": 0,
+          "snapshots": 61,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 247,
+          "bytes": 120869,
+          "compactions": 0,
+          "snapshots": 61,
+          "status": "pending"
+        }
+      },
+      "rss": 180322304,
+      "heapTotal": 84459520,
+      "heapUsed": 59934128,
+      "external": 7507747,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 61,
+      "elapsedMs": 2731620,
+      "maxRequestBytes": 32276,
+      "journals": {
+        "a": {
+          "entries": 251,
+          "bytes": 122662,
+          "compactions": 0,
+          "snapshots": 62,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 251,
+          "bytes": 122660,
+          "compactions": 0,
+          "snapshots": 62,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180322304,
+      "heapTotal": 84983808,
+      "heapUsed": 59795576,
+      "external": 7586957,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 62,
+      "elapsedMs": 2777093,
+      "maxRequestBytes": 32691,
+      "journals": {
+        "a": {
+          "entries": 255,
+          "bytes": 124419,
+          "compactions": 0,
+          "snapshots": 63,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 255,
+          "bytes": 124417,
+          "compactions": 0,
+          "snapshots": 63,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180338688,
+      "heapTotal": 84983808,
+      "heapUsed": 59871696,
+      "external": 7510507,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 63,
+      "elapsedMs": 2822593,
+      "maxRequestBytes": 33140,
+      "journals": {
+        "a": {
+          "entries": 259,
+          "bytes": 126202,
+          "compactions": 0,
+          "snapshots": 64,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 259,
+          "bytes": 126200,
+          "compactions": 0,
+          "snapshots": 64,
+          "status": "pending"
+        }
+      },
+      "rss": 180338688,
+      "heapTotal": 84983808,
+      "heapUsed": 59866816,
+      "external": 7553150,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 64,
+      "elapsedMs": 2868060,
+      "maxRequestBytes": 33551,
+      "journals": {
+        "a": {
+          "entries": 263,
+          "bytes": 127951,
+          "compactions": 0,
+          "snapshots": 65,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 263,
+          "bytes": 127949,
+          "compactions": 0,
+          "snapshots": 65,
+          "status": "pending"
+        }
+      },
+      "rss": 180338688,
+      "heapTotal": 85245952,
+      "heapUsed": 59933088,
+      "external": 7594199,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 65,
+      "elapsedMs": 2913541,
+      "maxRequestBytes": 34004,
+      "journals": {
+        "a": {
+          "entries": 267,
+          "bytes": 129742,
+          "compactions": 0,
+          "snapshots": 66,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 267,
+          "bytes": 129740,
+          "compactions": 0,
+          "snapshots": 66,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180355072,
+      "heapTotal": 84983808,
+      "heapUsed": 59828784,
+      "external": 7558298,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 66,
+      "elapsedMs": 2959020,
+      "maxRequestBytes": 34419,
+      "journals": {
+        "a": {
+          "entries": 271,
+          "bytes": 131499,
+          "compactions": 0,
+          "snapshots": 67,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 271,
+          "bytes": 131497,
+          "compactions": 0,
+          "snapshots": 67,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180633600,
+      "heapTotal": 84721664,
+      "heapUsed": 59907400,
+      "external": 7560551,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 67,
+      "elapsedMs": 3004521,
+      "maxRequestBytes": 34868,
+      "journals": {
+        "a": {
+          "entries": 275,
+          "bytes": 133282,
+          "compactions": 0,
+          "snapshots": 68,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 275,
+          "bytes": 133280,
+          "compactions": 0,
+          "snapshots": 68,
+          "status": "pending"
+        }
+      },
+      "rss": 180633600,
+      "heapTotal": 84721664,
+      "heapUsed": 59884032,
+      "external": 7604649,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 68,
+      "elapsedMs": 3050018,
+      "maxRequestBytes": 35279,
+      "journals": {
+        "a": {
+          "entries": 279,
+          "bytes": 135031,
+          "compactions": 0,
+          "snapshots": 69,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 279,
+          "bytes": 135029,
+          "compactions": 0,
+          "snapshots": 69,
+          "status": "pending"
+        }
+      },
+      "rss": 180715520,
+      "heapTotal": 84983808,
+      "heapUsed": 59909016,
+      "external": 7606559,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 69,
+      "elapsedMs": 3095504,
+      "maxRequestBytes": 35732,
+      "journals": {
+        "a": {
+          "entries": 283,
+          "bytes": 136822,
+          "compactions": 0,
+          "snapshots": 70,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 283,
+          "bytes": 136820,
+          "compactions": 0,
+          "snapshots": 70,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180748288,
+      "heapTotal": 85245952,
+      "heapUsed": 59890280,
+      "external": 7609611,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 70,
+      "elapsedMs": 3141010,
+      "maxRequestBytes": 36147,
+      "journals": {
+        "a": {
+          "entries": 287,
+          "bytes": 138579,
+          "compactions": 0,
+          "snapshots": 71,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 287,
+          "bytes": 138577,
+          "compactions": 0,
+          "snapshots": 71,
+          "status": "in_progress"
+        }
+      },
+      "rss": 180764672,
+      "heapTotal": 85770240,
+      "heapUsed": 59882888,
+      "external": 7738235,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 71,
+      "elapsedMs": 3186497,
+      "maxRequestBytes": 36596,
+      "journals": {
+        "a": {
+          "entries": 291,
+          "bytes": 140362,
+          "compactions": 0,
+          "snapshots": 72,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 291,
+          "bytes": 140360,
+          "compactions": 0,
+          "snapshots": 72,
+          "status": "pending"
+        }
+      },
+      "rss": 180764672,
+      "heapTotal": 83673088,
+      "heapUsed": 59790768,
+      "external": 7414804,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 72,
+      "elapsedMs": 3231984,
+      "maxRequestBytes": 37007,
+      "journals": {
+        "a": {
+          "entries": 295,
+          "bytes": 142111,
+          "compactions": 0,
+          "snapshots": 73,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 295,
+          "bytes": 142109,
+          "compactions": 0,
+          "snapshots": 73,
+          "status": "pending"
+        }
+      },
+      "rss": 180764672,
+      "heapTotal": 84197376,
+      "heapUsed": 59941096,
+      "external": 7416002,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 73,
+      "elapsedMs": 3277484,
+      "maxRequestBytes": 37460,
+      "journals": {
+        "a": {
+          "entries": 299,
+          "bytes": 143902,
+          "compactions": 0,
+          "snapshots": 74,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 299,
+          "bytes": 143900,
+          "compactions": 0,
+          "snapshots": 74,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181026816,
+      "heapTotal": 83148800,
+      "heapUsed": 59843872,
+      "external": 4165648,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 74,
+      "elapsedMs": 3322991,
+      "maxRequestBytes": 37875,
+      "journals": {
+        "a": {
+          "entries": 303,
+          "bytes": 145659,
+          "compactions": 0,
+          "snapshots": 75,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 303,
+          "bytes": 145657,
+          "compactions": 0,
+          "snapshots": 75,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181026816,
+      "heapTotal": 83673088,
+      "heapUsed": 59927688,
+      "external": 7373298,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 75,
+      "elapsedMs": 3368480,
+      "maxRequestBytes": 38324,
+      "journals": {
+        "a": {
+          "entries": 307,
+          "bytes": 147442,
+          "compactions": 0,
+          "snapshots": 76,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 307,
+          "bytes": 147440,
+          "compactions": 0,
+          "snapshots": 76,
+          "status": "pending"
+        }
+      },
+      "rss": 181026816,
+      "heapTotal": 84459520,
+      "heapUsed": 59997024,
+      "external": 7627263,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 76,
+      "elapsedMs": 3413979,
+      "maxRequestBytes": 38735,
+      "journals": {
+        "a": {
+          "entries": 311,
+          "bytes": 149191,
+          "compactions": 0,
+          "snapshots": 77,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 311,
+          "bytes": 149189,
+          "compactions": 0,
+          "snapshots": 77,
+          "status": "pending"
+        }
+      },
+      "rss": 181059584,
+      "heapTotal": 85245952,
+      "heapUsed": 60173648,
+      "external": 7629731,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 77,
+      "elapsedMs": 3459453,
+      "maxRequestBytes": 39188,
+      "journals": {
+        "a": {
+          "entries": 315,
+          "bytes": 150982,
+          "compactions": 0,
+          "snapshots": 78,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 315,
+          "bytes": 150980,
+          "compactions": 0,
+          "snapshots": 78,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181059584,
+      "heapTotal": 83673088,
+      "heapUsed": 59830296,
+      "external": 7422004,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 78,
+      "elapsedMs": 3504961,
+      "maxRequestBytes": 39603,
+      "journals": {
+        "a": {
+          "entries": 319,
+          "bytes": 152739,
+          "compactions": 0,
+          "snapshots": 79,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 319,
+          "bytes": 152737,
+          "compactions": 0,
+          "snapshots": 79,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181059584,
+      "heapTotal": 84721664,
+      "heapUsed": 60078480,
+      "external": 7734691,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 79,
+      "elapsedMs": 3550470,
+      "maxRequestBytes": 40052,
+      "journals": {
+        "a": {
+          "entries": 323,
+          "bytes": 154522,
+          "compactions": 0,
+          "snapshots": 80,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 323,
+          "bytes": 154520,
+          "compactions": 0,
+          "snapshots": 80,
+          "status": "pending"
+        }
+      },
+      "rss": 181059584,
+      "heapTotal": 85245952,
+      "heapUsed": 60003680,
+      "external": 7739145,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 80,
+      "elapsedMs": 3595942,
+      "maxRequestBytes": 40463,
+      "journals": {
+        "a": {
+          "entries": 327,
+          "bytes": 156271,
+          "compactions": 0,
+          "snapshots": 81,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 327,
+          "bytes": 156269,
+          "compactions": 0,
+          "snapshots": 81,
+          "status": "pending"
+        }
+      },
+      "rss": 181059584,
+      "heapTotal": 83673088,
+      "heapUsed": 59941952,
+      "external": 7425602,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 81,
+      "elapsedMs": 3641482,
+      "maxRequestBytes": 40916,
+      "journals": {
+        "a": {
+          "entries": 331,
+          "bytes": 158062,
+          "compactions": 0,
+          "snapshots": 82,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 331,
+          "bytes": 158060,
+          "compactions": 0,
+          "snapshots": 82,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181157888,
+      "heapTotal": 83935232,
+      "heapUsed": 59845552,
+      "external": 7427004,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 82,
+      "elapsedMs": 3686983,
+      "maxRequestBytes": 41331,
+      "journals": {
+        "a": {
+          "entries": 335,
+          "bytes": 159819,
+          "compactions": 0,
+          "snapshots": 83,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 335,
+          "bytes": 159817,
+          "compactions": 0,
+          "snapshots": 83,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181157888,
+      "heapTotal": 83673088,
+      "heapUsed": 59905888,
+      "external": 7428202,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 83,
+      "elapsedMs": 3732494,
+      "maxRequestBytes": 41780,
+      "journals": {
+        "a": {
+          "entries": 339,
+          "bytes": 161602,
+          "compactions": 0,
+          "snapshots": 84,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 339,
+          "bytes": 161600,
+          "compactions": 0,
+          "snapshots": 84,
+          "status": "pending"
+        }
+      },
+      "rss": 181157888,
+      "heapTotal": 85245952,
+      "heapUsed": 60033256,
+      "external": 7754281,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 84,
+      "elapsedMs": 3777990,
+      "maxRequestBytes": 42191,
+      "journals": {
+        "a": {
+          "entries": 343,
+          "bytes": 163351,
+          "compactions": 0,
+          "snapshots": 85,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 343,
+          "bytes": 163349,
+          "compactions": 0,
+          "snapshots": 85,
+          "status": "pending"
+        }
+      },
+      "rss": 181157888,
+      "heapTotal": 84983808,
+      "heapUsed": 60113352,
+      "external": 7757823,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 85,
+      "elapsedMs": 3823501,
+      "maxRequestBytes": 42644,
+      "journals": {
+        "a": {
+          "entries": 347,
+          "bytes": 165142,
+          "compactions": 0,
+          "snapshots": 86,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 347,
+          "bytes": 165140,
+          "compactions": 0,
+          "snapshots": 86,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181190656,
+      "heapTotal": 84197376,
+      "heapUsed": 59890376,
+      "external": 7537904,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 86,
+      "elapsedMs": 3868983,
+      "maxRequestBytes": 43059,
+      "journals": {
+        "a": {
+          "entries": 351,
+          "bytes": 166899,
+          "compactions": 0,
+          "snapshots": 87,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 351,
+          "bytes": 166897,
+          "compactions": 0,
+          "snapshots": 87,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181190656,
+      "heapTotal": 83410944,
+      "heapUsed": 59978056,
+      "external": 4165648,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 87,
+      "elapsedMs": 3914490,
+      "maxRequestBytes": 43508,
+      "journals": {
+        "a": {
+          "entries": 355,
+          "bytes": 168682,
+          "compactions": 0,
+          "snapshots": 88,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 355,
+          "bytes": 168680,
+          "compactions": 0,
+          "snapshots": 88,
+          "status": "pending"
+        }
+      },
+      "rss": 181190656,
+      "heapTotal": 86294528,
+      "heapUsed": 59990856,
+      "external": 7755590,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 88,
+      "elapsedMs": 3959997,
+      "maxRequestBytes": 43919,
+      "journals": {
+        "a": {
+          "entries": 359,
+          "bytes": 170431,
+          "compactions": 0,
+          "snapshots": 89,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 359,
+          "bytes": 170429,
+          "compactions": 0,
+          "snapshots": 89,
+          "status": "pending"
+        }
+      },
+      "rss": 181190656,
+      "heapTotal": 84983808,
+      "heapUsed": 60040888,
+      "external": 7544056,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 89,
+      "elapsedMs": 4005492,
+      "maxRequestBytes": 44372,
+      "journals": {
+        "a": {
+          "entries": 363,
+          "bytes": 172222,
+          "compactions": 0,
+          "snapshots": 90,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 363,
+          "bytes": 172220,
+          "compactions": 0,
+          "snapshots": 90,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181207040,
+      "heapTotal": 83410944,
+      "heapUsed": 60026280,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 90,
+      "elapsedMs": 4051011,
+      "maxRequestBytes": 44787,
+      "journals": {
+        "a": {
+          "entries": 367,
+          "bytes": 173979,
+          "compactions": 0,
+          "snapshots": 91,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 367,
+          "bytes": 173977,
+          "compactions": 0,
+          "snapshots": 91,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181207040,
+      "heapTotal": 86032384,
+      "heapUsed": 60067664,
+      "external": 7767062,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 91,
+      "elapsedMs": 4096502,
+      "maxRequestBytes": 45236,
+      "journals": {
+        "a": {
+          "entries": 371,
+          "bytes": 175762,
+          "compactions": 0,
+          "snapshots": 92,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 371,
+          "bytes": 175760,
+          "compactions": 0,
+          "snapshots": 92,
+          "status": "pending"
+        }
+      },
+      "rss": 181223424,
+      "heapTotal": 83935232,
+      "heapUsed": 60019512,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 92,
+      "elapsedMs": 4142019,
+      "maxRequestBytes": 45647,
+      "journals": {
+        "a": {
+          "entries": 375,
+          "bytes": 177511,
+          "compactions": 0,
+          "snapshots": 93,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 375,
+          "bytes": 177509,
+          "compactions": 0,
+          "snapshots": 93,
+          "status": "pending"
+        }
+      },
+      "rss": 181223424,
+      "heapTotal": 86032384,
+      "heapUsed": 60072520,
+      "external": 7774630,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 93,
+      "elapsedMs": 4187519,
+      "maxRequestBytes": 46100,
+      "journals": {
+        "a": {
+          "entries": 379,
+          "bytes": 179302,
+          "compactions": 0,
+          "snapshots": 94,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 379,
+          "bytes": 179300,
+          "compactions": 0,
+          "snapshots": 94,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181207040,
+      "heapTotal": 83410944,
+      "heapUsed": 60067768,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 94,
+      "elapsedMs": 4233042,
+      "maxRequestBytes": 46515,
+      "journals": {
+        "a": {
+          "entries": 383,
+          "bytes": 181059,
+          "compactions": 0,
+          "snapshots": 95,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 383,
+          "bytes": 181057,
+          "compactions": 0,
+          "snapshots": 95,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181207040,
+      "heapTotal": 86294528,
+      "heapUsed": 60147800,
+      "external": 7782030,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 95,
+      "elapsedMs": 4278525,
+      "maxRequestBytes": 46964,
+      "journals": {
+        "a": {
+          "entries": 387,
+          "bytes": 182842,
+          "compactions": 0,
+          "snapshots": 96,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 387,
+          "bytes": 182840,
+          "compactions": 0,
+          "snapshots": 96,
+          "status": "pending"
+        }
+      },
+      "rss": 181256192,
+      "heapTotal": 83935232,
+      "heapUsed": 60100328,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 96,
+      "elapsedMs": 4324036,
+      "maxRequestBytes": 47375,
+      "journals": {
+        "a": {
+          "entries": 391,
+          "bytes": 184591,
+          "compactions": 0,
+          "snapshots": 97,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 391,
+          "bytes": 184589,
+          "compactions": 0,
+          "snapshots": 97,
+          "status": "pending"
+        }
+      },
+      "rss": 181305344,
+      "heapTotal": 86294528,
+      "heapUsed": 60154888,
+      "external": 7848043,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 97,
+      "elapsedMs": 4369506,
+      "maxRequestBytes": 47828,
+      "journals": {
+        "a": {
+          "entries": 395,
+          "bytes": 186382,
+          "compactions": 0,
+          "snapshots": 98,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 395,
+          "bytes": 186380,
+          "compactions": 0,
+          "snapshots": 98,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181321728,
+      "heapTotal": 83935232,
+      "heapUsed": 60113504,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 98,
+      "elapsedMs": 4415001,
+      "maxRequestBytes": 48243,
+      "journals": {
+        "a": {
+          "entries": 399,
+          "bytes": 188139,
+          "compactions": 0,
+          "snapshots": 99,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 399,
+          "bytes": 188137,
+          "compactions": 0,
+          "snapshots": 99,
+          "status": "in_progress"
+        }
+      },
+      "rss": 181420032,
+      "heapTotal": 84983808,
+      "heapUsed": 60059608,
+      "external": 7537567,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 99,
+      "elapsedMs": 4460490,
+      "maxRequestBytes": 48692,
+      "journals": {
+        "a": {
+          "entries": 403,
+          "bytes": 189922,
+          "compactions": 0,
+          "snapshots": 100,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 403,
+          "bytes": 189920,
+          "compactions": 0,
+          "snapshots": 100,
+          "status": "pending"
+        }
+      },
+      "rss": 181780480,
+      "heapTotal": 83935232,
+      "heapUsed": 60107936,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 100,
+      "elapsedMs": 4505990,
+      "maxRequestBytes": 49103,
+      "journals": {
+        "a": {
+          "entries": 407,
+          "bytes": 191671,
+          "compactions": 0,
+          "snapshots": 101,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 407,
+          "bytes": 191669,
+          "compactions": 0,
+          "snapshots": 101,
+          "status": "pending"
+        }
+      },
+      "rss": 182042624,
+      "heapTotal": 86032384,
+      "heapUsed": 60223784,
+      "external": 7923913,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 101,
+      "elapsedMs": 4551496,
+      "maxRequestBytes": 49556,
+      "journals": {
+        "a": {
+          "entries": 411,
+          "bytes": 193462,
+          "compactions": 0,
+          "snapshots": 102,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 411,
+          "bytes": 193460,
+          "compactions": 0,
+          "snapshots": 102,
+          "status": "in_progress"
+        }
+      },
+      "rss": 182353920,
+      "heapTotal": 83935232,
+      "heapUsed": 60153000,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 102,
+      "elapsedMs": 4597014,
+      "maxRequestBytes": 49971,
+      "journals": {
+        "a": {
+          "entries": 415,
+          "bytes": 195219,
+          "compactions": 0,
+          "snapshots": 103,
+          "status": "in_progress"
+        },
+        "b": {
+          "entries": 415,
+          "bytes": 195217,
+          "compactions": 0,
+          "snapshots": 103,
+          "status": "in_progress"
+        }
+      },
+      "rss": 182353920,
+      "heapTotal": 86294528,
+      "heapUsed": 60158000,
+      "external": 7933241,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 103,
+      "elapsedMs": 4642518,
+      "maxRequestBytes": 50420,
+      "journals": {
+        "a": {
+          "entries": 419,
+          "bytes": 197002,
+          "compactions": 0,
+          "snapshots": 104,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 419,
+          "bytes": 197000,
+          "compactions": 0,
+          "snapshots": 104,
+          "status": "pending"
+        }
+      },
+      "rss": 182517760,
+      "heapTotal": 83673088,
+      "heapUsed": 60166024,
+      "external": 4165048,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    },
+    {
+      "cycle": 104,
+      "elapsedMs": 4687995,
+      "maxRequestBytes": 50831,
+      "journals": {
+        "a": {
+          "entries": 423,
+          "bytes": 198751,
+          "compactions": 0,
+          "snapshots": 105,
+          "status": "pending"
+        },
+        "b": {
+          "entries": 423,
+          "bytes": 198749,
+          "compactions": 0,
+          "snapshots": 105,
+          "status": "pending"
+        }
+      },
+      "rss": 182763520,
+      "heapTotal": 86294528,
+      "heapUsed": 60223648,
+      "external": 7942537,
+      "arrayBuffers": 167104,
+      "resources": {
+        "TCPServerWrap": 1,
+        "TCPSocketWrap": 1
+      }
+    }
+  ],
+  "sourceSha256": {
+    "packages/cli/dist/parity-test-api.js": "7f15bd2c5ab78e1c7e8b09e702e0c77c5bcc808b21e5fd3b0ee8c6c0ac392737",
+    "packages/cli/src/daemon-chats.ts": "1226eff0f6792d47558be7087b41e4b3d4497cd7d932b4f84931b9448dca124c",
+    "packages/cli/src/extensions/todo.ts": "c7ce99135dbd5717063af2503fae4c3a574e51c78b5064dfe389e43392a75c26"
+  },
+  "limitations": [
+    "Scripted sequential interleaving, not simultaneous execution or model decisions.",
+    "Fixed synthetic profile and two bounded journals; no private profiles or real providers.",
+    "128k declared context avoids intentional pressure; unexpected hidden summaries fail the two-request protocol. Compaction entries are counted, not assumed absent.",
+    "Heap/resource trends are diagnostics and include growing receipts/journals; not proof of a leak or its absence.",
+    "SIGINT/SIGTERM and turn timeout are failures. Hard watchdog may leave a synthetic temp directory. Setup/restart/final cleanup are outside turn watchdog and require parent supervision if stuck."
+  ],
+  "stopReason": "duration",
+  "finishedAt": "2026-10-11T22:05:00.209Z",
+  "finalResources": [
+    "TCPServerWrap"
+  ],
+  "finalMemory": {
+    "rss": 182779904,
+    "heapTotal": 68206592,
+    "heapUsed": 60106512,
+    "external": 4173541,
+    "arrayBuffers": 167104
+  }
+}

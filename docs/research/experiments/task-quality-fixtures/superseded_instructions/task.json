@@ -1,0 +1,44 @@
+{
+  "id": "superseded_instructions",
+  "api_contract": "delivery_fee(subtotal_cents, member) returns integer cents for nonnegative integer subtotals and Boolean member.",
+  "latest_user_request": "Finish delivery_fee using my latest policy correction, and keep the interface unchanged.",
+  "earlier_messages": [
+    {
+      "role": "user",
+      "content": "Initially: free delivery from 5000 cents, and members always get free delivery; otherwise charge 499 cents."
+    },
+    {
+      "role": "user",
+      "content": "Correction: ignore that old policy. Free delivery begins at 7500 cents, inclusive, for everyone. Membership gives no delivery discount. Below 7500 charge exactly 499 cents."
+    }
+  ],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_old_threshold": {
+      "expected": "fail",
+      "required_failure": "corrected_threshold"
+    },
+    "wrong_member_discount": {
+      "expected": "fail",
+      "required_failure": "no_member_discount"
+    },
+    "wrong_float": {
+      "expected": "fail",
+      "required_failure": "integer_cents"
+    }
+  },
+  "oracle_establishes": [
+    "The latest explicit fee policy wins at old/new cutoff boundaries and membership no longer overrides it."
+  ],
+  "oracle_does_not_establish": [
+    "Invalid inputs, currency conversion, or general instruction hierarchy outside the supplied correction."
+  ]
+}

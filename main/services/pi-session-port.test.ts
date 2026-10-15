@@ -80,3 +80,31 @@ test("migration receipt parser accepts metadata and rejects transcript-shaped fi
     /Invalid/u,
   );
 });
+
+for (const source of ["checkpoint", "custom projection"] as const) {
+  test(`large ${source} tails preserve summary, order and subsequent messages`, async () => {
+    const port = createPiSessionPort(await new InMemorySessionRepo().create({ id: `large-${source}` }));
+    await port.appendMessage({ role: "user", content: "old history", timestamp: 1 });
+    const tail = Array.from({ length: 120_000 }, (_, index) => ({
+      role: "user" as const, content: `tail ${index}`, timestamp: index + 2,
+    }));
+    await port.appendCompaction({
+      id: "checkpoint", summary: "durable checkpoint", tokensBefore: 500_000,
+      retainedTail: source === "checkpoint" ? tail : [],
+    });
+    if (source === "custom projection") await port.appendCustomEntry("large.projection", null);
+    await port.appendMessage({ role: "user", content: "current request", timestamp: 200_000 });
+    const view = source === "checkpoint" ? port : port.withEntryProjectors({ "large.projection": () => tail });
+    const context = await view.buildContext();
+    assert.equal(context.messages.length, tail.length + 2);
+    const summary = context.messages[0];
+    assert.equal(summary?.role === "compactionSummary" && summary.summary, "durable checkpoint");
+    for (let index = 0; index < tail.length; index++) {
+      const message = context.messages[index + 1];
+      assert.equal(message?.role === "user" && message.content, `tail ${index}`);
+    }
+    const latest = context.messages[context.messages.length - 1];
+    assert.equal(latest?.role === "user" && latest.content, "current request");
+    assert.equal(tail.length, 120_000);
+  });
+}

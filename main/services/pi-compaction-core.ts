@@ -601,8 +601,11 @@ export class PiCompactionCoordinator {
       if (!preparation) return { compacted: false, shouldRetry: false };
       if (
         requireEffectiveInput &&
-        preparation.messagesToSummarize.length === 0 &&
-        preparation.turnPrefixMessages.length === 0
+        // LLM serialization omits system messages. A system-only prepared
+        // conversation cannot reduce pressure or preserve additional evidence.
+        // VCC and explicit manual/overflow operations keep their own semantics.
+        !preparation.messagesToSummarize.some((message) => engine === "vcc" || message.role !== "system") &&
+        !preparation.turnPrefixMessages.some((message) => engine === "vcc" || message.role !== "system")
       ) {
         return { compacted: false, shouldRetry: false };
       }

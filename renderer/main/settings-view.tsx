@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
   Mic,
   Keyboard,
+  Link2,
   ListFilter,
   Search,
   MousePointer2,
@@ -37,6 +38,7 @@ import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
+import { LinksSettings } from "../components/settings/links-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
@@ -83,6 +85,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   memory: <MemoryCardIcon className="size-5" />,
   voice: <Mic className="size-5" />,
   tts: <Volume2 className="size-5" />,
+  links: <Link2 className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
   about: <Info className="size-5" />,
@@ -113,6 +116,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
   tts: TtsSettings,
+  links: LinksSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
@@ -135,6 +139,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
   tts: "Read Aiden’s latest response aloud with Google Gemini.",
+  links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
   about: "App information, updates, and diagnostics.",

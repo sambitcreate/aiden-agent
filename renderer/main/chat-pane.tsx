@@ -21,6 +21,7 @@ import { primeInlineVisualPreview, type GuestPromptHandler } from "../components
 import { forkSummaryHoldsSend, type ChatForkPosition } from "../shared/chat-copy-contract";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import {
+  admitRunInputOnceStarted,
   chatMessageQueue,
   committedRunInputNotice,
   steerQueuedMessage,
@@ -1718,11 +1719,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
           }
           return;
         }
-        const started = await runGeneration(messageTurnId);
-        // The user message crossed its durability barrier in appendMessage.
-        // Start rejection is surfaced by the stream callback but cannot turn
-        // that committed message back into an unsent composer payload.
-        if (!started.ok && mountedRef.current) setError(started.error.message);
+        // The user message crossed its durability barrier in appendMessage, so
+        // the send is finished here. Main may still be preparing the response:
+        // Stop and the Steer/Queue pill are live already, and holding this
+        // promise until start is acknowledged would make the composer drop
+        // whatever the user steers or queues in that window. A start rejection
+        // is surfaced as an error and cannot turn the committed message back
+        // into an unsent composer payload.
+        void runGeneration(messageTurnId).then((started) => {
+          if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
+            setError(started.error.message);
+          }
+        });
       } finally {
         if (firstDraft) finishChatDraftSend(chatId, false);
         if (
@@ -1872,7 +1880,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
     async (streamId: string, text: string) => {
-      const receipt = await chatControl.submitInput(streamId, "steer", text);
+      const receipt = await admitRunInputOnceStarted({
+        admit: () => chatControl.submitInput(streamId, "steer", text),
+        // This pane's own run can still be starting; a detached one is not retried.
+        live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
+      });
       if (receipt.committed && receipt.messageId) {
         const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
@@ -2682,6 +2694,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
+            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
             terminalButton={
               <Button
                 iconOnly
@@ -2699,15 +2712,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               </Button>
             }
             trailing={
-              <>
-                <QuickViewToggle disabled={!effectiveWorkspace} />
-                <EnvironmentPanelToggle />
-                <OpenInEditorPicker
-                  workspaceId={effectiveWorkspace?.id}
-                  folderPath={effectiveWorkspace?.folderPath}
-                />
-              </>
+              <OpenInEditorPicker
+                workspaceId={effectiveWorkspace?.id}
+                folderPath={effectiveWorkspace?.folderPath}
+              />
             }
+            end={<EnvironmentPanelToggle />}
           />
         }
         autoScrollToBottom

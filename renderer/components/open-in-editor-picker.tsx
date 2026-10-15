@@ -39,10 +39,17 @@ function EditorIcon({ editor, className }: { editor: ExternalEditor; className: 
   return <Icon aria-hidden="true" className={className} />;
 }
 
-export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPickerProps) {
-  const { binding } = useCommandSystem();
-  const shortcutBinding = binding("workspace.openPreferredEditor");
-  const shortcut = prettyAccelerator(shortcutBinding);
+/**
+ * Installed-editor discovery plus the remembered preferred editor for a workspace folder.
+ * Shared by the toolbar picker and the Quick View Folder row; only the picker registers
+ * the `workspace.openPreferredEditor` command so it is never bound twice.
+ */
+export function usePreferredEditor(
+  workspaceId: string | undefined,
+  folderPath: string | undefined,
+  /** Skip the toast when discovery fails; the toolbar picker already reports it. */
+  { silentDiscoveryErrors = false }: { silentDiscoveryErrors?: boolean } = {},
+) {
   const [editors, setEditors] = React.useState<ExternalEditor[]>([]);
   const [storedEditorId, setStoredEditorId] = React.useState<string | null>(readPreferredEditorId);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -56,7 +63,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         if (mountedRef.current) setEditors(discovered);
         return discovered;
       } catch (error) {
-        if (mountedRef.current) {
+        if (mountedRef.current && !silentDiscoveryErrors) {
           toast.error(error instanceof Error ? error.message : "Couldn't find installed editors.");
         }
         return null;
@@ -64,7 +71,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         if (mountedRef.current) setIsLoading(false);
       }
     },
-    [],
+    [silentDiscoveryErrors],
   );
 
   React.useEffect(() => {
@@ -121,6 +128,31 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     }
     if (editor) await openInEditor(editor);
   }, [openInEditor, preferredEditor, refreshEditors, storedEditorId]);
+
+  return {
+    editors,
+    isLoading,
+    preferredEditorId,
+    preferredEditor,
+    refreshEditors,
+    openInEditor,
+    openPreferredEditor,
+  };
+}
+
+export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPickerProps) {
+  const { binding } = useCommandSystem();
+  const shortcutBinding = binding("workspace.openPreferredEditor");
+  const shortcut = prettyAccelerator(shortcutBinding);
+  const {
+    editors,
+    isLoading,
+    preferredEditorId,
+    preferredEditor,
+    refreshEditors,
+    openInEditor,
+    openPreferredEditor,
+  } = usePreferredEditor(workspaceId, folderPath);
   useCommandHandler(
     "workspace.openPreferredEditor",
     openPreferredEditor,

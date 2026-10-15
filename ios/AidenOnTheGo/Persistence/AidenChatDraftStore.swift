@@ -10,6 +10,60 @@ actor AidenChatDraftStore {
         fileprivate let generation: UInt64
     }
 
+    struct PendingSend: Codable, Equatable, Sendable {
+        let deviceId: String
+        let request: AidenTurnStart
+        let key: UUID
+        let createdAt: Date
+        let attachments: [AidenAttachmentReference]
+        var streamId: String? = nil
+        var inputMode: AidenStreamInputMode? = nil
+        func canRetry(at now: Date = Date()) -> Bool {
+            let age = now.timeIntervalSince(createdAt)
+            return age >= 0 && age < 24 * 60 * 60
+        }
+    }
+
+    func loadPendingSend(session: Session, deviceId: String) throws -> PendingSend? {
+        guard isCurrent(session) else { return nil }
+        let url = attemptURL(session)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= maximumDraftBytes else { throw AidenRemoteClientError.invalidResponse }
+        let data = try Data(contentsOf: url)
+        let pending = try JSONDecoder().decode(PendingSend.self, from: data)
+        guard (pending.streamId == nil) == (pending.inputMode == nil) else { throw AidenRemoteClientError.invalidResponse }
+        return pending.deviceId == deviceId ? pending : nil
+    }
+
+    func savePendingSend(_ pending: PendingSend?, session: Session) throws {
+        guard isCurrent(session), !Task.isCancelled else { throw CancellationError() }
+        let url = attemptURL(session)
+        guard let pending else {
+            if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+            return
+        }
+        if let existing = try loadPendingSend(session: session, deviceId: pending.deviceId), existing != pending {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        let data = try JSONEncoder().encode(pending)
+        guard data.count <= maximumDraftBytes else { throw AidenRemoteContractError.payloadTooLarge }
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    func settlePendingSend(key: UUID, session: Session) {
+        let url = attemptURL(session)
+        guard let data = try? Data(contentsOf: url), data.count <= maximumDraftBytes,
+              let pending = try? JSONDecoder().decode(PendingSend.self, from: data), pending.key == key else { return }
+        try? fileManager.removeItem(at: url)
+    }
+
+    private func attemptURL(_ session: Session) -> URL {
+        instanceDirectory(instanceId: session.instanceId).appending(path: "\(digest(session.chatId)).attempt.json")
+    }
+
     static let shared = AidenChatDraftStore()
 
     private struct Envelope: Codable {
@@ -94,6 +148,8 @@ actor AidenChatDraftStore {
     }
 
     func remove(instanceId: String, chatId: String) {
+        let session = Session(instanceId: instanceId, chatId: chatId, generation: 0)
+        try? fileManager.removeItem(at: attemptURL(session))
         invalidate(instanceId: instanceId, chatId: chatId)
         try? fileManager.removeItem(at: fileURL(instanceId: instanceId, chatId: chatId))
     }

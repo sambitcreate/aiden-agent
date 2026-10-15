@@ -1,6 +1,6 @@
 # MCP and Plugins remediation stack — 2026-10-13
 
-Plan: `docs/plans/mcp-plugins-remediation-plan.md`. Origin: five read-only audits comparing Aiden's MCP stack with Pi 1.2.0 (`/Users/sambitbiswas/projects/opp/pi`).
+Plan: `docs/plans/completed/mcp-plugins-remediation-plan.md`. Origin: five read-only audits comparing Aiden's MCP stack with Pi 1.2.0 (`/Users/sambitbiswas/projects/opp/pi`).
 
 Key facts established by the audit:
 - Desktop and Aiden-managed CLI MCP both run on `@modelcontextprotocol/sdk` 1.30.0; `pi-mcp` is declared by the CLI but unused. The CLI also loads Pi's built-in MCP extension (native `mcp.json`, plaintext `mcp-auth.json`) next to Aiden's `aiden-mcp.json`.

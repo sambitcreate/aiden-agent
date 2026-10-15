@@ -1,0 +1,89 @@
+{
+  "sourceSha256": "ef2250725d1cffaa560902018c688bcfcb971e1d076f21796b18672e5d89250c",
+  "piAiVersion": "1.0.3",
+  "generatedAt": "2026-10-11T20:24:12.864Z",
+  "evidenceKind": "offline-real-google-adapter-static-cache",
+  "node": "v22.22.3",
+  "rows": [
+    {
+      "variant": "original",
+      "cacheReference": "cachedContents/offline-1",
+      "cumulativeCacheCreates": 1,
+      "dynamicContentHash": "5fb013202e8cf734b753d3c35091a510ec4150a9a6e23b128cf10f3445a0c776"
+    },
+    {
+      "variant": "dynamicChanged",
+      "cacheReference": "cachedContents/offline-1",
+      "cumulativeCacheCreates": 1,
+      "dynamicContentHash": "cff52f437325a73ed571ea8f380f2c4827b4b55fd519ffaecbbf5dc9e42f8c38"
+    },
+    {
+      "variant": "queued",
+      "cacheReference": "cachedContents/offline-1",
+      "cumulativeCacheCreates": 1,
+      "dynamicContentHash": "b8cc760ee22849b99b1df06cc51daac8006e1caa75346e2b56af9752d663e26e"
+    },
+    {
+      "variant": "schemaChanged",
+      "cacheReference": "cachedContents/offline-2",
+      "cumulativeCacheCreates": 2,
+      "dynamicContentHash": "cff52f437325a73ed571ea8f380f2c4827b4b55fd519ffaecbbf5dc9e42f8c38"
+    },
+    {
+      "variant": "policyChanged",
+      "cacheReference": "cachedContents/offline-3",
+      "cumulativeCacheCreates": 3,
+      "dynamicContentHash": "cff52f437325a73ed571ea8f380f2c4827b4b55fd519ffaecbbf5dc9e42f8c38"
+    },
+    {
+      "variant": "workspaceChanged",
+      "cacheReference": "cachedContents/offline-4",
+      "cumulativeCacheCreates": 4,
+      "dynamicContentHash": "cff52f437325a73ed571ea8f380f2c4827b4b55fd519ffaecbbf5dc9e42f8c38"
+    }
+  ],
+  "operations": [
+    {
+      "method": "POST",
+      "bodyHash": "7cee750b6a70f91549fc5d366828cc43f5c4c8215a12ee984ed3691d6302d375",
+      "containsConversation": false
+    },
+    {
+      "method": "POST",
+      "bodyHash": "4ec7902962f8f60caab21590ab667c0742929bfeb022dbca444ad0ad99388a12",
+      "containsConversation": false
+    },
+    {
+      "method": "POST",
+      "bodyHash": "962a2e9d51de17de0945a2306bd659a89843c7f1161de0b0d45696b0e30531e0",
+      "containsConversation": false
+    },
+    {
+      "method": "POST",
+      "bodyHash": "9f6af95a1ea1a6b7af5c1f2d0c12d0966aab3c41bd1db8c05821bccf5a0c0ec0",
+      "containsConversation": false
+    },
+    {
+      "method": "DELETE",
+      "containsConversation": false
+    },
+    {
+      "method": "DELETE",
+      "containsConversation": false
+    },
+    {
+      "method": "DELETE",
+      "containsConversation": false
+    },
+    {
+      "method": "DELETE",
+      "containsConversation": false
+    }
+  ],
+  "inferenceDispatches": 0,
+  "limitations": [
+    "All cache responses are local fetch fakes; no network, cache hit tokens, storage cost, or inference quality measured.",
+    "Dynamic user variation is solely a cache-key isolation control, never a proposed user-input elision policy.",
+    "Static cache lifecycle operations are distinct from assistant-message usage records; response usageMetadata in this fixture is not consumed by this API."
+  ]
+}

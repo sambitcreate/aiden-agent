@@ -15,7 +15,7 @@ import {
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
-  AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -34,7 +34,7 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60_000;
 export const MAX_AIDEN_REMOTE_DISPLAY_NAME_CHARACTERS = 80;
 const FALLBACK_AIDEN_REMOTE_DISPLAY_NAME = "Aiden Agent";
 
-export type AidenRemoteDeviceType = "iphone" | "ipad" | "mac" | "linux";
+export type AidenRemoteDeviceType = "iphone" | "ipad" | "android" | "mac" | "linux";
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
 
 interface StoredAidenRemoteDevice {
@@ -259,22 +259,22 @@ function isMobileSimulatorCapability(
   );
 }
 
-/** Revision 27 opt-in to Bot session cards: no authority, any device type. */
-function isBotCardCapability(
+/** Revision 27/30 opt-ins (`bot:cards`, `bot:activity`): no authority, any device type. */
+function isBotOptInCapability(
   value: unknown,
-): value is (typeof AIDEN_REMOTE_BOT_CARD_CAPABILITIES)[number] {
+): value is (typeof AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES)[number] {
   return (
     typeof value === "string" &&
-    (AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(value)
+    (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
   );
 }
 
 /**
  * The phone simulator viewer grant (contract revision 26) belongs to phones
- * and tablets only; desktops use `simulators:control`.
+ * and tablets only (`android` since revision 31); desktops use `simulators:control`.
  */
 export function mayHoldMobileSimulatorCapabilities(type: unknown): boolean {
-  return type === "iphone" || type === "ipad";
+  return type === "iphone" || type === "ipad" || type === "android";
 }
 
 function parsePersistedCapabilities(
@@ -333,7 +333,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   if (
     !boundedString(record.id, 128) ||
     !boundedString(record.name, 80) ||
-    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "mac" && record.type !== "linux") ||
+    (record.type !== "iphone" && record.type !== "ipad" && record.type !== "android" && record.type !== "mac" && record.type !== "linux") ||
     !boundedString(record.clientVersion, 40) ||
     !digestString(record.lookupDigest) ||
     !digestString(record.credentialSalt) ||
@@ -806,7 +806,7 @@ export class AidenRemoteStateRegistry {
         !isSimulatorCapability(capability) &&
         !isMobileSimulatorCapability(capability) &&
         !isHostCapability(capability) &&
-        !isBotCardCapability(capability))
+        !isBotOptInCapability(capability))
     ) {
       return null;
     }
@@ -836,7 +836,7 @@ export class AidenRemoteStateRegistry {
             isSimulatorCapability(capability) ||
             isMobileSimulatorCapability(capability) ||
             isHostCapability(capability) ||
-            isBotCardCapability(capability)) &&
+            isBotOptInCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);
@@ -862,7 +862,7 @@ export class AidenRemoteStateRegistry {
   }): Promise<AidenRemoteIssuedCredential> {
     if (
       !boundedString(input.name, 80) ||
-      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "mac" && input.type !== "linux") ||
+      (input.type !== "iphone" && input.type !== "ipad" && input.type !== "android" && input.type !== "mac" && input.type !== "linux") ||
       !boundedString(input.clientVersion, 40) ||
       (input.acceptsBotCapabilities !== undefined &&
         typeof input.acceptsBotCapabilities !== "boolean") ||

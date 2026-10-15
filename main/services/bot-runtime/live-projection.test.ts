@@ -26,6 +26,8 @@ import {
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
+import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
+import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
@@ -851,6 +853,17 @@ test("the live phase reads stop, a waiting card, compaction, the newest running 
   assert.equal(liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase, "preparing");
   assert.equal(liveBotActivity({ ...base, docs: docs({}) })?.phase, "thinking");
   assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
+  // A paused run's text and tool, still in `pi.live` when the Resume began, are not the resumed run's work.
+  const paused = docs({ tools, generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } });
+  const resumed = { ...base, resuming: true, resumedFrom: JSON.stringify(paused["pi.live"]) };
+  assert.equal(liveBotActivity({ ...resumed, docs: paused })?.phase, "resuming");
+  assert.equal(liveBotActivity({ ...resumed, stopping: true, docs: paused })?.phase, "stopping");
+  assert.equal(liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1 } }) })?.phase, "resuming");
+  assert.equal(
+    liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } }) })?.phase,
+    "writing",
+    "once anything live happened, text is the resumed run's",
+  );
   assert.equal(
     liveBotActivity({ ...base, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } } }) })?.phase,
     "writing",
@@ -871,6 +884,242 @@ test("Stop pressed while nothing runs is ignored, so the next reply never starts
     assert.equal(observedPhases(tape.events).includes("stopping"), false);
     unsubscribe();
   } finally {
+    await live.close();
+  }
+});
+
+/** A reply that waits for `open()` before the model answers: the run holds its "before any output" line. */
+function gatedAnswer(text: string) {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  return {
+    open: () => open(),
+    step: async () => {
+      await opened;
+      return fauxAssistantMessage(text);
+    },
+  };
+}
+
+test("each Stop and Resume intent reaches the desktop projection as its own call, until unwired", async () => {
+  const reported: string[] = [];
+  const intents = createBotTurnIntents({
+    onError: (botId, intent, error) => void reported.push(`${intent} ${botId}: ${(error as Error).message}`),
+  });
+  const calls: string[] = [];
+  const projection = {
+    notifyStopping: (botId: string) => void calls.push(`stopping ${botId}`),
+    cancelStopping: (botId: string) => void calls.push(`cancel ${botId}`),
+    notifyResuming: (botId: string) => void calls.push(`resuming ${botId}`),
+  };
+  // A listener that throws never keeps the next one from hearing the intent.
+  intents.onIntent(() => {
+    throw new Error("a broken surface");
+  });
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => projection });
+
+  assert.equal(await stopWithIntents(intents, "bot:a", async () => "stopped"), "stopped");
+  assert.deepEqual(calls, ["stopping bot:a"], "a Stop that took is never taken back");
+  assert.deepEqual(reported, ["stopping bot:a: a broken surface"], "the surface that missed it is reported");
+
+  calls.length = 0;
+  const refused = new Error("The Bot is held by another Aiden.");
+  await assert.rejects(stopWithIntents(intents, "bot:b", async () => Promise.reject(refused)), (error) => error === refused);
+  assert.deepEqual(calls, ["stopping bot:b", "cancel bot:b"], "a Stop that failed takes Stopping back");
+
+  calls.length = 0;
+  intents.announce("bot:c", "resuming");
+  assert.deepEqual(calls, ["resuming bot:c"]);
+
+  calls.length = 0;
+  unwire();
+  intents.announce("bot:a", "stopping");
+  assert.deepEqual(calls, []);
+  // The broken listener is still registered: each intent it missed is reported once.
+  assert.deepEqual(reported, [
+    "stopping bot:a: a broken surface",
+    "stopping bot:b: a broken surface",
+    "stopCancelled bot:b: a broken surface",
+    "resuming bot:c: a broken surface",
+    "stopping bot:a: a broken surface",
+  ]);
+});
+
+test("a Stop for one Bot leaves another Bot's running reply on its work, never Stopping", async () => {
+  const live = await start(createFauxModels([slowAnswer(), slowAnswer()], { tokensPerSecond: 40 }), {
+    service: { knownBotIds: async () => new Set(["bot:a", "bot:b"]) },
+  });
+  const intents = createBotTurnIntents();
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    const tapeA = recorder();
+    const tapeB = recorder();
+    const a = await live.projection.subscribe("bot:a", tapeA.sink);
+    tapeA.start(a.snapshot);
+    const b = await live.projection.subscribe("bot:b", tapeB.sink);
+    tapeB.start(b.snapshot);
+    await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-a" });
+    await live.service.send("bot:b", { text: "tell me another", requestId: "desk-b" });
+    await waitFor(() => tapeA.view?.activity?.phase === "writing" && tapeB.view?.activity?.phase === "writing", {
+      what: "both replies to stream",
+    });
+
+    await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"));
+    await waitFor(() => tapeA.view?.activity === null && tapeA.view.state.kind === "idle", { what: "Bot A to stop" });
+    assert.ok(observedPhases(tapeA.events).includes("stopping"), observedPhases(tapeA.events).join(" → "));
+    // Bot B's feed has handled every intent by now: a refresh runs after it on the same queue.
+    await live.projection.refreshActivity("bot:b");
+    assert.equal(tapeB.view?.state.kind, "running");
+    assert.equal(tapeB.view?.activity?.phase, "writing");
+    assert.equal(observedPhases(tapeB.events).includes("stopping"), false, observedPhases(tapeB.events).join(" → "));
+    a.unsubscribe();
+    b.unsubscribe();
+  } finally {
+    unwire();
+    await live.close();
+  }
+});
+
+test("a Stop announced while nothing runs changes nothing, and the next reply starts at Getting ready", async () => {
+  const answer = gatedAnswer("word ".repeat(20));
+  const live = await start(createFauxModels([answer.step], { tokensPerSecond: 40 }));
+  const intents = createBotTurnIntents();
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    // A double-tap on Stop after the last reply landed, from the Mac or a phone.
+    await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"));
+    const sent = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity != null, { what: "the next reply's line" });
+    assert.equal(tape.view?.activity?.phase, "preparing");
+    answer.open();
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    assert.equal(observedPhases(tape.events).includes("stopping"), false, observedPhases(tape.events).join(" → "));
+    unsubscribe();
+  } finally {
+    answer.open();
+    unwire();
+    await live.close();
+  }
+});
+
+test("a Stop that fails stops reading Stopping and the reply goes on; the Stop after it ends the reply", async () => {
+  const live = await start(createFauxModels([slowAnswer()], { tokensPerSecond: 40 }));
+  const intents = createBotTurnIntents();
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "writing", { what: "the reply to stream" });
+    const pressed = tape.events.length;
+    await assert.rejects(
+      stopWithIntents(intents, "bot:a", async () => {
+        throw new Error("The Bot is held by another Aiden.");
+      }),
+    );
+    const sincePressed = () => observedPhases(tape.events.slice(pressed));
+    await waitFor(() => sincePressed()[sincePressed().length - 1] === "writing", { what: "the line to return to the work" });
+    assert.deepEqual(observedPhases(tape.events.slice(pressed)), ["stopping", "writing"]);
+    assert.equal(tape.view?.state.kind, "running", "the reply goes on");
+
+    assert.equal((await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"))).kind, "idle");
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    assert.ok(observedPhases(tape.events.slice(pressed)).lastIndexOf("stopping") > 0);
+    unsubscribe();
+  } finally {
+    unwire();
+    await live.close();
+  }
+});
+
+test("Resume is announced only for a Resume the session carried out, and before the resumed run is published", async () => {
+  const profileDir = tempProfile();
+  const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
+  await child.waitFor("STREAMING");
+  await child.kill();
+  const intents = createBotTurnIntents();
+  const heard: string[] = [];
+  intents.onIntent((botId, intent) => void heard.push(`${intent} ${botId}`));
+  let projection: BotLiveProjection | undefined;
+  const live = await start(createFauxModels([fauxAssistantMessage("resumed answer")]), {
+    service: {
+      profileDir,
+      knownBotIds: async () => new Set(["bot:a", "bot:killed"]),
+      // The desktop wiring (`bot-session-main.ts`): the session announces a Resume it carried out.
+      onResumed: (botId) => intents.announce(botId, "resuming"),
+      onStateChange: (botId, state) => {
+        heard.push(`${state.kind} ${botId}`);
+        projection?.notifyState(botId, state);
+      },
+    },
+  });
+  projection = live.projection;
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    await live.service.initialize();
+    heard.length = 0;
+    // Nothing to pick up: an idle Bot's Resume announces nothing.
+    assert.equal((await live.service.resume("bot:a", "desk-1")).kind, "idle");
+    assert.equal(heard.length, 0, heard.join(", "));
+
+    await live.service.resume("bot:killed", "desk-2");
+    await live.service.resume("bot:killed", "desk-2");
+    // Heard before the running state, so the projection marks the run it starts.
+    assert.deepEqual(heard.slice(0, 2), ["resuming bot:killed", "running bot:killed"]);
+    await waitFor(async () => (await live.service.state("bot:killed")).kind === "idle", { what: "the resumed turn to finish" });
+    assert.equal(heard.filter((line) => line.startsWith("resuming")).length, 1, heard.join(", "));
+  } finally {
+    unwire();
+    await live.close();
+  }
+});
+
+test("a Resume after a crash mid-reply picks up where it left off; the killed run's text is not new writing", async () => {
+  const profileDir = tempProfile();
+  const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
+  await child.waitFor("STREAMING");
+  await child.kill();
+  const answer = gatedAnswer("resumed answer");
+  const intents = createBotTurnIntents();
+  let projection: BotLiveProjection | undefined;
+  const live = await start(createFauxModels([answer.step]), {
+    service: {
+      profileDir,
+      knownBotIds: async () => new Set(["bot:killed"]),
+      // The desktop wiring (`bot-session-main.ts`).
+      onResumed: (botId) => intents.announce(botId, "resuming"),
+      onStateChange: (botId, state) => projection?.notifyState(botId, state),
+    },
+  });
+  projection = live.projection;
+  const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
+  try {
+    await live.service.initialize();
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:killed", tape.sink);
+    tape.start(snapshot);
+    assert.equal(snapshot.state.kind, "interrupted");
+    assert.ok(snapshot.partial?.includes("word"), "the killed run's text is still on screen");
+
+    await live.service.resume("bot:killed", "desk-1");
+    // The model has not answered yet: the line holds through the resumed run's first live events.
+    await waitFor(() => tape.view?.activity != null, { what: "the resumed run's line" });
+    await live.projection.refreshActivity("bot:killed");
+    assert.equal(tape.view?.activity?.phase, "resuming", observedPhases(tape.events).join(" → "));
+    answer.open();
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the resumed turn to land" });
+    const phases = observedPhases(tape.events).filter((phase) => phase !== null);
+    assert.equal(phases[0], "resuming", phases.join(" → "));
+    assert.ok(inOrder(phases, ["resuming", "writing"]), phases.join(" → "));
+    unsubscribe();
+  } finally {
+    answer.open();
+    unwire();
     await live.close();
   }
 });
@@ -1045,10 +1294,13 @@ test("queued inputs are listed by the person's ids only; passive writes never sh
     },
   };
   assert.deepEqual(liveQueuedInputIds(docs), ["2", "4", "5"]);
-  assert.deepEqual(liveQueuedMessages(docs, new Set(["2", "4"])), [
+  // Only the ids classified as the person's own are listed; 2 and 4 are a routine's and the self-intro.
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["5"])), [
     { submissionId: "5", mode: "steer", text: "Make it vegetarian", imageCount: 1 },
   ]);
-  assert.deepEqual(liveQueuedMessages({}), []);
+  // An id not classified yet (or a passive write's) never shows.
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["1"])), []);
+  assert.deepEqual(liveQueuedMessages({}, new Set(["5"])), []);
 });
 
 /** Wait, outside the projection, until the conversation's `pi.inbox` satisfies `predicate`. */

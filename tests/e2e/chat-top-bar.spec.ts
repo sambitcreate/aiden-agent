@@ -167,6 +167,37 @@ test.describe("folder workspaces", () => {
       }).toBe("ok");
     }
   });
+  test("Quick View leads the workspace tools and Environment ends them", async ({ aiden }) => {
+    const { page } = aiden;
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await startPersistedChat(page);
+    const group = page.locator("[data-workspace-tool-buttons]");
+    const toggles = {
+      quickView: group.locator("[data-quick-view-toggle]"),
+      terminal: group.locator("[data-terminal-toggle]"),
+      more: group.locator('button[aria-label="More workspace tools"]'),
+      environment: group.locator("[data-environment-toggle]"),
+    };
+    for (const toggle of Object.values(toggles)) await expect(toggle).toBeVisible();
+    // Left-to-right order of the four controls, read again until the resized bar settles.
+    const leftToRight = async () => {
+      const entries = await Promise.all(
+        Object.entries(toggles).map(async ([name, toggle]) => [name, (await toggle.boundingBox())?.x] as const),
+      );
+      if (entries.some(([, left]) => left === undefined)) return [];
+      return entries.sort(([, a], [, b]) => a! - b!).map(([name]) => name);
+    };
+    await expect.poll(leftToRight).toEqual(["quickView", "terminal", "more", "environment"]);
+    // Narrow windows fold the individual tools into the menu but keep both toggles.
+    for (const width of [680, 760]) {
+      await aiden.app.evaluate(
+        ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800),
+        width,
+      );
+      await expect(group.locator("[data-quick-view-toggle]")).toBeVisible();
+      await expect(group.locator("[data-environment-toggle]")).toBeVisible();
+    }
+  });
   test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
     const { page } = aiden;
     await startPersistedChat(page);

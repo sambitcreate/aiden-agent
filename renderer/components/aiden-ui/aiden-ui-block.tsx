@@ -5,9 +5,10 @@ import { evaluate, truthy, type AidenUiScope } from "../../shared/aiden-ui/evalu
 import { ownEntry, ownField } from "../../shared/aiden-ui/own";
 import { MAX_GUEST_PROMPT_CHARS } from "../../shared/generative-ui-bridge";
 import { cn } from "../../lib/ui-utils";
-import { Button, Dialog, ErrorBoundary, toast, TooltipProvider } from "../ui";
+import { Button, ErrorBoundary, toast, TooltipProvider } from "../ui";
 import { CATALOG_COMPONENTS } from "./components";
 import { AidenUiContext, asString, type AidenUiRenderContext } from "./render-context";
+import { useLinkOpener } from "../../lib/link-opener";
 
 /**
  * Draws a native Aiden UI visual: the model's component tree rendered with
@@ -122,11 +123,11 @@ function AidenUiVisualBody({
   hideCaption = false,
   followUpBusy = false,
 }: AidenUiBlockProps) {
+  const { openLink } = useLinkOpener();
   const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
   const stateRef = React.useRef(state);
   /** True once the user changed something here; saved state then merges instead of replacing. */
   const touchedRef = React.useRef(false);
-  const [pendingUrl, setPendingUrl] = React.useState<string | null>(null);
   const [pendingFollowUp, setPendingFollowUp] = React.useState<string | null>(null);
   // A newer saved state (a revisit after the cache refreshed, or a revision
   // that declares new keys) re-seeds an untouched visual and fills in keys a
@@ -194,7 +195,9 @@ function AidenUiVisualBody({
         case "open": {
           const url = asString(evaluate(action.url, scope));
           try {
-            if (new URL(url).protocol === "https:") setPendingUrl(url);
+            if (new URL(url).protocol === "https:" && openLink(url, { forcePrompt: true })) {
+              onActionRef.current?.({ kind: "open", url });
+            }
           } catch {
             // Not a URL: nothing to open.
           }
@@ -202,7 +205,7 @@ function AidenUiVisualBody({
         }
       }
     },
-    [copyText, draft, setState],
+    [copyText, draft, openLink, setState],
   );
 
   const attachmentSource = React.useCallback(
@@ -230,13 +233,6 @@ function AidenUiVisualBody({
     return context;
   };
   const ctx = make({ vars: { ...data, ...state }, locale: navigator.language || "en-US" });
-
-  let host = "";
-  try {
-    host = pendingUrl ? new URL(pendingUrl).host : "";
-  } catch {
-    host = "";
-  }
 
   return (
     <section
@@ -303,25 +299,6 @@ function AidenUiVisualBody({
           </Button>
         </div>
       )}
-      <Dialog
-        open={pendingUrl !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingUrl(null);
-        }}
-        title="Open link?"
-        description={`This visual wants to open ${host} in your browser.`}
-        confirmLabel="Open"
-        cancelLabel="Cancel"
-        onConfirm={() => {
-          if (pendingUrl) {
-            window.open(pendingUrl, "_blank", "noopener,noreferrer");
-            onActionRef.current?.({ kind: "open", url: pendingUrl });
-          }
-          setPendingUrl(null);
-        }}
-      >
-        <p className="m-0 break-all text-small text-secondary">{pendingUrl}</p>
-      </Dialog>
     </section>
   );
 }

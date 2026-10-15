@@ -17,6 +17,7 @@ import {
   publishObservedRunProjection,
   releaseSettledDetachedLifecycleStreams,
   rememberDetachedLifecycleStream,
+  rememberOwnGenerationStream,
   subscribeChatReadReconciliations,
   subscribeDetachedLifecycleStreams,
   subscribeChatSettlements,
@@ -786,6 +787,64 @@ test("a run this document started is never mirrored over its own detached projec
   assert.equal(projection?.content, "Mine");
   assert.equal(projection?.observed, undefined);
   assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);
+});
+
+test("a run this document started is not mirrored back after its own terminal settles", async () => {
+  // Revisit a running chat, then Stop: the watcher started on revisit still
+  // follows the journal and reports the run's end after the terminal cleared
+  // its detached marker. The run is still this window's own.
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    () => undefined,
+  );
+  const own = detached("own-stopped-run", "chat-own-stopped", "workspace-1");
+  try {
+    rememberDetachedLifecycleStream(own, { content: "Partial", reasoning: "", timeline: null, artifacts: [], subagents: [] });
+    for (const handler of listeners.get("chat:done") ?? []) {
+      handler({ streamId: own.streamId, chat: chat(own.chatId, "Partial") });
+    }
+    assert.equal(isDetachedLifecycleChatDraining(own.chatId, own.workspaceId), false);
+
+    assert.equal(
+      publishObservedRunProjection(own, {
+        text: "Partial",
+        reasoning: "",
+        timeline: null,
+        textStreaming: false,
+        finished: true,
+      }),
+      false,
+    );
+    assert.equal(detachedLifecycleChatProjection(own.chatId, own.workspaceId), null);
+    assert.equal(isDetachedLifecycleChatDraining(own.chatId, own.workspaceId), false);
+
+    // A run another device started in the same chat is still mirrored.
+    const phone = detached("phone-run-after-stop", own.chatId, own.workspaceId);
+    assert.equal(
+      publishObservedRunProjection(phone, { text: "Hi", reasoning: "", timeline: null, textStreaming: true }),
+      true,
+    );
+    assert.equal(detachedLifecycleChatProjection(own.chatId, own.workspaceId)?.streamId, phone.streamId);
+    assert.equal(clearObservedRunProjection(own.chatId, own.workspaceId, phone.streamId), true);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test("a run this document started without detaching is never mirrored", () => {
+  const own = detached("own-attached-run", "chat-own-attached", "workspace-1");
+  rememberOwnGenerationStream(own.streamId);
+  assert.equal(
+    publishObservedRunProjection(own, { text: "Done", reasoning: "", timeline: null, textStreaming: false, finished: true }),
+    false,
+  );
+  assert.equal(isDetachedLifecycleChatDraining(own.chatId, own.workspaceId), false);
 });
 
 test("a saved reply hides an own run, but a mirrored run only by its own reply", () => {

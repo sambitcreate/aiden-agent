@@ -349,3 +349,17 @@ test("the first status and feed replies describe the loaded hosts, not an empty 
     manager?.close();
   }
 });
+
+test("a durable request with no saved admission never reaches the host", async () => {
+  const { registry, manager, invoke } = await setup();
+  try {
+    const page = new FakeDocument("durable:main");
+    const before = registry.reads.length;
+    const result = await invoke("remote:peerCall", page, "host_a", {
+      operation: "send", resourceId: "chat_1", body: { text: "Unconfirmed" }, idempotencyKey: "request_123",
+    }, { savedIntent: true }) as { ok: boolean; error?: { code: string } };
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.code, "outcome_unknown");
+    assert.equal(registry.reads.length, before);
+  } finally { manager.close(); }
+});

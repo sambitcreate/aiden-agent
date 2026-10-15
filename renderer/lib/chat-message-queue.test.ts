@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  admitRunInputOnceStarted,
   ChatMessageQueue,
   chatMessageQueue,
   canSteerQueuedMessage,
@@ -516,4 +517,74 @@ test("messages a run cannot take as guidance are never offered to admission", as
   assert.equal(calls, 0);
   assert.equal(queue.getSnapshot().messages.length, unsteerable.length + 1);
   assert.equal(canSteerQueuedMessage(message("plain")), true);
+});
+
+test("guidance sent while this window's run is still starting waits for the run to take input", async () => {
+  // Main answers run_not_active until Pi begins the first turn, although Stop
+  // and the Steer pill are live as soon as the send starts.
+  const answers = [
+    { admitted: false, reason: "run_not_active" as const, committed: false },
+    { admitted: false, reason: "run_not_active" as const, committed: false },
+    { admitted: true, queue: "steer" as const, committed: true, messageId: "m1" },
+  ];
+  const waits: number[] = [];
+  const receipt = await admitRunInputOnceStarted({
+    admit: async () => answers.shift()!,
+    live: () => true,
+    delay: async (ms) => {
+      waits.push(ms);
+    },
+  });
+  assert.deepEqual(receipt, { admitted: true, queue: "steer", committed: true, messageId: "m1" });
+  assert.equal(waits.length, 2);
+  assert.equal(answers.length, 0);
+});
+
+test("guidance for a run that ended, was stopped or never starts still reports it ended", async () => {
+  const notActive = { admitted: false, reason: "run_not_active" as const, committed: false };
+  let attempts = 0;
+  // The window's run settled: no retry.
+  assert.deepEqual(
+    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => false, delay: async () => {} }),
+    notActive,
+  );
+  assert.equal(attempts, 1);
+
+  // The run ends (or Stop is pressed) while waiting.
+  attempts = 0;
+  let live = true;
+  assert.deepEqual(
+    await admitRunInputOnceStarted({
+      admit: async () => (attempts++, notActive),
+      live: () => live,
+      delay: async () => {
+        live = false;
+      },
+    }),
+    notActive,
+  );
+  assert.equal(attempts, 1);
+
+  // Waiting is bounded.
+  attempts = 0;
+  assert.deepEqual(
+    await admitRunInputOnceStarted({ admit: async () => (attempts++, notActive), live: () => true, delay: async () => {}, retryMs: [1, 1, 1] }),
+    notActive,
+  );
+  assert.equal(attempts, 4);
+});
+
+test("only a run that has not started yet is waited for", async () => {
+  for (const receipt of [
+    { admitted: false, reason: "capacity" as const, committed: false },
+    { admitted: false, reason: "cancelled" as const, committed: false },
+    { admitted: false, reason: "run_not_active" as const, committed: true, messageId: "m" },
+  ]) {
+    let attempts = 0;
+    assert.deepEqual(
+      await admitRunInputOnceStarted({ admit: async () => (attempts++, receipt), live: () => true, delay: async () => {} }),
+      receipt,
+    );
+    assert.equal(attempts, 1);
+  }
 });

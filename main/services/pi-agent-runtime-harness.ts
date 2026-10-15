@@ -162,6 +162,8 @@ export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolEx
     projection: NextContextUsageProjection,
     options: GenerationContextOptions,
   ) => void;
+  /** Prompt parts the host recorded while assembling the prompt, for the context breakdown. */
+  contextPromptSections?: GenerationContextOptions["promptSections"];
 }
 
 function compactionHostFault(
@@ -325,6 +327,15 @@ class PiManagedCancellationError extends Error {
   }
 }
 
+/**
+ * True when `onJournalError` reports that Stop interrupted a journal write
+ * rather than that the write failed. The write may still land, so the host
+ * must still treat the journal as unhealthy and recover the visible turn.
+ */
+export function isPiManagedCancellationError(error: unknown): boolean {
+  return error instanceof PiManagedCancellationError;
+}
+
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -451,6 +462,11 @@ function composeTools(
   return tools;
 }
 
+/** The skills listing extensions contribute to the composed system prompt. */
+export function extensionSkillsPrompt(extensions: readonly PiAgentRuntimeExtension[]): string {
+  return formatSkillsForSystemPrompt(extensions.flatMap((extension) => extension.resources?.skills ?? []));
+}
+
 function composeSystemPrompt(
   basePrompt: string,
   extensions: readonly PiAgentRuntimeExtension[],
@@ -458,8 +474,7 @@ function composeSystemPrompt(
   const contributions = extensions
     .map((extension) => extension.systemPrompt?.trim())
     .filter((value): value is string => Boolean(value));
-  const extensionSkills = extensions.flatMap((extension) => extension.resources?.skills ?? []);
-  const skillsPrompt = formatSkillsForSystemPrompt(extensionSkills);
+  const skillsPrompt = extensionSkillsPrompt(extensions);
   const volatileContributions = extensions
     .map((extension) => extension.volatileSystemPrompt?.trim())
     .filter((value): value is string => Boolean(value));
@@ -892,6 +907,7 @@ export class PiAgentRuntimeHarness {
       resources: requestedResources = {},
       identity,
       onContextProjection,
+      contextPromptSections,
       ...agentOptions
     } = options;
     this.onContextProjection = onContextProjection;
@@ -948,6 +964,8 @@ export class PiAgentRuntimeHarness {
         providerId: initialState.model.provider,
         modelId: initialState.model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(initialState.model),
+        ...(contextPromptSections ? { promptSections: contextPromptSections } : {}),
+        ...(this.deferredTools.length ? { deferredTools: this.deferredTools } : {}),
       };
     }
     const reportExtensionFault = (

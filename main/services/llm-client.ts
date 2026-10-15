@@ -116,7 +116,7 @@ import {
 import { mcpAgentToolIdentity, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { createShareImageTool, SHARE_IMAGE_TOOL_NAME } from "./share-image-tool.js";
 import { type SkillRegistrySnapshot } from "./skill-registry.js";
-import { buildSystemPrompt } from "./chat-system-prompt.js";
+import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   assistantTurnTextSeparator,
@@ -203,7 +203,11 @@ import {
   summarizeEditAutomationToolCall,
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
-import { ToolApprovalCoordinator, type ToolApprovalDecisionPayload } from "./tool-approval.js";
+import {
+  ToolApprovalCoordinator,
+  toolApprovalBlockReason,
+  type ToolApprovalDecisionPayload,
+} from "./tool-approval.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import {
   SCOPED_APPROVAL_OFFER,
@@ -278,13 +282,10 @@ import {
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
 import {
-  assertScheduledProviderFingerprint,
+  assertScheduledGenerationProvider,
   scheduledProviderFingerprint,
 } from "./schedule-provider-binding.js";
-import {
-  advanceAttendedToolErrorState,
-  recoverAttendedToolErrorContext,
-} from "./assistant/tool-loop-guard.js";
+import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
@@ -361,12 +362,15 @@ import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discove
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import {
   PiAgentRuntimeHarness,
+  isPiManagedCancellationError,
   piAgentRuntimeExtensions,
+  extensionSkillsPrompt,
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
 } from "./pi-agent-runtime-harness.js";
 import {
+  MEMORY_EXTENSION_ID,
   createMemoryExtension,
   authorizeMemoryProposal,
   authorizeMemoryRemoval,
@@ -1072,9 +1076,7 @@ async function prepareGeneration(
     runtime.provider.modelMetadata?.[model.id]?.overrides,
     runtimeSupportsImages(model) ? chat.messages : chat.messages.slice(-1),
   );
-  if (assistantAutomationMode || params.mode === "assistant-unattended") {
-    assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
-  }
+  assertScheduledGenerationProvider(params.mode, runtime.provider, options.providerFingerprint);
   const assistantModelSelection = {
     providerId: runtime.provider.id,
     providerName: runtime.provider.label,
@@ -2426,7 +2428,6 @@ export const llmClient = {
     }
 
     const deniedToolCalls = new Set<string>();
-    let consecutiveAttendedToolErrorTurns = 0;
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
       sendGeneration(streamId, "chat:timeline", {
         streamId,
@@ -2686,6 +2687,7 @@ export const llmClient = {
     let currentPromptMessage: AgentMessage | undefined;
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
+    let piJournalStopNoted = false;
     let piJournalless = false;
     let piUpgradeCompactionEnabled = false;
     let memoryApprovalContext: { scope: MemoryScope; provenance: MemoryProvenance } | undefined;
@@ -2942,6 +2944,7 @@ export const llmClient = {
               truncated: false,
             };
       const telegramInteractive = options.interactionSurface === "telegram";
+      let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
         generationProfile.kind === "design"
           ? (designWiring?.baseSystemPrompt ?? "")
@@ -2969,7 +2972,7 @@ export const llmClient = {
               : withUnattendedAssistantContract(
                   await buildSystemPrompt(folderPath, git.branch, permission, false, false),
                 )
-            : await buildSystemPrompt(
+            : await buildSystemPromptWithSections(
                 folderPath,
                 git.branch,
                 permission,
@@ -2977,7 +2980,10 @@ export const llmClient = {
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
-              );
+              ).then(({ systemPrompt, sections }) => {
+                hostPromptSkills = sections.skills;
+                return systemPrompt;
+              });
       const botSystemPrompt = authoritativeBot
         ? preparedBotContext
           ? withBotRuntimeInstructions(
@@ -3000,6 +3006,14 @@ export const llmClient = {
       const modelContributions = applyCustomModelToolPolicy(
         resolvedContributions, runtime.provider.modelMetadata?.[model.id]?.overrides,
       );
+      // What each prompt part adds, for the context meter's per-category breakdown.
+      const contextPromptSections = {
+        skills: (hostPromptSkills ?? "") + extensionSkillsPrompt(resolvedContributions.extensions),
+        memory: resolvedContributions.extensions
+          .find((extension) => extension.id === MEMORY_EXTENSION_ID)
+          ?.volatileSystemPrompt?.trim() ?? "",
+        "bot-instructions": botSystemPrompt.slice(baseSystemPrompt.length),
+      };
       // Freeze only the already-admitted MCP inventory. The provider sees the
       // discovery/script tools; nested calls still use the ordinary host gates.
       const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
@@ -3029,6 +3043,8 @@ export const llmClient = {
         providerId: model.provider,
         modelId: model.id,
         retainsSystemUpdates: modelRetainsSystemUpdates(model),
+        promptSections: contextPromptSections,
+        deferredTools,
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -3238,6 +3254,7 @@ export const llmClient = {
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
         deferredTools,
+        contextPromptSections,
         // Servers that finished discovery after the turn started stay behind
         // codemode / tool_search too, under the same exclusions.
         ...(runtimeTools.some((tool) => tool.name === "codemode")
@@ -3344,7 +3361,19 @@ export const llmClient = {
               }
             : {}),
           onJournalError: (error) => {
+            // A Stop-interrupted write may still land, so the turn is recovered
+            // from the visible chat either way. Only a real failure is an error.
             piJournalHealthy = false;
+            if (isPiManagedCancellationError(error)) {
+              if (!piJournalStopNoted) {
+                piJournalStopNoted = true;
+                logger.info(
+                  "pi",
+                  `Stop interrupted Pi session writes for stream ${streamId}; the visible turn will be recovered.`,
+                );
+              }
+              return;
+            }
             logger.error(
               "pi",
               `Could not append Pi session messages for stream ${streamId}.`,
@@ -3359,35 +3388,25 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        prepareNextTurnWithContext: async ({ toolResults, context }, requestSignal) => {
-          let nextContext = await prepareCustomModelToolContext(
-            context,
-            browserDiscovery?.prepare.bind(browserDiscovery),
-            runtime.provider.modelMetadata?.[model.id]?.overrides,
-          );
-          if (agentsInstructions) nextContext = await agentsInstructions.apply(nextContext, requestSignal);
-          nextContext = mcpServersSection.apply(nextContext);
-          let changed = nextContext !== context;
-          if (changed) {
-            updateGenerationContextOptions(generationContextOptions, nextContext);
-          }
-          if (attendedAssistant) {
-            const state = advanceAttendedToolErrorState(
-              consecutiveAttendedToolErrorTurns,
-              toolResults,
+        prepareNextTurnWithContext: createPiTurnContextPreparation({
+          generationOptions: generationContextOptions,
+          attended: attendedAssistant,
+          prepareContext: async (context, requestSignal) => {
+            let prepared = await prepareCustomModelToolContext(
+              context,
+              browserDiscovery?.prepare.bind(browserDiscovery),
+              runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
-            consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
-            if (state.shouldStop) {
-              logger.warn(
-                "pi",
-                `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
-              );
-              nextContext = recoverAttendedToolErrorContext(nextContext);
-              changed = true;
-            }
-          }
-          return changed ? { context: nextContext } : undefined;
-        },
+            if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
+            return mcpServersSection.apply(prepared);
+          },
+          onRecovery: () => {
+            logger.warn(
+              "pi",
+              `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+            );
+          },
+        }),
         // Computer Use asks once per chat. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
           timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
@@ -3824,16 +3843,7 @@ export const llmClient = {
             ? undefined
             : {
                 block: true,
-                reason:
-                  attendedScheduleApproval && approvalOutcome === "denied"
-                    ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
-                    : approvalOutcome === "denied"
-                      ? "The user denied this action."
-                      : approvalOutcome === "detached"
-                        ? "Approval is unavailable while this response continues in the background. Return to the chat and retry the action."
-                        : approvalOutcome === "unavailable"
-                          ? "Aiden could not present the approval request. Return to the chat and retry the action."
-                          : "The action was cancelled before approval.",
+                reason: toolApprovalBlockReason(approvalOutcome, attendedScheduleApproval),
               };
         },
       });

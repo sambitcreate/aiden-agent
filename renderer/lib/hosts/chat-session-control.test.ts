@@ -193,7 +193,7 @@ test("dismissing an unresolved send forgets it without contacting the host", asy
   const { host, control } = session();
   host.loseNextAck = true;
   await assert.rejects(control.send("Maybe"), { code: "outcome_unknown" });
-  assert.equal(control.dismissUnresolved()?.text, "Maybe");
+  assert.equal((await control.dismissUnresolved())?.text, "Maybe");
   assert.equal(control.getSnapshot().unresolved, null);
   assert.equal(host.calls.length, 1);
 
@@ -364,7 +364,7 @@ test("dismissing a send that never arrived frees its uploads, so the next attach
   await assert.rejects(control.send("First", { attachments: [notes] }), { code: "outcome_unknown" });
   assert.equal(host.staged.size, 1, "the host still holds the upload the lost turn never used");
 
-  control.dismissUnresolved();
+  await control.dismissUnresolved();
   await control.send("Second", { attachments: [notes] });
   assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Second"]);
   assert.equal(host.staged.size, 0);
@@ -392,4 +392,99 @@ test("attachments and skills are refused when the host does not grant them, befo
     { code: "unsupported" },
   );
   assert.deepEqual(host.calls, []);
+});
+
+test("an acknowledged host turn with a lost response cannot be replayed after retention expires", async () => {
+  const host = new FakeHost();
+  let now = Date.parse("2026-10-06T12:00:00Z");
+  const ledger = new ChatIntentLedger(undefined, () => now);
+  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId: "chat-expired" }, ledger);
+  control.attach();
+  host.loseNextAck = true;
+  await assert.rejects(control.send("Run the deployment"), { code: "outcome_unknown" });
+  now += 25 * 60 * 60 * 1_000;
+  host.turns.clear(); // The host has forgotten its settled idempotency entry.
+  const calls = host.calls.length;
+  await assert.rejects(control.retryUnresolved(), { code: "retry_expired" });
+  assert.equal(host.calls.length, calls, "an expired retry must not reach the host");
+  assert.equal(control.getSnapshot().unresolved?.retryAllowed, false);
+  await assert.rejects(control.send("Run the deployment"), { code: "unresolved" });
+});
+
+test("saved ambiguous sends restore after renderer loss with exact attachment, skill and key identity", async () => {
+  const { PeerIntentStore } = await import("../../../main/services/peer-intent-store");
+  let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
+  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => { disk = structuredClone(rows); } }, async () => "paired-device-1");
+  const persistence = { list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) };
+  const host = new FakeHost();
+  const ref = { hostId: host.hostId, chatId: "chat-restored" };
+  const first = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
+  const detach = first.attach();
+  host.loseNextAck = true;
+  await assert.rejects(first.send("Inspect the attached notes", { attachments: [{ kind: "text", name: "notes.txt", mimeType: "text/plain", text: "Release notes" }] }), { code: "outcome_unknown" });
+  assert.equal(disk.length, 1);
+  const originalKey = disk[0]!.intent.idempotencyKey;
+  detach();
+  const restored = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
+  restored.attach();
+  await restored.restore();
+  assert.equal(restored.getSnapshot().unresolved?.idempotencyKey, originalKey);
+  assert.equal(restored.getSnapshot().unresolved?.text, "Inspect the attached notes");
+  await restored.retryUnresolved();
+  assert.equal(host.turns.size, 1, "restoring must not turn a retry into a second host turn");
+  assert.equal(host.turns.get(originalKey)?.attachmentIds?.length, 1);
+  assert.equal(disk.length, 0, "successful reconciliation clears durable uncertainty");
+});
+
+test("durable admission fails closed before sending and pairing replacement invalidates old retries", async () => {
+  const { PeerIntentStore } = await import("../../../main/services/peer-intent-store");
+  let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
+  let identity = "first-device";
+  let failSave = true;
+  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => {
+    if (failSave) throw new Error("disk full"); disk = structuredClone(rows);
+  } }, async () => identity);
+  const host = new FakeHost();
+  const ref = { hostId: host.hostId, chatId: "chat-pairing" };
+  const control = new ChatSessionControl(host, ref, new ChatIntentLedger({ list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) }));
+  control.attach();
+  await assert.rejects(control.send("Do work"), /disk full/);
+  assert.equal(host.calls.length, 0);
+  failSave = false;
+  host.loseNextAck = true;
+  await assert.rejects(control.send("Do work"), { code: "outcome_unknown" });
+  identity = "replacement-device";
+  const calls = host.calls.length;
+  await assert.rejects(control.retryUnresolved(), /pairing/);
+  assert.equal(host.calls.length, calls);
+  assert.ok(control.getSnapshot().unresolved, "keep the uncertainty visible until explicitly dismissed");
+});
+
+test("a second fork cannot replace an uncertain fork and restart retries the original key", async () => {
+  const { PeerIntentStore } = await import("../../../main/services/peer-intent-store");
+  let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
+  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => { disk = structuredClone(rows); } }, async () => "paired-device-1");
+  const persistence = { list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) };
+  const keys: string[] = [];
+  let lose = true;
+  const host = Object.assign(new FakeHost(), { fork: async (_chatId: string, input: import("./host-chat-adapter").HostChatForkInput) => {
+    keys.push(input.idempotencyKey);
+    if (lose) { lose = false; throw new HostChatControlError({ code: "outcome_unknown", message: "Lost response" }); }
+    return { id: "fork_1", title: "Fork", forkedFrom: { chatId: "chat_1", messageId: input.messageId, position: input.position, at: Date.now() } };
+  } });
+  host.granted.add("fork");
+  const ref = { hostId: host.hostId, chatId: "chat_1" };
+  const first = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
+  first.attach();
+  await assert.rejects(first.fork({ messageId: "message_a", position: "after" }, "rev1"), { code: "outcome_unknown" });
+  await assert.rejects(first.fork({ messageId: "message_b", position: "after" }, "rev1"), /earlier fork/);
+  assert.equal(keys.length, 1);
+  const restored = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
+  restored.attach();
+  await restored.restore();
+  assert.equal(restored.getSnapshot().unresolvedFork, true);
+  const fork = await restored.fork({ messageId: "message_a", position: "after" }, "rev1");
+  assert.equal(fork.id, "fork_1");
+  assert.equal(new Set(keys).size, 1, "a recreated renderer must use the original fork identity");
+  assert.equal(disk.length, 0);
 });

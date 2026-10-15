@@ -79,6 +79,9 @@ class AidenRemoteClient(
         )
     )
 
+    private data class ConditionalResponse(val etag: String, val bytes: ByteArray)
+    private val conditionalResponses = linkedMapOf<String, ConditionalResponse>()
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -210,6 +213,9 @@ class AidenRemoteClient(
             if (!response.isSuccessful) {
                 val error = parseError(response.code, responseBytes)
                 if (response.code == 400 && error.code == AidenRemoteErrorCode.INVALID_REQUEST) {
+                    if (deviceType == AidenDeviceType.ANDROID_PHONE || deviceType == AidenDeviceType.ANDROID_TABLET) {
+                        throw AidenPairingBootstrapException.AndroidPairingUnsupported
+                    }
                     // Retry with legacy four-field shape
                     val legacyRequestObj = PairingExchangeRequest(
                         secret = bootstrap.secret,
@@ -395,6 +401,8 @@ class AidenRemoteClient(
     ): T = try {
         withContext(Dispatchers.IO) {
         val url = if (path.startsWith("http")) path else "$endpoint$path"
+        val cacheable = method.uppercase() == "GET" && authenticated && acceptHeader.contains("json")
+        val cached = synchronized(conditionalResponses) { if (cacheable) conditionalResponses[url] else null }
         val requestBuilder = Request.Builder()
             .url(url)
             .addHeader("Aiden-Protocol-Version", "1")
@@ -418,6 +426,7 @@ class AidenRemoteClient(
             requestBuilder.addHeader(k, v)
         }
 
+        cached?.let { requestBuilder.header("If-None-Match", it.etag) }
         val requestBody = bodyJson?.toRequestBody("application/json".toMediaType())
         when (method.uppercase()) {
             "GET" -> requestBuilder.get()
@@ -448,9 +457,11 @@ class AidenRemoteClient(
             throw error
         }
 
-        val bytes = response.bytes
+        val unchanged = response.code == 304 && cached != null
+        val bytes = if (unchanged) cached.bytes else response.bytes
+        if (maximumResponseBytes != null && bytes.size > maximumResponseBytes) throw AidenRemoteContractException.PayloadTooLarge
 
-        if (!acceptedStatus.contains(response.code)) {
+        if (!unchanged && !acceptedStatus.contains(response.code)) {
             val errorBody = parseError(response.code, bytes)
             AidenDiagnostics.record(
                 if (response.code == 401 || response.code == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION,
@@ -468,7 +479,18 @@ class AidenRemoteClient(
                     AidenBotPrivateResponseValidator.validate(bytes, botScope)
                 }
             }
-            deserializer(bytes)
+            val decoded = deserializer(bytes)
+            if (cacheable && !unchanged) synchronized(conditionalResponses) {
+                conditionalResponses.remove(url)
+                val etag = response.etag
+                if (etag != null && etag.length <= 256 && bytes.size <= 1_048_576) {
+                    if (conditionalResponses.size >= 32 || conditionalResponses.values.sumOf { it.bytes.size } + bytes.size > 4_194_304) {
+                        conditionalResponses.clear()
+                    }
+                    conditionalResponses[url] = ConditionalResponse(etag, bytes)
+                }
+            }
+            decoded
         } catch (error: Exception) {
             AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
             throw error
@@ -1132,12 +1154,16 @@ class AidenRemoteClient(
     /** Standalone chat-scoped progress journal; it never mirrors parent turns. */
     fun progressEvents(
         chatId: String,
-        after: Int = 0
+        after: Int = 0,
+        epoch: String? = null,
+        onOpen: suspend (Boolean) -> Unit = {}
     ): Flow<AidenRemoteStreamEvent> = sseEvents(
         path = "/chats/$chatId/progress/events",
         expectedStreamId = chatId,
         after = after,
-        expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS
+        expectedChannel = AidenSSEParser.ExpectedChannel.CHAT_PROGRESS,
+        epoch = epoch,
+        onOpen = onOpen
     )
 
     // --- Contract revision 24: runs started on the Mac, in Telegram or by the scheduler ---
@@ -1253,12 +1279,14 @@ class AidenRemoteClient(
         path: String,
         expectedStreamId: String,
         after: Int,
-        expectedChannel: AidenSSEParser.ExpectedChannel
-    ): Flow<AidenRemoteStreamEvent> = rawSseEvents(path, after) { stream ->
+        expectedChannel: AidenSSEParser.ExpectedChannel,
+        epoch: String? = null,
+        onOpen: suspend (Boolean) -> Unit = {}
+    ): Flow<AidenRemoteStreamEvent> = rawSseEvents(path, after, epoch, onOpen) { stream ->
         AidenSSEParser.parseStream(
             stream,
             expectedStreamId = expectedStreamId,
-            startSequence = after,
+            startSequence = if (expectedChannel == AidenSSEParser.ExpectedChannel.CHAT_PROGRESS) 0 else after,
             expectedChannel = expectedChannel
         )
     }
@@ -1266,6 +1294,8 @@ class AidenRemoteClient(
     private fun <T> rawSseEvents(
         path: String,
         after: Int,
+        epoch: String? = null,
+        onOpen: suspend (Boolean) -> Unit = {},
         parse: (java.io.InputStream) -> Flow<T>
     ): Flow<T> = callbackFlow {
         if (credential.isNullOrEmpty()) {
@@ -1287,6 +1317,7 @@ class AidenRemoteClient(
             requestBuilder.addHeader("Last-Event-ID", after.toString())
         }
 
+        epoch?.let { requestBuilder.header("Aiden-Progress-Epoch", it) }
         val call = httpClient.newCall(requestBuilder.build())
         val readerJob = launch(Dispatchers.IO) {
             try {
@@ -1296,6 +1327,7 @@ class AidenRemoteClient(
                         val errorBody = parseError(response.code, bytes)
                         throw AidenRemoteClientException.Server(response.code, errorBody)
                     }
+                    onOpen(response.header("Aiden-Progress-Resumed") == "true")
                     val stream = response.body?.byteStream()
                         ?: throw AidenRemoteClientException.InvalidResponse()
                     parse(stream).collect { event -> send(event) }
@@ -1378,15 +1410,24 @@ class AidenRemoteClient(
         decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
     }
 
+    /**
+     * `PATCH /bots/{id}`. The patch's `chatActivity` goes out only when [supportsBotActivity]:
+     * an older Mac refuses the key, so a patch that changes nothing else is refused here with
+     * [AidenBotContractException.InvalidCombination] before anything is sent.
+     */
     suspend fun updateBotIdentity(
         id: String,
         revision: String,
-        patch: AidenBotIdentityPatch
+        patch: AidenBotIdentityPatch,
+        supportsBotActivity: Boolean = false
     ): AidenBotDetail = executeRequest(
         "/bots/$id",
         method = "PATCH",
         ifMatchRevision = revision,
-        bodyJson = botJson.encodeToString(AidenBotIdentityPatch.serializer(), patch),
+        bodyJson = botJson.encodeToString(
+            AidenBotIdentityPatch.serializer(),
+            patch.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
+        ),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
         val detail = decodeBotWire(AidenBotDetail.serializer(), String(bytes, Charsets.UTF_8))
@@ -1431,10 +1472,21 @@ class AidenRemoteClient(
         }
     }
 
-    /** Sends one turn. Control writes never auto-retry; a manual retry reuses [idempotencyKey]. */
-    suspend fun sendBotMessage(botId: String, text: String, idempotencyKey: UUID): AidenBotSessionSendResponse {
+    /**
+     * `POST /bots/{id}/messages`: sends one turn. Control writes never auto-retry; a manual retry
+     * reuses [idempotencyKey]. [whenBusy] goes out only when [supportsBotActivity] (the Mac
+     * announces `bot-activity-v1` and this phone holds `bot:activity`): an older Mac refuses the key.
+     */
+    suspend fun sendBotMessage(
+        botId: String,
+        text: String,
+        idempotencyKey: UUID,
+        whenBusy: AidenStreamInputMode? = null,
+        supportsBotActivity: Boolean = false
+    ): AidenBotSessionSendResponse {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
-        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), AidenBotSessionSendRequest(text))
+        val request = AidenBotSessionSendRequest(text, whenBusy.takeIf { supportsBotActivity })
+        val body = botJson.encodeToString(AidenBotSessionSendRequest.serializer(), request)
         return executeRequest(
             "/bots/$botId/messages",
             method = "POST",
@@ -2595,7 +2647,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
-private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray)
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?)
 
 /** Keep cancellation connected to the socket until the body is consumed and closed. */
 @OptIn(DelicateCoroutinesApi::class)
@@ -2617,7 +2669,7 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
                             } else {
                                 it.body?.bytes() ?: ByteArray(0)
                             }
-                            BufferedHttpResponse(it.code, bytes)
+                            BufferedHttpResponse(it.code, bytes, it.header("ETag"))
                         }
                     } catch (error: Exception) {
                         continuation.resumeWithException(error)

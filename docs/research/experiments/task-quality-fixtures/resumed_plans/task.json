@@ -1,0 +1,59 @@
+{
+  "id": "resumed_plans",
+  "api_contract": "clean_label(value) returns trimmed string labels; None remains None; blank strings raise ValueError; preserve internal whitespace and Unicode.",
+  "latest_user_request": "Resume the existing branch checkpoint plan and finish its remaining work. Keep existing task IDs and subjects; do not add, replace, or delete checkpoints.",
+  "earlier_messages": [
+    {
+      "role": "user",
+      "content": "Checkpoint 3 is already done: preserve None for legacy callers. Remaining work is outer whitespace trimming and rejecting blank labels without changing internal whitespace or Unicode."
+    }
+  ],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_new_plan": {
+      "expected": "fail",
+      "required_failure": "stable_plan_ids"
+    },
+    "wrong_claimed_done": {
+      "expected": "fail",
+      "required_failure": "trim_outer"
+    }
+  },
+  "oracle_establishes": [
+    "Implementation behavior and final-state task ID/subject continuity with a completed synthetic receipt."
+  ],
+  "oracle_does_not_establish": [
+    "The offline receipt is synthetic: it does not prove SDK durability, actual tool calls or that the model used todo list. Future receipt must come from host replay, never a model-authored JSON file.",
+    "A final receipt cannot exclude transient deletion/replacement restored before completion. Future admission requires checking every host-observed plan mutation against the no-add/replace/delete instruction."
+  ],
+  "durable_todo_state": {
+    "tasks": [
+      {
+        "id": 3,
+        "subject": "Preserve legacy None",
+        "status": "completed"
+      },
+      {
+        "id": 8,
+        "subject": "Trim outer whitespace",
+        "status": "pending"
+      },
+      {
+        "id": 12,
+        "subject": "Reject blank labels",
+        "status": "pending"
+      }
+    ],
+    "nextId": 13
+  },
+  "resume_summary": "Label cleanup remains unfinished. Continue the existing branch work.",
+  "fixture_delivery": "Host seeds the exact durable todo snapshot, while compacted prose omits task details. Host extracts final branch state via strict replay after completion; only that out-of-band receipt feeds the plan oracle."
+}

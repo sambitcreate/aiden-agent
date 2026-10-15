@@ -276,6 +276,10 @@ struct AidenBotsHomeView: View {
     @State private var presets: [AidenBotPreset] = []
     @State private var presetAttempt: (presetID: String, key: UUID)?
     @State private var isStartingPreset = false
+    /// Bot creation outlives New Bot (R15): the row shows at once, a failure offers Try Again.
+    @State private var createFlow = AidenBotCreateFlow()
+    /// The failed create New Bot reopens with after Try Again.
+    @State private var createPrefill: AidenBotCreateFlow.Failure?
     @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
@@ -342,10 +346,30 @@ struct AidenBotsHomeView: View {
         )
     }
 
+    /// The pairing in use, as a create flow keys what it keeps.
+    private var activePairing: (instanceId: String, deviceId: String)? {
+        coordinator.installationStore.activeInstallation.map { ($0.id, $0.deviceId) }
+    }
+
+    /// The Bot on its way, when it is on its way to the Mac in use.
+    private var activePendingCreate: AidenBotCreateFlow.Pending? {
+        guard let pending = createFlow.pending, let pairing = activePairing,
+              pending.instanceId == pairing.instanceId, pending.deviceId == pairing.deviceId else { return nil }
+        return pending
+    }
+
+    /// The failed create of the Mac in use; another Mac's waits for that Mac. It shows once no
+    /// other Bot is on its way, since one Bot is made at a time.
+    private var activeCreateFailure: AidenBotCreateFlow.Failure? {
+        guard createFlow.pending == nil else { return nil }
+        return activePairing.flatMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+    }
+
+    /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.
     private var canCreateBot: Bool {
         availability.canWrite
-            && coordinator.connectionState == .connected
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
+            && createFlow.pending == nil
     }
 
     var body: some View {
@@ -376,14 +400,18 @@ struct AidenBotsHomeView: View {
                 homeScroll
             }
         }
-        .sheet(item: $presentedSheet) { sheet in
+        .sheet(item: $presentedSheet, onDismiss: {
+            // Try Again reopened New Bot and it closed without Create: that Bot is let go.
+            if let reopened = createPrefill {
+                createPrefill = nil
+                createFlow.discard(reopened)
+            }
+        }) { sheet in
             switch sheet {
             case .create:
-                AidenBotCreateView(coordinator: coordinator) { created in
-                    Task {
-                        await load()
-                        openChat(for: AidenBotSummary(detail: created))
-                    }
+                AidenBotCreateView(coordinator: coordinator, initial: createPrefill?.input) { input in
+                    // Reopened by Try Again: it goes only to the Mac it was for.
+                    startCreate(input, retrying: createPrefill)
                 }
             case let .profile(bot):
                 AidenBotProfileView(
@@ -417,6 +445,40 @@ struct AidenBotsHomeView: View {
             if let bot = pendingDelete { Task { await delete(bot) } }
         }
         .alert(
+            AidenBotCreateCopy.failedTitle,
+            isPresented: Binding(
+                get: { activeCreateFailure != nil },
+                // Both buttons settle the failure themselves; a switch of Mac only hides it.
+                set: { _ in }
+            ),
+            presenting: activeCreateFailure
+        ) { failure in
+            Button("Try Again") {
+                guard let pairing = activePairing else { return }
+                switch createFlow.retry(
+                    failure,
+                    instanceId: pairing.instanceId,
+                    deviceId: pairing.deviceId,
+                    bots: listedBots(for: failure)
+                ) {
+                case let .send(input):
+                    // An earlier launch's create: the same request, on the same key.
+                    startCreate(input, retrying: failure)
+                case let .reopen(reopened):
+                    createPrefill = reopened
+                    presentedSheet = .create
+                case .settled, .none:
+                    break
+                }
+            }
+            Button("OK", role: .cancel) {
+                createPrefill = nil
+                createFlow.discard(failure)
+            }
+        } message: { failure in
+            Text(failure.message)
+        }
+        .alert(
             "Couldn’t Delete",
             isPresented: Binding(
                 get: { deleteError != nil },
@@ -428,6 +490,13 @@ struct AidenBotsHomeView: View {
             Text(deleteError ?? "Please try again.")
         }
         .task(id: loadID) {
+            // A New Bot an earlier launch left on its way comes back with Try Again, on its own Mac only.
+            if loadID.isBotSurfaceActive, let context = try? coordinator.requestContext() {
+                let coordinator = coordinator
+                await createFlow.restore(instanceId: context.instanceId, deviceId: context.deviceId) {
+                    coordinator.isCurrent(context)
+                }
+            }
             await load()
         }
         .task(id: searchID) {
@@ -477,6 +546,7 @@ struct AidenBotsHomeView: View {
             }
             .disabled(allRows.isEmpty && !isSearching)
             headerButton(systemImage: "plus", label: "New Bot") {
+                createPrefill = nil
                 presentedSheet = .create
             }
             .disabled(!canCreateBot)
@@ -527,16 +597,24 @@ struct AidenBotsHomeView: View {
 
     @ViewBuilder
     private var content: some View {
+        if let pending = activePendingCreate {
+            AidenBotPendingCreateRow(pending: pending)
+        }
         switch contentState {
         case .loading:
             AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
+        case .empty where activePendingCreate != nil:
+            EmptyView()
         case .empty where coordinator.connectionState == .connected && !presets.isEmpty:
             AidenBotMeetFirstBotView(
                 presets: presets,
                 isBusy: isStartingPreset,
                 canCreate: canCreateBot,
                 onStartChat: { preset in Task { await startChat(with: preset) } },
-                onCreateOwn: { presentedSheet = .create }
+                onCreateOwn: {
+                    createPrefill = nil
+                    presentedSheet = .create
+                }
             )
         case .empty:
             ContentUnavailableView {
@@ -551,8 +629,11 @@ struct AidenBotsHomeView: View {
                         : "Connect to your Mac to see your Bots."
                 )
             } actions: {
-                if coordinator.connectionState == .connected {
-                    Button("New Bot") { presentedSheet = .create }
+                if canCreateBot {
+                    Button("New Bot") {
+                        createPrefill = nil
+                        presentedSheet = .create
+                    }
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
                         .tint(palette.accent)
@@ -585,18 +666,9 @@ struct AidenBotsHomeView: View {
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,
-                size: 52
+                size: 52,
+                working: row.isWorking
             )
-            .overlay(alignment: .bottomTrailing) {
-                if row.isWorking {
-                    Circle()
-                        .fill(palette.success)
-                        .frame(width: 14, height: 14)
-                        .padding(2)
-                        .background(palette.canvas, in: Circle())
-                        .accessibilityHidden(true)
-                }
-            }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(row.bot.name)
@@ -670,6 +742,40 @@ struct AidenBotsHomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
+    }
+
+    /// The Bots the list shows for the failure's own pairing, to find one a lost create made.
+    private func listedBots(for failure: AidenBotCreateFlow.Failure) -> [AidenBotSummary] {
+        snapshotScope == AidenBotsHomeScope(instanceID: failure.instanceId, deviceID: failure.deviceId) ? allBots : []
+    }
+
+    /// Makes the Bot New Bot asked for, after the sheet closed (R15). `retrying` is the failure
+    /// a Try Again came from: the flow sends it only to that failure's own Mac.
+    @MainActor
+    private func startCreate(_ input: AidenBotCreateInput, retrying: AidenBotCreateFlow.Failure? = nil) {
+        guard let context = try? coordinator.requestContext() else { return }
+        createPrefill = nil
+        let coordinator = coordinator
+        let operations = AidenBotCreateOperations(
+            instanceId: context.instanceId,
+            deviceId: context.deviceId,
+            usesDurableSession: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator),
+            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
+            catalog: { try await coordinator.remoteClient(for: context).botCapabilityCatalog() },
+            create: { request, key in try await coordinator.remoteClient(for: context).createBot(request, idempotencyKey: key) },
+            createChat: { botID, request, key in
+                _ = try await coordinator.remoteClient(for: context).createBotChat(botId: botID, request: request, idempotencyKey: key)
+            },
+            readBot: { botID in try await coordinator.remoteClient(for: context).bot(id: botID) },
+            isCurrent: { coordinator.isCurrent(context) },
+            handleRevocation: { error in await coordinator.handleCredentialRevocation(error, context: context) }
+        )
+        Task {
+            await createFlow.submit(input, operations: operations, retrying: retrying) { created in
+                await load()
+                openChat(for: AidenBotSummary(detail: created))
+            }
+        }
     }
 
     /// Opens the Bot's one chat, starting it the first time if needed.

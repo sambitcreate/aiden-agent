@@ -87,7 +87,7 @@ test("disabled peers make no requests; views contain no trust or credential data
   const [view] = await store.list();
   assert.deepEqual(
     Object.keys(view!).sort(),
-    ["id", "name", "enabled", "state", "features", "capabilities"].sort(),
+    ["id", "name", "enabled", "state", "features", "capabilities", "routes", "hasSuppressedRoutes"].sort(),
   );
 });
 
@@ -556,4 +556,152 @@ test("streams have their own budget so live runs cannot starve unary operations"
   for (const release of held.splice(0)) release();
   assert.deepEqual(await Promise.all(streams), Array(17).fill({ reason: "eof" }));
   assert.deepEqual(await Promise.all(unary), Array(8).fill({ ok: true }));
+});
+
+test("authenticated routes bootstrap LAN trust, fail over, suppress removal and restore preference", async () => {
+  const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
+  const { peerRoute } = await import("./peer-routes.js");
+  const fixture = await startPeerTestHost({ lanHostname: "route-fixture.local" });
+  const lan = { endpoint: fixture.lanEndpoint, serverSpkiSha256: fixture.serverSpkiSha256(), caCertificateDerBase64: fixture.caDerBase64, addresses: ["192.168.1.50"] };
+  const tailnet = { endpoint: "https://route-fixture.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  let now = 100_000;
+  let stored: StoredPeerHost[] = [{ ...saved(), ...tailnet }];
+  let failedLan: "unavailable" | "identity_changed" | "authentication_required" | undefined;
+  let advertised = [lan, tailnet];
+  const traffic: { endpoint: string; path: string; credential?: string }[] = [];
+  const store = new PeerHostRegistry({
+    storage: { load: async () => structuredClone(stored), save: async (next) => { stored = structuredClone(next); } },
+    localInstanceId: async () => "self", deviceName: "Desktop", clientVersion: "1", platform: "mac", now: () => now,
+    client: (routeTrust) => ({
+      json: async (request) => {
+        traffic.push({ endpoint: routeTrust.endpoint, path: request.path, credential: request.credential });
+        if (routeTrust.endpoint === lan.endpoint) {
+          assert.equal(routeTrust.caCertificateDerBase64, fixture.caDerBase64, "LAN must carry the CA delivered by the authenticated host");
+          if (failedLan) throw new PeerTransportError(failedLan);
+        }
+        if (request.path === "/server") return { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: advertised };
+        return { reached: routeTrust.endpoint };
+      }, events: async () => {},
+    }),
+  });
+  try {
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
+    assert.equal(stored[0]!.routes?.find((route) => route.kind === "lan")?.caCertificateDerBase64, fixture.caDerBase64);
+    assert.equal(await store.preferReachableRoute("host_a"), false, "preference cooldown prevents flapping");
+    now += 30_000;
+    assert.equal(await store.preferReachableRoute("host_a"), true);
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
+    assert.deepEqual(await store.request("host_a", { path: "/chats" }), { reached: lan.endpoint });
+    failedLan = "unavailable";
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "dead active route bypasses preference cooldown");
+    failedLan = "identity_changed";
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "a bad learned route cannot block a trusted fallback");
+    failedLan = "authentication_required";
+    const before = traffic.length;
+    await assert.rejects(store.connect("host_a"), (error: unknown) => error instanceof PeerTransportError && error.code === "authentication_required");
+    assert.equal(traffic.slice(before).some((request) => request.endpoint === tailnet.endpoint), false, "revocation must stop all route attempts");
+    failedLan = undefined;
+    const routeId = peerRoute(lan, "learned").id;
+    await store.removeRoute("host_a", routeId);
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
+    assert.ok(stored[0]!.suppressedRoutes?.includes(routeId), "refresh cannot re-add a removed learned route");
+    assert.equal((await store.list())[0]!.routes?.some((route) => route.id === routeId), false);
+    await store.restoreRoutes("host_a");
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
+    advertised = [tailnet];
+    await store.connect("host_a");
+    assert.equal((await store.list())[0]!.routes?.length, 2, "an omitted optional observation cannot erase validated route trust");
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan", "the previously learned route remains usable after an incomplete advertisement");
+    await store.removeRoute("host_a", routeId);
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale", "explicit removal still suppresses the retained route");
+    assert.equal(JSON.stringify(await store.list()).includes("192.168.1.50"), false);
+    assert.equal(JSON.stringify(await store.list()).includes(fixture.caDerBase64), false);
+  } finally { store.close(); await fixture.close(); }
+});
+
+test("route parsing rejects public hints and enforces route-specific trust", async () => {
+  const { parsePeerRoutes } = await import("./peer-routes.js");
+  const route = { endpoint: "https://route.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  assert.deepEqual(parsePeerRoutes([route])[0]?.kind, "tailscale");
+  for (const candidate of [
+    { ...route, endpoint: "http://route.example.ts.net/api/aiden/v1" },
+    { ...route, endpoint: "https://8.8.8.8/api/aiden/v1" },
+    { ...route, endpoint: "https://route.local/api/aiden/v1" },
+    { ...route, addresses: ["8.8.8.8"] },
+    { ...route, endpoint: "https://attacker.example/api/aiden/v1" },
+  ]) assert.throws(() => parsePeerRoutes([candidate]));
+  const injected = parsePeerRoutes([{ ...route, credential: "not-a-route-field", enabled: false }])[0]!;
+  assert.equal("credential" in injected, false);
+  assert.equal("enabled" in injected, false);
+  assert.throws(() => parsePeerRoutes([route, route]));
+});
+
+test("saved retry admission rejects an earlier pairing before sending credentials", async () => {
+  let calls = 0;
+  const store = registry([saved()], { json: async () => { calls++; return {}; }, events: async () => {} });
+  try {
+    await assert.rejects(store.request("host_a", { method: "POST", path: "/chats/chat-1/turns", idempotencyKey: "saved-key-12345678", body: { message: "Once" } }, undefined, { credentialIdentity: "old-device" }), /earlier pairing/u);
+    assert.equal(calls, 0);
+    await store.request("host_a", { path: "/chats" }, undefined, { credentialIdentity: "device_a" });
+    assert.equal(calls, 1);
+  } finally { store.close(); }
+});
+
+test("LAN-paired peers learn system-trusted Tailscale and safely renew only that route's pin", async () => {
+  const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
+  const fixture = await startPeerTestHost({ lanHostname: "lan-first.local" });
+  const lan = { endpoint: fixture.lanEndpoint, serverSpkiSha256: fixture.serverSpkiSha256(), caCertificateDerBase64: fixture.caDerBase64 };
+  const tailnet = { endpoint: "https://lan-first.example.ts.net/api/aiden/v1", serverSpkiSha256: trust.serverSpkiSha256 };
+  const renewedPin = `sha256/${Buffer.alloc(32, 9).toString("base64")}`;
+  let stored = [{ ...saved(), ...lan }];
+  let lanOffline = false;
+  let renew = false;
+  const store = new PeerHostRegistry({
+    storage: { load: async () => structuredClone(stored), save: async (next) => { stored = structuredClone(next) as typeof stored; } },
+    localInstanceId: async () => "self", deviceName: "Desktop", clientVersion: "1", platform: "mac",
+    bootstrap: ({ endpoint, mode }) => {
+      assert.equal(endpoint, tailnet.endpoint);
+      assert.equal(mode, "webpki");
+      return { observedSpki: renewedPin, json: async () => ({ protocolVersion: 1, instanceId: "host_a" }) };
+    },
+    client: (routeTrust) => ({
+      json: async (request) => {
+        if (routeTrust.endpoint === lan.endpoint && lanOffline) throw new PeerTransportError("unavailable");
+        if (routeTrust.endpoint === tailnet.endpoint) {
+          assert.equal(routeTrust.caCertificateDerBase64, undefined, "the LAN CA must not contaminate system trust");
+          if (renew && routeTrust.serverSpkiSha256 !== renewedPin) throw new PeerTransportError("identity_changed");
+        }
+        return request.path === "/server"
+          ? { protocolVersion: 1, instanceId: "host_a", capabilities: ["chat:read"], features: ["peer-routes-v1"], peerRoutes: [lan, { ...tailnet, serverSpkiSha256: renew ? renewedPin : tailnet.serverSpkiSha256 }] }
+          : { endpoint: routeTrust.endpoint };
+      }, events: async () => {},
+    }),
+  });
+  try {
+    assert.equal((await store.connect("host_a")).activeRouteKind, "lan");
+    lanOffline = true;
+    renew = true;
+    assert.equal((await store.connect("host_a")).activeRouteKind, "tailscale");
+    assert.deepEqual(await store.request("host_a", { path: "/chats" }), { endpoint: tailnet.endpoint });
+    assert.equal((await store.relayTarget("host_a"))?.trust.serverSpkiSha256, renewedPin);
+    assert.equal(stored[0]!.caCertificateDerBase64, fixture.caDerBase64, "renewing the alternate must retain the paired LAN trust");
+    const { parseStoredPeerHosts } = await import("./peer-host-registry.js");
+    const restored = parseStoredPeerHosts(stored);
+    assert.equal(restored[0]!.routes?.find((route) => route.endpoint === tailnet.endpoint)?.serverSpkiSha256, renewedPin);
+  } finally { store.close(); await fixture.close(); }
+});
+
+test("route advertisements exclude loopback, virtual bridges, tunnels and public interfaces", async () => {
+  const { peerLanInterfaceAddresses } = await import("./peer-routes.js");
+  const entry = (address: string, internal = false, family = "IPv4") => ({ address, internal, family });
+  assert.deepEqual(peerLanInterfaceAddresses({
+    en0: [entry("192.168.1.7"), entry("fe80::123", false, "IPv6")],
+    eth0: [entry("10.1.0.2"), entry("192.168.1.7")],
+    lo0: [entry("127.0.0.1", true)],
+    bridge100: [entry("192.168.64.1")],
+    docker0: [entry("172.17.0.1")],
+    utun3: [entry("10.20.0.4")],
+    tailscale0: [entry("100.64.0.1")],
+    en1: [entry("203.0.113.4")],
+  }), ["192.168.1.7", "10.1.0.2"]);
 });

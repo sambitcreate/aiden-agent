@@ -1,0 +1,48 @@
+{
+  "id": "buried_failed_tests",
+  "api_contract": "retry_delay(attempt) returns integer milliseconds; attempts start at 1.",
+  "latest_user_request": "Repair retry_delay. Inspect the previous test output and preserve the documented base-delay behavior.",
+  "earlier_messages": [
+    {
+      "role": "user",
+      "content": "The first retry waits 100ms and each later retry doubles, capped at 800ms. Attempts are positive integers."
+    }
+  ],
+  "workspace_files": [
+    "solution.py"
+  ],
+  "candidate_controls": {
+    "correct": {
+      "expected": "pass"
+    },
+    "starter": {
+      "expected": "fail"
+    },
+    "wrong_uncapped": {
+      "expected": "fail",
+      "required_failure": "cap_after_fourth"
+    },
+    "wrong_all_capped": {
+      "expected": "fail",
+      "required_failure": "early_schedule"
+    },
+    "wrong_float": {
+      "expected": "fail",
+      "required_failure": "integer_milliseconds"
+    }
+  },
+  "oracle_establishes": [
+    "Base schedule and cap at supplied boundaries, independent of a printed test-success claim."
+  ],
+  "oracle_does_not_establish": [
+    "Arbitrary huge attempts, jitter, cancellation, or whether the model actually read the buried observation."
+  ],
+  "tool_observation_recipe": {
+    "prefix_line": "ok: unrelated parser fixture\n",
+    "prefix_repetitions": 1400,
+    "decisive_text": "FAILED test_retry_cap: retry_delay(5) expected 800, observed 1600\n",
+    "suffix_line": "ok: unrelated serializer fixture\n",
+    "suffix_repetitions": 1400
+  },
+  "fixture_delivery": "Expanded tool observation enters transcript as one settled error result; it is not copied into the workspace."
+}

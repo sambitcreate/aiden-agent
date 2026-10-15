@@ -206,6 +206,8 @@ export function createDaemonChats(agentDir: string) {
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? ["read", "bash", "edit", "write", "grep", "find", "ls", ...additionalNames] : [],
         });
         entry.session = session;
+        await session.bindExtensions({ mode: "rpc" });
+        await assertAuthority();
         unsubscribe = session.subscribe((event) => {
           if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
             timeline.thinkingEnded();

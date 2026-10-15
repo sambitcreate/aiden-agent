@@ -193,3 +193,28 @@ test("the Connections segments expose one selected tab and keyboard order wraps"
   assert.equal(connectionsSegmentForKey("Home", 1), 0);
   assert.equal(connectionsSegmentForKey("Enter", 0), null);
 });
+
+test("transport connection stays syncing until the host feed is live", () => {
+  const view = host({ routes: [{ id: "route_lan", kind: "lan", origin: "paired", active: true }], activeRouteKind: "lan" });
+  const status: PeerHostStatus = { hostId: view.id, generation: 1, state: { kind: "connected", since: NOW }, feed: "syncing", stale: true };
+  const render = (status: PeerHostStatus) => renderToStaticMarkup(<PeerHostRow host={view} status={status} now={NOW} busy={false} onEnabledChange={noop} onReconnect={noop} onRename={noop} onRepair={noop} onForget={noop} />);
+  assert.match(render(status), /Syncing chats/);
+  assert.match(render(status), /Local network/);
+  assert.doesNotMatch(render(status), />Ready</);
+  assert.match(render({ ...status, feed: "live", stale: false }), />Ready</);
+  assert.match(render({ ...status, feed: "unsupported" }), /Access unavailable/);
+});
+
+test("a failed initial paired-computer read offers retry instead of a false empty state", async () => {
+  const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+  const { PeerHostsSettings } = await import("./peer-hosts-settings");
+  const { hostQueryKeys } = await import("../../lib/hosts/host-query-keys");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
+  await client.fetchQuery({ queryKey: hostQueryKeys.list(), queryFn: async () => { throw new Error("Storage locked"); } }).catch(() => {});
+  const html = renderToStaticMarkup(<QueryClientProvider client={client}><PeerHostsSettings hostLabel="computer" /></QueryClientProvider>);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Couldn&#x27;t load paired computers/);
+  assert.ok(buttons(html).includes("Try again"));
+  assert.doesNotMatch(html, /No computers yet/);
+  client.clear();
+});

@@ -301,6 +301,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     capability: HostChatCapability,
     operation: PeerOperation,
     recover?: (error: PeerOperationError) => { value: unknown } | null,
+    savedIntent = false,
   ): Promise<unknown> {
     if (this.disposed) throw new HostChatControlError(FENCED_ERROR);
     if (!this.granted.has(capability))
@@ -310,7 +311,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     const generation = this.current.generation;
     let outcome: Awaited<ReturnType<PeerHostTransport["call"]>>;
     try {
-      outcome = await this.transport.call(this.hostId, operation);
+      outcome = await this.transport.call(this.hostId, operation, { savedIntent });
     } catch (error) {
       outcome = { ok: false, error: { code: "outcome_unknown", message: failure(error).message } };
     }
@@ -337,7 +338,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
           ...(input.skill ? { skill: input.skill } : {}),
         },
         idempotencyKey: input.idempotencyKey,
-      }),
+      }, undefined, input.savedIntent),
     );
     const turnId = text(value.turnId);
     const streamId = text(value.streamId);
@@ -351,6 +352,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
       { operation: "runCancel", resourceId: input.runId, body: {}, idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey() },
       // The run already finished and the host let it go: nothing is left to stop.
       (error) => (error.remoteCode === "run_gone" ? { value: { cancelRequested: false } } : null),
+      input.savedIntent,
     );
     return record(value).cancelRequested === true;
   }
@@ -371,6 +373,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         error.remoteCode === "approval_resolved"
           ? { value: { elsewhere: true, decision: error.details?.decision } }
           : null,
+      input.savedIntent,
     );
     const result = record(value);
     if (result.elsewhere === true) {
@@ -395,6 +398,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         error.remoteCode === "question_already_resolved"
           ? { value: { outcome: error.details?.outcome === "expired" ? "expired" : "elsewhere" } }
           : null,
+      input.savedIntent,
     );
     const outcome = record(value).outcome;
     return { status: outcome === "answered" || outcome === "expired" || outcome === "elsewhere" ? outcome : undefined };
@@ -407,7 +411,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         resourceId: input.runId,
         body: { mode: input.mode, text: input.text },
         idempotencyKey: input.idempotencyKey ?? mintPeerIdempotencyKey(),
-      }),
+      }, undefined, input.savedIntent),
     );
     const queue = value.queue === "steer" || value.queue === "follow-up" ? value.queue : undefined;
     const reason =
@@ -466,7 +470,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         body: { messageId: input.messageId, position: input.position, ...summary },
         revision: input.revision,
         idempotencyKey: input.idempotencyKey,
-      }),
+      }, undefined, input.savedIntent),
     );
     // A fork leaves its source untouched, so the open transcript stays current.
     return this.shaped(value, mapHostForkedChat);

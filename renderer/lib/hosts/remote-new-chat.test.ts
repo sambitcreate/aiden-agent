@@ -251,7 +251,7 @@ test("dismissing an unresolved first turn sends nothing", async () => {
   host.lose.add("send");
   await assert.rejects(c.start(target, "Hello"), { code: "outcome_unknown" });
   const before = host.calls.length;
-  assert.equal(c.dismissUnresolved()?.chatId, "chat-1");
+  assert.equal((await c.dismissUnresolved())?.chatId, "chat-1");
   assert.equal(c.getSnapshot().unresolved, null);
   assert.equal(host.calls.length, before);
 });
@@ -393,7 +393,7 @@ test("dismissing a first turn that never arrived frees its uploads for the next 
   await assert.rejects(c.start(target, "Hello", [notes]), { code: "outcome_unknown" });
   assert.equal(host.staged.size, 1);
 
-  c.dismissUnresolved();
+  await c.dismissUnresolved();
   await c.start({ workspaceId: "ws-c" }, "Hello again", [notes]);
   assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Hello again"]);
 });

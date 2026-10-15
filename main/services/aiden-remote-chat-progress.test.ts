@@ -424,6 +424,31 @@ test("SSE is scoped by read grants, publishes fresh state on reconnect, and clos
   service.close();
 });
 
+test("a cursor from another host epoch hydrates despite colliding sequence numbers", async () => {
+  const firstHost = fixture().service;
+  const nextHost = fixture().service;
+  const grants = new Set(["tasks:read", "agents:read"] as const);
+  const before = new Response();
+  await firstHost.openEvents("device-1", "chat-1", grants, 0, before.wire);
+  const oldEpoch = (await firstHost.taskSnapshot("device-1", "chat-1")).epoch;
+  const cursor = Number([...before.chunks.join("").matchAll(/^id: (\d+)$/gmu)].pop()![1]);
+  before.emit("close");
+  const collision = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, 0, collision.wire);
+  collision.emit("close");
+  const restored = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, cursor, restored.wire, oldEpoch);
+  assert.equal(restored.chunks.length, 2, "a restart must deliver fresh task and roster state");
+  restored.emit("close");
+  const currentEpoch = (await nextHost.taskSnapshot("device-1", "chat-1")).epoch;
+  const currentCursor = Number([...restored.chunks.join("").matchAll(/^id: (\d+)$/gmu)].pop()![1]);
+  const resumed = new Response();
+  await nextHost.openEvents("device-1", "chat-1", grants, currentCursor, resumed.wire, currentEpoch);
+  assert.equal(resumed.chunks.length, 0, "a current epoch resumes unchanged snapshots");
+  firstHost.close();
+  nextHost.close();
+});
+
 test("a reconnect cursor resumes without resending snapshots the device already received", async () => {
   const { service, events } = fixture({
     authorize: async (_deviceId, chatId) => ({

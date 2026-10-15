@@ -1,20 +1,10 @@
 import * as React from "react";
 import {
-  Files,
-  GitCompareArrows,
   PanelRightClose,
   PanelRightOpen,
   Plus,
 } from "lucide-react";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Text,
-  toast,
-} from "./ui";
+import { Button, toast } from "./ui";
 import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel";
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
@@ -23,15 +13,38 @@ import { acceptBrowserState } from "../lib/browser-ui-state";
 import { cn } from "../lib/ui-utils";
 import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import { useBrowserLinks } from "../lib/use-browser-links";
+import { LinkOpenerProvider, useBrowserSurface } from "../lib/link-opener";
 import {
   FilesPanel,
   type FilesEditorState,
   type FilesEditorStateChangeOptions,
 } from "./files-panel";
-import { EnvironmentOverview } from "./environment-overview";
+import {
+  ChangesRows,
+  EnvironmentRows,
+  QuickViewUnavailable,
+  useChangesSummary,
+  useChangesVisibility,
+  useEnvironmentSummary,
+  useShowWorkspaceFolder,
+} from "./environment-overview";
+import { ContextBreakdown } from "./context-breakdown";
+import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
+import { SubagentStatusGroups } from "./subagent-status-groups";
+import {
+  DEFAULT_QUICK_VIEW_LAYOUT,
+  QUICK_VIEW_LAYOUT_STORAGE_KEY,
+  moveSection,
+  parseQuickViewLayout,
+  quickViewVisibleSections,
+  serializeQuickViewLayout,
+  toggleSectionExpanded,
+  type QuickViewLayout,
+  type QuickViewSectionId,
+} from "../lib/quick-view-layout";
+import { contextPressurePercent, type ChatContextPressureV1 } from "../shared/context-pressure";
+import type { Workspace } from "../lib/types";
 import { ReviewPanel } from "./review-panel";
-import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
 import {
   resolveEnvironmentPanelLayout,
@@ -52,11 +65,9 @@ import {
   reconcileSubagentPersistenceHandoff,
   resolveSubagentDetailResult,
   resolveSubagentSelection,
-  summarizeSubagentRunViews,
   type SubagentDetailRequest,
   type SubagentReferenceMessage,
   type SubagentRunView,
-  type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
 import {
   subagentOverviewSummary,
@@ -139,7 +150,7 @@ interface EnvironmentActiveChat {
   workspaceId: string | null;
 }
 
-interface EnvironmentPanelContextValue {
+export interface EnvironmentPanelContextValue {
   toolsOpen: boolean;
   openTabs: EnvironmentPanelTab[];
   closeTab: (tab: EnvironmentPanelTab) => void;
@@ -175,7 +186,6 @@ interface EnvironmentPanelContextValue {
   openReview: (mode: EnvironmentReviewMode) => void;
   subagents: EnvironmentSubagentContext;
   subagentViews: SubagentRunView[];
-  subagentCounts: SubagentRunViewCounts;
   selectedSubagentRunId: string | null;
   subagentFocusDetailVersion: number;
   subagentDetailLoading: boolean;
@@ -208,7 +218,8 @@ interface EnvironmentPanelContextValue {
   setCreateWorktreeHandler: (handler: ((branchName: string) => Promise<void>) | null) => void;
 }
 
-const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
+/** Exported so component tests can render a single surface against a stub panel. */
+export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
 const TABS_STORAGE_KEY = "aiden-agent.environment.open-tabs-v1";
 const OPEN_STORAGE_KEY = "aiden-agent.environment.open";
 const QUICK_VIEW_OPEN_STORAGE_KEY = "aiden-agent.quick-view.open";
@@ -293,7 +304,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const { activeId } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const [contextDetails, setContextDetails] = React.useState<ChatContextDetails | null>(null);
-  useBrowserLinks(activeId);
   const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
   const [surfaceState, dispatchSurface] = React.useReducer(
     reduceEnvironmentSurfaceState,
@@ -407,10 +417,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
     ],
   );
-  const subagentCounts = React.useMemo(
-    () => summarizeSubagentRunViews(subagentViews),
-    [subagentViews],
-  );
   const selectedSubagentView = subagentViews.find((entry) => entry.runId === selectedSubagentRunId);
   const selectedSubagentGenerationId = selectedSubagentView?.generationId;
   const selectedSubagentReferenceMessageId = selectedSubagentView?.referenceMessageId;
@@ -471,18 +477,22 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ).find((element) => element.dataset.subagentChipRunId === returnSubagentRunIdRef.current)
         : null;
     const storedTarget = returnRef.current;
-    const storedTargetAvailable =
-      storedTarget?.isConnected &&
-      !storedTarget.closest("[inert]") &&
-      !storedTarget.closest('[aria-hidden="true"]');
     const fallbackSelector =
       surface === "tools" ? "[data-environment-toggle]" : "[data-quick-view-toggle]";
-    const returnTarget = storedTargetAvailable
-      ? storedTarget
-      : (replacementChip ??
-        document.querySelector<HTMLElement>(fallbackSelector) ??
-        document.querySelector<HTMLElement>("[data-app-focus-root]"));
-    if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
+    // Decide after the close has rendered: a target in a surface this close uncovers (a Quick
+    // View row under stacked tools) is inert now but usable by the next frame.
+    requestAnimationFrame(() => {
+      const storedTargetAvailable =
+        storedTarget?.isConnected &&
+        !storedTarget.closest("[inert]") &&
+        !storedTarget.closest('[aria-hidden="true"]');
+      const returnTarget = storedTargetAvailable
+        ? storedTarget
+        : (replacementChip ??
+          document.querySelector<HTMLElement>(fallbackSelector) ??
+          document.querySelector<HTMLElement>("[data-app-focus-root]"));
+      if (returnTarget?.isConnected) returnTarget.focus();
+    });
   }, []);
 
   const closeTools = React.useCallback(() => {
@@ -1097,7 +1107,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openReview,
       subagents,
       subagentViews,
-      subagentCounts,
       selectedSubagentRunId: displayedSubagentSelection.runId,
       subagentFocusDetailVersion,
       subagentDetailLoading: displayedSubagentSelection.loading,
@@ -1182,7 +1191,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentStopPending,
       subagentDetailLoading,
       subagents,
-      subagentCounts,
       subagentViews,
       subagentsEnabled,
       devicesEnabled,
@@ -1199,14 +1207,16 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      {subagentsEnabled ? (
-        <SubagentLiveAnnouncer
-          ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
-          runs={subagents.liveSnapshots}
-          detailRequest={subagentDetailAnnouncement}
-        />
-      ) : null}
-      {children}
+      <LinkOpenerProvider workspaceId={activeId ?? null}>
+        {subagentsEnabled ? (
+          <SubagentLiveAnnouncer
+            ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
+            runs={subagents.liveSnapshots}
+            detailRequest={subagentDetailAnnouncement}
+          />
+        ) : null}
+        {children}
+      </LinkOpenerProvider>
     </EnvironmentPanelContext.Provider>
   );
 }
@@ -1518,6 +1528,315 @@ function EnvironmentPanelSurface({
   );
 }
 
+const QUICK_VIEW_SECTION_TITLES: Record<QuickViewSectionId, string> = {
+  environment: "Environment",
+  changes: "Changes",
+  context: "Context",
+  subagents: "Subagents",
+};
+
+/** Gap between Quick View cards (`gap-2`), added to the dragged card's height when siblings shift. */
+const QUICK_VIEW_CARD_GAP_PX = 8;
+/** Keeps a collapsing body's content until its row transition (`--motion-duration`) has run. */
+const QUICK_VIEW_BODY_UNMOUNT_MS = 300;
+
+function readQuickViewLayout(): QuickViewLayout {
+  try {
+    return parseQuickViewLayout(localStorage.getItem(QUICK_VIEW_LAYOUT_STORAGE_KEY));
+  } catch {
+    return DEFAULT_QUICK_VIEW_LAYOUT;
+  }
+}
+
+function writeQuickViewLayout(layout: QuickViewLayout): void {
+  try {
+    localStorage.setItem(QUICK_VIEW_LAYOUT_STORAGE_KEY, serializeQuickViewLayout(layout));
+  } catch {
+    // Storage can be unavailable; the layout still applies for this session.
+  }
+}
+
+/** True while `open`, and for a moment after it closes so a collapsing body keeps its content. */
+function useMountedWhileOpen(open: boolean): boolean {
+  const [mounted, setMounted] = React.useState(open);
+  React.useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    if (prefersReducedMotion()) {
+      setMounted(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setMounted(false), QUICK_VIEW_BODY_UNMOUNT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open]);
+  return open || mounted;
+}
+
+function ContextSummaryMeter({
+  pressure,
+  compacting,
+}: {
+  pressure: ChatContextPressureV1;
+  compacting: boolean;
+}) {
+  const percent = contextPressurePercent(pressure);
+  // Same presentation threshold as the composer ContextMeter; a running compaction is emphasized too.
+  const approaching = compacting || pressure.shouldCompact || pressure.percentOfUsableInput >= 80;
+  return (
+    <>
+      <span>{`${percent}%`}</span>
+      <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-control">
+        <span
+          className={cn(
+            "block h-full rounded-full transition-[width] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
+            approaching ? "bg-support-warning" : "bg-accent",
+          )}
+          style={{ width: `${Math.min(100, percent)}%` }}
+        />
+      </span>
+    </>
+  );
+}
+
+interface QuickViewDragPreview {
+  id: QuickViewSectionId;
+  to: number;
+  offset: number;
+}
+
+/**
+ * Quick View's cards for a workspace with a readable folder. Environment always shows; the
+ * others appear once they have something to say, and every card starts collapsed.
+ */
+export function QuickViewCards({ workspace, live }: { workspace: Workspace; live: boolean }) {
+  const panel = useEnvironmentPanel();
+  const chatId = panel.activeChat.chatId ?? undefined;
+  const [layout, setLayout] = React.useState(readQuickViewLayout);
+  const [dragPreview, setDragPreview] = React.useState<QuickViewDragPreview | null>(null);
+  const [announcement, setAnnouncement] = React.useState("");
+  const [changesDialogOpen, setChangesDialogOpen] = React.useState(false);
+  const [entering, setEntering] = React.useState<ReadonlySet<QuickViewSectionId>>(() => new Set());
+  const [changesWasShown, setChangesWasShown] = React.useState(false);
+  const cardRefs = React.useRef(new Map<QuickViewSectionId, HTMLDivElement>());
+  const previousVisibleRef = React.useRef<ReadonlySet<QuickViewSectionId> | null>(null);
+  const focusGripRef = React.useRef<QuickViewSectionId | null>(null);
+
+  const changesVisible = useChangesVisibility(workspace.id, chatId, live);
+  const changesSummary = useChangesSummary(workspace.id, live);
+  const environmentSummary = useEnvironmentSummary(workspace);
+  const showFolder = useShowWorkspaceFolder(workspace);
+  const pressure = panel.contextDetails?.pressure ?? null;
+  const compacting = Boolean(panel.contextDetails?.compacting);
+  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
+  const subagentsBodyMounted = useMountedWhileOpen(Boolean(layout.expanded.subagents));
+
+  const visible = quickViewVisibleSections(layout.order, {
+    changesVisible,
+    // An open commit or push dialog, or the Git operation it started, keeps the card that owns it.
+    changesHeld: changesDialogOpen || panel.gitOperationBusy,
+    changesWasShown,
+    hasContextPressure: Boolean(pressure),
+    subagentsEnabled: panel.subagentsEnabled,
+    subagentRunCount: panel.subagentViews.length,
+  });
+  const visibleKey = visible.join(" ");
+
+  React.useLayoutEffect(() => {
+    const previous = previousVisibleRef.current;
+    const ids = visibleKey.split(" ") as QuickViewSectionId[];
+    const current = new Set(ids);
+    previousVisibleRef.current = current;
+    setChangesWasShown(current.has("changes"));
+    // A card that leaves mid-drag takes its drag preview with it.
+    setDragPreview((preview) => (preview && !current.has(preview.id) ? null : preview));
+    if (!previous) return;
+    const removed = [...previous].some((id) => !current.has(id));
+    // A removed card that held focus drops it to the body; hand it to the first remaining card.
+    const focusLost = !document.activeElement || document.activeElement === document.body;
+    if (removed && focusLost && live) {
+      cardRefs.current.get(ids[0])?.querySelector<HTMLElement>("button[aria-expanded]")?.focus();
+    }
+    // Cards present when Quick View opens arrive with the surface; only later ones animate.
+    if (prefersReducedMotion()) return;
+    const added = ids.filter((id) => !previous.has(id));
+    if (added.length > 0) setEntering((animating) => new Set([...animating, ...added]));
+  }, [live, visibleKey]);
+
+  React.useLayoutEffect(() => {
+    const id = focusGripRef.current;
+    if (!id) return;
+    focusGripRef.current = null;
+    document
+      .querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`)
+      ?.focus();
+  }, [layout.order]);
+
+  const commitLayout = (next: QuickViewLayout) => {
+    setLayout(next);
+    writeQuickViewLayout(next);
+  };
+
+  const onMove = (id: QuickViewSectionId, toIndex: number) => {
+    const card = cardRefs.current.get(id);
+    // Reordering moves the card's DOM node, which drops focus; put it back on the grip.
+    if (card?.contains(document.activeElement)) focusGripRef.current = id;
+    commitLayout(moveSection(layout, id, toIndex, visible));
+    const position = Math.max(0, Math.min(visible.length - 1, toIndex)) + 1;
+    setAnnouncement(`${QUICK_VIEW_SECTION_TITLES[id]} moved to position ${position} of ${visible.length}`);
+  };
+
+  const onDragPreview = (id: QuickViewSectionId, to: number | null) => {
+    if (to === null) {
+      setDragPreview(null);
+      return;
+    }
+    const height = cardRefs.current.get(id)?.getBoundingClientRect().height ?? 0;
+    setDragPreview({ id, to, offset: height + QUICK_VIEW_CARD_GAP_PX });
+  };
+
+  const measureSiblings = () =>
+    visible.flatMap((id) => {
+      const card = cardRefs.current.get(id);
+      return card ? [card.getBoundingClientRect()] : [];
+    });
+
+  const siblingShift = (index: number): number => {
+    if (!dragPreview) return 0;
+    const from = visible.indexOf(dragPreview.id);
+    if (from < 0 || index === from) return 0;
+    if (from < dragPreview.to && index > from && index <= dragPreview.to) return -dragPreview.offset;
+    if (dragPreview.to < from && index >= dragPreview.to && index < from) return dragPreview.offset;
+    return 0;
+  };
+
+  const toolsBlocked = panel.gitOperationBusy;
+  const sections: Record<
+    QuickViewSectionId,
+    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "children">
+  > = {
+    environment: {
+      summary: environmentSummary?.node,
+      summaryLabel: environmentSummary?.label,
+      headerAction: { kind: "external", label: showFolder.label, onSelect: showFolder.show },
+      children: (
+        <EnvironmentRows
+          workspace={workspace}
+          active={live}
+          mutationBlockedReason={panel.gitMutationBlockedReason}
+          onGitOperationBusyChange={panel.setGitOperationBusy}
+          onCreateWorktree={panel.createWorktree}
+          onBrowseFiles={() => panel.showTools("files")}
+          toolsDisabled={toolsBlocked}
+        />
+      ),
+    },
+    changes: {
+      summary: changesSummary?.node,
+      summaryLabel: changesSummary?.label,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Changes in sidebar",
+        onSelect: () => panel.openReview("changes"),
+        disabled: toolsBlocked,
+      },
+      children: (
+        <ChangesRows
+          workspace={workspace}
+          chatId={chatId}
+          active={live}
+          mutationBlockedReason={panel.gitMutationBlockedReason}
+          onGitOperationBusyChange={panel.setGitOperationBusy}
+          onOpenReview={panel.openReview}
+          toolsDisabled={toolsBlocked}
+          onDialogOpenChange={setChangesDialogOpen}
+        />
+      ),
+    },
+    context: {
+      summary: pressure ? <ContextSummaryMeter pressure={pressure} compacting={compacting} /> : undefined,
+      summaryLabel: pressure ? `${contextPressurePercent(pressure)} percent used` : undefined,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Context in sidebar",
+        onSelect: () => panel.showTools("context"),
+        disabled: toolsBlocked,
+      },
+      children: pressure ? <ContextBreakdown pressure={pressure} compacting={compacting} /> : null,
+    },
+    subagents: {
+      summary: subagentSummary.secondary,
+      summaryLabel: subagentSummary.ariaLabel,
+      headerAction: {
+        kind: "sidebar",
+        label: "Open Subagents in sidebar",
+        onSelect: () => panel.showTools("subagents"),
+        disabled: toolsBlocked,
+      },
+      // The run list ticks elapsed time, so it only exists while the card is open.
+      children: subagentsBodyMounted ? (
+        <SubagentStatusGroups
+          runs={panel.subagentViews}
+          stopPendingRunIds={panel.subagentStopPendingRunIds}
+          stopErrors={panel.subagentStopErrorsByRunId}
+          onOpen={panel.openSubagent}
+          onStop={panel.stopSubagent}
+        />
+      ) : null,
+    },
+  };
+
+  return (
+    <>
+      {visible.map((id, index) => {
+        const shift = siblingShift(index);
+        return (
+          <div
+            key={id}
+            ref={(element) => {
+              if (element) cardRefs.current.set(id, element);
+              else cardRefs.current.delete(id);
+            }}
+            data-entering={entering.has(id) ? "" : undefined}
+            onAnimationEnd={(event) => {
+              if (event.target !== event.currentTarget) return;
+              setEntering((ids) => {
+                const next = new Set(ids);
+                next.delete(id);
+                return next;
+              });
+            }}
+            className={cn(
+              "quick-view-card-slot shrink-0",
+              dragPreview &&
+                "transition-[translate] duration-(--motion-large-duration) ease-standard motion-reduce:transition-none",
+            )}
+            style={shift ? { translate: `0 ${shift}px` } : undefined}
+          >
+            <QuickViewSection
+              id={id}
+              title={QUICK_VIEW_SECTION_TITLES[id]}
+              collapsed={!layout.expanded[id]}
+              onToggle={() => commitLayout(toggleSectionExpanded(layout, id))}
+              index={index}
+              count={visible.length}
+              onMove={onMove}
+              measureSiblings={measureSiblings}
+              onDragPreview={onDragPreview}
+              {...sections[id]}
+            />
+          </div>
+        );
+      })}
+      <QuickViewMoveStatus message={announcement} />
+    </>
+  );
+}
+
+/** Matches `-m-1.5` on the Quick View stack: how far its padded scroller extends past the cards' old box. */
+const QUICK_VIEW_STACK_BLEED_PX = 6;
+
 function QuickViewCard({
   width,
   right,
@@ -1531,13 +1850,8 @@ function QuickViewCard({
   const { active } = useActiveWorkspace();
   const open = panel.quickViewOpen;
   const [present, setPresent] = React.useState(open);
-  const menuButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const menuDestinationRef = React.useRef<EnvironmentReviewMode | "files" | null>(null);
-  const subagentCounts = panel.subagentCounts;
-  const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
-  const representativeSubagent =
-    panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
-  const subagentSummary = subagentOverviewSummary(panel.subagentViews);
+  const stackRef = React.useRef<HTMLElement | null>(null);
+  const available = Boolean(active?.folderPath) && active?.permission !== "none";
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -1555,12 +1869,17 @@ function QuickViewCard({
 
   React.useLayoutEffect(() => {
     if (open && present && presented && panel.frontSurface === "quick-view") {
-      menuButtonRef.current?.focus();
+      // Keep focus that is already inside Quick View (a card the user just pressed).
+      if (stackRef.current?.contains(document.activeElement)) return;
+      stackRef.current
+        ?.querySelector<HTMLButtonElement>("[data-quick-view-section] button[aria-expanded]")
+        ?.focus();
     }
   }, [open, panel.frontSurface, present, presented]);
 
   return (
     <aside
+      ref={stackRef}
       id="quick-view-card"
       data-environment-surface="quick-view"
       data-surface-mode="quick-view"
@@ -1572,144 +1891,25 @@ function QuickViewCard({
       onFocusCapture={() => panel.activateSurface("quick-view")}
       onPointerDownCapture={() => panel.activateSurface("quick-view")}
       className={cn(
-        "quick-view-card absolute top-14 z-30 flex max-h-[calc(100%-4.25rem)] flex-col overflow-hidden rounded-sheet bg-popover text-primary shadow-dialog transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        "quick-view-card no-drag absolute top-14 z-30 -m-1.5 flex max-h-[calc(100%-3.5rem)] flex-col gap-2 overflow-y-auto p-2 text-primary transition-[right,width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         (!open || !presented) && "translate-x-[calc(100%+0.75rem)] opacity-0",
       )}
       style={{
-        width,
+        // The scroller pads out beyond the cards so card shadows, a dragged card's lift and
+        // its overshoot aren't clipped; the negative margin keeps the cards where they were.
+        width: width + 2 * QUICK_VIEW_STACK_BLEED_PX,
         right,
         pointerEvents: open && presented ? "auto" : "none",
       }}
     >
       {present ? (
-        <>
-          <header className="drag-region flex h-12 shrink-0 items-center gap-2 px-4">
-            <Text variant="strong" color="tertiary" truncate className="min-w-0 flex-1">
-              Quick View
-            </Text>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  ref={menuButtonRef}
-                  variant="transparent"
-                  size="small"
-                  iconOnly
-                  aria-label="Quick View actions"
-                  title="Quick View actions"
-                  className="no-drag"
-                >
-                  <Plus />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="w-52"
-                onCloseAutoFocus={(event) => {
-                  const destination = menuDestinationRef.current;
-                  menuDestinationRef.current = null;
-                  if (!destination) return;
-                  const trigger = menuButtonRef.current;
-                  const triggerAvailable =
-                    trigger?.isConnected &&
-                    !trigger.closest('[inert], [aria-hidden="true"]');
-                  if (!open || !presented || panel.gitOperationBusy || !triggerAvailable) {
-                    // Keep Radix's normal restoration when the trigger is usable. If
-                    // it disappeared or became inert, preserve newer focus or use the
-                    // application fallback instead of leaving focus in the removed menu.
-                    if (!triggerAvailable) {
-                      event.preventDefault();
-                      const focused = document.activeElement;
-                      if (
-                        !(focused instanceof HTMLElement) ||
-                        focused === document.body ||
-                        !focused.isConnected ||
-                        focused.closest('[inert], [aria-hidden="true"]')
-                      ) {
-                        document.querySelector<HTMLElement>("[data-app-focus-root]")?.focus();
-                      }
-                    }
-                    return;
-                  }
-                  event.preventDefault();
-                  // Finish the menu's focus scope before opening tools. Otherwise its
-                  // return focus reactivates Quick View and covers tools in narrow layouts.
-                  // Remember the durable trigger, not the menu item that just unmounted.
-                  trigger.focus();
-                  if (destination === "files") panel.showTools("files");
-                  else panel.openReview(destination);
-                }}
-              >
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "changes";
-                  }}
-                >
-                  <GitCompareArrows className="size-4" aria-hidden="true" />
-                  Review changes
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "files";
-                  }}
-                >
-                  <Files className="size-4" aria-hidden="true" />
-                  Browse files
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={panel.gitOperationBusy}
-                  onSelect={() => {
-                    menuDestinationRef.current = "compare";
-                  }}
-                >
-                  <GitCompareArrows className="size-4" aria-hidden="true" />
-                  Compare branch
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1">
-              <EnvironmentOverview
-                workspace={active}
-                chatId={panel.activeChat.chatId ?? undefined}
-                active={open && presented}
-                presentation="card"
-                mutationBlockedReason={panel.gitMutationBlockedReason}
-                onGitOperationBusyChange={panel.setGitOperationBusy}
-                onOpenReview={panel.openReview}
-                onCreateWorktree={panel.createWorktree}
-              />
-            </div>
-            {hasSubagents ? (
-              <div className="shrink-0 border-t border-separator px-3 py-3">
-                <Text as="h2" variant="small-strong" color="tertiary" className="mb-1 px-2">
-                  Subagents
-                </Text>
-                <button
-                  type="button"
-                  onClick={() => panel.showTools("subagents")}
-                  aria-label={`Open Subagents, ${subagentSummary.ariaLabel}`}
-                  className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
-                >
-                  <SubagentMark
-                    role={representativeSubagent?.role}
-                    state={representativeSubagent?.state ?? "finished"}
-                    activity={representativeSubagent?.snapshot?.activity}
-                    size={20}
-                  />
-                  <span className="min-w-0 truncate text-regular text-primary">
-                    {subagentSummary.primary}
-                  </span>
-                  <span className="max-w-44 min-w-0 truncate text-small tabular-nums text-tertiary">
-                    {subagentSummary.secondary}
-                  </span>
-                </button>
-              </div>
-            ) : null}
+        active && available ? (
+          <QuickViewCards workspace={active} live={open && presented} />
+        ) : (
+          <div className="shrink-0 rounded-dialog bg-popover shadow-popover">
+            <QuickViewUnavailable workspace={active} />
           </div>
-        </>
+        )
       ) : null}
     </aside>
   );
@@ -1759,6 +1959,7 @@ export function EnvironmentWorkbench({
   suppressed?: boolean;
 }>) {
   const panel = useEnvironmentPanel();
+  useBrowserSurface(!suppressed);
   const toolsOpen = panel.toolsOpen && !suppressed;
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);

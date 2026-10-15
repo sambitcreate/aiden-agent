@@ -14,12 +14,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+
+/** The Bots-list row for a Bot the Mac just sent in full. */
+fun AidenBotDetail.summary(): AidenBotSummary = AidenBotSummary(
+    id = id,
+    name = name,
+    purpose = purpose,
+    avatar = avatar,
+    health = health,
+    sessionState = sessionState,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    revision = revision
+)
 
 class AidenBotsViewModel(
     val coordinator: AidenRemoteCoordinator,
@@ -56,6 +70,15 @@ class AidenBotsViewModel(
                 .collect { (client, state) ->
                     if (client != null && state == AidenConnectionState.CONNECTED) loadBots()
                 }
+        }
+        // A Bot made after New Bot closed (R15) joins the list, whichever screen is showing.
+        viewModelScope.launch {
+            coordinator.client.collectLatest {
+                coordinator.botCreateFlow().created.collect { made ->
+                    acceptBot(made.summary())
+                    loadBots(force = true)
+                }
+            }
         }
     }
 

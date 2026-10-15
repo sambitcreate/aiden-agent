@@ -22,7 +22,7 @@ import {
   peerNetworkFingerprint,
 } from "./peer-host-manager.js";
 import { PEER_RUN_EVICT_MS } from "./peer-run-subscriptions.js";
-import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
+import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd, type PeerTrust } from "./peer-transport.js";
 import type {
   PeerHostFeedMessage,
   PeerHostStatus,
@@ -330,7 +330,7 @@ function stored(id: string, enabled = true): StoredPeerHost {
   };
 }
 
-function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))) {
+function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id)), client?: (host: FakeHost, trust: PeerTrust) => PeerClient) {
   const timers = new FakeTimers();
   const byId = new Map(hosts.map((host) => [host.id, host]));
   let saved = records;
@@ -345,7 +345,10 @@ function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))
     deviceName: "Desktop",
     clientVersion: "1",
     platform: "mac",
-    client: (trust) => byId.get((trust as StoredPeerHost).id)!.client(),
+    client: (trust) => {
+      const host = byId.get((trust as StoredPeerHost).id)!;
+      return client ? client(host, trust) : host.client();
+    },
     // No fake host presents a WebPKI-valid renewed key, so a pin mismatch is never re-pinned.
     bootstrap: () => ({
       observedSpki: undefined,
@@ -697,7 +700,9 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     assert.equal(last(harness.events("host_a"))?.type, "run.ended");
     assert.equal(streamState(harness.frames("host_a")), "idle");
 
-    // Reconnecting probes the chat again; the host replays the finished run.
+    // A dropped feed forces reconnection; the host replays the finished run.
+    host.streams("/host/events")[0]!.drop();
+    await settle();
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     assert.equal(host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length, 2);
@@ -808,7 +813,7 @@ test("a disabled host makes no requests at all", async () => {
   }
 });
 
-test("sleep, unlock and network changes coalesce into one reconnect that resumes the feed", async () => {
+test("sleep, unlock and network changes probe the healthy connection without stale flashes", async () => {
   const host = new FakeHost("host_a", "Plans");
   const harness = setup([host]);
   try {
@@ -822,12 +827,12 @@ test("sleep, unlock and network changes coalesce into one reconnect that resumes
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     assert.deepEqual(host.calls.filter((call) => call === "GET /server").length, 2);
-    assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /host/events @")).length, 1);
+    assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /host/events @")).length, 0);
     assert.equal(resets(), 1);
     assert.deepEqual(
       harness.feed("host_a").flatMap((message) => (message.change.type === "stale" ? [message.change.stale] : [])),
-      [true, false],
-      "rows were marked stale while reconnecting",
+      [],
+      "healthy rows never become stale during a wake probe",
     );
   } finally {
     harness.close();
@@ -944,6 +949,8 @@ test("a request admitted by a superseded connection cannot block the reconnected
     const held = harness.manager.call("host_a", { operation: "summaries" });
     await settle();
 
+    host.streams("/host/events")[0]!.drop();
+    await settle();
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
     const reconnected = harness.status("host_a");
@@ -1030,7 +1037,7 @@ for (const hostCount of [1, 5, 10]) {
     }
   });
 
-  test(`one wake reconnects ${hostCount} host(s) with one identity check and one feed resume each`, async () => {
+  test(`one wake checks ${hostCount} healthy host(s) without reopening feeds`, async () => {
     const hosts = Array.from({ length: hostCount }, (_, index) => new FakeHost(`host_${index}`, `Chat ${index}`));
     const off = new FakeHost("host_off", "Off");
     const harness = setup(
@@ -1048,12 +1055,11 @@ for (const hostCount of [1, 5, 10]) {
       harness.manager.wake();
       await harness.advance(PEER_WAKE_COALESCE_MS);
       const requests = hosts.flatMap((host) => host.calls);
-      assert.equal(requests.length, 2 * hostCount, requests.join("\n"));
+      assert.equal(requests.length, hostCount, requests.join("\n"));
       for (const host of hosts) {
-        assert.equal(host.calls.length, 2, host.calls.join("\n"));
+        assert.equal(host.calls.length, 1, host.calls.join("\n"));
         assert.equal(host.calls[0], "GET /server");
-        assert.match(host.calls[1]!, /^EVENTS \/host\/events @epoch_host_\d+:\d+$/u);
-        // The feed resumed from its cursor rather than reading a new snapshot.
+        // The existing feed remained live without reading a new snapshot.
         assert.equal(harness.feed(host.id).filter((message) => message.change.type === "reset").length, 1);
         assert.equal(harness.status(host.id).state.kind, "connected");
       }
@@ -1063,3 +1069,96 @@ for (const hostCount of [1, 5, 10]) {
     }
   });
 }
+
+for (const timing of ["early", "delayed", "slow"] as const) {
+  test(`cold LAN automatically learns its alternate without replacing the feed (${timing} discovery)`, async () => {
+    const host = new FakeHost("host_discovery", "Cold discovery");
+    const record = { ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" };
+    const alternate = { endpoint: "https://studio.tail123.ts.net/api/aiden/v1", serverSpkiSha256: record.serverSpkiSha256 };
+    let discovered = false;
+    let lanDown = false;
+    const attempted: string[] = [];
+    host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+      features: [...FEATURES, "peer-routes-v1"], peerRoutes: discovered ? [alternate] : [] });
+    const harness = setup([host], [record], (server, trust) => {
+      const client = server.client();
+      return { ...client, json: async (input) => {
+        attempted.push(trust.endpoint);
+        if (lanDown && trust.endpoint === record.endpoint) throw new PeerTransportError("unavailable");
+        return client.json(input);
+      } };
+    });
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      const generation = harness.status(host.id).generation;
+      const stream = host.streams("/host/events")[0]!;
+      assert.equal(harness.status(host.id).feed, "live");
+      await harness.advance(24_999);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
+      if (timing === "slow") {
+        await harness.advance(1);
+        assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
+        assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+        await harness.advance(5_000);
+        discovered = true;
+        await harness.advance(69_999);
+        assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
+        await harness.advance(1);
+      } else {
+        discovered = true;
+        await harness.advance(timing === "delayed" ? 40_000 : 1);
+      }
+      const expectedReads = timing === "slow" ? 3 : 2;
+      assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), true);
+      assert.equal(harness.status(host.id).generation, generation);
+      assert.equal(host.streams("/host/events")[0], stream);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads);
+      await harness.advance(300_000);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads, "discovery never becomes idle polling");
+      lanDown = true;
+      stream.drop();
+      await settle();
+      await harness.advance(3_000);
+      assert.equal(harness.status(host.id).state.kind, "connected");
+      assert.equal(harness.status(host.id).feed, "live");
+      assert.equal((await harness.registry.list())[0]!.activeRouteKind, "tailscale");
+      assert.equal(last(attempted), alternate.endpoint);
+    } finally { harness.close(); }
+  });
+}
+
+for (const disableAt of [0, 25_000]) test(`disabling a cold LAN connection at ${disableAt} cancels remaining discovery reads`, async () => {
+  const host = new FakeHost("host_disabled_discovery", "Disabled discovery");
+  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
+  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    assert.equal(harness.status(host.id).state.kind, "connected");
+    await harness.advance(disableAt);
+    await harness.manager.setEnabled(host.id, false);
+    await harness.advance(120_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, disableAt ? 2 : 1);
+    assert.equal(harness.status(host.id).state.kind, "disabled");
+  } finally { harness.close(); }
+});
+
+test("unavailable alternate discovery stops after its two bounded collection reads", async () => {
+  const host = new FakeHost("host_no_alternate", "No alternate");
+  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
+    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
+  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    await harness.advance(25_000);
+    await harness.advance(75_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 3);
+    await harness.advance(600_000);
+    assert.equal(host.calls.filter((call) => call === "GET /server").length, 3);
+    assert.equal(harness.status(host.id).feed, "live");
+    assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
+  } finally { harness.close(); }
+});

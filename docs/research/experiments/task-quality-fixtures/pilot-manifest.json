@@ -1,0 +1,251 @@
+{
+  "schema": "aiden.research.task-quality-pilot.v1",
+  "status": "offline_fixture_design_frozen_not_authorized_for_inference",
+  "purpose": "Feasibility pilot of exactly one future intervention on independently verified synthetic tasks; not a powered model or harness superiority claim.",
+  "frozen_files_sha256": {
+    "buried_failed_tests/controls/correct/solution.py": "9f4bb60119999c2317077f67fadd549f7c56c4127e96f2c9462ad80575e507a5",
+    "buried_failed_tests/controls/wrong_all_capped/solution.py": "72b3cb20faeca324c4eb71cc402f8fbfc6cc9cbc4a1f0caa192fe4c0f966962b",
+    "buried_failed_tests/controls/wrong_float/solution.py": "fb360b3d2624f282f735099061585954d90319161d57509ef3660ec9c4097c25",
+    "buried_failed_tests/controls/wrong_uncapped/solution.py": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6",
+    "buried_failed_tests/oracle.py": "3da67fa537bae2045bfd0310142bb8a5cf64cb50803d27c328c46ce4e1a60e74",
+    "buried_failed_tests/task.json": "196fe214f325eb0b6af89305d37a3693a2fec4febf9d2aedafac24cddd22e675",
+    "buried_failed_tests/workspace/solution.py": "6c8be4c100767aac135caf7175fd306901c5c47bb7f17871cf72fbcf99f6c6f6",
+    "comfortable_window_control/controls/correct/solution.py": "21c7178d8f8bc64b617e6397617e13fbaae52fcf4549d0b95c49fe0019945cbb",
+    "comfortable_window_control/controls/wrong_float/solution.py": "6e51d10f91655e4d1f457f241a554068c8d2cd88aff14987f6415eaf1fca66ba",
+    "comfortable_window_control/controls/wrong_inplace/solution.py": "7154ebb335a7d54d870d4e4eb9814f16fa122a926b3b4455312ca873feecde30",
+    "comfortable_window_control/controls/wrong_touching/solution.py": "7dbc482a5d2ab61f03f2c734ef28c65f97fdb6f373987423725f36402a60b33a",
+    "comfortable_window_control/oracle.py": "c0ba268f8975d5fcb558826cba6dc7d1be88f535db3fdbdc456c93f718937a8a",
+    "comfortable_window_control/task.json": "72a6c6a6a38a6e0eac5ffa13918266cb018d2a6b7e12214606f8bb6b0d45e371",
+    "comfortable_window_control/workspace/solution.py": "30fa44a4803e646e3650c11bf719dedab0bca169797b48c94c1096864fda41ad",
+    "old_only_constraints/controls/correct/solution.py": "e074dd5626aaaf4508fa2c7b65792d5dcd32962b844be60afe407393e6f0a02a",
+    "old_only_constraints/controls/correct_quote_all/solution.py": "49358669f0f63de2be89cd283b338109908aa2a53d04760e86e4d5b1f3e40029",
+    "old_only_constraints/controls/wrong_crlf/solution.py": "3f9136bd12ce8d4ee585de474bc85077f22e058d9ce44338781b4070cb7ae775",
+    "old_only_constraints/controls/wrong_deduplicate/solution.py": "dea59d85aa41b9dfd4b6b07dc2be6b959005f0caaddab5ee2faeacee21c5644b",
+    "old_only_constraints/controls/wrong_unquoted/solution.py": "2aa92e1057bc9258a549242aab2ec7c96715b38a2dbfb48d863867895dae9931",
+    "old_only_constraints/oracle.py": "7177f96a65a5a1c05aea9a0279c7b3ad2cfac7048f10db850a62fada58a9ded4",
+    "old_only_constraints/task.json": "eb8a98007d47b35d91d9ae01ec9f2d27ab4d318e1503287fba79b22fe09a5c0d",
+    "old_only_constraints/workspace/solution.py": "b46abf64a8283a7a87e1cb9898694928f14fcee04e87ba597149d71f8d2d0206",
+    "output_recovery/controls/correct/solution.py": "f32fcd35bd42c417551d6179de5819d16c7f3c1fb3251f79b589f0b52c193977",
+    "output_recovery/controls/wrong_archived/solution.py": "50bda26da9112811a87b0ac21644a2a7cd92df014d42104216327e07331e5dd4",
+    "output_recovery/controls/wrong_unknown_fallback/solution.py": "31a10f02c652c4d0fe4c077b831bbca8cf71d4838b10e3d5e9f1bc08fa0f62ee",
+    "output_recovery/oracle.py": "af7eb89d5794b8bfcbf7b82884407f13837c74bad0573188a7df771dc381c7d9",
+    "output_recovery/task.json": "15b7120abbe4da5d2669b3de758332dbe9bb0e3c31156f9c69870549409364f6",
+    "output_recovery/workspace/solution.py": "29b2c3ef7638af1fbd27c4604ee0b0706ccb0d37803a424cdc670714625a4489",
+    "resumed_plans/controls/correct/host-plan-receipt.json": "d19e3aab997d7adbde2e12f35c3a87f045939307a0bd83f4566581491e5b4ca6",
+    "resumed_plans/controls/correct/solution.py": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17",
+    "resumed_plans/controls/wrong_claimed_done/host-plan-receipt.json": "d19e3aab997d7adbde2e12f35c3a87f045939307a0bd83f4566581491e5b4ca6",
+    "resumed_plans/controls/wrong_claimed_done/solution.py": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e",
+    "resumed_plans/controls/wrong_new_plan/host-plan-receipt.json": "a797780055217c8dc8d2af0163c8db4e3eba607ed509f228b37821fe60ba829b",
+    "resumed_plans/controls/wrong_new_plan/solution.py": "6c786214d1ab4386fc14d9aa43d3f11eddc653dbdddc16766baf1f30d48d3f17",
+    "resumed_plans/oracle.py": "368edf82f76c810788176adcd2138fa7a4ec0d22f666adddbe9b92179c2eddbc",
+    "resumed_plans/task.json": "ab9ac570e63db4f80ba29751aa8d2cde814564004fdb15d955ef24184151aa26",
+    "resumed_plans/workspace/solution.py": "75d8efc1daa95b451e48dc717b6021999c0b5e276d8fef5b341995970249022e",
+    "resumed_plans/workspace-initial-host-plan.json": "d24ca3bb13bea6417ec5a0da8cb19c11266976f71d083740763a380d6a4a9cf9",
+    "superseded_instructions/controls/correct/solution.py": "557b0ec103ecaa144644bf94ff30a8e79bc03992ea65c60e0074591db6292f06",
+    "superseded_instructions/controls/wrong_float/solution.py": "ec08e0bbd9992c68937d82c6a4727883608b886d93aa80f876fb1e39f9cf62d0",
+    "superseded_instructions/controls/wrong_member_discount/solution.py": "d290c54c15c183fdffc735d2ca394e84d30cf0d5060112c121b566cc087c867c",
+    "superseded_instructions/controls/wrong_old_threshold/solution.py": "5627d5ccacf2ced28bab3f041fa633b6485d7657ed9fd4a61a9f192c2e1ccc9b",
+    "superseded_instructions/oracle.py": "848840cc7b6f98d5db0afea5ba7ca9aa724da24278591aaceac87114080d73e1",
+    "superseded_instructions/task.json": "834b9098524adbc416f7933180b1448a0189f1c3946a06984e216abe536a91cc",
+    "superseded_instructions/workspace/solution.py": "b7124b00a0f420baf1624cb5f155ecb84dac4d019a92d48b55bc544b55bda9bb",
+    "validate.py": "bf2d2ede7db25a0ef3610b847521fa2e319a518db58089bb9ef46ec4be813902"
+  },
+  "task_ids": [
+    "old_only_constraints",
+    "superseded_instructions",
+    "buried_failed_tests",
+    "output_recovery",
+    "resumed_plans",
+    "comfortable_window_control"
+  ],
+  "model": {
+    "user_requested_family": "GPT Astra",
+    "reasoning_effort": "medium",
+    "provider_id": null,
+    "exact_model_id": null,
+    "provider_version_or_snapshot": null,
+    "resolution": "Only after explicit user approval; do not query catalogs or infer an identifier."
+  },
+  "intervention": {
+    "baseline_policy_revision": null,
+    "candidate_policy_revision": null,
+    "one_change_only": true,
+    "permitted_selection": "Choose and preregister one policy intervention; do not combine context elision, plan prompt and tool scheduling changes."
+  },
+  "authorization": {
+    "approved": false,
+    "hard_spend_ceiling": null,
+    "currency": null,
+    "credential_source": null,
+    "permitted_endpoints": [],
+    "per_request_token_limit": null,
+    "per_task_wall_limit_seconds": null,
+    "maximum_provider_requests_per_task": null,
+    "deny_until_all_fields_resolved": true
+  },
+  "execution_freeze_required": {
+    "harness_commit": null,
+    "root_lockfile_sha256": null,
+    "tool_inventory_sha256": null,
+    "system_prompt_sha256": null,
+    "provider_options_sha256": null,
+    "context_window": null,
+    "output_reserve": null,
+    "os_image": null,
+    "fixture_adapter_revision": null
+  },
+  "pairing": {
+    "replicates_per_task_per_arm": 2,
+    "planned_task_runs": 24,
+    "order": [
+      {
+        "task": "old_only_constraints",
+        "replicate": 0,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      },
+      {
+        "task": "old_only_constraints",
+        "replicate": 1,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "superseded_instructions",
+        "replicate": 0,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "superseded_instructions",
+        "replicate": 1,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      },
+      {
+        "task": "buried_failed_tests",
+        "replicate": 0,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      },
+      {
+        "task": "buried_failed_tests",
+        "replicate": 1,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "output_recovery",
+        "replicate": 0,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "output_recovery",
+        "replicate": 1,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      },
+      {
+        "task": "resumed_plans",
+        "replicate": 0,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      },
+      {
+        "task": "resumed_plans",
+        "replicate": 1,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "comfortable_window_control",
+        "replicate": 0,
+        "arms": [
+          "candidate",
+          "baseline"
+        ]
+      },
+      {
+        "task": "comfortable_window_control",
+        "replicate": 1,
+        "arms": [
+          "baseline",
+          "candidate"
+        ]
+      }
+    ],
+    "reset": "Fresh identical workspace snapshot and isolated host journal/output store per arm. Never reuse mutated workspace or final plan. Record cache preconditioning and all warming costs; do not describe fresh chat IDs as proven cold provider caches."
+  },
+  "model_visible_projection": {
+    "workspace": "Copy only the selected case workspace/ subtree. Initialize an isolated Git repository if the harness requires one. Oracles, controls, manifest, receipts and task.json are outside agent-readable paths.",
+    "messages": "Project only api_contract, earlier_messages and latest_user_request; host-only recipe/answer/control fields must not be sent as task metadata. User history must retain roles and temporal order.",
+    "buried_failed_tests": "Expand tool_observation_recipe byte-for-byte, admit through a valid settled call/result envelope and record the full observation hash. A future policy may transform it; do not pre-delete the decisive line from both arms.",
+    "output_recovery": "Expand retained_output_recipe, seed real scoped ToolOutputStore, provide normal bounded head/tail preview and its fresh actual handle. Before inference verify decisive rows are omitted inline but authorized read can recover them. Record recovered bytes/calls separately; a correct code answer alone does not prove causal use.",
+    "resumed_plans": "Seed durable_todo_state through host-owned journal state, use resume_summary for prose, and obtain final host-plan receipt via strict branch replay. The agent cannot edit the receipt or source of truth directly.",
+    "comfortable_window_control": "No added padding, hidden prior history, compaction requirement or plan. Record actual pressure; do not force every task into the same pressure cohort."
+  },
+  "offline_to_live_admission_gates": [
+    "Frozen positive and targeted negative oracle controls pass.",
+    "All future task constraints are actually available in permitted original history or scoped recovery; no impossible hidden-fact tasks.",
+    "A host adapter constructs valid transcript pairs and real output/plan state without exposing controls or oracle code.",
+    "Verifier executes after the turn in a separate protected environment; current Python -I control runner is not that sandbox.",
+    "Publish a new resolved manifest with user-approved spend, exact model, one intervention, immutable harness/settings, and practical adoption criterion before any inference.",
+    "For resumed_plans, validate host-observed mutation event history: no checkpoint add/delete/replace operations, including operations whose effects are later reversed; final state alone is insufficient."
+  ],
+  "outcomes": {
+    "primary": "All task-specific executable assertions pass, with no safety/authority violation. Resumed plan requires both code behavior and host-observed plan continuity.",
+    "separate_fields": [
+      "provider/harness terminal status",
+      "task oracle status and failing assertion",
+      "plan receipt provenance",
+      "recovery-call count and byte count",
+      "foreground/summary/cache-warm/retry provider usage",
+      "uncached/cache-read/cache-write/input/output tokens when actually reported",
+      "total monetary cost per attempted task",
+      "wall time",
+      "all requests and tool effects",
+      "infrastructure failures and cancellation"
+    ],
+    "do_not_use": [
+      "assistant self-reported success",
+      "marker substring retention alone",
+      "source-code string matching",
+      "only cost of solved runs",
+      "estimated prompt characters as billed tokens"
+    ]
+  },
+  "stop_criteria": [
+    "No inference until authorization fields and admission gates are satisfied.",
+    "Stop immediately on authority/credential/data isolation violation or hard spend/resource limit.",
+    "Stop if an oracle becomes model-visible or a host receipt becomes model-editable; invalidate affected pair.",
+    "Stop and diagnose irreconcilable usage/accounting or adapter failures; retain failures in the record and do not silently replace them.",
+    "If results are inconclusive or there are too few discordant pairs, retain current defaults; expansion requires new authorization."
+  ],
+  "analysis": "Report each paired outcome and raw discordances by task/pressure stratum, including failed attempts. This tiny purpose-built corpus checks feasibility and failure mechanisms; it cannot establish general Astra-medium efficacy or justify rollout alone.",
+  "practical_adoption_criterion": null,
+  "next_revision_rule": "This manifest freezes the offline design and source hashes. Resolving any pending model/budget/intervention/harness field requires a new explicitly approved manifest revision; do not mutate it silently.",
+  "offline_design_revision": 3,
+  "supersedes_manifest_sha256": "5a9399fa8fd639399b09517ec7a757256a90213eb2ee215fe2ab965b2488d344",
+  "revision_reason": "Independent review found valid QUOTE_ALL CSV falsely rejected by exact empty-header encoding. Empty header now uses CSV semantics plus LF framing; added an independent valid serialization control. No inference authorization or pending model/intervention resolution changed."
+}

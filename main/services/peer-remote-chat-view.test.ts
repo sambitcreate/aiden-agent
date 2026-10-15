@@ -281,9 +281,13 @@ test("a page read across a reconnect is dropped and the newest page is read agai
     await settle();
     assert.equal(harness.transcript().loadingOlder, true);
 
-    // The Mac wakes from sleep and the host connection is re-established.
+    // A failed wake probe retires the old connection and its in-flight page.
+    host.down = true;
     harness.manager.wake();
     harness.timers.advance(PEER_WAKE_COALESCE_MS);
+    await settle();
+    host.down = false;
+    await harness.manager.reconnect(host.id);
     await settle();
     host.windowGate = undefined;
     release();

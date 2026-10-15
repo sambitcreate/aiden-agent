@@ -926,11 +926,26 @@ test("phones negotiate only the phone run subset; the host feed stays desktop-on
   assert.equal(restoredDesktop?.capabilities.has("host:events"), true);
 });
 
+test("Android device identity survives restart without gaining desktop authority", async () => {
+  const state = fixture();
+  await state.registry.initialize();
+  const issued = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  const authenticated = await restored.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.type, "android");
+  assert.equal(authenticated?.capabilities.has("chat:write"), true);
+  assert.equal(authenticated?.capabilities.has("host:events"), false);
+  assert.equal(authenticated?.capabilities.has("simulators:control"), false);
+  assert.equal((await restored.registry.listDevices())[0]?.type, "android");
+});
+
 test("the phone simulator viewer grant is negotiated only by phones and never issued at pairing", async () => {
   const state = fixture();
   const mac = await state.registry.issueDevice({ name: "Studio", type: "mac", clientVersion: "1" });
   const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
   const tablet = await state.registry.issueDevice({ name: "iPad", type: "ipad", clientVersion: "1" });
+  const android = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
   const writesAfterPairing = state.writes.length;
 
   await assert.rejects(
@@ -948,7 +963,7 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
   );
   assert.equal(state.writes.length, writesAfterPairing);
 
-  for (const device of [phone, tablet]) {
+  for (const device of [phone, tablet, android]) {
     const upgraded = await state.registry.upgradeDeviceCapabilities(device.device.id, ["simulators:mobile"]);
     assert.equal(upgraded?.capabilities.includes("simulators:mobile"), true);
     const authenticated = await state.registry.authenticate(device.credential);
@@ -966,4 +981,42 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
   await restored.registry.initialize();
   assert.equal((await restored.registry.authenticate(mac.credential))?.capabilities.has("simulators:mobile"), false);
   assert.equal((await restored.registry.authenticate(phone.credential))?.capabilities.has("simulators:mobile"), true);
+});
+
+test("bot:activity is an opt-in any paired device may negotiate and keep", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:cards", "bot:activity"]);
+  assert.deepEqual(upgraded?.capabilities.slice(-2), ["bot:cards", "bot:activity"]);
+  const authenticated = await state.registry.authenticate(issued.credential);
+  assert.equal(authenticated?.capabilities.has("bot:activity"), true);
+  assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
+});
+
+test("bot:activity survives a restart, dies with revocation, and an older stored state simply lacks it", async () => {
+  const state = fixture();
+  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:activity"]);
+
+  // The grant is persisted: a restored registry still honours it.
+  const restored = fixture(state.stored());
+  await restored.registry.initialize();
+  assert.equal((await restored.registry.authenticate(issued.credential))?.capabilities.has("bot:activity"), true);
+
+  // Revoking ends the credential; pairing again starts without the opt-in until it is negotiated anew.
+  assert.equal(await state.registry.revokeDevice(issued.device.id), true);
+  assert.equal((await state.registry.authenticate(issued.credential))?.revoked, true);
+  const repaired = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), false);
+  await state.registry.upgradeDeviceCapabilities(repaired.device.id, ["bot:activity"]);
+  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), true);
+
+  // A state written before revision 30 has no such grant, loads cleanly, and can still negotiate it.
+  const older = fixture();
+  const legacy = await older.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const reloaded = fixture(older.stored());
+  await reloaded.registry.initialize();
+  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), false);
+  await reloaded.registry.upgradeDeviceCapabilities(legacy.device.id, ["bot:activity"]);
+  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), true);
 });
