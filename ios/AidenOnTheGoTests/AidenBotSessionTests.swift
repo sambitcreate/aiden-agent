@@ -4098,7 +4098,7 @@ final class AidenBotChatActivityTests: XCTestCase {
         report.saved(first, reportBehind: { behind.append($0.revision) })
         report.saved(second, reportBehind: { behind.append($0.revision) })
         XCTAssertEqual(behind, [], "while Advanced is open it holds the newest")
-        report.advancedClosed(reportBehind: { behind.append($0.revision) })
+        report.disappeared(.advanced, reportBehind: { behind.append($0.revision) })
         XCTAssertEqual(behind, ["rev_3"], "closing reports the newest once")
         report.saved(late, reportBehind: { behind.append($0.revision) })
         XCTAssertEqual(behind, ["rev_3", "rev_4"], "a pick confirmed after leaving still reports")
@@ -4107,8 +4107,41 @@ final class AidenBotChatActivityTests: XCTestCase {
         let own = AidenBotChatActivityReport()
         own.saved(first, reportBehind: { behind.append($0.revision) })
         own.reportedByAdvanced()
-        own.advancedClosed(reportBehind: { behind.append($0.revision) })
+        own.disappeared(.advanced, reportBehind: { behind.append($0.revision) })
         XCTAssertEqual(behind, ["rev_3", "rev_4"])
+    }
+
+    func testAPickConfirmedAfterTheSheetClosedFromChatActivityStillReachesTheScreensBehind() throws {
+        var behind: [String] = []
+        let record: (AidenBotDetail) -> Void = { behind.append($0.revision) }
+        let picked = try detail(revision: "rev_2", AidenBotChatActivity(level: .summary, wording: .follows))
+        let late = try detail(revision: "rev_3", AidenBotChatActivity(level: .detailed, wording: .follows))
+
+        // Chat activity is pushed over Advanced: still open, so the pick is held.
+        let report = AidenBotChatActivityReport()
+        report.appeared(.advanced)
+        report.disappeared(.advanced, replacedBy: .chatActivity, reportBehind: record)
+        report.appeared(.chatActivity)
+        report.saved(picked, reportBehind: record)
+        XCTAssertEqual(behind, [])
+
+        // The sheet closes from Chat activity; Advanced never shows again.
+        report.disappeared(.chatActivity, reportBehind: record)
+        XCTAssertEqual(behind, ["rev_2"], "the held pick reaches the screens behind")
+        report.saved(late, reportBehind: record)
+        XCTAssertEqual(behind, ["rev_2", "rev_3"], "and one confirmed later goes straight behind")
+
+        // Back from Chat activity to Advanced, then closing Advanced: reported once, at the end.
+        let back = AidenBotChatActivityReport()
+        behind = []
+        back.disappeared(.advanced, replacedBy: .chatActivity, reportBehind: record)
+        back.appeared(.chatActivity)
+        back.appeared(.advanced)
+        back.disappeared(.chatActivity, reportBehind: record)
+        back.saved(picked, reportBehind: record)
+        XCTAssertEqual(behind, [], "Advanced still shows")
+        back.disappeared(.advanced, reportBehind: record)
+        XCTAssertEqual(behind, ["rev_2"])
     }
 
     func testTheRunningStepReadsInTheMacsPhaseWords() {

@@ -157,11 +157,15 @@ struct AidenBotAdvancedView: View {
                 let expectedSession = sessionIdentity
                 Task { await load(for: expectedSession) }
             }
-            .onAppear { chatActivityReport.advancedOpened() }
+            .onAppear { chatActivityReport.appeared(.advanced) }
             .onDisappear {
-                // Closing Advanced (not opening Chat activity) reports a saved pick once;
+                // Closing Advanced (not opening Chat activity over it) reports a saved pick once;
                 // one that lands later is reported when it lands.
-                if !isShowingChatActivity { chatActivityReport.advancedClosed(reportBehind: onSaved) }
+                chatActivityReport.disappeared(
+                    .advanced,
+                    replacedBy: isShowingChatActivity ? .chatActivity : nil,
+                    reportBehind: onSaved
+                )
             }
             .confirmationDialog(
                 "Discard changes?",
@@ -245,6 +249,9 @@ struct AidenBotAdvancedView: View {
                     canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true,
                     model: chatActivityModel
                 )
+                .onAppear { chatActivityReport.appeared(.chatActivity) }
+                // The sheet or the chat can close straight from here, with Advanced never showing again.
+                .onDisappear { chatActivityReport.disappeared(.chatActivity, reportBehind: onSaved) }
             }
         }
     }
@@ -966,31 +973,37 @@ func aidenBotChatActivityTransportFailure(_ error: Error) -> Bool {
     error is AidenBotRequestTimedOut || error is URLError
 }
 
-/// Reports Chat activity saves to the screens behind Advanced. While Advanced is
-/// open it holds the newest, to report once when Advanced closes; a save that
-/// lands after Advanced closed is reported at once, so it is never lost.
+/// Reports Chat activity saves to the screens behind Advanced. While Advanced or
+/// its Chat activity page shows, it holds the newest, to report once when the
+/// last of them closes, whichever page that is (the sheet can close from Chat
+/// activity); a save that lands after that is reported at once, so it is never lost.
 @MainActor
 final class AidenBotChatActivityReport {
-    private var advancedOpen = true
+    enum Page: Hashable {
+        case advanced, chatActivity
+    }
+
+    private var showing: Set<Page> = [.advanced]
     private var unreported: AidenBotDetail?
 
     func saved(_ detail: AidenBotDetail, reportBehind: (AidenBotDetail) -> Void) {
-        if advancedOpen {
-            unreported = detail
-        } else {
+        if showing.isEmpty {
             reportBehind(detail)
+        } else {
+            unreported = detail
         }
     }
 
-    func advancedOpened() { advancedOpen = true }
+    func appeared(_ page: Page) { showing.insert(page) }
 
-    /// Advanced closed: what it held is reported once, and later saves go straight behind it.
-    func advancedClosed(reportBehind: (AidenBotDetail) -> Void) {
-        advancedOpen = false
-        if let detail = unreported {
-            unreported = nil
-            reportBehind(detail)
-        }
+    /// `page` left the screen; `replacedBy` is the page pushed over it. Once neither
+    /// page shows, what was held is reported once, and later saves go straight behind.
+    func disappeared(_ page: Page, replacedBy next: Page? = nil, reportBehind: (AidenBotDetail) -> Void) {
+        showing.remove(page)
+        if let next { showing.insert(next) }
+        guard showing.isEmpty, let detail = unreported else { return }
+        unreported = nil
+        reportBehind(detail)
     }
 
     /// Advanced's own Save reported the newest Bot; nothing older is held.
