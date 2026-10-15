@@ -60,6 +60,9 @@ export const queryKeys = {
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
   botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
+  /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
+  botLiveSummaries: ["bot-live-summary"] as const,
+  botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -763,20 +766,26 @@ export function useMcpPresets() {
  */
 export function useMcpLiveStatus() {
   const queryClient = useQueryClient();
-  useEffect(
-    () =>
-      mcpApi.onStatusChanged((status) => {
-        let signInChanged = false;
-        queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
-          const previous = current.find((entry) => entry.serverId === status.serverId);
-          signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
-          const others = current.filter((entry) => entry.serverId !== status.serverId);
-          return status.removed ? others : [...others, status];
-        });
-        if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
-      }),
-    [queryClient],
-  );
+  useEffect(() => {
+    const unsubscribe = mcpApi.onStatusChanged((status) => {
+      let signInChanged = false;
+      queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+        const previous = current.find((entry) => entry.serverId === status.serverId);
+        signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+        const others = current.filter((entry) => entry.serverId !== status.serverId);
+        return status.removed ? others : [...others, status];
+      });
+      if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+    });
+    return () => {
+      unsubscribe();
+      // Pushes sent while nothing listens are lost, so the cached snapshot is
+      // only trusted while subscribed: the next mount reads main's current one.
+      // Main answers that read after any push it sent earlier, so the snapshot
+      // is never older than the pushes that arrive before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+    };
+  }, [queryClient]);
   const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
   return useMemo(
     () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),

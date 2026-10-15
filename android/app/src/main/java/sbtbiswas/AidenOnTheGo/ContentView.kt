@@ -43,7 +43,8 @@ fun ContentView(
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenInstallations: () -> Unit
+    onOpenInstallations: () -> Unit,
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val errorMessage by coordinator.errorMessage.collectAsStateWithLifecycle()
@@ -97,7 +98,8 @@ fun ContentView(
                         onNavigateToWorkspaceFiles = onNavigateToWorkspaceFiles,
                         onNavigateToWorkspaceGit = onNavigateToWorkspaceGit,
                         onOpenSettings = onOpenSettings,
-                        onOpenInstallations = onOpenInstallations
+                        onOpenInstallations = onOpenInstallations,
+                        onNavigateToBotMemory = onNavigateToBotMemory
                     )
                 }
                 }

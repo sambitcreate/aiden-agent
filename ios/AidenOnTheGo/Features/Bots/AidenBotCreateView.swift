@@ -111,6 +111,53 @@ struct AidenBotCreateView: View {
                 } footer: {
                     Text(accessNote)
                 }
+                if let catalog, let current = draft {
+                    Section {
+                        AidenBotModelRow(
+                            title: "Model",
+                            catalog: catalog,
+                            providerID: current.customAccess.providerID,
+                            modelID: current.customAccess.modelID,
+                            recommended: AidenBotCustomAccessDraft(catalog: catalog).map {
+                                AidenBotModelSelection(providerId: $0.providerID, modelId: $0.modelID)
+                            }
+                        ) { providerID, modelID in
+                            // Re-confirming the checked row changes nothing, so a committed Bot's recovery survives.
+                            let before = draft
+                            draft?.selectModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                            if draft != before {
+                                retainedAttempt = nil
+                                retainedCreatedBot = nil
+                            }
+                        }
+                        switch current.photoModelNeed(catalog: catalog) {
+                        case .none:
+                            EmptyView()
+                        case .unavailable:
+                            Text(current.noImageModelNote(catalog: catalog))
+                                .foregroundStyle(palette.secondary)
+                        case .choose:
+                            AidenBotModelRow(
+                                title: "Photos",
+                                catalog: catalog,
+                                providerID: current.visionProviderID,
+                                modelID: current.visionModelID,
+                                imagesOnly: true
+                            ) { providerID, modelID in
+                                let before = draft
+                                draft?.selectVisionModel(providerID: providerID, modelID: modelID, catalog: catalog)
+                                if draft != before {
+                                    retainedAttempt = nil
+                                    retainedCreatedBot = nil
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("AI model")
+                    } footer: {
+                        Text("You can change this later in Advanced.")
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(palette.canvas)

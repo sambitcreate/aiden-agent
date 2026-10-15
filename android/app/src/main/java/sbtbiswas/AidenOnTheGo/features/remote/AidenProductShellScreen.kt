@@ -60,7 +60,8 @@ fun AidenProductShellScreen(
     onNavigateToWorkspaceFiles: (String) -> Unit,
     onNavigateToWorkspaceGit: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenInstallations: () -> Unit
+    onOpenInstallations: () -> Unit,
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
 ) {
     val activeArea by navigationStore.activeArea.collectAsStateWithLifecycle()
     val activeInstallationId by installationStore.activeInstallationId.collectAsStateWithLifecycle()
@@ -166,6 +167,7 @@ fun AidenProductShellScreen(
                         onNavigateToBotProfile = onNavigateToBotProfile,
                         onNavigateToBotChat = onNavigateToBotChat,
                         botDeleter = sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter,
+                        onNavigateToBotMemory = onNavigateToBotMemory,
                         onNavigateToCreateBot = { onNavigateToBotEditor(null) },
                         modifier = Modifier.fillMaxSize()
                     )

@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Creation Walkthrough</title>
+<style>
+:root{
+  --canvas:#f6f6f4; --page:#ecebe7; --raised:#ffffff; --sidebar:#f0efeb; --control:#ecebe7; --control-hover:#e3e2dd;
+  --popover:#ffffff; --fg:#1d1d1b; --secondary:#6b6a66; --tertiary:#9c9b96; --sep:rgba(0,0,0,.08);
+  --accent:#1d1d1b; --accent-fg:#ffffff; --ios-accent:#0a84ff;
+  --new-bg:#e7f3ea; --new-fg:#1e6b35; --chg-bg:#fdf1dc; --chg-fg:#8a5a00; --today-bg:#eceae6; --today-fg:#55544f;
+  --edge-bg:#fbe6e4; --edge-fg:#9b2c22; --hot:rgba(10,132,255,.14);
+  --shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.10);
+  --pop-shadow:0 2px 6px rgba(0,0,0,.08),0 18px 48px rgba(0,0,0,.18);
+  --focus:#7a7a76;
+  --r-card:14px; --r-ctl:9px; --r-pill:999px;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --canvas:#161615; --page:#1f1f1d; --raised:#262624; --sidebar:#1b1b1a; --control:#2e2e2b; --control-hover:#373734;
+  --popover:#2a2a28; --fg:#efeee9; --secondary:#a3a29c; --tertiary:#75746f; --sep:rgba(255,255,255,.08);
+  --accent:#efeee9; --accent-fg:#161615;
+  --new-bg:#1d3324; --new-fg:#8fd6a3; --chg-bg:#3a2e14; --chg-fg:#f0c66d; --today-bg:#2e2e2b; --today-fg:#b9b8b2;
+  --edge-bg:#3b1f1c; --edge-fg:#f2a49a; --hot:rgba(10,132,255,.22);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.45); --pop-shadow:0 18px 48px rgba(0,0,0,.6);
+}}
+:root[data-theme="dark"]{
+  --canvas:#161615; --page:#1f1f1d; --raised:#262624; --sidebar:#1b1b1a; --control:#2e2e2b; --control-hover:#373734;
+  --popover:#2a2a28; --fg:#efeee9; --secondary:#a3a29c; --tertiary:#75746f; --sep:rgba(255,255,255,.08);
+  --accent:#efeee9; --accent-fg:#161615;
+  --new-bg:#1d3324; --new-fg:#8fd6a3; --chg-bg:#3a2e14; --chg-fg:#f0c66d; --today-bg:#2e2e2b; --today-fg:#b9b8b2;
+  --edge-bg:#3b1f1c; --edge-fg:#f2a49a; --hot:rgba(10,132,255,.22);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.45); --pop-shadow:0 18px 48px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--canvas);color:var(--fg);font:14px/1.45 var(--font);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+/* ---------- shell ---------- */
+.top{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 20px;background:color-mix(in srgb,var(--canvas) 88%,transparent);backdrop-filter:blur(14px);border-bottom:1px solid var(--sep)}
+.top h1{font-size:15px;font-weight:650;margin:0 8px 0 0;letter-spacing:-.01em}
+.seg{display:inline-flex;background:var(--control);border-radius:var(--r-pill);padding:3px}
+.seg button{border:0;background:transparent;padding:6px 14px;border-radius:var(--r-pill);font-weight:550;color:var(--secondary);transition:background .2s,color .2s}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.spacer{flex:1}
+.btn{border:0;background:var(--control);padding:7px 14px;border-radius:var(--r-ctl);font-weight:550;transition:background .15s,transform .1s}
+.btn:hover{background:var(--control-hover)} .btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);color:var(--accent-fg)}
+.btn:disabled{opacity:.4;cursor:default}
+.counter{color:var(--secondary);font-variant-numeric:tabular-nums;min-width:56px;text-align:center}
+
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:20px;padding:20px;max-width:1500px;margin:0 auto}
+@media (max-width:1100px){.wrap{grid-template-columns:1fr}}
+.stage{position:relative;min-height:660px;transition:min-height .3s ease;display:grid;place-items:center;background:var(--page);border-radius:20px;padding:28px;overflow:hidden}
+.panel{background:var(--raised);border-radius:20px;padding:20px;align-self:start;position:sticky;top:76px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+@media (max-width:1100px){.panel{position:static}}
+.stage.ios{min-height:850px}
+@media (max-width:520px){.stage.ios{min-height:720px}}
+
+.timeline{display:flex;gap:6px;flex-wrap:wrap;padding:0 20px 28px;max-width:1500px;margin:0 auto}
+.tl{border:0;background:var(--raised);border-radius:var(--r-pill);padding:6px 12px 6px 8px;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--secondary);transition:background .15s,color .15s}
+.tl .n{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--control);font-size:11px;font-weight:650;color:var(--fg)}
+.tl[aria-current="step"]{background:var(--accent);color:var(--accent-fg)} .tl[aria-current="step"] .n{background:color-mix(in srgb,var(--accent-fg) 22%,transparent);color:var(--accent-fg)}
+.tl .dot{width:6px;height:6px;border-radius:50%}
+.tl .dot.new{background:#34a853}.tl .dot.changed{background:#e0a020}.tl .dot.edge{background:#d9493a}.tl .dot.today{background:var(--tertiary)}
+.tl.has-note::after{content:"✎";font-size:11px;margin-left:-2px}
+
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;padding:3px 9px;border-radius:var(--r-pill);letter-spacing:.01em}
+.badge.new{background:var(--new-bg);color:var(--new-fg)}.badge.changed{background:var(--chg-bg);color:var(--chg-fg)}
+.badge.today{background:var(--today-bg);color:var(--today-fg)}.badge.edge{background:var(--edge-bg);color:var(--edge-fg)}
+.panel h2{font-size:19px;margin:10px 0 6px;letter-spacing:-.015em}
+.panel .lede{color:var(--secondary);margin:0 0 14px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--tertiary);margin:16px 0 6px;font-weight:650}
+.panel ul{margin:0;padding-left:18px}.panel li{margin:3px 0}
+.files{font:12px/1.5 var(--mono);color:var(--secondary);background:var(--control);border-radius:10px;padding:8px 10px;word-break:break-all}
+.hint{font-size:12.5px;color:var(--secondary);background:var(--control);border-radius:10px;padding:8px 10px;margin-top:12px}
+.hint b{color:var(--fg)}
+textarea.note{width:100%;min-height:96px;resize:vertical;border:1px solid transparent;background:var(--control);border-radius:10px;padding:10px;font:inherit;color:var(--fg)}
+textarea.note:focus{outline:none;background:var(--control-hover)}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--secondary)}
+
+/* ---------- transitions ---------- */
+.layer{position:absolute;inset:0;display:grid;place-items:center;padding:28px}
+.anim-push-in{animation:pushIn .42s cubic-bezier(.2,.8,.2,1) both}
+.anim-push-out{animation:pushOut .42s cubic-bezier(.2,.8,.2,1) both}
+.anim-pop-in{animation:popIn .42s cubic-bezier(.2,.8,.2,1) both}
+.anim-pop-out{animation:popOut .42s cubic-bezier(.2,.8,.2,1) both}
+.anim-fade-in{animation:fadeIn .3s ease both}.anim-fade-out{animation:fadeOut .2s ease both}
+@keyframes pushIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+@keyframes pushOut{to{transform:translateX(-40px);opacity:0}}
+@keyframes popIn{from{transform:translateX(-40px);opacity:0}to{transform:none;opacity:1}}
+@keyframes popOut{to{transform:translateX(40px);opacity:0}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes fadeOut{to{opacity:0}}
+/* inner, per-surface motion */
+.dlg-in{animation:dlgIn .28s cubic-bezier(.2,.8,.2,1) both}
+@keyframes dlgIn{from{transform:scale(.96) translateY(6px);opacity:0}to{transform:none;opacity:1}}
+.scrim-in{animation:fadeIn .22s ease both}
+.pop-in{animation:popover .2s cubic-bezier(.2,.8,.2,1) both;transform-origin:top left}
+@keyframes popover{from{transform:scale(.97) translateY(-4px);opacity:0}to{transform:none;opacity:1}}
+.sheet-in{animation:sheetIn .45s cubic-bezier(.2,.9,.25,1) both}
+@keyframes sheetIn{from{transform:translateY(100%)}to{transform:none}}
+.ios-push-in{animation:iosPush .4s cubic-bezier(.2,.9,.25,1) both}
+@keyframes iosPush{from{transform:translateX(100%)}to{transform:none}}
+.row-in{animation:rowIn .35s cubic-bezier(.2,.8,.2,1) both}
+@keyframes rowIn{from{opacity:0;transform:translateY(-6px);max-height:0}to{opacity:1;transform:none;max-height:120px}}
+.typing span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--tertiary);margin:0 2px;animation:blink 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.menu-in{animation:menuIn .22s cubic-bezier(.2,.8,.2,1) both;transform-origin:top right}
+@keyframes menuIn{from{transform:scale(.9);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-delay:0ms!important;transition-duration:.01ms!important}}
+
+/* hotspot: clickable things in mockups */
+.hot{position:relative;cursor:pointer}
+.hot::after{content:"";position:absolute;inset:-4px;border-radius:inherit;box-shadow:0 0 0 2px var(--ios-accent);opacity:0;animation:hotPulse 2.2s ease-in-out infinite;pointer-events:none}
+.show-hot-off .hot::after{display:none}
+@keyframes hotPulse{0%,100%{opacity:0}50%{opacity:.55}}
+.newtag{display:inline-block;font-size:9.5px;font-weight:750;letter-spacing:.06em;padding:1px 6px;border-radius:var(--r-pill);background:var(--new-bg);color:var(--new-fg);vertical-align:middle;margin-left:6px}
+
+/* ---------- mac window ---------- */
+.mac{width:min(920px,100%);height:600px;background:var(--canvas);border-radius:12px;box-shadow:var(--shadow);display:grid;grid-template-columns:200px 1fr;overflow:hidden;position:relative;font-size:13px}
+.mac-side{background:var(--sidebar);padding:40px 10px 10px;display:flex;flex-direction:column;gap:2px}
+.lights{position:absolute;top:13px;left:14px;display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.side-item{padding:6px 10px;border-radius:8px;color:var(--secondary);display:flex;align-items:center;gap:8px}
+.side-item.on{background:var(--control);color:var(--fg);font-weight:550}
+.side-label{font-size:11px;color:var(--tertiary);padding:12px 10px 4px;font-weight:600}
+.mac-main{position:relative;display:flex;flex-direction:column;min-width:0}
+.toolbar{height:46px;display:flex;align-items:center;padding:0 16px;gap:10px;flex:0 0 auto}
+.toolbar .title{font-weight:650;font-size:13.5px}
+.content{flex:1;overflow:hidden;padding:4px 0}
+.col{max-width:620px;margin:0 auto;padding:0 20px}
+.dbtn{border:0;background:var(--control);padding:6px 12px;border-radius:9px;font-weight:550;font-size:12.5px}
+.dbtn.accent{background:var(--accent);color:var(--accent-fg)}
+.dbtn.quiet{background:transparent;color:var(--secondary)}
+.search{display:flex;align-items:center;gap:8px;background:var(--control);border-radius:9px;padding:7px 10px;color:var(--tertiary);margin:6px 0 10px}
+.bot-row{display:flex;align-items:center;gap:12px;padding:10px;border-radius:12px}
+.bot-row:hover{background:var(--control)}
+.av{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:700;color:#fff;flex:0 0 auto;position:relative}
+.av.round{border-radius:50%}
+.av .live{position:absolute;right:-1px;bottom:-1px;width:10px;height:10px;border-radius:50%;background:#34c759;box-shadow:0 0 0 2px var(--canvas)}
+.row-main{flex:1;min-width:0}.row-top{display:flex;align-items:center;gap:6px}
+.row-name{font-weight:600}.pill{font-size:11px;color:var(--secondary);background:var(--control);padding:1px 7px;border-radius:999px}
+.preview{color:var(--secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
+.time{color:var(--tertiary);font-size:11.5px}
+
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.28);display:grid;place-items:center;z-index:5}
+.dialog{width:440px;background:var(--popover);border-radius:16px;box-shadow:var(--pop-shadow);padding:20px;position:relative}
+.dialog h4{margin:0;font-size:15px;font-weight:650}.dialog .desc{color:var(--secondary);margin:4px 0 0;font-size:12.5px}
+.dialog .body{margin:16px 0;display:flex;flex-direction:column;gap:14px}
+.dialog .foot{display:flex;justify-content:flex-end;gap:8px}
+.flabel{font-weight:600;font-size:12.5px;margin-bottom:6px;display:block}
+.input{background:var(--control);border-radius:9px;padding:8px 10px;min-height:34px;color:var(--fg)}
+.input.ph{color:var(--tertiary)} .input.ta{min-height:64px}
+.caret::after{content:"";display:inline-block;width:1px;height:14px;background:var(--fg);margin-left:1px;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+.small{font-size:12px;color:var(--secondary)}
+.model-trigger{display:flex;align-items:center;gap:8px;background:var(--control);border-radius:9px;padding:7px 10px;border:0;width:100%;text-align:left}
+.model-trigger:hover{background:var(--control-hover)}
+.picon{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;font-weight:750;color:#fff;flex:0 0 auto}
+.meta{color:var(--tertiary);font-size:11.5px}
+.chev{margin-left:auto;color:var(--tertiary)}
+.reco{font-size:10.5px;font-weight:650;color:var(--secondary);background:var(--raised);padding:1px 6px;border-radius:999px}
+
+.popover{position:absolute;z-index:8;width:360px;background:var(--popover);border-radius:14px;box-shadow:var(--pop-shadow);padding:6px;font-size:12.5px}
+.pop-search{display:flex;gap:8px;align-items:center;padding:8px 10px;color:var(--tertiary);border-bottom:1px solid var(--sep);margin-bottom:4px}
+.pgroup{font-size:11px;color:var(--tertiary);font-weight:650;padding:8px 10px 4px;display:flex;align-items:center;gap:6px}
+.pitem{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;border:0;background:transparent;width:100%;text-align:left}
+.pitem:hover,.pitem.kbd{background:var(--control)}
+.pitem .chk{margin-left:auto;width:14px;text-align:right}
+.pitem[disabled]{opacity:.45;cursor:default}
+.pop-foot{border-top:1px solid var(--sep);margin-top:4px;padding:8px 10px;display:flex;justify-content:space-between;color:var(--secondary)}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--control);border-radius:999px;padding:6px 12px;font-size:12.5px}
+.chip.ok{background:var(--new-bg);color:var(--new-fg)}
+
+.chat{display:flex;flex-direction:column;height:100%}
+.chat-head{display:flex;align-items:center;gap:10px;padding:0 16px;height:46px}
+.namepill{display:inline-flex;align-items:center;gap:8px;background:var(--control);border-radius:999px;padding:4px 12px 4px 4px;font-weight:600}
+.namepill .av{width:24px;height:24px;border-radius:8px;font-size:11px}
+.msgs{flex:1;padding:12px 0;display:flex;flex-direction:column;gap:10px}
+.bubble{max-width:78%;padding:9px 13px;border-radius:16px;background:var(--raised);box-shadow:0 1px 1px rgba(0,0,0,.04)}
+.bubble.me{align-self:flex-end;background:var(--accent);color:var(--accent-fg)}
+.qr{display:flex;gap:6px;flex-wrap:wrap}.qr span{background:var(--control);border-radius:999px;padding:4px 10px;font-size:12px}
+.composer{margin:0 auto 14px;width:calc(100% - 40px);max-width:620px;background:var(--raised);border-radius:16px;padding:10px 12px;color:var(--tertiary);display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--control);display:grid;place-items:center}
+.menu{position:absolute;z-index:9;background:var(--popover);border-radius:12px;box-shadow:var(--pop-shadow);padding:5px;min-width:180px}
+.menu div{padding:7px 10px;border-radius:7px;display:flex;gap:8px;align-items:center}
+.menu div:hover{background:var(--control)} .menu .danger{color:#d9493a} .menu hr{border:0;border-top:1px solid var(--sep);margin:4px 6px}
+
+.group-title{font-size:12px;font-weight:650;color:var(--secondary);margin:16px 0 6px 4px}
+.group{background:var(--raised);border-radius:var(--r-card);overflow:hidden}
+.grow{display:flex;align-items:center;gap:12px;padding:11px 14px;position:relative}
+.grow+.grow::before{content:"";position:absolute;top:0;left:14px;right:0;border-top:1px solid var(--sep)}
+.grow .lbl{flex:1}.grow .val{color:var(--secondary)}
+.grow .sub{display:block;color:var(--secondary);font-size:12px}
+.sel{background:var(--control);border-radius:8px;padding:5px 10px;display:inline-flex;gap:6px;align-items:center;font-size:12.5px}
+.meter{height:6px;background:var(--control);border-radius:999px;overflow:hidden;margin-top:6px}.meter i{display:block;height:100%;background:var(--tertiary);border-radius:999px}
+.switch{width:34px;height:20px;border-radius:999px;background:#34c759;position:relative}.switch::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff}
+.radio{width:16px;height:16px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--tertiary);flex:0 0 auto}
+.radio.on{box-shadow:inset 0 0 0 5px var(--accent)}
+.photo{width:76px;height:76px;border-radius:24px;display:grid;place-items:center;font-size:28px;font-weight:700;color:#fff;margin:0 auto}
+.file-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px}
+.file-row:hover{background:var(--control)}
+.ficon{width:28px;height:28px;border-radius:7px;background:var(--control);display:grid;place-items:center;font-size:13px}
+
+/* ---------- iPhone ---------- */
+.phone{width:390px;height:780px;border-radius:54px;background:#0b0b0b;padding:12px;box-shadow:var(--shadow);position:relative;flex:0 0 auto}
+@media (max-width:520px){.phone{transform:scale(.82);transform-origin:top center;margin-bottom:-140px}}
+.screen{position:relative;width:100%;height:100%;border-radius:43px;overflow:hidden;background:var(--canvas);font-size:15px}
+.island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:120px;height:34px;border-radius:20px;background:#000;z-index:30}
+.status{height:50px;display:flex;justify-content:space-between;align-items:flex-end;padding:0 30px 6px;font-weight:600;font-size:15px}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:6px 16px;min-height:44px}
+.nav .t{font-weight:600}.nav .a{color:var(--ios-accent)}
+.nav .a.dis{color:var(--tertiary)}
+.big{font-size:32px;font-weight:700;padding:0 18px 8px;letter-spacing:-.02em}
+.circbtn{width:36px;height:36px;border-radius:50%;background:var(--control);display:grid;place-items:center;font-size:18px;color:var(--fg)}
+.ios-search{margin:0 16px 10px;background:var(--control);border-radius:12px;padding:8px 12px;color:var(--tertiary)}
+.ios-list{padding:0 8px}
+.ios-row{display:flex;align-items:center;gap:12px;padding:10px;border-radius:14px}
+.ios-row .av{width:46px;height:46px;border-radius:15px}
+.sheet{position:absolute;inset:0;top:56px;background:var(--canvas);border-radius:14px 14px 0 0;z-index:10;overflow:hidden;box-shadow:0 -1px 0 var(--sep)}
+.sheet-scrim{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:9}
+.form{padding:4px 16px}
+.fsec{background:var(--raised);border-radius:12px;overflow:hidden}
+.frow{padding:12px 16px;display:flex;align-items:center;gap:10px;position:relative;min-height:46px}
+.frow+.frow::before{content:"";position:absolute;top:0;left:16px;right:0;border-top:1px solid var(--sep)}
+.frow .ph{color:var(--tertiary)}
+.frow .v{margin-left:auto;color:var(--secondary);display:flex;align-items:center;gap:6px}
+.fhead{font-size:13px;color:var(--secondary);padding:18px 16px 6px;text-transform:none}
+.ffoot{font-size:13px;color:var(--secondary);padding:6px 16px 0}
+.ios-chev{color:var(--tertiary);font-weight:600}
+.ios-check{color:var(--ios-accent);margin-left:auto;font-weight:700}
+.sub13{display:block;font-size:13px;color:var(--secondary)}
+.ios-menu{position:absolute;right:14px;top:96px;width:230px;background:color-mix(in srgb,var(--popover) 92%,transparent);backdrop-filter:blur(20px);border-radius:14px;box-shadow:var(--pop-shadow);z-index:20;overflow:hidden}
+.ios-menu div{padding:12px 16px;display:flex;justify-content:space-between;position:relative}
+.ios-menu div+div::before{content:"";position:absolute;top:0;left:0;right:0;border-top:1px solid var(--sep)}
+.ios-menu .danger{color:#ff3b30}
+.ios-composer{position:absolute;left:12px;right:12px;bottom:28px;background:var(--raised);border-radius:22px;padding:11px 14px;color:var(--tertiary);display:flex;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.home-ind{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--fg);opacity:.85;z-index:40}
+.creating{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--canvas) 70%,transparent);z-index:12;font-weight:600}
+.toast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:var(--accent);color:var(--accent-fg);padding:8px 14px;border-radius:999px;font-size:12.5px;z-index:20;animation:fadeIn .3s ease both}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Bot creation walkthrough</h1>
+  <div class="seg" role="group" aria-label="Platform">
+    <button id="pf-desktop" aria-pressed="true">Desktop (Mac)</button>
+    <button id="pf-ios" aria-pressed="false">iPhone</button>
+  </div>
+  <div class="spacer"></div>
+  <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="hot-toggle" checked> Highlight tappable spots</label>
+  <button class="btn" id="prev" aria-label="Previous step">← Back</button>
+  <span class="counter" id="counter" aria-live="polite"></span>
+  <button class="btn primary" id="next" aria-label="Next step">Next →</button>
+  <button class="btn" id="copy">Copy my notes</button>
+</header>
+
+<main class="wrap">
+  <section class="stage" id="stage" aria-label="Screen mockup"></section>
+  <aside class="panel" id="panel" aria-live="polite"></aside>
+</main>
+<nav class="timeline" id="timeline" aria-label="Steps"></nav>
+
+<script>
+/* ---------------- sample data ---------------- */
+// Example inventory only. The real list is whatever providers/models Aiden
+// already has set up (BotCapabilityCatalog.providers on the Mac).
+const PROVIDERS = [
+  { id:"anthropic", label:"Anthropic", letter:"A", color:"#c96442", models:[
+    { id:"claude-sonnet-5-5", label:"Claude Sonnet 5.5", images:true, recommended:true },
+    { id:"claude-opus-5-5",   label:"Claude Opus 5.5",   images:true },
+    { id:"claude-haiku-5-5",  label:"Claude Haiku 5.5",  images:true },
+  ]},
+  { id:"openrouter", label:"OpenRouter", letter:"O", color:"#5a5fd6", models:[
+    { id:"deepseek-v3", label:"DeepSeek V3", images:false },
+    { id:"qwen3-coder", label:"Qwen3 Coder", images:false },
+  ]},
+  { id:"ollama", label:"Ollama (this Mac)", letter:"L", color:"#3d3d3a", models:[
+    { id:"llama-local", label:"Llama 3.3 70B", images:false },
+    { id:"gemma-local", label:"Gemma 3 27B", images:true },
+  ]},
+  { id:"openai", label:"OpenAI", letter:"G", color:"#10a37f", unavailable:true, models:[
+    { id:"gpt", label:"Not signed in", images:true, disabled:true },
+  ]},
+];
+const allModels = () => PROVIDERS.flatMap(p => p.models.map(m => ({...m, provider:p})));
+const findModel = id => allModels().find(m => m.id === id);
+const RECO = "claude-sonnet-5-5";
+const VISION_FALLBACK = "claude-haiku-5-5";
+
+const state = {
+  platform: "desktop",
+  index: { desktop:0, ios:0 },
+  model: { desktop:RECO, ios:RECO },
+  forceTextOnlyDemo: { desktop:false, ios:false },
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const picon = (p, size=18) => `<span class="picon" style="background:${p.color};width:${size}px;height:${size}px">${p.letter}</span>`;
+const avatar = (cls="") => `<div class="av ${cls}" style="background:#6a8f5a">M<span class="live"></span></div>`;
+const cur = () => findModel(state.model[state.platform]);
+
+/* ---------------- shared mac chrome ---------------- */
+function mac(main, overlay="") {
+  return `<div class="mac">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div class="mac-side">
+      <div class="side-item">＋ New chat</div>
+      <div class="side-item">⌕ Search</div>
+      <div class="side-item on">◎ Bots</div>
+      <div class="side-item">⌘ Devices</div>
+      <div class="side-label">Chats</div>
+      <div class="side-item">Release notes draft</div>
+      <div class="side-item">Fix flaky e2e</div>
+    </div>
+    <div class="mac-main">${main}${overlay}</div>
+  </div>`;
+}
+function botsHomeMain(hotNew=false) {
+  return `<div class="toolbar"><span class="title">Bots</span><span class="spacer" style="flex:1"></span>
+      <button class="dbtn accent ${hotNew?"hot":""}" data-go="+1">New Bot</button></div>
+    <div class="content"><div class="col">
+      <div class="search">⌕ Search Bots</div>
+      ${botRow("Study Buddy","Exam prep","Here are 3 flashcards for tomorrow…","9:12 AM","#7c6bd6")}
+      ${botRow("Trip Planner","Travel","Your Lisbon itinerary is ready.","Yesterday","#3b82c4")}
+      ${botRow("Inbox Triage","Email","Paused — tap to resume","Mon","#b0763a")}
+    </div></div>`;
+}
+function botRow(n, s, p, t, c) {
+  return `<div class="bot-row"><div class="av" style="background:${c}">${n[0]}</div>
+    <div class="row-main"><div class="row-top"><span class="row-name">${n}</span><span class="pill">${s}</span></div>
+    <div class="preview">${p}</div></div><span class="time">${t}</span></div>`;
+}
+
+/* ---------------- desktop dialog pieces ---------------- */
+function modelField({ hot=false, empty=false } = {}) {
+  if (empty) {
+    return `<div><span class="flabel">AI model <span class="newtag">NEW</span></span>
+      <div class="model-trigger" style="cursor:default"><span class="small">No AI model set up yet</span>
+      <span class="dbtn" style="margin-left:auto;padding:3px 10px">Set up…</span></div>
+      <div class="small" style="margin-top:6px">You can still create it. It asks for a model when you open it.</div></div>`;
+  }
+  const m = cur();
+  const needsVision = !m.images;
+  const vision = findModel(VISION_FALLBACK);
+  return `<div><span class="flabel">AI model <span class="newtag">NEW</span></span>
+    <button class="model-trigger ${hot?"hot":""}" data-go="picker" aria-haspopup="listbox">
+      ${picon(m.provider)}<span>${esc(m.label)}</span>
+      ${m.id===RECO?`<span class="reco">Recommended</span>`:`<span class="meta">· ${esc(m.provider.label)}</span>`}
+      <span class="chev">⌄</span></button>
+    ${needsVision ? `<div class="row-in" style="margin-top:10px">
+      <span class="flabel">For photos <span class="newtag">AUTO</span></span>
+      <div class="model-trigger" style="cursor:default">${picon(vision.provider)}<span>${vision.label}</span><span class="meta">· reads images</span><span class="chev">⌄</span></div>
+      <div class="small" style="margin-top:6px">${esc(m.label)} reads text only, so photos and screenshots go here.</div></div>` : ""}
+  </div>`;
+}
+function createDialogStep1(opts={}) {
+  return `<div class="scrim ${opts.animate?"scrim-in":""}"><div class="dialog ${opts.animate?"dlg-in":""}" role="dialog" aria-label="New Bot">
+    <h4>New Bot</h4>
+    <div class="body">
+      <div><span class="flabel">Name</span><div class="input ${opts.typing?"caret":""}">Meal Planner</div></div>
+      <div><span class="flabel">What should it help with?</span><div class="input ta">Plan my meals and grocery list every week</div></div>
+      ${modelField(opts)}
+      <div class="small">It can use everything Aiden can on this Mac. You can change this later in Advanced.</div>
+    </div>
+    <div class="foot"><button class="dbtn">Cancel</button><button class="dbtn accent ${opts.hotNext?"hot":""}" data-go="+1">Next</button></div>
+  </div></div>`;
+}
+function pickerPopover() {
+  const sel = state.model.desktop;
+  const groups = PROVIDERS.map(p => `
+    <div class="pgroup">${picon(p,14)} ${esc(p.label)}${p.unavailable?` <span class="meta">· not set up</span>`:""}</div>
+    ${p.models.map(m => `<button class="pitem ${m.id===sel?"kbd":""}" ${m.disabled?"disabled":""} data-pick="${m.id}" role="option" aria-selected="${m.id===sel}">
+        <span>${esc(m.label)}</span>
+        ${m.disabled?"":`<span class="meta">· ${m.images?"Reads images":"Text only"}</span>`}
+        ${m.recommended?`<span class="reco">Recommended</span>`:""}
+        <span class="chk">${m.id===sel?"✓":""}</span></button>`).join("")}`).join("");
+  return `<div class="popover pop-in" style="left:calc(50% - 205px);top:254px" role="listbox" aria-label="AI model">
+    <div class="pop-search">⌕ <span>Search models</span></div>
+    <div style="max-height:250px;overflow:auto">${groups}</div>
+    <div class="pop-foot"><span>Manage providers…</span><span class="meta">↑↓ ⏎</span></div>
+  </div>`;
+}
+function connectionsDialog(created=false) {
+  return `<div class="scrim"><div class="dialog dlg-in">
+    <h4>Connections</h4><p class="desc">Optional. Meal Planner can use any app you connect on this Mac.</p>
+    <div class="body">
+      <div class="chips"><span class="chip ok">✓ Google Calendar</span><span class="chip">＋ Notion</span><span class="chip">＋ Gmail</span><span class="chip">＋ More apps (Composio)</span></div>
+      <div class="small">Skip this if you like. You can connect more apps any time in Settings.</div>
+      <div class="group" style="background:var(--control)"><div class="grow"><span class="lbl small" style="color:var(--fg)">Runs on</span>
+        <span class="val" style="display:flex;gap:6px;align-items:center">${picon(cur().provider,14)} ${esc(cur().label)}</span></div></div>
+    </div>
+    <div class="foot"><button class="dbtn">Back</button><button class="dbtn accent hot" data-go="+1">${created?"Creating…":"Create"}</button></div>
+  </div></div>`;
+}
+function chatMain({ typing=false, menu=false, hotMenu=false } = {}) {
+  return `<div class="chat">
+    <div class="chat-head"><span class="dbtn quiet">←</span>
+      <span class="namepill">${`<span class="av" style="background:#6a8f5a">M</span>`}Meal Planner</span>
+      <span style="flex:1"></span><button class="dbtn quiet ${hotMenu?"hot":""}" data-go="+1" aria-label="More">•••</button></div>
+    <div class="col msgs" style="width:100%">
+      <div class="bubble">Hi! I’m Meal Planner. I’ll plan your week of meals and keep the grocery list in sync. To start, any foods you avoid?</div>
+      <div class="qr"><span>A · Vegetarian</span><span>B · No nuts</span><span>C · Nothing, surprise me</span></div>
+      ${typing?`<div class="bubble me">No dairy please</div><div class="bubble typing" aria-label="Typing"><span></span><span></span><span></span></div>`:""}
+    </div>
+    <div class="composer"><span>Message Meal Planner</span><span class="send">↑</span></div>
+    ${menu?`<div class="menu menu-in" style="right:14px;top:44px"><div class="hot" data-go="+1">▢ Files</div><div data-go="profile">◉ Profile</div><hr><div class="danger">Delete Bot</div></div>`:""}
+  </div>`;
+}
+function pageShell(title, body, rightBtn="") {
+  return `<div class="toolbar"><span class="dbtn quiet">←</span><span class="title">${title}</span><span style="flex:1"></span>${rightBtn}</div>
+    <div class="content" style="overflow:auto"><div class="col" style="padding-bottom:30px">${body}</div></div>`;
+}
+
+/* ---------------- desktop steps ---------------- */
+const DESKTOP = [
+  { id:"d-home", title:"Bots home", status:"today",
+    lede:"Sidebar → Bots. The list, search, and New Bot in the toolbar. First run shows the “Meet your first Bot” carousel here instead.",
+    today:["New Bot opens a 2-step dialog.","Presets (“Start chat”) create a Bot with the recommended model and no picker."],
+    proposed:["Unchanged. New Bot still opens the dialog."],
+    files:"renderer/main/bots-view.tsx · bots/bot-list.tsx · bots/bot-starter-carousel.tsx",
+    render:()=> mac(botsHomeMain(true)), enter:"fade" },
+  { id:"d-step1", title:"New Bot · step 1 with an AI model field", status:"changed",
+    lede:"Name and “What should it help with?” stay. A new AI model field sits under them, set to the recommended model.",
+    today:["No model choice here. <code>recommendedFullAccess()</code> silently takes the first available model."],
+    proposed:["Add an <b>AI model</b> field that opens the same searchable picker as the chat composer.","Default = today’s recommendation, marked <b>Recommended</b>, so pressing Enter twice still works.","Only models Aiden already has set up are listed. Providers that aren’t set up appear greyed out."],
+    files:"renderer/main/bots/bot-create-flow.tsx (recommendedFullAccess → chosen model)\nrenderer/components/model-picker.tsx (reuse)",
+    render:()=> mac(botsHomeMain(), createDialogStep1({ animate:true, hot:true, typing:true })), enter:"fade" },
+  { id:"d-picker", title:"Model picker open", status:"new",
+    lede:"Click a model. Pick a text-only one (DeepSeek, Qwen, Llama) to see the photo model appear on the next step.",
+    today:["This picker exists only in the chat composer; Bots never show it."],
+    proposed:["A popover anchored to the field: search, grouped by provider with provider icons, “Reads images / Text only” per row, ✓ on the current one.","Keyboard: type to filter, ↑↓, Return picks and closes, Esc closes.","“Manage providers…” goes to Settings → Providers."],
+    files:"renderer/components/model-picker.tsx (needs a small adapter from BotCapabilityCatalog to Provider[])",
+    render:()=> mac(botsHomeMain(), createDialogStep1() + pickerPopover()), enter:"fade" },
+  { id:"d-picked", title:"Model chosen · photo model added when needed", status:"changed",
+    lede:"The field shows your pick. If it reads text only, a “For photos” row appears below it, already filled in.",
+    today:["Advanced is the only place that does this text-only → image-model pairing."],
+    proposed:["Same rule as Advanced: an image model is chosen for you only when the main model can’t see images.","Optional: hide the photo row behind “Change” to keep the dialog short."],
+    files:"renderer/main/bots/bot-access-draft.ts (firstAvailableVisionModel)",
+    render:()=> mac(botsHomeMain(), createDialogStep1({ hotNext:true })), enter:"fade",
+    extra:()=> `<button class="btn" data-demo="textonly" style="margin-top:10px">Show with a text-only model</button>` },
+  { id:"d-nomodel", title:"Edge case · no AI model set up", status:"edge",
+    lede:"Nothing to pick yet. The field becomes a “Set up…” shortcut, and creating still works.",
+    today:["The Bot is created without a model and shows “Needs an AI model” when opened."],
+    proposed:["Field reads “No AI model set up yet” with <b>Set up…</b> (Settings → Providers).","When you come back the field refreshes. Next is never blocked."],
+    files:"renderer/main/bots/bot-needs-model.tsx",
+    render:()=> mac(botsHomeMain(), createDialogStep1({ empty:true })), enter:"fade" },
+  { id:"d-connect", title:"New Bot · step 2 Connections", status:"today",
+    lede:"Unchanged connect-now chips, plus an optional read-only “Runs on” summary of the model you picked.",
+    today:["Chips start a connection’s setup. Back keeps the step 1 draft."],
+    proposed:["Optional: a quiet “Runs on” row so the choice is confirmed before Create. Remove it if it feels redundant."],
+    files:"renderer/main/bots/bot-create-flow.tsx · components/bots/connection-chips.tsx",
+    render:()=> mac(botsHomeMain(), connectionsDialog()), enter:"push" },
+  { id:"d-chat", title:"Bot chat opens with its self-intro", status:"today",
+    lede:"Create closes the dialog and opens the chat. The one-time self-intro runs on the model you picked.",
+    today:["The intro is skipped when the Bot has no model.","Chat mode hides the workspace, git, permission, model and thinking pickers."],
+    proposed:["No change. The model stays off the chat header; it’s a Bot setting, not a per-message choice."],
+    files:"renderer/main/bots/bot-chat-pane.tsx · bot-chat-header.tsx",
+    render:()=> mac(chatMain({ typing:true, hotMenu:true })), enter:"push" },
+  { id:"d-menu", title:"••• menu", status:"today",
+    lede:"Profile, Files and Delete Bot. Click Files.",
+    today:["Same menu on rows (hover •••) and in the chat header."], proposed:["No change."],
+    files:"renderer/main/bots/bot-chat-header.tsx",
+    render:()=> mac(chatMain({ menu:true })), enter:"fade" },
+  { id:"d-files", title:"Bot’s files", status:"today",
+    lede:"Files the Bot has written or been given, in a dialog with a single Close.",
+    today:["Skeleton while loading, Try again on failure, empty state when there are none."], proposed:["No change."],
+    files:"renderer/main/bots/bot-files-dialog.tsx",
+    render:()=> mac(chatMain(), `<div class="scrim scrim-in"><div class="dialog dlg-in" style="width:460px">
+        <h4>Meal Planner’s files</h4>
+        <div class="body" style="gap:2px">
+          <div class="file-row"><span class="ficon">▤</span><div><div>week-42-meal-plan.md</div><div class="meta">Today · 3 KB</div></div></div>
+          <div class="file-row"><span class="ficon">▤</span><div><div>grocery-list.md</div><div class="meta">Today · 1 KB</div></div></div>
+          <div class="file-row"><span class="ficon">▧</span><div><div>fridge-photo.jpg</div><div class="meta">Yesterday · 2.1 MB</div></div></div>
+        </div>
+        <div class="foot"><button class="dbtn accent hot" data-go="+1">Close</button></div></div></div>`), enter:"fade" },
+  { id:"d-profile", title:"Profile", status:"changed",
+    lede:"Photo, name, subtitle and Character auto-save. About holds Instructions, Memory and Routines.",
+    today:["The model is only visible two levels down, in ••• → Advanced."],
+    proposed:["Optional new row in About: <b>AI model</b> → shows the current model and opens Advanced. Say if you want it."],
+    files:"renderer/main/bots/bot-profile.tsx",
+    render:()=> mac(pageShell("Meal Planner", `
+      <div style="text-align:center;padding:10px 0 4px"><div class="photo" style="background:#6a8f5a">M</div>
+        <div style="margin-top:10px;font-weight:650;font-size:16px">Meal Planner</div><div class="small">Plan my meals and grocery list every week</div></div>
+      <div class="group-title">Character</div>
+      <div class="group"><div class="grow"><span class="lbl">Colour and shape</span><span class="val">Sage · Rounded</span></div></div>
+      <div class="group-title">About</div>
+      <div class="group">
+        <div class="grow"><span class="lbl">Instructions</span><span class="val">›</span></div>
+        <div class="grow hot" data-go="+1"><span class="lbl">Memory</span><span class="val">6 things ›</span></div>
+        <div class="grow"><span class="lbl">AI model <span class="newtag">OPTIONAL</span></span><span class="val" style="display:flex;gap:6px;align-items:center">${picon(cur().provider,14)} ${esc(cur().label)} ›</span></div>
+      </div>
+      <div class="group-title">Routines</div>
+      <div class="group"><div class="grow"><span class="lbl">Every Sunday at 6:00 PM<span class="sub">Plan next week’s meals</span></span><span class="val">›</span></div>
+        <div class="grow"><span class="lbl" style="color:var(--secondary)">＋ Add routine</span></div></div>`,
+      `<span class="dbtn quiet">•••</span>`)), enter:"push" },
+  { id:"d-memory", title:"Memory", status:"today",
+    lede:"What the Bot remembers, in two groups, with a fullness meter and Erase memory at the bottom.",
+    today:["Each row has ••• (Edit, Delete). Delete has a 6-second Undo toast.","“Memory updated” in the chat opens this page."], proposed:["No change."],
+    files:"renderer/main/bots/bot-memory-page.tsx · use-bot-memory.ts",
+    render:()=> mac(pageShell("Memory", `
+      <div class="group-title">About you</div>
+      <div class="group">
+        <div class="grow"><span class="lbl">Doesn’t eat dairy</span><span class="val">•••</span></div>
+        <div class="grow"><span class="lbl">Cooks for two on weekdays</span><span class="val">•••</span></div>
+      </div>
+      <div class="group-title">Meal Planner’s notes</div>
+      <div class="group">
+        <div class="grow"><span class="lbl">Grocery list lives in grocery-list.md</span><span class="val">•••</span></div>
+        <div class="grow"><span class="lbl">Prefers 30-minute recipes</span><span class="val">•••</span></div>
+        <div class="grow" style="display:block"><span class="small">41% full</span><div class="meter" role="meter" aria-valuetext="563 of 1,375 characters"><i style="width:41%"></i></div></div>
+      </div>
+      <div style="margin-top:16px"><button class="dbtn" style="color:#d9493a">Erase memory</button></div>`)), enter:"push",
+    after:"advanced" },
+  { id:"d-advanced", title:"Advanced", status:"changed",
+    lede:"Opened from Profile •••. Shows the model you chose at creation, plus access and Telegram.",
+    today:["Service + Model selects, an image model when needed, and Use recommended.","Full or Custom access, Telegram binding. One Save button for everything."],
+    proposed:["Switch the two selects to the same picker field used in the New Bot dialog, so both places look and behave the same."],
+    files:"renderer/main/bots/bot-advanced.tsx (ModelSection)",
+    render:()=> mac(pageShell("Advanced", `
+      <div class="group-title">AI model</div>
+      <div class="group">
+        <div class="grow"><span class="lbl">Model</span><span class="sel">${picon(cur().provider,14)} ${esc(cur().label)} ⌄</span></div>
+        <div class="grow"><span class="lbl" style="color:var(--secondary)">Use recommended</span></div>
+      </div>
+      <div class="group-title">What it can use</div>
+      <div class="group">
+        <div class="grow"><span class="radio on"></span><span class="lbl">Full access<span class="sub">Everything Aiden can use on this Mac</span></span></div>
+        <div class="grow"><span class="radio"></span><span class="lbl">Custom<span class="sub">Only what you pick</span></span></div>
+      </div>
+      <div class="group-title">Telegram</div>
+      <div class="group"><div class="grow"><span class="lbl">Not connected</span><span class="dbtn">Connect</span></div></div>`,
+      `<span class="dbtn accent">Save</span>`)), enter:"push" },
+];
+
+/* ---------------- iPhone pieces ---------------- */
+function phone(inner, { dark=false } = {}) {
+  return `<div class="phone"><div class="screen">
+    <div class="island"></div>
+    <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+    ${inner}
+    <div class="home-ind"></div>
+  </div></div>`;
+}
+function iosHome(hotPlus=false) {
+  return `<div class="nav"><span></span><span class="circbtn ${hotPlus?"hot":""}" data-go="+1" aria-label="New Bot">＋</span></div>
+    <div class="big">Bots</div>
+    <div class="ios-search">⌕ Search</div>
+    <div class="ios-list">
+      ${iosRow("Study Buddy","Exam prep","Here are 3 flashcards…","9:12","#7c6bd6")}
+      ${iosRow("Trip Planner","Travel","Your Lisbon itinerary is ready.","Yesterday","#3b82c4", true)}
+      ${iosRow("Inbox Triage","Email","Paused — tap to resume","Mon","#b0763a")}
+    </div>`;
+}
+function iosRow(n,s,p,t,c,mac=false){
+  return `<div class="ios-row"><div class="av" style="background:${c}">${n[0]}</div>
+    <div class="row-main"><div class="row-top"><span class="row-name">${n}</span><span class="pill">${s}</span>${mac?`<span class="meta">⌘ Mac</span>`:""}</div>
+    <div class="preview" style="font-size:14px">${p}</div></div><span class="time">${t}</span></div>`;
+}
+function iosCreateSheet({ animate=false, empty=false, hotModel=false, creating=false } = {}) {
+  const m = cur();
+  const vision = findModel(VISION_FALLBACK);
+  const modelSection = empty
+    ? `<div class="fhead">AI model <span class="newtag">NEW</span></div>
+       <div class="fsec"><div class="frow"><span>Model</span><span class="v">None on your Mac</span></div></div>
+       <div class="ffoot">It needs an AI model before it can reply. Add one on your Mac in Settings → Providers.</div>`
+    : `<div class="fhead">AI model <span class="newtag">NEW</span></div>
+       <div class="fsec">
+         <div class="frow ${hotModel?"hot":""}" data-go="+1" role="button"><span>Model</span>
+           <span class="v">${picon(m.provider,18)} ${esc(m.label)} <span class="ios-chev">›</span></span></div>
+         ${!m.images?`<div class="frow row-in"><span>Photos</span><span class="v">${picon(vision.provider,18)} ${vision.label} <span class="ios-chev">›</span></span></div>`:""}
+       </div>
+       <div class="ffoot">${m.id===RECO?"Recommended. ":""}${!m.images?`${esc(m.label)} reads text only, so photos go to ${vision.label}. `:""}You can change this later in Advanced.</div>`;
+  return `<div class="sheet-scrim ${animate?"scrim-in":""}"></div>
+    <div class="sheet ${animate?"sheet-in":""}">
+      <div class="nav"><span class="a">Cancel</span><span class="t">New Bot</span><span class="a ${creating?"dis":""} hot" data-go="create">${creating?"Creating…":"Create"}</span></div>
+      <div class="form">
+        <div class="fsec" style="margin-top:12px">
+          <div class="frow"><span class="caret">Meal Planner</span></div>
+          <div class="frow" style="align-items:flex-start;min-height:70px">Plan my meals and grocery list every week</div>
+        </div>
+        <div class="ffoot">It can use everything your Mac allows. You can change this later in Advanced.</div>
+        ${modelSection}
+      </div>
+      ${creating?`<div class="creating"><span>Creating Meal Planner…</span></div>`:""}
+    </div>`;
+}
+function iosPicker() {
+  const sel = state.model.ios;
+  const reco = findModel(RECO);
+  return `<div class="sheet-scrim"></div><div class="sheet"><div class="ios-push-in" style="position:absolute;inset:0;background:var(--canvas);overflow:auto">
+    <div class="nav"><span class="a">‹ New Bot</span><span class="t">AI model</span><span style="width:60px"></span></div>
+    <div class="ios-search" style="margin-top:4px">⌕ Search models</div>
+    <div class="form">
+      <div class="fhead" style="padding-top:6px">Recommended</div>
+      <div class="fsec">${iosPickRow(reco, sel)}</div>
+      ${PROVIDERS.map(p=>`
+        <div class="fhead" style="display:flex;gap:8px;align-items:center">${picon(p,16)} ${esc(p.label)}${p.unavailable?" · Not set up":""}</div>
+        <div class="fsec">${p.models.map(m=>iosPickRow({...m,provider:p}, sel)).join("")}</div>`).join("")}
+      <div class="ffoot" style="padding-bottom:40px">These are the models your Mac has set up. Add more on your Mac in Settings → Providers.</div>
+    </div></div></div>`;
+}
+function iosPickRow(m, sel) {
+  return `<div class="frow" ${m.disabled?`style="opacity:.45"`:`data-pick="${m.id}" role="button"`}>
+    <span>${esc(m.label)}<span class="sub13">${m.disabled?"Sign in on your Mac":m.images?"Reads images":"Text only"}</span></span>
+    ${m.id===sel?`<span class="ios-check">✓</span>`:""}</div>`;
+}
+function iosChat({ menu=false, intro=true } = {}) {
+  return `<div class="ios-push-in" style="position:absolute;inset:0;top:50px">
+    <div class="nav"><span class="a">‹</span>
+      <span class="namepill" style="font-size:14px"><span class="av" style="background:#6a8f5a">M</span>Meal Planner</span>
+      <span class="circbtn hot" data-go="+1" aria-label="More">•••</span></div>
+    <div style="padding:10px 14px;display:flex;flex-direction:column;gap:10px">
+      ${intro?`<div class="bubble" style="max-width:85%">Hi! I’m Meal Planner. I’ll plan your week and keep the grocery list in sync. Any foods you avoid?</div>
+      <div class="qr"><span>A · Vegetarian</span><span>B · No nuts</span><span>C · Surprise me</span></div>`:""}
+    </div>
+    <div class="ios-composer"><span>Message</span><span>🎙</span></div>
+    ${menu?`<div class="ios-menu menu-in" style="top:46px"><div data-go="profile">Profile <span>◉</span></div><div class="hot" data-go="+1">Files <span>▢</span></div><div class="danger">Delete Bot <span>🗑</span></div></div>`:""}
+  </div>`;
+}
+function iosSheetPage(title, body, { left="", right="Done", animate=true, push=false } = {}) {
+  return `${iosChat({intro:true})}<div class="sheet-scrim"></div>
+    <div class="sheet ${animate&&!push?"sheet-in":""}"><div class="${push?"ios-push-in":""}" style="position:absolute;inset:0;background:var(--canvas);overflow:auto">
+      <div class="nav"><span class="a">${left}</span><span class="t">${title}</span><span class="a">${right}</span></div>
+      <div class="form" style="padding-bottom:40px">${body}</div></div></div>`;
+}
+
+/* ---------------- iPhone steps ---------------- */
+const IOS = [
+  { id:"i-home", title:"Bots tab", status:"today",
+    lede:"The Bots list. ＋ opens New Bot as a sheet. Bots from a paired Mac show a Mac badge.",
+    today:["First run shows the presets carousel (Start Chat / Create My Own) instead of the list.","Presets use the Mac’s recommended model with no choice."],
+    proposed:["Unchanged. Open question: should presets also offer a model? (See questions.)"],
+    files:"ios/…/Bots/AidenBotsHomeView.swift · AidenBotPresetsView.swift",
+    render:()=> phone(iosHome(true)), enter:"fade" },
+  { id:"i-create", title:"New Bot sheet with an AI model section", status:"changed",
+    lede:"Name and “What should it help with?” stay. A new AI model section shows the recommended model; tap it to change.",
+    today:["Just two fields. The draft already picks a model (<code>.recommended</code>) and sends it in the create request, but you never see it."],
+    proposed:["Add an <b>AI model</b> section: Model row with the provider icon + name, pushes a picker.","Photos row appears only when the model reads text only.","Footer: “Recommended. You can change this later in Advanced.”"],
+    files:"ios/…/Bots/AidenBotCreateView.swift (draft.customAccess.providerID/modelID already exist)",
+    render:()=> phone(iosHome() + iosCreateSheet({ animate:true, hotModel:true })), enter:"fade" },
+  { id:"i-picker", title:"Model picker (pushed inside the sheet)", status:"new",
+    lede:"Tap any model. A text-only one (DeepSeek, Qwen, Llama) adds the Photos row on the next screen.",
+    today:["iOS has a model menu in the chat composer and Pickers in Bot Advanced, but nothing in New Bot."],
+    proposed:["A searchable list: Recommended first, then one section per provider from the Mac, with provider icons and “Reads images / Text only”.","Providers the Mac hasn’t signed into are greyed out. Choosing pops back."],
+    files:"Reuse AidenProviderIcon + the provider/model bindings from AidenBotAdvancedView.swift",
+    render:()=> phone(iosHome() + iosPicker()), enter:"fade" },
+  { id:"i-picked", title:"Back in New Bot with the model chosen", status:"changed",
+    lede:"The Model row shows your pick. A text-only model brings in a Photos row, already filled.",
+    today:["Not shown during creation. Only Advanced pairs a text-only model with a photo model."], proposed:["Same pairing rule as desktop and Advanced."],
+    files:"ios/…/Bots/AidenBotSettingsDraft.swift",
+    render:()=> phone(iosHome() + iosCreateSheet({})), enter:"fade",
+    extra:()=> `<button class="btn" data-demo="textonly" style="margin-top:10px">Show with a text-only model</button>` },
+  { id:"i-nomodel", title:"Edge case · Mac has no AI model", status:"edge",
+    lede:"On a Mac with no model, the section explains that and Create still works.",
+    today:["Today’s footer already says “It needs an AI model before it can reply. Choose one on your Mac.”"],
+    proposed:["Keep that, but in the AI model section so it sits where the choice would be."],
+    files:"AidenBotCreateView.swift (allowsModellessCreate)",
+    render:()=> phone(iosHome() + iosCreateSheet({ empty:true })), enter:"fade" },
+  { id:"i-creating", title:"Create", status:"today",
+    lede:"Create sends one idempotent request (with the model), then the sheet closes and the chat opens.",
+    today:["No Connections step on iPhone. That stays desktop-only (“Finish on your Mac”)."],
+    proposed:["No change apart from sending the model you picked."],
+    files:"AidenBotCreateView.create() · POST /bots (no protocol change needed)",
+    render:()=> phone(iosHome() + iosCreateSheet({ creating:true })), enter:"fade" },
+  { id:"i-chat", title:"Bot chat with its self-intro", status:"today",
+    lede:"Pushed from the list. Name pill opens Profile; ••• opens the menu.",
+    today:["Self-intro runs on the Mac on the chosen model. A Bot without a model shows “Needs an AI model”."],
+    proposed:["No change."],
+    files:"ios/…/Bots/AidenBotSessionChatView.swift",
+    render:()=> phone(iosChat()), enter:"push" },
+  { id:"i-menu", title:"••• menu", status:"today",
+    lede:"Profile, Files, Delete Bot. Tap Files.",
+    today:["Files appear once the Bot has a conversation."], proposed:["No change."],
+    files:"AidenBotSessionChatView.swift (botMenu)",
+    render:()=> phone(iosChat({ menu:true })), enter:"fade" },
+  { id:"i-files", title:"Files sheet", status:"today",
+    lede:"The Bot’s files in a sheet with Done.",
+    today:["No inline file chips in the chat on phones (Remote entries carry no file data)."], proposed:["No change."],
+    files:"ios/…/Remote/AidenBotChatToolsView.swift (AidenBotConversationFilesView)",
+    render:()=> phone(iosSheetPage("Files", `
+      <div class="fsec" style="margin-top:8px">
+        <div class="frow"><span class="ficon">▤</span><span>week-42-meal-plan.md<span class="sub13">Today · 3 KB</span></span></div>
+        <div class="frow"><span class="ficon">▤</span><span>grocery-list.md<span class="sub13">Today · 1 KB</span></span></div>
+        <div class="frow"><span class="ficon">▧</span><span>fridge-photo.jpg<span class="sub13">Yesterday · 2.1 MB</span></span></div>
+      </div>`, { right:`<span class="hot" data-go="+1">Done</span>` })), enter:"fade" },
+  { id:"i-profile", title:"Profile sheet", status:"changed",
+    lede:"Photo (Choose, Generate, Remove), name, subtitle, Character, Instructions, Memory, Routines; ••• for Advanced.",
+    today:["The model is only shown in ••• → Advanced."],
+    proposed:["Optional: an AI model row under Memory that opens Advanced. Same question as desktop."],
+    files:"ios/…/Bots/AidenBotProfileView.swift",
+    render:()=> phone(iosSheetPage("Meal Planner", `
+      <div style="text-align:center;padding:10px 0"><div class="photo" style="background:#6a8f5a">M</div><div class="a" style="color:var(--ios-accent);margin-top:8px;font-size:14px">Edit photo</div></div>
+      <div class="fsec"><div class="frow">Meal Planner</div><div class="frow">Plan my meals and grocery list every week</div></div>
+      <div class="fhead">Character</div>
+      <div class="fsec"><div class="frow"><span>Colour and shape</span><span class="v">Sage · Rounded <span class="ios-chev">›</span></span></div></div>
+      <div class="fhead">About</div>
+      <div class="fsec">
+        <div class="frow"><span>Instructions</span><span class="v"><span class="ios-chev">›</span></span></div>
+        <div class="frow hot" data-go="+1"><span>Memory</span><span class="v">6 things <span class="ios-chev">›</span></span></div>
+        <div class="frow"><span>AI model <span class="newtag">OPTIONAL</span></span><span class="v">${picon(cur().provider,16)} ${esc(cur().label)} <span class="ios-chev">›</span></span></div>
+      </div>
+      <div class="fhead">Routines</div>
+      <div class="fsec"><div class="frow"><span>Every Sunday at 6:00 PM<span class="sub13">Plan next week’s meals</span></span></div></div>`,
+      { left:"•••", right:"Done" })), enter:"fade" },
+  { id:"i-memory", title:"Memory", status:"today",
+    lede:"Pushed from Profile. Same two groups, meter and Erase as desktop. Swipe or ••• to edit or delete.",
+    today:["Only on a Mac that serves bot-memory-v1."], proposed:["No change."],
+    files:"ios/…/Bots/AidenBotMemoryView.swift",
+    render:()=> phone(iosSheetPage("Memory", `
+      <div class="fhead">About you</div>
+      <div class="fsec"><div class="frow">Doesn’t eat dairy</div><div class="frow">Cooks for two on weekdays</div></div>
+      <div class="fhead">Meal Planner’s notes</div>
+      <div class="fsec"><div class="frow">Grocery list lives in grocery-list.md</div><div class="frow">Prefers 30-minute recipes</div>
+        <div class="frow" style="display:block"><span class="sub13">41% full</span><div class="meter"><i style="width:41%"></i></div></div></div>
+      <div class="fsec" style="margin-top:22px"><div class="frow" style="color:#ff3b30;justify-content:center">Erase Memory</div></div>`,
+      { left:"‹ Meal Planner", right:"", push:true })), enter:"fade" },
+  { id:"i-advanced", title:"Advanced", status:"changed",
+    lede:"Profile ••• → Advanced. Model, access, and Use recommended.",
+    today:["Native Pickers: “AI”, “Model”, and “Photos”/“Photo model” for text-only models."],
+    proposed:["Replace the two Pickers with the same Model row + pushed picker used in New Bot, so both screens match."],
+    files:"ios/…/Bots/AidenBotAdvancedView.swift (modelSection)",
+    render:()=> phone(iosSheetPage("Advanced", `
+      <div class="fhead">AI model</div>
+      <div class="fsec"><div class="frow"><span>Model</span><span class="v">${picon(cur().provider,16)} ${esc(cur().label)} <span class="ios-chev">›</span></span></div>
+        <div class="frow" style="color:var(--ios-accent)">Use Recommended</div></div>
+      <div class="fhead">What it can use</div>
+      <div class="fsec"><div class="frow"><span>What it can use</span><span class="v">Everything ⌃⌄</span></div></div>
+      <div class="ffoot">It can use everything your Mac allows. Your Mac still asks before risky steps.</div>`,
+      { left:"Cancel", right:"Save", push:true })), enter:"fade" },
+];
+
+const QUESTIONS = [
+  "Model on step 1 of the dialog (shown here), or its own step between name and Connections?",
+  "Should “Start chat” on a preset also let you pick a model, or keep using the recommended one?",
+  "Do you want the AI model row on Profile, or is Advanced enough?",
+  "Show the photo model row at creation, or pick it silently and only show it in Advanced?",
+  "Remember the last model you picked and default the next Bot to it, instead of the recommended one?",
+  "Android: same change in its create flow, and move Android Advanced off radio rows to the shared AidenModelPickerField?",
+];
+
+/* ---------------- render loop ---------------- */
+const STATUS_LABEL = { today:"Already there", new:"New", changed:"Changed", edge:"Edge case" };
+const steps = () => state.platform === "desktop" ? DESKTOP : IOS;
+const stage = document.getElementById("stage");
+const panel = document.getElementById("panel");
+const timeline = document.getElementById("timeline");
+let lastDir = 1;
+
+const store = {
+  get(k){ try { return localStorage.getItem("botflow:"+k) ?? ""; } catch { return ""; } },
+  set(k,v){ try { localStorage.setItem("botflow:"+k, v); } catch {} },
+};
+
+function render(dir=0) {
+  const list = steps();
+  const i = state.index[state.platform];
+  const step = list[i];
+  const html = step.render();
+  const old = stage.querySelector(".layer:not(.leaving)");
+  const layer = document.createElement("div");
+  layer.className = "layer";
+  layer.innerHTML = html;
+  if (old && dir !== 0) {
+    old.classList.add("leaving", dir > 0 ? "anim-push-out" : "anim-pop-out");
+    old.addEventListener("animationend", () => old.remove(), { once:true });
+    setTimeout(() => old.remove(), 600);
+    layer.classList.add(dir > 0 ? "anim-push-in" : "anim-pop-in");
+  } else if (old) {
+    old.remove();
+    layer.classList.add("anim-fade-in");
+  } else layer.classList.add("anim-fade-in");
+  stage.appendChild(layer);
+
+  const noteKey = state.platform + ":" + step.id;
+  panel.innerHTML = `
+    <span class="badge ${step.status}">${STATUS_LABEL[step.status]}</span>
+    <h2>${step.title}</h2>
+    <p class="lede">${step.lede}</p>
+    <h3>Today</h3><ul>${step.today.map(t=>`<li>${t}</li>`).join("")}</ul>
+    <h3>Proposed</h3><ul>${step.proposed.map(t=>`<li>${t}</li>`).join("")}</ul>
+    ${step.extra ? step.extra() : ""}
+    <h3>Code</h3><div class="files">${esc(step.files).replace(/\n/g,"<br>")}</div>
+    <h3>Your note for this screen</h3>
+    <textarea class="note" id="note" placeholder="What should change here?">${esc(store.get(noteKey))}</textarea>
+    ${i === list.length-1 ? `<h3>Open questions</h3><ol style="margin:0;padding-left:18px">${QUESTIONS.map(q=>`<li style="margin:4px 0">${q}</li>`).join("")}</ol>
+      <textarea class="note" id="qnote" style="margin-top:8px" placeholder="Answers, by number">${esc(store.get("questions"))}</textarea>` : ""}
+    <div class="hint">Click the <b>pulsing</b> spots in the mockup, or use ← → keys. Model choices carry through the rest of the flow.</div>
+    <div class="legend" style="margin-top:10px"><span class="badge today">Already there</span><span class="badge changed">Changed</span><span class="badge new">New</span><span class="badge edge">Edge case</span></div>`;
+  panel.querySelector("#note").addEventListener("input", e => { store.set(noteKey, e.target.value); paintTimeline(); });
+  panel.querySelector("#qnote")?.addEventListener("input", e => store.set("questions", e.target.value));
+  panel.querySelector("[data-demo]")?.addEventListener("click", () => {
+    state.model[state.platform] = state.platform==="desktop" ? "deepseek-v3" : "llama-local";
+    render(0);
+  });
+
+  document.getElementById("counter").textContent = `${i+1} / ${list.length}`;
+  document.getElementById("prev").disabled = i === 0;
+  document.getElementById("next").disabled = i === list.length-1;
+  paintTimeline();
+}
+function paintTimeline() {
+  const list = steps(); const i = state.index[state.platform];
+  timeline.innerHTML = list.map((s,n)=>`<button class="tl ${store.get(state.platform+":"+s.id)?"has-note":""}" data-idx="${n}" ${n===i?'aria-current="step"':""}>
+    <span class="n">${n+1}</span><span class="dot ${s.status}"></span>${s.title.split(" · ")[0].replace(/ with .*/,"")}</button>`).join("");
+}
+function go(n) {
+  const list = steps(); const i = state.index[state.platform];
+  const next = Math.max(0, Math.min(list.length-1, n));
+  if (next === i) return;
+  state.index[state.platform] = next;
+  render(next > i ? 1 : -1);
+}
+function goById(id) { const n = steps().findIndex(s => s.id.endsWith(id)); if (n >= 0) go(n); }
+
+stage.addEventListener("click", e => {
+  const pick = e.target.closest("[data-pick]");
+  if (pick) {
+    state.model[state.platform] = pick.dataset.pick;
+    go(state.index[state.platform] + 1);
+    return;
+  }
+  const t = e.target.closest("[data-go]");
+  if (!t) return;
+  const v = t.dataset.go;
+  if (v === "+1") go(state.index[state.platform] + 1);
+  else if (v === "picker") goById("picker");
+  else if (v === "profile") goById("profile");
+  else if (v === "create") goById("creating") ;
+});
+timeline.addEventListener("click", e => { const b = e.target.closest("[data-idx]"); if (b) go(+b.dataset.idx); });
+document.getElementById("prev").onclick = () => go(state.index[state.platform]-1);
+document.getElementById("next").onclick = () => {
+  const s = steps()[state.index[state.platform]];
+  if (s.id === "i-creating") { go(state.index.ios+1); return; }
+  go(state.index[state.platform]+1);
+};
+document.addEventListener("keydown", e => {
+  if (e.target.matches("textarea,input")) return;
+  if (e.key === "ArrowRight") document.getElementById("next").click();
+  if (e.key === "ArrowLeft") document.getElementById("prev").click();
+});
+function setPlatform(p) {
+  if (state.platform === p) return;
+  state.platform = p;
+  document.getElementById("pf-desktop").setAttribute("aria-pressed", p==="desktop");
+  document.getElementById("pf-ios").setAttribute("aria-pressed", p==="ios");
+  stage.innerHTML = "";
+  stage.classList.toggle("ios", p==="ios");
+  render(0);
+}
+document.getElementById("pf-desktop").onclick = () => setPlatform("desktop");
+document.getElementById("pf-ios").onclick = () => setPlatform("ios");
+document.getElementById("hot-toggle").onchange = e => stage.classList.toggle("show-hot-off", !e.target.checked);
+
+document.getElementById("copy").onclick = async () => {
+  const lines = ["# Bot creation flow notes", ""];
+  for (const [label, list, key] of [["Desktop", DESKTOP, "desktop"], ["iPhone", IOS, "ios"]]) {
+    const notes = list.map((s,n)=>[s, store.get(key+":"+s.id)]).filter(([,v])=>v.trim());
+    if (!notes.length) continue;
+    lines.push(`## ${label}`);
+    for (const [s,v] of notes) lines.push(`- **${list.indexOf(s)+1}. ${s.title}**: ${v.trim()}`);
+    lines.push("");
+  }
+  const q = store.get("questions").trim();
+  if (q) { lines.push("## Open questions", ...QUESTIONS.map((x,n)=>`${n+1}. ${x}`), "", "Answers:", q); }
+  const text = lines.length > 2 ? lines.join("\n") : "(no notes yet)";
+  try { await navigator.clipboard.writeText(text); flash("Notes copied. Paste them into Claude."); }
+  catch { prompt("Copy your notes:", text); }
+};
+function flash(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; stage.appendChild(t); setTimeout(()=>t.remove(),2200); }
+
+render(0);
+</script>
+</body>
+</html>

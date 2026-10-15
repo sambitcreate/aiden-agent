@@ -578,7 +578,7 @@ test("compaction commands keep cancellation available for every engine", async (
   await composer.fill("Create a chat for compaction command testing.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
 
   // Hold IPC open so even instant local compaction has a deterministic busy state.
   await app.evaluate(({ ipcMain }) => {

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link2, RotateCcw, Unlink } from "lucide-react";
+import { ChevronRight, Link2, RotateCcw, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -9,7 +9,6 @@ import {
   EmptyState,
   Field,
   FieldSet,
-  InlineMetadata,
   Label,
   RadioGroup,
   RadioGroupItem,
@@ -45,30 +44,23 @@ import {
   botFullAccessAccepted,
   buildBotAccessUpdate,
   firstAvailableModel,
-  firstAvailableVisionModel,
   type BotAccessDraft,
 } from "./bot-access-draft";
+import {
+  chooseBotModel,
+  chooseBotVisionModel,
+  findBotModel,
+  recommendedBotModelChoice,
+  sameBotModelChoice,
+} from "./bot-model-choice";
+import { botChatActivitySummary } from "./bot-chat-activity-page";
+import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
 type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
 
 function sameDraft(left: BotAccessDraft | null, right: BotAccessDraft | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function withRecommendedModel(draft: BotAccessDraft, catalog: BotCapabilityCatalog): BotAccessDraft {
-  const model = firstAvailableModel(catalog);
-  const supportsImages = catalog.providers
-    .find((provider) => provider.id === model?.providerId)
-    ?.models.find((candidate) => candidate.id === model?.modelId)?.supportsImages;
-  const vision = supportsImages ? undefined : firstAvailableVisionModel(catalog, model?.providerId);
-  return {
-    ...draft,
-    providerId: model?.providerId,
-    modelId: model?.modelId,
-    visionProviderId: vision?.providerId,
-    visionModelId: vision?.modelId,
-  };
 }
 
 function ModelSection({
@@ -84,18 +76,12 @@ function ModelSection({
   onChange(next: BotAccessDraft): void;
   onSetUpModel(): void;
 }) {
-  const provider = catalog.providers.find(({ id }) => id === draft.providerId);
-  const model = provider?.models.find(({ id }) => id === draft.modelId);
-  const visionProviders = catalog.providers.filter(
+  const recommended = recommendedBotModelChoice(catalog);
+  const usingRecommended = sameBotModelChoice(recommended, draft);
+  const primary = findBotModel(catalog, draft.providerId, draft.modelId);
+  const visionAvailable = catalog.providers.some(
     (candidate) => candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
   );
-  const visionProvider = catalog.providers.find(({ id }) => id === draft.visionProviderId);
-  const recommended = withRecommendedModel(draft, catalog);
-  const usingRecommended =
-    recommended.providerId === draft.providerId &&
-    recommended.modelId === draft.modelId &&
-    recommended.visionProviderId === draft.visionProviderId &&
-    recommended.visionModelId === draft.visionModelId;
   if (!firstAvailableModel(catalog)) {
     return (
       <FieldSet title="AI model">
@@ -109,125 +95,41 @@ function ModelSection({
   }
   return (
     <FieldSet title="AI model">
-      <Field label="Service">
-        <Select
-          value={draft.providerId ?? ""}
+      <Field label="Model" description={primary ? botModelCapabilityLabel(primary.model.supportsImages) : undefined}>
+        <BotModelPicker
+          catalog={catalog}
+          label="AI model"
+          providerId={draft.providerId}
+          modelId={draft.modelId}
+          recommended={recommended.providerId && recommended.modelId
+            ? { providerId: recommended.providerId, modelId: recommended.modelId }
+            : undefined}
           disabled={disabled}
-          onValueChange={(providerId) => {
-            const nextProvider = catalog.providers.find(({ id }) => id === providerId);
-            const nextModel = nextProvider?.models.find((candidate) => candidate.available);
-            const vision = nextModel?.supportsImages
-              ? undefined
-              : firstAvailableVisionModel(catalog, providerId);
-            onChange({
-              ...draft,
-              providerId,
-              modelId: nextModel?.id,
-              visionProviderId: vision?.providerId,
-              visionModelId: vision?.modelId,
-            });
-          }}
-        >
-          <SelectTrigger aria-label="AI service">
-            <SelectValue placeholder="Choose a service" />
-          </SelectTrigger>
-          <SelectContent>
-            {catalog.providers.map((candidate) => (
-              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                {candidate.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onSelect={(providerId, modelId) => onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })}
+        />
       </Field>
-      <Field label="Model">
-        <Select
-          value={draft.modelId ?? ""}
-          disabled={disabled}
-          onValueChange={(modelId) => {
-            const nextModel = provider?.models.find(({ id }) => id === modelId);
-            const vision = nextModel?.supportsImages
-              ? undefined
-              : draft.visionProviderId && draft.visionModelId
-                ? { providerId: draft.visionProviderId, modelId: draft.visionModelId }
-                : firstAvailableVisionModel(catalog, provider?.id);
-            onChange({
-              ...draft,
-              modelId,
-              visionProviderId: vision?.providerId,
-              visionModelId: vision?.modelId,
-            });
-          }}
-        >
-          <SelectTrigger aria-label="AI model">
-            <SelectValue placeholder="Choose a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {(provider?.models ?? []).map((candidate) => (
-              <SelectItem key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                {candidate.label}{" "}
-                <InlineMetadata>· {candidate.supportsImages ? "Reads images" : "Text only"}</InlineMetadata>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-      {model && !model.supportsImages ? (
-        visionProviders.length === 0 ? (
+      {primary && !primary.model.supportsImages ? (
+        visionAvailable ? (
           <Field
-            label="Image model"
-            description={`${model.label} reads text only, and no model that reads images is set up. Add one in Settings → Providers.`}
-          />
+            label="Model for photos"
+            description={`${primary.model.label} reads text only. Photos and screenshots go to this model.`}
+          >
+            <BotModelPicker
+              catalog={catalog}
+              label="Model for photos"
+              imagesOnly
+              providerId={draft.visionProviderId}
+              modelId={draft.visionModelId}
+              disabled={disabled}
+              onSelect={(providerId, modelId) =>
+                onChange({ ...draft, ...chooseBotVisionModel(catalog, draft, providerId, modelId) })}
+            />
+          </Field>
         ) : (
-          <>
-            <Field
-              label="Image service"
-              description={`${model.label} reads text only. Photos and screenshots go to this model.`}
-            >
-              <Select
-                value={draft.visionProviderId ?? ""}
-                disabled={disabled}
-                onValueChange={(providerId) => {
-                  const nextProvider = catalog.providers.find(({ id }) => id === providerId);
-                  const nextModel = nextProvider?.models.find(
-                    (candidate) => candidate.available && candidate.supportsImages,
-                  );
-                  onChange({ ...draft, visionProviderId: providerId, visionModelId: nextModel?.id });
-                }}
-              >
-                <SelectTrigger aria-label="Image service">
-                  <SelectValue placeholder="Choose a service" />
-                </SelectTrigger>
-                <SelectContent>
-                  {visionProviders.map((candidate) => (
-                    <SelectItem key={candidate.id} value={candidate.id}>
-                      {candidate.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Image model">
-              <Select
-                value={draft.visionModelId ?? ""}
-                disabled={disabled}
-                onValueChange={(visionModelId) => onChange({ ...draft, visionModelId })}
-              >
-                <SelectTrigger aria-label="Image model">
-                  <SelectValue placeholder="Choose a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(visionProvider?.models ?? [])
-                    .filter((candidate) => candidate.available && candidate.supportsImages)
-                    .map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
-                        {candidate.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </>
+          <Field
+            label="Model for photos"
+            description={`${primary.model.label} reads text only, and no model that reads images is set up. Add one in Settings → Providers.`}
+          />
         )
       ) : null}
       <Field label="Recommended" description="The first model you set up, plus an image model when it reads text only.">
@@ -235,7 +137,7 @@ function ModelSection({
           size="small"
           variant="filled"
           disabled={disabled || usingRecommended}
-          onClick={() => onChange(recommended)}
+          onClick={() => onChange({ ...draft, ...recommended })}
         >
           <RotateCcw /> Use recommended
         </Button>
@@ -529,7 +431,15 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
  * Back with unsaved edits asks before discarding them. Telegram is a
  * connection with its own Connect and Disconnect actions.
  */
-export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): void }) {
+export function BotAdvanced({
+  bot,
+  onClose,
+  onOpenChatActivity,
+}: {
+  bot: BotDefinition;
+  onClose(): void;
+  onOpenChatActivity(): void;
+}) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const catalogQuery = useBotCapabilityCatalog(true, bot.id);
@@ -548,10 +458,12 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
 
   const accessChanged = draft !== null && !sameDraft(draft, baseline);
   const dirty = accessChanged;
-  const guard = useDiscardChangesGuard({
+  const discardDescription = `Your changes to ${bot.name}’s Advanced settings won’t be saved.`;
+  const guard = useDiscardChangesGuard({ dirty, onLeave: onClose, description: discardDescription });
+  const chatActivityGuard = useDiscardChangesGuard({
     dirty,
-    onLeave: onClose,
-    description: `Your changes to ${bot.name}’s Advanced settings won’t be saved.`,
+    onLeave: onOpenChatActivity,
+    description: discardDescription,
   });
 
   const saveAccess = async (current: BotAccessDraft, start: BotAccessDraft) => {
@@ -652,8 +564,26 @@ export function BotAdvanced({ bot, onClose }: { bot: BotDefinition; onClose(): v
           <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
         </>
       )}
+      <FieldSet title="Chat">
+        <button
+          type="button"
+          aria-label="Chat activity"
+          className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+          onClick={() => {
+            if (!saving) chatActivityGuard.requestLeave();
+          }}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-strong text-primary">Chat activity</span>
+            <span className="mt-0.5 block text-small text-secondary">What you see while {bot.name} works.</span>
+          </span>
+          <span className="shrink-0 text-small text-secondary">{botChatActivitySummary(bot.chatActivity)}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+        </button>
+      </FieldSet>
       <TelegramSection bot={bot} />
       {guard.dialog}
+      {chatActivityGuard.dialog}
     </BotPageShell>
   );
 }

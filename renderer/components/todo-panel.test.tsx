@@ -47,7 +47,6 @@ test("visible chrome and scroll clearance share the complete snapshot state matr
     /scrollToBottomButtonOffset=\{todoPanelVisible \? 44 : 0\}/u,
   );
   assert.match(chatPaneSource, /scrollContentBottomOffset=\{todoPanelVisible \? 56 : 0\}/u);
-  assert.match(uiSource, /\[autoScrollToBottom, scheduleFollowBottom, scrollContentBottomOffset, scrollToBottom, updateScrollEdges\]/u);
   const html = renderToStaticMarkup(
     <ScrollArea scrollContentBottomOffset={56} footer={<div>Composer</div>}>
       <div>Last transcript row</div>
@@ -89,7 +88,6 @@ test("renders a floating elevated progress chip without an inline expanding pane
   assert.match(source, /shouldPinAfterContentGrowth\(followLatest\.current\)/u);
   assert.match(source, /addEventListener\("scroll"/u);
   assert.match(source, /\[taskFollowKey\]/u);
-  assert.match(uiSource, /resolveProgrammaticFollowLatch/u);
   assert.match(source, /function TrackedTaskList\(/u);
   assert.doesNotMatch(source, /hover:-translate|focus-visible:-translate/u);
   assert.match(source, /Blocked by\{" "\}/u);

@@ -1,6 +1,6 @@
 # MCP and Plugins remediation (Pi 1.2.0 parity)
 
-Status: Active (2026-10-13). Delivered as one stacked PR series; each slice below is one PR, based on the previous one. Slices with disjoint files are built in parallel waves (2–4, then 5–6, then 7–8), and the stack order follows that.
+Status: Active (2026-10-13). Delivered as one twelve-PR stacked series, [#460](https://github.com/sambitcreate/aiden-agent/pull/460)–[#471](https://github.com/sambitcreate/aiden-agent/pull/471); each slice below is one PR, based on the previous one, and they merge in order. Slices with disjoint files are built in parallel waves (2–4, then 5–6, then 7–8), and the stack order follows that.
 
 ## Why
 
@@ -18,13 +18,17 @@ OAuth hardening is broadly at parity. The gaps are turn latency (every turn and 
 - **CIMD stays deferred.** It needs an Aiden-hosted HTTPS client metadata document. Until that exists the Figma preset keeps its current client name.
 - **Plugin catalog refresh is dev-time only** (`npm run plugins:refresh`), never at runtime, matching the models.dev posture.
 
+## Release gate
+
+Slice 5 starts enabled MCP servers in the background at app start, and slice 11 is the one that stops stdio servers added outside Aiden from launching until they are approved. Today an enabled stdio server already runs on the next chat turn without approval, so slice 5 alone only moves that earlier; still, no release may be cut from `main` after slice 5 merges and before slice 11 does. Merge the stack in order and release after slice 11 (ideally after slice 12).
+
 ## Stack
 
 Each slice lists its scope, the files it owns, and what done means. Slices touching disjoint files may be developed in parallel; commit order follows the stack.
 
-### 1. Plan (this document)
+### 1. Plan (this document) — [#460](https://github.com/sambitcreate/aiden-agent/pull/460)
 
-### 2. MCP transport and OAuth correctness (`main/services/mcp*.ts`, `generation-bound-connection-cache.ts`)
+### 2. MCP transport and OAuth correctness (`main/services/mcp*.ts`, `generation-bound-connection-cache.ts`) — [#461](https://github.com/sambitcreate/aiden-agent/pull/461)
 
 - [x] Single-flight refresh-token exchange per server (shared by concurrent 401s across foreground, status, child and Bot clients) and compare-and-delete `invalidateCredentials("tokens")`.
 - [x] Never re-send a JSON-RPC request after it was cancelled or timed out (SDK retries after an auth refresh).
@@ -37,7 +41,7 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 - [x] Remember a 403 `insufficient_scope` challenge scope for the next interactive authorize.
 - [x] Per-page `tools/list` timeout.
 
-### 3. Aiden CLI MCP (`packages/cli/src/mcp.ts`, `mcp-config-migration.ts`, `subagent-hosts.ts`)
+### 3. Aiden CLI MCP (`packages/cli/src/mcp.ts`, `mcp-config-migration.ts`, `subagent-hosts.ts`) — [#462](https://github.com/sambitcreate/aiden-agent/pull/462)
 
 - [x] Use the shared guarded `callMcpTool` / `listMcpToolInventory` path.
 - [x] Cache inventory per connection; credential-independent connection cache key; single-flight connect.
@@ -45,7 +49,7 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 - [x] `validateMcpServer` checks types before use; `remove` deletes the credential; malformed native `mcp.json` no longer blocks startup.
 - [x] Remove dead `child-runner.ts` path.
 
-### 4. Plugins settings robustness (`renderer/components/settings/*`, renderer queries, bad-preset handling in `main/handlers/phase2.ts`)
+### 4. Plugins settings robustness (`renderer/components/settings/*`, renderer queries, bad-preset handling in `main/handlers/phase2.ts`) — [#463](https://github.com/sambitcreate/aiden-agent/pull/463)
 
 - [x] Save, Remove, Toggle and Reset surface errors; Toggle has a pending state.
 - [x] A bad preset record no longer breaks the directory; list and preset errors render with Retry.
@@ -54,7 +58,7 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 - [x] Accessibility and layout fixes (row-specific labels, container-width grid, SSE deprecation hint).
 - [x] Replace source-grep Plugins tests (`mcp-settings.test.tsx`, `mcp-preset-icons.test.ts`) with rendered behavioural tests.
 
-### 5. MCP latency and caching (`mcp.ts`, `llm-client.ts`, `mcp-tool-inventory.ts`, `mcp-credential-cleanup.ts`, `mcp-oauth-store.ts`)
+### 5. MCP latency and caching (`mcp.ts`, `llm-client.ts`, `mcp-tool-inventory.ts`, `mcp-credential-cleanup.ts`, `mcp-oauth-store.ts`) — [#464](https://github.com/sambitcreate/aiden-agent/pull/464)
 
 - [x] Prewarm enabled servers (app ready, server save/enable, sign-in, API key, Reset connections). Chat-focus prewarm not done: the TTL cache and warm connections already cover a focused chat.
 - [x] With codemode/`tool_search` available, start the turn with servers that are ready (or have a cached inventory) within a short window; late servers become callable once discovered, and tool search waits for them.
@@ -64,14 +68,14 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 - [x] In-memory OAuth session cache in `mcpOAuthStore`, invalidated on write.
 - [x] Cache built `AgentTool` arrays per client generation.
 
-### 6. Bots and schedules (`bot-*`, `schedule-mcp-binding.ts`, `bot-tool-sources-main.ts`)
+### 6. Bots and schedules (`bot-*`, `schedule-mcp-binding.ts`, `bot-tool-sources-main.ts`) — [#465](https://github.com/sambitcreate/aiden-agent/pull/465)
 
 - [x] Bot MCP scopes are cached per connection snapshot and credential incarnation, reuse the manager's inventory, and invalidate on configuration change and `tools/list_changed`.
 - [x] A slow server no longer revokes scopes from servers that finished; last good scope survives a short grace window; per-server failures reach diagnostics.
 - [x] `suggest_connection` reports connected only when the server is ready (credentials present), matching the renderer.
 - [x] Schedule and Bot fingerprints exclude display name and description, and the prompt wording matches the server-level approval that is enforced (a tool-inventory digest was rejected: every server update would silently break schedules).
 
-### 7. Model-facing MCP surface (`pi-codemode.ts`, `pi-tool-discovery.ts`, `mcp-tool-identity.ts`, `mcp-tool-result.ts`, `mcp-server-instructions.ts`, `mcp-resources.ts`, system prompt)
+### 7. Model-facing MCP surface (`pi-codemode.ts`, `pi-tool-discovery.ts`, `mcp-tool-identity.ts`, `mcp-tool-result.ts`, `mcp-server-instructions.ts`, `mcp-resources.ts`, system prompt) — [#466](https://github.com/sambitcreate/aiden-agent/pull/466)
 
 - [x] Codemode-nested MCP calls get a large script budget; the 32K cap applies only to model-facing text; omitted `structuredContent` is marked.
 - [x] New tool naming (see Decisions); `describeTool` accepts identifier forms.
@@ -82,34 +86,35 @@ Each slice lists its scope, the files it owns, and what done means. Slices touch
 - [x] Direct declarations cap descriptions and fall back to `title`; activity labels read `server/tool`.
 - [x] Child read lane keeps `structuredContent` with credential redaction.
 
-### 8. OAuth controls and live status (`main/handlers/phase2*.ts`, `mcp-oauth*.ts`, preload, Settings)
+### 8. OAuth controls and live status (`main/handlers/phase2*.ts`, `mcp-oauth*.ts`, preload, Settings) — [#467](https://github.com/sambitcreate/aiden-agent/pull/467)
 
 - [x] Test connection and Authorize no longer persist an unsaved server.
 - [x] `mcp:cancelAuthorize` and `mcp:signOut`; Cancel button; real authorization status.
 - [x] Remove, Disable and Rename list dependent schedules and Bots.
 - [x] Live per-server status (`mcp:statusChanged` push), tool/resource badges.
 
-### 9. Exposure controls (config, runtime, Settings)
+### 9. Exposure controls (config, runtime, Settings) — [#468](https://github.com/sambitcreate/aiden-agent/pull/468)
 
-- [ ] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
-- [ ] Foreground, Assistant, Bot and child paths honour it.
-- [ ] Settings row control and per-tool list.
+- [x] `exposure` (`auto` / `direct` / `hidden`) and per-tool hidden list on `McpServer`, validated in parse and portable config.
+- [x] Foreground, Assistant, Bot and child paths honour it.
+- [x] Settings row control and per-tool list.
 
-### 10. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings)
-
-- [ ] Secret-looking env and header values move to the keychain and are masked; externally added stdio servers need first-run approval.
-
-### 11. Pi 1.2.0 lockstep upgrade
-
-- [ ] Root and CLI pins to 1.2.0 (`pi-ai`, `pi-agent-core`, `pi-codemode`, `pi-durable`, `chord`, `pi-coding-agent`, `pi-mcp`); drop the CLI `chord` dependency if unused.
-- [ ] `before_agent_start` union (`session-parity.ts`), `deliverAs` on `/attach`, `pi-durable` `output` rename, patch anchors (`SETTINGS_DEFAULTS.enableInstallTelemetry`, `PI_AI_VERSION`), theme `$schema` URL, reject `+`/`-`-prefixed server names.
-- [ ] Pi upgrade evaluation and CLI suites.
-
-### 12. Cleanup and catalog
+### 10. Cleanup and catalog — [#469](https://github.com/sambitcreate/aiden-agent/pull/469)
 
 - [ ] Delete dead code (`mcpAgentToolResult`, `createNoRedirectFetch`, stale client version). `McpToolListCache` went in slice 5.
 - [ ] Replace source-grep MCP tests with behavioural tests.
 - [ ] Dev-only `npm run plugins:refresh` and catalog invariant tests.
+
+### 11. Credential hygiene for custom servers (config store, `mcp.ts` transport, Settings) — [#470](https://github.com/sambitcreate/aiden-agent/pull/470)
+
+- [ ] Env and header values of custom servers move to the keychain (config.json keeps names + markers) and are masked in Settings; externally added stdio servers need first-run approval.
+- [ ] Servers switched off for the model are excluded from schedule pickers and `schedule_task`; an approved schedule bound to one fails with a clear reason.
+
+### 12. Pi 1.2.0 lockstep upgrade — [#471](https://github.com/sambitcreate/aiden-agent/pull/471)
+
+- [ ] Root and CLI pins to 1.2.0 (`pi-ai`, `pi-agent-core`, `pi-codemode`, `pi-durable`, `chord`, `pi-coding-agent`, `pi-mcp`); drop the CLI `chord` dependency if unused.
+- [ ] `before_agent_start` union (`session-parity.ts`), `deliverAs` on `/attach`, `pi-durable` `output` rename, patch anchors (`SETTINGS_DEFAULTS.enableInstallTelemetry`, `PI_AI_VERSION`), theme `$schema` URL, reject `+`/`-`-prefixed server names.
+- [ ] Pi upgrade evaluation and CLI suites.
 
 ## Validation
 
