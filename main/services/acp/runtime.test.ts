@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
-import { Type, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, Type, type AssistantMessage, type Message, type ToolResultMessage } from "@earendil-works/pi-ai";
 
+import { createAgentsInstructionRefresher } from "../agents-instructions.js";
 import { AcpHostRegistry } from "./host.js";
 import { AcpHarnessRuntime } from "./runtime.js";
 import { AcpSessionStore } from "./session-store.js";
@@ -59,6 +60,20 @@ function text(message: AssistantMessage): string {
     .filter((block) => block.type === "text")
     .map((block) => (block as { text: string }).text)
     .join("");
+}
+
+async function refreshedAgentsPrompt(globalRoot: string, workspaceRoot: string): Promise<string> {
+  const refresher = await createAgentsInstructionRefresher({
+    globalRoot,
+    workspaceRoot,
+    revalidate: async () => {},
+    read: (root) => fs.readFile(path.join(root.canonicalPath, "AGENTS.md"), "utf8"),
+  });
+  const prepared = await refresher.apply({
+    messages: [{ role: "system", content: "HOST", timestamp: 0 }],
+    tools: [],
+  });
+  return getCurrentSystemPrompt(prepared.messages);
 }
 
 test("300 growing diff updates keep timeline and Remote journal publications bounded and finish with the last line counts", async (t) => {
@@ -228,6 +243,70 @@ test("host instructions reconcile on every turn, including A to B to A, while un
   assert.match(revertedPrompt[0]?.resource?.text ?? "", /^# Instructions from Aiden\n\nINSTRUCTION_A/u);
   assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
   assert.equal(host.notices.length, 2);
+});
+
+test("separate AGENTS refreshers reuse a warm ACP session for the same guidance and rebuild for A to B to A", async (t) => {
+  const h = harness();
+  t.after(() => h.runtime.close());
+  const globalRoot = path.join(h.dir, "global");
+  await fs.mkdir(globalRoot);
+  const file = path.join(h.dir, "AGENTS.md");
+  await fs.writeFile(file, "INSTRUCTION_A");
+  const host = new RecordingHost("chat-1", h.dir);
+  h.hosts.register(host);
+
+  const firstPrompt = await refreshedAgentsPrompt(globalRoot, h.dir);
+  const first = await turn(h, [userMessage("echo:one")], { systemPrompt: firstPrompt });
+  const samePrompt = await refreshedAgentsPrompt(globalRoot, h.dir);
+  assert.notEqual(samePrompt, firstPrompt, "each generation gets a distinct AGENTS marker");
+  const same = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump")], { systemPrompt: samePrompt });
+  assert.deepEqual(JSON.parse(text(same)), [{ type: "text", text: "prompt-dump" }]);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 1);
+  assert.equal(host.notices.length, 0);
+
+  await fs.writeFile(file, "INSTRUCTION_B");
+  const changed = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), same, userMessage("prompt-dump")], {
+    systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
+  });
+  const changedBlocks = JSON.parse(text(changed)) as Array<{ resource?: { text: string } }>;
+  assert.match(changedBlocks[0]?.resource?.text ?? "", /INSTRUCTION_B/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 2);
+
+  await fs.writeFile(file, "INSTRUCTION_A");
+  const reverted = await turn(h, [userMessage("echo:one"), first, userMessage("prompt-dump"), same, userMessage("prompt-dump"), changed, userMessage("prompt-dump")], {
+    systemPrompt: await refreshedAgentsPrompt(globalRoot, h.dir),
+  });
+  const revertedBlocks = JSON.parse(text(reverted)) as Array<{ resource?: { text: string } }>;
+  assert.match(revertedBlocks[0]?.resource?.text ?? "", /INSTRUCTION_A/u);
+  assert.equal(readAgentLog(h.env).filter((entry) => entry.method === "newSession").length, 3);
+});
+
+test("a saved ACP session resumes across fresh AGENTS markers when file guidance is unchanged", async (t) => {
+  const dir = tempDir();
+  const globalRoot = path.join(dir, "global");
+  await fs.mkdir(globalRoot);
+  await fs.writeFile(path.join(dir, "AGENTS.md"), "INSTRUCTION_A");
+  const env = fakeAgentEnv(dir);
+  const first = harness(dir, env);
+  first.hosts.register(new RecordingHost("chat-1", dir));
+  const reply = await turn(first, [userMessage("echo:one")], {
+    systemPrompt: await refreshedAgentsPrompt(globalRoot, dir),
+  });
+  await first.runtime.close();
+  await first.store.flush();
+
+  const second = harness(dir, env);
+  t.after(() => second.runtime.close());
+  const host = new RecordingHost("chat-1", dir);
+  second.hosts.register(host);
+  const result = await turn(second, [userMessage("echo:one"), reply, userMessage("prompt-dump")], {
+    systemPrompt: await refreshedAgentsPrompt(globalRoot, dir),
+  });
+  assert.deepEqual(JSON.parse(text(result)), [{ type: "text", text: "prompt-dump" }]);
+  const log = readAgentLog(env);
+  assert.equal(log.filter((entry) => entry.method === "resumeSession" && entry.known === true).length, 1);
+  assert.equal(log.filter((entry) => entry.method === "newSession").length, 1);
+  assert.equal(host.notices.length, 0);
 });
 
 test("a resumed ACP session rebuilds before prompting when saved host instructions changed", async (t) => {
