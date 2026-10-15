@@ -513,6 +513,21 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
   });
 });
 
+test("a workspace keeps only a literal scratch mark across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "scratch", name: "calm-moon-run", folderPath: "/x/aiden/calm-moon-run", scratch: true });
+  await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", scratch: "yes" as unknown as true });
+  await h.store.saveWorkspace({ ...base, id: "plain", name: "Plain" });
+  const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
+  assert.equal(listed.get("scratch")?.scratch, true);
+  assert.equal("scratch" in (listed.get("odd") ?? {}), false);
+  assert.equal("scratch" in (listed.get("plain") ?? {}), false);
+  // Renaming keeps the mark.
+  await h.store.saveWorkspace({ ...listed.get("scratch")!, name: "Landing page" });
+  assert.equal((await h.store.getWorkspace("scratch"))?.scratch, true);
+});
+
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

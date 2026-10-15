@@ -139,7 +139,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "create",
     title: "Workspaces & Worktrees",
     description:
-      "Keep chats grouped with folders, scratch spaces, and isolated worktrees in one workspace outline.",
+      "Start a chat in any folder, clone a repository, or use a scratch space. Chats stay grouped with isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     size: "wide",
   },
