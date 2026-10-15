@@ -1108,7 +1108,8 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
       await workspace.testObserver?.beforeWriteCommit?.(full);
       throwIfAborted(signal, "File edit cancelled.");
-      const updated = original.replace(old_string, new_string);
+      const start = original.indexOf(old_string);
+      const updated = original.slice(0, start) + new_string + original.slice(start + old_string.length);
       const details = fileMutationDetails(original, updated);
       throwIfAborted(signal, "File edit cancelled.");
       details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "edited", bytes: Buffer.byteLength(updated) }, "edit_file");
