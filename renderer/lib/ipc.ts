@@ -1,6 +1,13 @@
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import type {
+  WorkspaceClonePreview,
+  WorkspaceCloneProgress,
+  WorkspaceCloneResult,
+  WorkspaceOpenPathResult,
+  WorkspacePathInspection,
+} from "../shared/workspace-intake";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -863,6 +870,29 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /**
+   * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
+   * given workspace's folder). Never creates anything.
+   */
+  inspectPath: (input: string, relativeToWorkspaceId?: string) =>
+    invoke<WorkspacePathInspection>("workspaces:inspectPath", input, relativeToWorkspaceId),
+  /**
+   * Register a typed path as a workspace, or return the one already there.
+   * With `create`, makes the final folder first when only its parent exists.
+   */
+  openPath: (input: string, options: { create: boolean; relativeToWorkspaceId?: string }) =>
+    invoke<WorkspaceOpenPathResult<Workspace>>("workspaces:openPath", input, options),
+  /** Validate a clone URL and suggest `<clone base>/<repo>` as the destination. */
+  clonePreview: (url: string) => invoke<WorkspaceClonePreview>("workspaces:clonePreview", url),
+  /**
+   * Clone a repository (a deliberate network action) and register it.
+   * `cloneId` (8–64 of `[A-Za-z0-9_-]`) routes progress and cancellation.
+   */
+  clone: (input: { cloneId: string; url: string; destination?: string }) =>
+    invoke<WorkspaceCloneResult<Workspace>>("workspaces:clone", input),
+  cancelClone: (cloneId: string) => invoke<boolean>("workspaces:cloneCancel", cloneId),
+  onCloneProgress: (handler: (progress: WorkspaceCloneProgress) => void) =>
+    onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
     patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },

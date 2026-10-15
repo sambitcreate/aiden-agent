@@ -140,6 +140,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "tts:event",
   "voice:stream-text",
   "workspaces:changed",
+  /** Progress for a clone, sent only to the document that started it: `WorkspaceCloneProgress`. */
+  "workspaces:clone-progress",
   "aiden:theme:changed",
 ] as const;
 

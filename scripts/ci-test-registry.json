@@ -27,6 +27,7 @@
         "main/handlers/voice-codec.test.ts",
         "main/handlers/web-search-contract.test.ts",
         "main/handlers/web-search-key-pool.test.ts",
+        "main/handlers/workspace-intake.test.ts",
         "main/handlers/worktree-create-params.test.ts",
         "main/services/advisor-attempt-store.test.ts",
         "main/services/advisor-context.test.ts",
@@ -616,8 +617,10 @@
         "main/services/vision-analysis-tool.test.ts",
         "main/services/workspace-application-service.test.ts",
         "main/services/workspace-environment-application-service.test.ts",
+        "main/services/workspace-intake.test.ts",
         "main/services/workspace-worktree-application-service.test.ts",
         "renderer/shared/agents-instructions-notice.test.ts",
+        "renderer/shared/workspace-intake.test.ts",
         "scripts/bot-inbox-writer.test.mjs",
         "scripts/subagent-run-store.test.mjs"
       ],

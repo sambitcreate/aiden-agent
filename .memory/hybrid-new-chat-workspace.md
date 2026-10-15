@@ -16,3 +16,11 @@ Planned, not implemented. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. 
 - The whole bar is hidden after the first message (`autoHideComposerContext`).
 - ⌘O is already `workspace.openPreferredEditor`, so Open folder uses ⌘⇧O. ⌘⇧N is free.
 - Remote worktree creation (`aiden-remote-git`) is used by the phones. Creating worktrees on send for remote targets needs a Remote revision plus iOS and Android work (plan Phase 5).
+
+## Phase 2 main process (implemented 2026-10-15; UI pending)
+- `main/services/workspace-intake.ts` (pure `parseWorkspacePathInput`, inspect/open/previewClone/clone service), `main/services/git-clone-runner.ts` (spawned `git clone`), `main/handlers/workspace-intake.ts` (DI handler registration, wired from `registerWorkspaceHandlers`), shared contract and `parseCloneUrl` in `renderer/shared/workspace-intake.ts`.
+- Channels: `workspaces:inspectPath`, `workspaces:openPath`, `workspaces:clonePreview`, `workspaces:clone`, `workspaces:cloneCancel`; progress notification `workspaces:clone-progress` goes only to the requesting document, and a reload cancels the clone.
+- Repository detection while typing is a `.git` stat only: no Git process runs on user-typed folders (a hostile repo config such as `core.fsmonitor` could otherwise execute).
+- Opening registers through `workspaceApplicationService.createFromFolder`, the same path as the native picker; an already registered folder (matched by realpath) is returned instead. Create makes one folder, never intermediates.
+- Clone base: `~/projects` when it exists, else home (no existing setting). Clone runs `git -c core.hooksPath=/dev/null -c protocol.{ext,fd,file}.allow=never clone --progress -- <url> <dest>` in a new session (no TTY), `GIT_TERMINAL_PROMPT=0`, 16 KiB stderr tail, 60 min timeout. Accepted URLs: https, ssh://, scp-like `user@host:path`, GitHub `owner/repo`; https credentials in the URL are refused.
+- Tests clone a local bare repo through the runner's `extraConfig` seam (`url.file://….insteadOf` + `protocol.file.allow=always`); the production IPC path has no way to pass config.
