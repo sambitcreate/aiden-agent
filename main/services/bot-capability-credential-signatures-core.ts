@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import type { Credential } from "@earendil-works/pi-ai";
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { mcpOAuthGrantIdentity, type McpOAuthSession } from "./mcp-oauth-session.js";
+import { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
 import { piCredentialGrantIdentity } from "./pi-credential-store-core.js";
 import type { McpServer, Provider } from "./types.js";
 
@@ -77,12 +78,48 @@ export function botMcpCredentialSignatureCore(
   input: {
     server: McpServer;
     presetKey: unknown;
-    oauthSession: McpOAuthSession | null;
+    /** `"unreadable"`: a saved sign-in exists but secure storage cannot read it. */
+    oauthSession: McpOAuthSession | "unreadable" | null;
   },
 ): string {
   return botCredentialSignature(key, "mcp", {
     server: input.server,
     presetKey: input.presetKey,
-    oauthSession: input.oauthSession ? mcpOAuthGrantIdentity(input.oauthSession) : null,
+    oauthSession:
+      input.oauthSession === "unreadable"
+        ? { unreadable: true }
+        : input.oauthSession
+          ? mcpOAuthGrantIdentity(input.oauthSession)
+          : null,
   });
+}
+
+export interface BotMcpCredentialSignatureDependencies {
+  readPresetKey(server: McpServer): Promise<unknown>;
+  readOAuthSession(serverId: string): Promise<McpOAuthSession>;
+}
+
+/**
+ * Signatures are computed for every configured server at once, so one saved
+ * sign-in that secure storage cannot read must not fail the others. It signs
+ * as a distinct "unreadable" credential: never the previous grant's identity,
+ * so no Bot grant made against that grant stays valid, and the server's own
+ * connection still reports the storage error when it tries to use it.
+ */
+export function createBotMcpCredentialSignatureCore(
+  dependencies: BotMcpCredentialSignatureDependencies,
+) {
+  return async (server: McpServer, key: Uint8Array): Promise<string> => {
+    const presetKey = await dependencies.readPresetKey(server);
+    let oauthSession: McpOAuthSession | "unreadable" | null = null;
+    if (server.oauth) {
+      try {
+        oauthSession = await dependencies.readOAuthSession(server.id);
+      } catch (error) {
+        if (!(error instanceof McpOAuthCredentialStorageError)) throw error;
+        oauthSession = "unreadable";
+      }
+    }
+    return botMcpCredentialSignatureCore(key, { server, presetKey, oauthSession });
+  };
 }
