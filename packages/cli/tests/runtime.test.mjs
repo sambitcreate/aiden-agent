@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -218,6 +218,28 @@ test("native MCP command routing leaves Aiden's migrated inventory intact", () =
     const legacy = runCli(["mcp", "list"], options);
     assert.equal(legacy.status, 0, legacy.stderr);
     assert.deepEqual(JSON.parse(legacy.stdout), [server]);
+  } finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+  try {
+    const legacy = path.join(agentDir, "mcp.json");
+    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+    writeFileSync(legacy, "{ not json");
+    const malformed = runCli(["mcp", "list"], options);
+    assert.equal(malformed.status, 0, malformed.stderr);
+    assert.deepEqual(JSON.parse(malformed.stdout), []);
+    assert.match(malformed.stderr, /skipped MCP migration; .* is not valid JSON/);
+    assert.equal(readFileSync(legacy, "utf8"), "{ not json");
+    if (process.getuid?.() !== 0) {
+      writeFileSync(legacy, JSON.stringify([{ id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" }]));
+      chmodSync(legacy, 0o000);
+      const unreadable = runCli(["mcp", "list"], options);
+      chmodSync(legacy, 0o600);
+      assert.equal(unreadable.status, 0, unreadable.stderr);
+      assert.match(unreadable.stderr, /skipped MCP migration; .* is unreadable \(EACCES\)/);
+    }
   } finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
 
