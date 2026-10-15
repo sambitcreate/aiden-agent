@@ -29,7 +29,7 @@ import {
   type FilesEditorState,
   type FilesEditorStateChangeOptions,
 } from "./files-panel";
-import { EnvironmentOverview } from "./environment-overview";
+import { ChangesRows, EnvironmentRows, QuickViewUnavailable } from "./environment-overview";
 import { ReviewPanel } from "./review-panel";
 import { SubagentMark } from "./subagent-chips";
 import { SubagentsPanel } from "./subagents-panel";
@@ -1671,16 +1671,29 @@ function QuickViewCard({
           </header>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
-              <EnvironmentOverview
-                workspace={active}
-                chatId={panel.activeChat.chatId ?? undefined}
-                active={open && presented}
-                presentation="card"
-                mutationBlockedReason={panel.gitMutationBlockedReason}
-                onGitOperationBusyChange={panel.setGitOperationBusy}
-                onOpenReview={panel.openReview}
-                onCreateWorktree={panel.createWorktree}
-              />
+              {/* Interim body until Task 6 places these rows into Quick View cards. */}
+              {active?.folderPath && active.permission !== "none" ? (
+                <section aria-label="Environment overview" className="h-full overflow-y-auto px-3 pb-3">
+                  <EnvironmentRows
+                    workspace={active}
+                    active={open && presented}
+                    mutationBlockedReason={panel.gitMutationBlockedReason}
+                    onGitOperationBusyChange={panel.setGitOperationBusy}
+                    onCreateWorktree={panel.createWorktree}
+                    onBrowseFiles={() => panel.showTools("files")}
+                  />
+                  <ChangesRows
+                    workspace={active}
+                    chatId={panel.activeChat.chatId ?? undefined}
+                    active={open && presented}
+                    mutationBlockedReason={panel.gitMutationBlockedReason}
+                    onGitOperationBusyChange={panel.setGitOperationBusy}
+                    onOpenReview={panel.openReview}
+                  />
+                </section>
+              ) : (
+                <QuickViewUnavailable workspace={active} />
+              )}
             </div>
             {hasSubagents ? (
               <div className="shrink-0 border-t border-separator px-3 py-3">

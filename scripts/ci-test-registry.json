@@ -783,6 +783,7 @@
         "renderer/lib/environment-panel-state.test.ts",
         "renderer/components/workbench-panel.test.tsx",
         "renderer/components/quick-view-section.test.tsx",
+        "renderer/components/environment-overview.test.tsx",
         "renderer/lib/gemini-live-media-core.test.ts",
         "renderer/lib/gemini-recorded-retry.test.ts",
         "renderer/lib/generation-stream.test.ts",
