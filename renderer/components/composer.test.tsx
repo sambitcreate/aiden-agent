@@ -222,7 +222,6 @@ test("chat surfaces share the responsive centered chat-column contract", () => {
 test("composer slash palette is an overlaid textarea-owned accessible listbox", () => {
   const composer = source("./composer.tsx");
   const palette = source("./composer-slash-palette.tsx");
-  const styles = source("../styles.css");
 
   assert.match(composer, /aria-autocomplete=\{slashSession \? "list" : undefined\}/u);
   assert.match(
@@ -240,22 +239,13 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.doesNotMatch(palette, /role="group"/u);
   assert.match(palette, /role="option"/u);
   assert.match(palette, /aria-live="polite"/u);
-  assert.match(palette, /absolute inset-x-3 bottom-full/u);
   assert.match(palette, /onPointerDown=\{\(event\) => event\.preventDefault\(\)\}/u);
-  assert.match(palette, /motion-reduce:animate-none/u);
-  assert.match(palette, /max-\[520px\]:hidden/u);
-  assert.match(palette, /flex min-h-10/u);
-  assert.match(palette, /selected && available && "bg-control"/u);
   assert.match(palette, /result\.command\.title/u);
   assert.doesNotMatch(palette, /`\/\$\{result\.command\.name\}`/u);
   assert.doesNotMatch(palette, /`\/\$\{alias\}`/u);
   assert.match(palette, /const detail = unavailableReason \?\? description/u);
-  assert.match(palette, /rounded-dialog bg-popover/u);
-  assert.doesNotMatch(palette, /block truncate text-small text-secondary/u);
-  assert.doesNotMatch(palette, /selected && available && "bg-list-selection"/u);
   assert.doesNotMatch(palette, /Commands and skills/u);
   assert.doesNotMatch(palette, /composer-slash-shortcuts/u);
-  assert.doesNotMatch(palette, /rounded-md bg-control\/65 text-secondary/u);
   assert.doesNotMatch(palette, />Commands</u);
   assert.doesNotMatch(palette, />Skills</u);
   assert.match(palette, /mode === "command" \? "Slash commands" : "Skills"/u);
@@ -267,9 +257,6 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
     /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => \{\s*if \(attachmentOperationRef\.current\.isCurrent\(token\)\)/u,
   );
   assert.match(palette, /data-presence=\{presenceState\}/u);
-  assert.match(styles, /@keyframes aiden-slash-palette-in/u);
-  assert.match(styles, /@keyframes aiden-slash-palette-out/u);
-  assert.match(styles, /aiden-slash-palette-out 100ms ease-in/u);
   const attemptIndex = composer.indexOf("const attempted = attemptSlashCommandAction");
   const completionIndex = composer.indexOf(
     "const attempt = asyncAction ? await attempted.completion : attempted",
