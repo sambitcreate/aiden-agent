@@ -169,15 +169,6 @@ function fileMutationResult(
   };
 }
 
-async function readExistingText(filePath: string): Promise<string> {
-  try {
-    return await fs.readFile(filePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-}
-
 function throwIfAborted(signal: AbortSignal | undefined, fallback: string): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error ? signal.reason : new Error(fallback);
@@ -268,6 +259,7 @@ interface WorkspaceRootGuard {
     onFileRead?(bytes: number): void;
     onDirectoryEntry?(entryPath: string): void;
     beforeWriteCommit?(entryPath: string): void | Promise<void>;
+    beforeFileWrite?(entryPath: string): void | Promise<void>;
   };
 }
 
@@ -481,8 +473,8 @@ async function nearestExistingAncestor(fullPath: string): Promise<string> {
 }
 
 /**
- * Resolve a writable path without letting mkdir/writeFile follow a symlink to
- * somewhere outside the workspace. Existing safe symlinks are canonicalized.
+ * Select a canonical in-root target. Native descriptor traversal creates any
+ * missing parents later; pathname-based mkdir here would be raceable.
  */
 async function resolveWritableInRoot(
   workspace: WorkspaceRootGuard,
@@ -499,15 +491,15 @@ async function resolveWritableInRoot(
 
   await workspace.testObserver?.beforeWriteCommit?.(lexical);
   throwIfAborted(signal, "File write cancelled.");
-  await fs.mkdir(parent, { recursive: true });
-  throwIfAborted(signal, "File write cancelled.");
-  const realParent = await fs.realpath(parent);
-  assertRealPathInRoot(realRoot, realParent, suppliedPath);
+  const canonicalParent = path.join(realAncestor, path.relative(ancestor, parent));
+  assertRealPathInRoot(realRoot, canonicalParent, suppliedPath);
 
   try {
     await fs.lstat(lexical);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lexical;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return path.join(canonicalParent, path.basename(lexical));
+    }
     throw error;
   }
 
@@ -1061,7 +1053,45 @@ function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
   };
 }
 
-function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
+async function commitPinnedWrite(input: {
+  binary?: string;
+  root: string;
+  rootIdentity: PinnedWorkspaceRootIdentity;
+  relativePath: string;
+  before?: { identity: PinnedWorkspaceRootIdentity; sha256: string };
+  updated: Buffer;
+}): Promise<void> {
+  if (input.updated.length > MAX_PARENT_EDIT_BYTES) {
+    throw new Error("The written file exceeds the safe write limit.");
+  }
+  const args = [
+    "write-file", input.root, input.rootIdentity.device, input.rootIdentity.inode,
+    input.relativePath,
+    ...(input.before
+      ? ["existing", input.before.identity.device, input.before.identity.inode, input.before.sha256]
+      : ["new"]),
+    String(input.updated.length),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
+      encoding: "utf8",
+      maxBuffer: 1024,
+      timeout: 120_000,
+    }, (error, stdout, stderr) => {
+      if (error || stdout !== "written\n") {
+        reject(new Error(stderr.trim() === "conflict"
+          ? "The workspace file changed before the write could be committed."
+          : "The workspace write could not be completed safely; the target file may be incomplete."));
+      } else {
+        resolve();
+      }
+    });
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end(input.updated);
+  });
+}
+
+function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
   return {
     name: "write_file",
     label: "Write File",
@@ -1072,14 +1102,50 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
       content: Type.String({ description: "Full file content to write." }),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<FileMutationDetailsV1>> => {
+      const activeWorkspace = workspace.exactIdentity === null
+        ? pinWorkspaceRoot(workspace.lexical, workspace.testObserver)
+        : workspace;
       const { path: p, content } = params as { path: string; content: string };
-      const full = await resolveWritableInRoot(workspace, p, signal);
-      const before = await readExistingText(full);
+      const full = await resolveWritableInRoot(activeWorkspace, p, signal);
+      let before = "";
+      let preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string } | undefined;
+      try {
+        const handle = await fs.open(full, fsConstants.O_RDONLY |
+          (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+        try {
+          const stat = await handle.stat({ bigint: true });
+          if (!stat.isFile() || stat.nlink !== 1n) {
+            throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
+          }
+          const source = await handle.readFile();
+          before = source.toString("utf8");
+          preimage = {
+            identity: { device: stat.dev.toString(), inode: stat.ino.toString() },
+            sha256: createHash("sha256").update(source).digest("hex"),
+          };
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
       throwIfAborted(signal, "File write cancelled.");
       const details = fileMutationDetails(before, content);
       throwIfAborted(signal, "File write cancelled.");
-      details.producedFile = parseProducedFile({ relativePath: path.relative(await fs.realpath(workspace.lexical), path.join(await fs.realpath(path.dirname(full)), path.basename(full))).split(path.sep).join("/"), operation: "written", bytes: Buffer.byteLength(content) }, "write_file");
-      await fs.writeFile(full, content, "utf-8");
+      const root = await verifyWorkspaceRoot(activeWorkspace, signal);
+      const relativePath = path.relative(root, full).split(path.sep).join("/");
+      const updated = Buffer.from(content, "utf8");
+      details.producedFile = parseProducedFile({ relativePath, operation: "written", bytes: updated.length }, "write_file");
+      await activeWorkspace.testObserver?.beforeFileWrite?.(full);
+      throwIfAborted(signal, "File write cancelled.");
+      await commitPinnedWrite({
+        binary,
+        root,
+        rootIdentity: activeWorkspace.exactIdentity!,
+        relativePath,
+        before: preimage,
+        updated,
+      });
       return fileMutationResult(`Wrote ${content.length} chars to ${p}.`, details);
     },
   };
@@ -2048,7 +2114,7 @@ function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: Coding
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGlob(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGrep(workspace)), "safe"),
     declarePiRuntimeReplay(makeEditFile(workspace, options.fileMutatorBinary), "never"),
-    declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
+    declarePiRuntimeReplay(makeWriteFile(workspace, options.fileMutatorBinary), "never"),
     declarePiRuntimeReplay(makeRunCommand(workspace, options), "never"),
   ];
 }

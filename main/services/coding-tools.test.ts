@@ -1370,6 +1370,130 @@ test("pinned edit_file cannot overwrite an outside file after a target or ancest
   }
 });
 
+test("pinned write_file cannot overwrite an outside file after a target or ancestor swap", async () => {
+  for (const swappedPart of ["target", "ancestor"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-outside-"));
+    try {
+      const directory = path.join(root, "nested");
+      await fs.mkdir(directory);
+      const target = path.join(directory, "write.txt");
+      const outsideFile = path.join(outside, "write.txt");
+      await fs.writeFile(target, "before\n");
+      await fs.writeFile(outsideFile, "outside\n");
+      const write = buildPinnedCodingTools(root, {
+        beforeFileWrite: async () => {
+          if (swappedPart === "target") {
+            await fs.rename(target, path.join(directory, "original.txt"));
+            await fs.symlink(outsideFile, target);
+          } else {
+            await fs.rename(directory, path.join(root, "original-directory"));
+            await fs.symlink(outside, directory);
+          }
+        },
+      }).find((tool) => tool.name === "write_file");
+      assert.ok(write);
+      await assert.rejects(write.execute("swap", { path: "nested/write.txt", content: "after\n" }));
+      assert.equal(await fs.readFile(outsideFile, "utf8"), "outside\n");
+      const original = swappedPart === "target"
+        ? path.join(directory, "original.txt")
+        : path.join(root, "original-directory", "write.txt");
+      assert.equal(await fs.readFile(original, "utf8"), "before\n");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  }
+});
+
+test("pinned write_file rejects a new-file ancestor swap and follows a stable in-root alias", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-create-root-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-create-outside-"));
+  try {
+    const directory = path.join(root, "nested");
+    await fs.mkdir(directory);
+    const write = buildPinnedCodingTools(root, {
+      beforeFileWrite: async () => {
+        await fs.rename(directory, path.join(root, "original-directory"));
+        await fs.symlink(outside, directory);
+      },
+    }).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    await assert.rejects(
+      write.execute("new", { path: "nested/new.txt", content: "created\n" }),
+      /changed before the write could be committed/u,
+    );
+    await assert.rejects(fs.access(path.join(outside, "new.txt")));
+    await assert.rejects(fs.access(path.join(root, "original-directory", "new.txt")));
+
+    const target = path.join(root, "actual.txt");
+    const alias = path.join(root, "alias.txt");
+    await fs.writeFile(target, "before\n");
+    await fs.symlink(target, alias);
+    const stable = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(stable);
+    await stable.execute("alias", { path: "alias.txt", content: "after\n" });
+    assert.equal(await fs.readFile(target, "utf8"), "after\n");
+    assert.equal((await fs.lstat(alias)).isSymbolicLink(), true);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("pinned write_file rejects a replaced workspace root", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-root-swap-"));
+  try {
+    const root = path.join(parent, "workspace");
+    const moved = path.join(parent, "original-workspace");
+    const outside = path.join(parent, "outside");
+    await fs.mkdir(root);
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(root, "write.txt"), "before\n");
+    await fs.writeFile(path.join(outside, "write.txt"), "outside\n");
+    const write = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    await fs.rename(root, moved);
+    await fs.symlink(outside, root);
+    await assert.rejects(
+      write.execute("root-swap", { path: "write.txt", content: "after\n" }),
+      /authorized workspace root changed/u,
+    );
+    assert.equal(await fs.readFile(path.join(outside, "write.txt"), "utf8"), "outside\n");
+    assert.equal(await fs.readFile(path.join(moved, "write.txt"), "utf8"), "before\n");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("parent write_file pins the root during a write call", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-write-root-swap-"));
+  try {
+    const root = path.join(parent, "workspace");
+    const moved = path.join(parent, "original-workspace");
+    const outside = path.join(parent, "outside");
+    await fs.mkdir(root);
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(root, "write.txt"), "before\n");
+    await fs.writeFile(path.join(outside, "write.txt"), "outside\n");
+    const write = buildCodingTools(root, {
+      beforeFileWrite: async () => {
+        await fs.rename(root, moved);
+        await fs.symlink(outside, root);
+      },
+    }).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    await assert.rejects(
+      write.execute("root-swap", { path: "write.txt", content: "after\n" }),
+      /(?:authorized workspace root changed|changed before the write could be committed)/u,
+    );
+    assert.equal(await fs.readFile(path.join(outside, "write.txt"), "utf8"), "outside\n");
+    assert.equal(await fs.readFile(path.join(moved, "write.txt"), "utf8"), "before\n");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("pinned edit_file follows a stable in-root file symlink", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-in-root-"));
   try {
