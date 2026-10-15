@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundedMcpToolPageReader, callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -395,4 +395,91 @@ test("a cached inventory waiter stops on its own abort without failing the share
   assert.equal(await survivor, "inventory");
   assert.equal(await cache.load(client, read), "inventory");
   assert.equal(reads, 1);
+});
+
+test("a server without listChanged reuses its inventory for the TTL, then re-lists; close forgets it", async () => {
+  let now = 0;
+  let lists = 0;
+  let names = ["first"];
+  let failNext = false;
+  const server = new Server({ name: "ttl-fixture", version: "1" }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    lists += 1;
+    if (failNext) { failNext = false; throw new Error("transient list failure"); }
+    return { tools: names.map((name) => ({ name, inputSchema: { type: "object" as const } })) };
+  });
+  const client = new Client({ name: "test-client", version: "1" });
+  const cache = createMcpToolInventoryCache<{ names: string[]; guard: ReturnType<typeof createMcpToolCallGuard> }>({ ttlMs: 30_000, now: () => now });
+  cache.watch(client);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const read = () => cache.load(client, async () => {
+    const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
+    return { names: tools.map(({ name }) => name), guard: createMcpToolCallGuard(tools) };
+  });
+  try {
+    const first = await read();
+    now = 29_000;
+    assert.equal(await read(), first, "the same inventory object is reused inside the TTL");
+    assert.equal(lists, 1);
+    assert.ok(first.guard.has("first"));
+    assert.ok(!first.guard.has("second"));
+
+    names = ["second"];
+    now = 61_000;
+    const refreshed = await read();
+    assert.deepEqual(refreshed.names, ["second"]);
+    assert.equal(lists, 2);
+
+    now = 200_000;
+    failNext = true;
+    await assert.rejects(read(), /transient list failure/u);
+    assert.deepEqual((await read()).names, ["second"], "a failed read is not retained");
+    assert.equal(lists, 4);
+
+    cache.forget(client);
+    await read();
+    assert.equal(lists, 5, "a forgotten client lists afresh");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("after a reconnect, calls are checked against the live client's inventory, not the one the tools were built from", async (t) => {
+  const serve = async (tools: { name: string; outputSchema?: Record<string, unknown> }[]) => {
+    const server = new Server({ name: "reconnect-fixture", version: "1" }, { capabilities: { tools: {} } });
+    let calls = 0;
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: tools.map(({ name, outputSchema }) => ({ name, inputSchema: { type: "object" as const }, ...(outputSchema ? { outputSchema } : {}) })),
+    }));
+    server.setRequestHandler(CallToolRequestSchema, async () => {
+      calls += 1;
+      return { content: [{ type: "text", text: "ok" }], structuredContent: { count: "many" } };
+    });
+    const client = new Client({ name: "test-client", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    t.after(async () => { await client.close(); await server.close(); });
+    const inventory = async () => ({ guard: createMcpToolCallGuard(await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) })) });
+    return { client, inventory, calls: () => calls };
+  };
+  const before = await serve([{ name: "lookup" }, { name: "retired" }]);
+  // The restarted server dropped one tool and now declares an output schema for the other.
+  const after = await serve([{ name: "lookup", outputSchema: { type: "object", properties: { count: { type: "number" } } } }]);
+  const discovered = { client: before.client, guard: (await before.inventory()).guard };
+
+  const ok = await callMcpToolOnLiveClient(discovered, before.client, before.inventory, { name: "retired", arguments: {} });
+  assert.equal(ok.isError, undefined);
+  await assert.rejects(
+    callMcpToolOnLiveClient(discovered, after.client, after.inventory, { name: "retired", arguments: {} }),
+    /no longer offered/u,
+  );
+  assert.equal(after.calls(), 0, "a tool the live server no longer offers is never dispatched");
+  await assert.rejects(
+    callMcpToolOnLiveClient(discovered, after.client, after.inventory, { name: "lookup", arguments: {} }),
+    /does not match the tool's output schema/u,
+  );
 });

@@ -69,6 +69,7 @@ async function managedTestHarness(
   options: {
     tools?: AgentTool[];
     deferredTools?: readonly AgentTool[];
+    lateDeferredTools?: PiAgentRuntimeHarnessOptions["lateDeferredTools"];
     extensions?: PiAgentRuntimeHarnessOptions["extensions"];
     identity?: PiAgentRuntimeHarnessOptions["identity"];
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
@@ -128,6 +129,7 @@ async function managedTestHarness(
   );
   const harness = new PiAgentRuntimeHarness({
     deferredTools: options.deferredTools,
+    lateDeferredTools: options.lateDeferredTools,
     extensions: options.extensions,
     identity: options.identity,
     convertToLlm,
@@ -3569,4 +3571,54 @@ test("deferred MCP schemas stay outside provider requests while discovery and ap
   assert.deepEqual(effects.filter((effect) => effect.toolName === "remote_docs").map((effect) => effect.state).sort(), ["completed", "remote_error"]);
   const fresh = testHarness([], { initialState: { tools: [codemode] } }).harness;
   assert.deepEqual(fresh.getCallableTools().map((tool) => tool.name), ["codemode"]);
+});
+
+test("an MCP server that finished discovery after the turn started is searchable and callable through codemode", async (t) => {
+  const store = await effectStoreFixture(t);
+  let harness!: PiAgentRuntimeHarness;
+  let providerCore!: ReturnType<typeof createFauxCore>;
+  const toolSets: string[][] = [];
+  const approved: string[] = [];
+  const late: AgentTool[] = [];
+  const remote = Object.assign<AgentTool, object>({
+    name: "late_docs", label: "Docs", description: "Search late documents", replay: "never",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute() {
+      return { content: [{ type: "text", text: "late document" }], details: null };
+    },
+  }, { codemode: true, discovery: Object.freeze({ namespace: "mcp:late", label: "Late docs" }) });
+  // The server arrives while the provider is still planning its first call.
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = () => { late.push(remote, { ...remote, name: "codemode" }); resolve(); }; });
+  const codemode = createPiCodemodeTool({
+    tools: () => harness.getCallableTools(),
+    executeTool: (...args) => harness.executeNestedToolCall(...args),
+    settled: () => arrived,
+  });
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(await searchTools("late documents")); text(await tools.late_docs({query:"q"}));' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], {
+    tools: [codemode], lateDeferredTools: () => late, effects: { store, chatId: "late" },
+    beforeToolCall: async ({ toolCall }) => { approved.push(toolCall.name); return undefined; },
+    streamFn: (model, context, options) => {
+      toolSets.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return providerCore.streamSimple(model, context, options);
+    },
+  });
+  harness = prepared.harness;
+  providerCore = prepared.core;
+  assert.deepEqual(harness.getCallableTools().map((tool) => tool.name), ["codemode"]);
+  setTimeout(arrive, 10);
+  assert.equal((await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "search", timestamp: 1 } })).kind, "completed");
+  // Declarations never change as the server arrives; a late duplicate name is ignored.
+  assert.deepEqual(toolSets, [["codemode"], ["codemode"]]);
+  assert.deepEqual(harness.getCallableTools().map((tool) => tool.name), ["codemode", "late_docs"]);
+  assert.deepEqual(approved, ["codemode", "late_docs"]);
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  const outputs = result.content.filter((item) => item.type === "text").map((item) => JSON.parse(item.text));
+  assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
+  assert.equal(outputs[1].isError, false);
+  assert.match(JSON.stringify(outputs[1]), /late document/u);
 });

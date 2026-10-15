@@ -19,7 +19,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { shell, logger } from "../platform.js";
-import { mcpOAuthStore } from "./mcp-oauth-store.js";
+import { McpOAuthCredentialStorageError, mcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   clearMcpStepUpScope,
   hasMcpOAuthSessionData,
@@ -322,7 +322,14 @@ export async function hasOAuthTokens(
   authServerMetadataUrl?: string,
   oauthClientName?: string,
 ): Promise<boolean> {
-  const session = await mcpOAuthStore.get(serverId);
+  let session: McpOAuthSession;
+  try {
+    session = await mcpOAuthStore.get(serverId);
+  } catch (error) {
+    // Status only: an unreadable sign-in is not usable. Connecting reports why.
+    if (error instanceof McpOAuthCredentialStorageError) return false;
+    throw error;
+  }
   if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url, authServerMetadataUrl, oauthClientName)))
     return false;
   return Boolean(session.tokens);
@@ -504,7 +511,11 @@ export async function authorizeMcpServer(
   const previousSession = await mcpOAuthStore.get(
     server.id,
     () => isCurrent() && oauthOperations.isCurrent(operation),
-  );
+  ).catch((error: unknown) => {
+    // Signing in again is how the user recovers from an unreadable sign-in.
+    if (error instanceof McpOAuthCredentialStorageError) return {};
+    throw error;
+  });
   const transaction = new McpOAuthSessionTransaction(
     sessionForMcpAuthorizationAttempt(previousSession, binding),
   );

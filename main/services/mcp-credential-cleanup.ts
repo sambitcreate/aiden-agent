@@ -22,17 +22,17 @@ import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 import { syncDirectory } from "./durable-fs.js";
+import { createMcpAdmissionQueue, McpPendingJournalState, singleFlight } from "./mcp-admission-queue.js";
 
 const FILE = "pending-mcp-credential-cleanup.json";
-let cleanupTail: Promise<void> = Promise.resolve();
+const queue = createMcpAdmissionQueue();
+// This process is the journal's only writer: once it has read, written or
+// cleared the file it knows whether anything is pending without re-reading.
+const journal = new McpPendingJournalState();
 
+/** Mutations and reconciliation: one at a time, never during an admission. */
 function serialized<R>(operation: () => Promise<R>): Promise<R> {
-  const result = cleanupTail.then(operation, operation);
-  cleanupTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
+  return queue.exclusive(operation);
 }
 
 async function journalPath(): Promise<string> {
@@ -44,14 +44,22 @@ async function journalPath(): Promise<string> {
 async function readPending(): Promise<PendingMcpCredentialCleanupV1 | null> {
   const target = await journalPath();
   try {
-    return parsePendingMcpCredentialCleanup(JSON.parse(await readRegularUtf8File(target)));
+    const pending = parsePendingMcpCredentialCleanup(JSON.parse(await readRegularUtf8File(target)));
+    journal.observed(true);
+    return pending;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      journal.observed(false);
+      return null;
+    }
+    journal.uncertain();
     throw error;
   }
 }
 
 async function writePending(pending: PendingMcpCredentialCleanupV1): Promise<void> {
+  // Pending (or uncertain) from before the first byte: a failed write still reads next time.
+  journal.written();
   const target = await journalPath();
   const staged = `${target}.${randomUUID()}.tmp`;
   try {
@@ -74,8 +82,14 @@ async function writePending(pending: PendingMcpCredentialCleanupV1): Promise<voi
 
 async function clearPending(): Promise<void> {
   const target = await journalPath();
-  await fs.rm(target, { force: true });
-  await syncDirectory(path.dirname(target));
+  try {
+    await fs.rm(target, { force: true });
+    await syncDirectory(path.dirname(target));
+  } catch (error) {
+    journal.uncertain();
+    throw error;
+  }
+  journal.cleared();
 }
 
 function assertCurrent(isCurrent: () => boolean): void {
@@ -124,8 +138,18 @@ async function reconcileNow(
 }
 
 export function reconcilePendingMcpCredentialCleanup(): Promise<void> {
+  // Nothing to reconcile and nothing that could write the journal is queued.
+  if (journal.knownEmpty() && !queue.exclusiveBusy()) return Promise.resolve();
   return serialized(reconcileNow);
 }
+
+/**
+ * Admission-time reconciliation. Admissions for different servers run
+ * concurrently, so they share one reconciliation rather than racing two.
+ * Exclusive operations never run alongside an admission, so the journal
+ * cannot change underneath it.
+ */
+const reconcileForAdmission = singleFlight(() => reconcileNow());
 
 export function mutateMcpWithCredentialCleanup<R>(
   serverId: string,
@@ -210,8 +234,8 @@ export function withConfiguredMcp<R>(
   isCurrent: () => boolean = () => true,
   onAdmitted: () => void = () => undefined,
 ): Promise<R> {
-  const admitted = serialized(async () => {
-    await reconcileNow(isCurrent);
+  const admitted = queue.shared(serverId, async () => {
+    if (!journal.knownEmpty()) await reconcileForAdmission();
     assertCurrent(isCurrent);
     const configured = (await configStore.listMcpServers()).find(
       (server) => server.id === serverId,
