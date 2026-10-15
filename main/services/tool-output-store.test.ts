@@ -74,7 +74,8 @@ test("MCP previews retain recoverable normalized text with fresh authority check
 test("an MCP tool admitted after the turn started keeps a recoverable oversized result", async () => {
   const root = await mkdtemp(join(tmpdir(), "aiden-mcp-late-spill-"));
   try {
-    const raw = "x".repeat(50_000) + "late-tail";
+    // Previews keep the head and tail, so the recoverable part is the middle.
+    const raw = "x".repeat(25_000) + "late-middle" + "x".repeat(25_000);
     const lateTool = markToolOutputSource({ name: "mcp_slow_search", label: "Slow", description: "test", parameters: Type.Object({}),
       execute: async () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: raw }] })),
     });
@@ -90,11 +91,11 @@ test("an MCP tool admitted after the turn started keeps a recoverable oversized 
     const preview = result.content[0];
     assert.equal(preview?.type, "text");
     if (preview?.type !== "text") return;
-    assert.ok(!preview.text.includes("late-tail"));
+    assert.ok(!preview.text.includes("late-middle"), "the oversized middle is cut from the preview");
     const handle = /handle=([a-f0-9-]+)/u.exec(preview.text)?.[1];
     assert.ok(handle, "the late result was retained");
-    const read = await reader.execute("read", { handle, offset: 50_000 });
-    assert.match(JSON.stringify(read.content), /late-tail/u);
+    const read = await reader.execute("read", { handle, offset: 24_990 });
+    assert.match(JSON.stringify(read.content), /late-middle/u);
     // A late tool cannot replace the reader.
     assert.deepEqual(outputs.adopt([{ ...lateTool, name: "read_tool_output" }]), []);
   } finally { await rm(root, { recursive: true, force: true }); }
