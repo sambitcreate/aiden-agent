@@ -11,6 +11,9 @@ Git's ownership/identity/journal gates continue to apply.
 The Remote Git adapter maps this retryable refusal to its existing
 `git_capability_denied` response with the specific terminal message; iOS and
 Android already surface Remote errors without a wire-shape change.
+The standalone CLI has no owned PTYs; its shared-service adapter implements an
+async no-op to satisfy the drain contract. Root typecheck does not compile this
+package, so its separate build/typecheck is required.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual
