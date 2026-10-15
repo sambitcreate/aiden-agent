@@ -402,6 +402,7 @@ function RootContent() {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
         queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets }),
         queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
         queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
       ]);
