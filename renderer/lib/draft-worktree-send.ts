@@ -65,14 +65,21 @@ export interface WorktreeSendApi<Input, C> {
   onProgress(handler: (progress: FirstMessageWorktreeProgress) => void): () => void;
 }
 
-export type WorktreeFirstSendResult<C> =
+export type WorktreeFirstSendResult<C> = (
   | { chat: C; worktree: FirstMessageWorktreeInfo; keptWorktreeBranch?: undefined }
   | {
       chat: C;
       worktree?: undefined;
       /** Run in this checkout after a worktree was already created: it is kept, not deleted. */
       keptWorktreeBranch?: string;
-    };
+    }
+) & {
+  /**
+   * The chat was saved after the user answered a failure (Retry, Use
+   * <branch>, Run in this checkout), possibly from a later view of the draft.
+   */
+  answered: boolean;
+};
 
 export interface WorktreeFirstSend<C> {
   result: Promise<WorktreeFirstSendResult<C>>;
@@ -161,6 +168,7 @@ export function startWorktreeFirstSend<Input, C>(options: {
   let waiting: ((decision: WorktreeSendDecision) => void) | undefined;
   let settled = false;
   let released = false;
+  let answered = false;
 
   const decide = (decision: WorktreeSendDecision) => {
     waiting?.(decision);
@@ -185,7 +193,7 @@ export function startWorktreeFirstSend<Input, C>(options: {
       progress = {};
       show({ status: "running", request, progress });
       const result = await api.createInWorktree({ ...input, worktree: request });
-      if (result.ok) return { chat: result.chat, worktree: result.worktree };
+      if (result.ok) return { chat: result.chat, worktree: result.worktree, answered };
       const existing = existingWorktreeOf(result);
       // A worktree that reported ready before the chat failed to save is kept.
       const created = existing?.branch ?? (progress.phase === "ready" ? progress.branch : undefined);
@@ -202,10 +210,11 @@ export function startWorktreeFirstSend<Input, C>(options: {
       });
       waiting = undefined;
       if (decision === "cancel") throw new WorktreeSendCancelledError();
+      answered = true;
       if (decision === "checkout") {
         show({ status: "checkout", request, progress });
         const chat = await api.createInCheckout(input);
-        return created ? { chat, keptWorktreeBranch: created } : { chat };
+        return created ? { chat, keptWorktreeBranch: created, answered } : { chat, answered };
       }
       if (decision === "use-existing" && existing) {
         // Resend exactly as the attempt that created it, so main reuses it.
@@ -232,4 +241,34 @@ export function startWorktreeFirstSend<Input, C>(options: {
       if (activeSends.get(draftId)?.decide === decide) publish(draftId, undefined);
     },
   };
+}
+
+type WorktreeSendContinuation = (turnId: string, workspaceId: string | undefined) => void;
+const continuations = new Map<string, WorktreeSendContinuation>();
+
+/**
+ * The view currently showing `chatId` registers how it starts a reply. A
+ * worktree send the user continued from that view (after leaving the pane
+ * that sent it) hands its saved turn here instead of abandoning it.
+ */
+export function registerWorktreeSendContinuation(
+  chatId: string,
+  start: WorktreeSendContinuation,
+): () => void {
+  continuations.set(chatId, start);
+  return () => {
+    if (continuations.get(chatId) === start) continuations.delete(chatId);
+  };
+}
+
+/** Start the reply in the view showing `chatId`; false when none is. */
+export function continueWorktreeSendInView(
+  chatId: string,
+  turnId: string,
+  workspaceId: string | undefined,
+): boolean {
+  const start = continuations.get(chatId);
+  if (!start) return false;
+  start(turnId, workspaceId);
+  return true;
 }

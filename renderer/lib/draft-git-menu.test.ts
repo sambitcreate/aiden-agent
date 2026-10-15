@@ -4,6 +4,7 @@ import {
   branchChipState,
   draftWorkInOptions,
   draftWorktreeHint,
+  draftWorktreeSendBlocker,
   worktreeBaseNote,
   worktreeProgressText,
 } from "./draft-git-menu";
@@ -132,4 +133,27 @@ test("a quiet note appears only when From origin found no upstream", () => {
   );
   assert.equal(worktreeBaseNote({ baseSource: "fetched", baseRef: "main" }), undefined);
   assert.equal(worktreeBaseNote({ baseSource: "local", baseRef: "main" }), undefined);
+});
+
+test("a New worktree draft waits for Git status and a resolved base before it can send", () => {
+  const repo = {
+    gitMode: "worktree" as const,
+    sending: false,
+    inManagedWorktree: false,
+    gitLoading: false,
+    isRepo: true,
+    unborn: false,
+    accessOff: false,
+  };
+  assert.equal(draftWorktreeSendBlocker({ ...repo, baseRef: "main" }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, gitLoading: true, baseRef: "main" }), "Reading Git status…");
+  // Git status is in, but the base branch has not been filled in yet.
+  assert.equal(draftWorktreeSendBlocker(repo), "Reading Git status…");
+  // Nothing to wait for where no worktree can be made, or none is wanted.
+  assert.equal(draftWorktreeSendBlocker({ ...repo, isRepo: false }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, unborn: true }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, accessOff: true }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, gitMode: "checkout", gitLoading: true }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, inManagedWorktree: true }), undefined);
+  assert.equal(draftWorktreeSendBlocker({ ...repo, sending: true }), undefined, "a send in flight is not blocked");
 });

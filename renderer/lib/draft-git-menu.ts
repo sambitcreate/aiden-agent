@@ -165,3 +165,26 @@ export function worktreeBaseNote(
     ? `No upstream for ${worktree.baseRef}; started from local ${worktree.baseRef}`
     : undefined;
 }
+
+/**
+ * Why a draft can't be sent yet because its New worktree isn't settled:
+ * Git status is still loading, or the repository can host a worktree but the
+ * base branch hasn't been resolved. Undefined when sending can go ahead (in
+ * checkout mode, an existing worktree, or a folder that can't host one).
+ */
+export function draftWorktreeSendBlocker(input: {
+  gitMode: ChatDraftGitMode;
+  sending: boolean;
+  baseRef?: string;
+  /** The draft already runs in a managed worktree, used as it is. */
+  inManagedWorktree: boolean;
+  gitLoading: boolean;
+  isRepo: boolean;
+  unborn: boolean;
+  accessOff: boolean;
+}): string | undefined {
+  if (input.gitMode !== "worktree" || input.sending || input.inManagedWorktree) return undefined;
+  if (input.gitLoading) return "Reading Git status…";
+  const canHostWorktree = input.isRepo && !input.unborn && !input.accessOff;
+  return canHostWorktree && !input.baseRef ? "Reading Git status…" : undefined;
+}

@@ -5,7 +5,9 @@ import { beforeEach, test } from "node:test";
 import { chatsApi } from "./ipc";
 import {
   activeWorktreeSend,
+  continueWorktreeSendInView,
   isWorktreeSendCancelled,
+  registerWorktreeSendContinuation,
   startWorktreeFirstSend,
   subscribeActiveWorktreeSends,
   type WorktreeSendView,
@@ -301,4 +303,39 @@ test("running in this checkout after a worktree was made reports the worktree as
   saved.decide("checkout");
   assert.equal((await saved.result).keptWorktreeBranch, "aiden/made-it");
   saved.release();
+});
+
+test("a save after the user answered a failure says so; one that needed no answer does not", async () => {
+  replies.push({ ok: true, chat: savedChat("ws-worktree"), worktree: WORKTREE_INFO });
+  const direct = start([]);
+  assert.equal((await direct.result).answered, false);
+  direct.release();
+
+  replies.push(
+    { ok: false, code: "worktree-failed", reason: "Couldn't create the worktree." },
+    savedChat("ws-repo"),
+  );
+  const answered = start([]);
+  await nextTick();
+  activeWorktreeSend(DRAFT_ID)!.decide("checkout");
+  assert.equal((await answered.result).answered, true);
+  answered.release();
+});
+
+test("a continued send's reply starts in the view now showing the chat, once, and only there", () => {
+  const started: Array<[string, string, string | undefined]> = [];
+  const leave = registerWorktreeSendContinuation(DRAFT_ID, (turnId, workspaceId) => {
+    started.push(["first view", turnId, workspaceId]);
+  });
+  // The pane that took over replaces the one that left.
+  const unregisterReturned = registerWorktreeSendContinuation(DRAFT_ID, (turnId, workspaceId) => {
+    started.push(["returned view", turnId, workspaceId]);
+  });
+  leave();
+  assert.equal(continueWorktreeSendInView(DRAFT_ID, "turn-1", "ws-worktree"), true);
+  assert.deepEqual(started, [["returned view", "turn-1", "ws-worktree"]]);
+  assert.equal(continueWorktreeSendInView(OTHER_DRAFT, "turn-2", undefined), false, "no view shows that chat");
+  unregisterReturned();
+  assert.equal(continueWorktreeSendInView(DRAFT_ID, "turn-3", undefined), false, "nobody is looking: abandon");
+  assert.equal(started.length, 1);
 });
