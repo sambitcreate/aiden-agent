@@ -388,6 +388,34 @@ export interface GitCreatedWorktree extends GitWorktree {
   createdFromHead: string;
 }
 
+/** A remote branch a worktree base can be fetched from. */
+export interface GitWorktreeBaseUpstream {
+  remote: string;
+  /** Branch name on the remote, without `refs/heads/`. */
+  branch: string;
+  /** Local remote-tracking ref Git updates on fetch, e.g. `refs/remotes/origin/main`. */
+  trackingRef: string;
+}
+
+/** A validated, existing base for a new managed worktree. */
+export interface GitWorktreeBase {
+  /** Fully qualified ref (`refs/heads/main`, `refs/remotes/origin/main`) or `HEAD`. */
+  ref: string;
+  /** The name as the user chose it. */
+  name: string;
+  commit: string;
+  upstream?: GitWorktreeBaseUpstream;
+}
+
+export interface GitCreateWorktreeOptions {
+  provisionedIgnored?: readonly string[];
+  /**
+   * Fully qualified ref or full commit to start from. Resolved to a commit
+   * inside the repository's mutation queue. Defaults to `HEAD`.
+   */
+  startPoint?: string;
+}
+
 type GitWorktreeRollbackIdentity = Pick<
   GitCreatedWorktree,
   "worktreeGitDir" | "ownershipToken" | "worktreeDevice" | "worktreeInode"
@@ -3716,6 +3744,191 @@ export class GitService {
     return head.stdout.trim();
   }
 
+  /** Resolve a fully qualified ref (or full commit) to the commit a worktree starts at. */
+  private async requireStartCommit(
+    repo: GitRepository,
+    startPoint: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (startPoint === "HEAD") return this.requireHead(repo);
+    if (!/^(?:refs\/(?:heads|remotes)\/\S+|[0-9a-f]{40}|[0-9a-f]{64})$/u.test(startPoint)) {
+      throw new GitServiceError("invalid_ref", "The worktree base is not a branch or commit.");
+    }
+    const resolved = await this.run(
+      repo.cwd,
+      ["rev-parse", "--verify", "--quiet", `${startPoint}^{commit}`],
+      { allowExitCodes: [1, 128], signal },
+    );
+    const commit = resolved.stdout.trim();
+    if (resolved.exitCode !== 0 || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(commit)) {
+      throw new GitServiceError("invalid_ref", "The worktree base no longer exists.");
+    }
+    return commit;
+  }
+
+  private async optionalCommit(
+    repo: GitRepository,
+    ref: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const result = await this.run(repo.cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+      allowExitCodes: [1, 128],
+      signal,
+    });
+    const commit = result.stdout.trim();
+    return result.exitCode === 0 && commit ? commit : undefined;
+  }
+
+  private async configuredRemotes(repo: GitRepository, signal?: AbortSignal): Promise<string[]> {
+    const result = await this.run(repo.cwd, ["remote"], { signal });
+    return result.stdout.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+  }
+
+  /**
+   * Validate a base the user chose for a new worktree: a local branch, a
+   * remote-tracking branch (`origin/main`), or `HEAD`. Also reports the remote
+   * branch it can be fetched from: the local branch's upstream, else
+   * `origin/<branch>` when that tracking branch exists.
+   */
+  async resolveWorktreeBase(
+    cwd: string,
+    baseRef: string,
+    signal?: AbortSignal,
+  ): Promise<GitWorktreeBase> {
+    const repo = this.requireRepository(await this.repository(cwd, signal));
+    if (baseRef === "HEAD") {
+      return { ref: "HEAD", name: "HEAD", commit: await this.requireHead(repo) };
+    }
+    await this.validateBranchName(repo, baseRef);
+    const localRef = `refs/heads/${baseRef}`;
+    const localCommit = await this.optionalCommit(repo, localRef, signal);
+    if (localCommit) {
+      const upstream = await this.run(
+        repo.cwd,
+        [
+          "for-each-ref",
+          "--count=1",
+          "--format=%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream)%00",
+          localRef,
+        ],
+        { signal },
+      );
+      const [remote = "", remoteRef = "", trackingRef = ""] = upstream.stdout.split("\u0000");
+      const remotes = await this.configuredRemotes(repo, signal);
+      let resolvedUpstream: GitWorktreeBaseUpstream | undefined;
+      if (
+        remotes.includes(remote) &&
+        remoteRef.startsWith("refs/heads/") &&
+        trackingRef.startsWith("refs/remotes/")
+      ) {
+        resolvedUpstream = {
+          remote,
+          branch: remoteRef.slice("refs/heads/".length),
+          trackingRef,
+        };
+      } else if (
+        remotes.includes("origin") &&
+        (await this.optionalCommit(repo, `refs/remotes/origin/${baseRef}`, signal))
+      ) {
+        resolvedUpstream = {
+          remote: "origin",
+          branch: baseRef,
+          trackingRef: `refs/remotes/origin/${baseRef}`,
+        };
+      }
+      return {
+        ref: localRef,
+        name: baseRef,
+        commit: localCommit,
+        ...(resolvedUpstream ? { upstream: resolvedUpstream } : {}),
+      };
+    }
+    const remoteRef = `refs/remotes/${baseRef}`;
+    const remoteCommit = await this.optionalCommit(repo, remoteRef, signal);
+    if (!remoteCommit) {
+      throw new GitServiceError("invalid_ref", `Branch “${baseRef}” does not exist.`);
+    }
+    const remote = (await this.configuredRemotes(repo, signal))
+      .filter((name) => baseRef.startsWith(`${name}/`) && baseRef.length > name.length + 1)
+      .sort((left, right) => right.length - left.length)[0];
+    return {
+      ref: remoteRef,
+      name: baseRef,
+      commit: remoteCommit,
+      ...(remote
+        ? { upstream: { remote, branch: baseRef.slice(remote.length + 1), trackingRef: remoteRef } }
+        : {}),
+    };
+  }
+
+  /**
+   * Fetch one branch from its remote (no tags, submodules, hooks, or
+   * background maintenance) and return the updated tracking commit. A
+   * deliberate network action, run only for an explicit "from origin" send.
+   */
+  async fetchWorktreeBase(
+    cwd: string,
+    upstream: GitWorktreeBaseUpstream,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const repo = this.requireRepository(await this.repository(cwd, signal));
+    const remotes = await this.configuredRemotes(repo, signal);
+    if (!remotes.includes(upstream.remote)) {
+      throw new GitServiceError("invalid_ref", `Remote “${upstream.remote}” is not configured.`);
+    }
+    await this.validateBranchName(repo, upstream.branch);
+    if (!upstream.trackingRef.startsWith("refs/remotes/")) {
+      throw new GitServiceError("invalid_ref", "The remote-tracking branch is invalid.");
+    }
+    try {
+      await this.run(
+        repo.cwd,
+        [
+          "fetch",
+          "--no-tags",
+          "--no-recurse-submodules",
+          "--no-write-fetch-head",
+          "--",
+          upstream.remote,
+          `refs/heads/${upstream.branch}`,
+        ],
+        {
+          hooksDisabled: true,
+          mutation: true,
+          signal,
+          timeoutMs: this.pushTimeoutMs,
+          extraConfig: [
+            ["protocol.ext.allow", "never"],
+            ["maintenance.auto", "false"],
+            ["gc.auto", "0"],
+          ],
+        },
+      );
+    } finally {
+      // The fetch may have moved remote-tracking refs other reads cached.
+      this.invalidate(repo.commonDir);
+    }
+    const commit = await this.optionalCommit(repo, upstream.trackingRef, signal);
+    if (!commit) {
+      throw new GitServiceError(
+        "invalid_ref",
+        `Fetched ${upstream.remote}/${upstream.branch}, but its remote-tracking branch is missing.`,
+      );
+    }
+    return commit;
+  }
+
+  /** Every local branch name, for picking a free worktree branch name. */
+  async localBranchNames(cwd: string, signal?: AbortSignal): Promise<string[]> {
+    const repo = this.requireRepository(await this.repository(cwd, signal));
+    const result = await this.run(
+      repo.cwd,
+      ["for-each-ref", "--format=%(refname:strip=2)%00", "refs/heads"],
+      { signal },
+    );
+    return result.stdout.split("\u0000").map((value) => value.trim()).filter(Boolean);
+  }
+
   async checkout(cwd: string, name: string, signal?: AbortSignal): Promise<void> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, name);
@@ -5474,12 +5687,14 @@ export class GitService {
     root: string,
     branch: string,
     signal?: AbortSignal,
-    options?: { provisionedIgnored?: readonly string[] },
+    options?: GitCreateWorktreeOptions,
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
     return this.enqueueMutation(repo.commonDir, async () => {
-      const createdFromHead = await this.requireHead(repo);
+      const createdFromHead = options?.startPoint === undefined
+        ? await this.requireHead(repo)
+        : await this.requireStartCommit(repo, options.startPoint, signal);
       const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, createdFromHead);
       await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
       const exists = await this.run(
@@ -6665,8 +6880,17 @@ export const gitCreateWorktree = (
   root: string,
   branch: string,
   signal?: AbortSignal,
-  options?: { provisionedIgnored?: readonly string[] },
+  options?: GitCreateWorktreeOptions,
 ) => gitService.createWorktree(folderPath, root, branch, signal, options);
+export const gitResolveWorktreeBase = (folderPath: string, baseRef: string, signal?: AbortSignal) =>
+  gitService.resolveWorktreeBase(folderPath, baseRef, signal);
+export const gitFetchWorktreeBase = (
+  folderPath: string,
+  upstream: GitWorktreeBaseUpstream,
+  signal?: AbortSignal,
+) => gitService.fetchWorktreeBase(folderPath, upstream, signal);
+export const gitLocalBranchNames = (folderPath: string, signal?: AbortSignal) =>
+  gitService.localBranchNames(folderPath, signal);
 export const gitRollbackWorktree = (
   folderPath: string,
   created: GitCreatedWorktree,
