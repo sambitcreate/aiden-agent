@@ -1,6 +1,9 @@
 # Managed worktree process cleanup
 
-2026-10-15, pending PR from `origin/main` `11b58367`.
+2026-10-15, pending PR #500. Started from `origin/main` `11b58367`;
+merged latest `origin/main` `dd2c0d03` into the PR branch without rebasing.
+The merged root `package.json` test chain matches main, and this PR changes no
+Aiden Remote protocol revision or native-client fixture.
 
 Explicit managed-worktree removal now awaits exit of Aiden-owned PTY sessions
 after signalling them. The terminal service retains pending exits across retries;
