@@ -145,12 +145,16 @@ fun AidenBotProfileScreen(
     val photoError by avatarModel.errorMessage.collectAsStateWithLifecycle()
     val canDelete = aidenBotDeleteAvailable(serverInfo, botDeleter)
 
-    fun accept(detail: AidenBotDetail) {
+    /**
+     * A Bot for the page and every screen. [confirmed] is the Mac's answer, kept on disk; an
+     * Advanced Save on its way (or its rollback) is only shown. Pinned either way: a Bot from
+     * another pairing's save never lands in this one's cache.
+     */
+    fun accept(detail: AidenBotDetail, confirmed: Boolean) {
         bot = detail
         nameText = detail.name
         subtitleText = detail.purpose
-        // Pinned: a Bot from another pairing's save never lands in this one's cache.
-        saveHost.cache(detail)
+        if (confirmed) saveHost.cache(detail) else saveHost.show(detail)
         editor?.adopt(detail)
         onBotMutated()
     }
@@ -258,7 +262,7 @@ fun AidenBotProfileScreen(
             }
             if (avatarModel.hasCandidate) {
                 avatarModel.uploadAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
-                    scope.launch { accept(updated) }
+                    scope.launch { accept(updated, confirmed = true) }
                 }
             }
         }
@@ -391,7 +395,7 @@ fun AidenBotProfileScreen(
                                     showPhotoMenu = false
                                     scope.launch {
                                         avatarModel.deleteAvatar(current.id, aidenBotAvatarExpectedRevision(current)) { updated ->
-                                            scope.launch { accept(updated) }
+                                            scope.launch { accept(updated, confirmed = true) }
                                         }
                                     }
                                 }
@@ -501,11 +505,12 @@ fun AidenBotProfileScreen(
             onDismiss = { showAdvanced = false },
             // Save applies at once (R15): the optimistic Bot now, the Mac's when it answers.
             onSaved = {
-                accept(it)
+                accept(it, confirmed = false)
                 showAdvanced = false
             },
             saveHost = saveHost,
-            onSaveSettled = ::accept,
+            // The Mac's Bot is already kept by the save; a rollback is only shown.
+            onSaveSettled = { accept(it, confirmed = false) },
             onSaveFailed = coordinator::presentError,
             chatActivityAvailable = aidenBotShowsChatActivity(serverInfo, hasBaseline = true, cachedSupport = coordinator.cachedBotActivitySupported),
             chatActivityHost = remember(client) { coordinator.botChatActivityHost() },

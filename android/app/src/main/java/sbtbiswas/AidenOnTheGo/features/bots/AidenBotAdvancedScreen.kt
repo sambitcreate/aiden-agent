@@ -169,7 +169,8 @@ fun AidenBotAdvancedDraft.optimistic(bot: AidenBotDetail, catalog: AidenBotCapab
  * Advanced's Save, applied at once (R15): [show] gets the optimistic Bot now, and the save runs
  * on [host] (outliving the sheet), waiting for the connection and bounded. The Mac's Bot then
  * replaces it through [settled]; a failure puts back what was there, unless something newer
- * replaced it, and says why through [failed].
+ * replaced it, and says why through [failed]. Only the Mac's Bot is kept on disk: the
+ * optimistic one and a rollback are shown, never written.
  */
 fun aidenBotSaveAdvancedOptimistically(
     host: AidenBotSaveHost,
@@ -185,7 +186,7 @@ fun aidenBotSaveAdvancedOptimistically(
         return
     }
     val optimistic = draft.optimistic(bot, catalog)
-    host.cache(optimistic)
+    host.show(optimistic)
     show(optimistic)
     host.launch {
         try {
@@ -195,7 +196,7 @@ fun aidenBotSaveAdvancedOptimistically(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (host.cached(bot.id)?.let { it == optimistic } != false) host.cache(bot)
+            if (host.cached(bot.id)?.let { it == optimistic } != false) host.show(bot)
             settled(bot)
             failed(aidenBotSaveFailure(error))
         }

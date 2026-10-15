@@ -1,22 +1,37 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
@@ -26,6 +41,9 @@ import java.util.UUID
 /** R15: Bot edits on the phone apply at once, wait for the connection on their own, and roll back on failure. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AidenBotOptimisticSavesTest {
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     private val json = AidenBotWireJson.json
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json"))
@@ -235,6 +253,7 @@ class AidenBotOptimisticSavesTest {
         val start = bot.copy(sessionState = AidenBotSessionState.NEEDS_MODEL)
         val draft = AidenBotAdvancedDraft.fromDetail(start, catalog)!!.let { it.copy(usesFullAccess = !it.usesFullAccess) }
         val cache = mutableMapOf<String, AidenBotDetail>()
+        val disk = mutableListOf<AidenBotDetail>()
         val shown = mutableListOf<AidenBotDetail>()
         val settled = mutableListOf<AidenBotDetail>()
         val failures = mutableListOf<AidenBotChatActivityFailure>()
@@ -242,7 +261,8 @@ class AidenBotOptimisticSavesTest {
             client = { null },
             waitForConnection = { false },
             launch = { block -> launch { block() } },
-            cache = { cache[it.id] = it },
+            show = { cache[it.id] = it },
+            cache = { cache[it.id] = it; disk += it },
             cached = { cache[it] }
         )
         aidenBotSaveAdvancedOptimistically(host, start, draft, catalog, show = { shown += it }, settled = { settled += it }, failed = { failures += it })
@@ -255,6 +275,7 @@ class AidenBotOptimisticSavesTest {
         assertEquals(listOf(AidenBotChatActivityFailure.OFFLINE), failures)
         assertEquals(start, cache[bot.id])
         assertEquals(listOf(start), settled)
+        assertTrue("nothing the Mac didn't confirm is kept", disk.isEmpty())
     }
 
     @Test
@@ -266,6 +287,7 @@ class AidenBotOptimisticSavesTest {
             client = { null },
             waitForConnection = { gate.await() },
             launch = { block -> launch { block() } },
+            show = { cache[it.id] = it },
             cache = { cache[it.id] = it },
             cached = { cache[it] }
         )
@@ -302,5 +324,88 @@ class AidenBotOptimisticSavesTest {
         attempts.failed(first, AidenBotChatActivityTimeout())
         assertTrue(attempts.replays(draft))
         assertEquals("the Mac may have made it", first.key, attempts.begin(draft, catalog)!!.key)
+    }
+
+    // --- What a relaunch reads: only what the Mac confirmed reaches the disk (as on iOS) ---
+
+    private val pairing = AidenPairingExchange(
+        instanceId = "one",
+        deviceId = "device-one",
+        endpoint = "https://one.test/api/aiden/v1",
+        serverSpkiSha256 = "sha256/one",
+        credential = "secret-one",
+        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_READ)
+    )
+
+    /** A paired phone whose Mac never answers: its scope runs nothing, so no request leaves. */
+    private fun pairedPhone(): AidenRemoteCoordinator {
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        installations.addInstallation(pairing, null)
+        return AidenRemoteCoordinator(
+            installationStore = installations,
+            storageDir = tempFolder.root,
+            scope = CoroutineScope(StandardTestDispatcher() + SupervisorJob())
+        ).also { it.refreshClient() }
+    }
+
+    /** The Bot as the next launch reads it, after the process died. */
+    private fun afterRelaunch(id: String): AidenBotDetail? =
+        AidenBotCache(tempFolder.root).apply { activate(pairing.instanceId, pairing.deviceId) }.getBotDetail(id)
+
+    @Test
+    fun aProfileEditStillSavingShowsEverywhereButARelaunchReadsTheMacsBot() = runTest {
+        val phone = pairedPhone()
+        phone.pinnedBotCache()(bot)
+        val editor = phone.botIdentityEditor(bot)
+        val editing = launch { editor.edit(AidenBotIdentityPatch(name = "Chef")) }
+        runCurrent()
+        assertEquals("every screen shows the edit at once", "Chef", phone.botCache.getBotDetail(bot.id)?.name)
+        assertEquals("a process that dies mid-save never comes back showing it saved", bot, afterRelaunch(bot.id))
+
+        // The Mac never connects: the edit goes back, and the disk still holds the Mac's Bot.
+        advanceTimeBy(AIDEN_BOT_SAVE_HOLD_MILLIS + 1)
+        editing.join()
+        assertEquals(bot, phone.botCache.getBotDetail(bot.id))
+        assertEquals(bot, afterRelaunch(bot.id))
+    }
+
+    @Test
+    fun anAdvancedSaveStillSavingShowsAtOnceButARelaunchReadsTheMacsBot() {
+        val phone = pairedPhone()
+        phone.pinnedBotCache()(bot)
+        val draft = AidenBotAdvancedDraft.fromDetail(bot, catalog)!!.let { it.copy(usesFullAccess = !it.usesFullAccess) }
+        aidenBotSaveAdvancedOptimistically(phone.botSaveHost(), bot, draft, catalog, show = {}, settled = {}, failed = {})
+        assertEquals("shown at once", draft.optimistic(bot, catalog), phone.botCache.getBotDetail(bot.id))
+        assertEquals("the disk holds only what the Mac confirmed", bot, afterRelaunch(bot.id))
+    }
+
+    @Test
+    fun onlyTheMacsAnswerToAProfileEditIsKept() = runBlocking {
+        val response = fixture.getValue("botActivity").jsonObject.getValue("identityPatch").jsonObject.getValue("response")
+        val answered = json.decodeFromJsonElement(AidenBotDetail.serializer(), response)
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(response.toString()))
+            val client = AidenRemoteClient(
+                endpoint = server.url("/api/aiden/v1").toString().trimEnd('/'),
+                credential = "test_credential_123",
+                customOkHttpClient = OkHttpClient()
+            )
+            val shown = mutableListOf<AidenBotDetail>()
+            val kept = mutableListOf<AidenBotDetail>()
+            val host = AidenBotSaveHost(
+                client = { client },
+                waitForConnection = { true },
+                launch = { },
+                show = { shown += it },
+                cache = { kept += it }
+            )
+            aidenBotIdentityEditor(bot, host).edit(AidenBotIdentityPatch(name = "Chef"))
+            assertTrue("the edit showed while it saved", shown.any { it.name == "Chef" && it.revision == bot.revision })
+            assertEquals("only the Mac's Bot is kept", listOf(answered), kept)
+        } finally {
+            server.shutdown()
+        }
     }
 }

@@ -21,7 +21,8 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 /**
  * What a Bot edit needs from its surroundings, bound to one pairing: the client at request
  * time, a wait for the connection, a scope that outlives the screen (so leaving mid-save
- * doesn't cancel the request), and the one pinned place a saved Bot is cached.
+ * doesn't cancel the request), and the pinned cache: [show] for what the Mac hasn't confirmed
+ * (memory only), [cache] for what it has (memory and disk).
  */
 class AidenBotSaveHost(
     /** The pairing's client now, or null once that pairing is gone or the phone is offline. */
@@ -29,6 +30,9 @@ class AidenBotSaveHost(
     /** Suspends until the Mac is connected; false when it can't be (unpaired, another pairing). */
     val waitForConnection: suspend () -> Boolean,
     val launch: (suspend () -> Unit) -> Unit,
+    /** Every screen shows this Bot now; a relaunch doesn't (an edit on its way, a rollback). */
+    val show: (AidenBotDetail) -> Unit,
+    /** The Mac sent or confirmed this Bot: kept, on disk too. */
     val cache: (AidenBotDetail) -> Unit,
     /** The Bot the cache holds now, to roll back only what nothing newer replaced. */
     val cached: (String) -> AidenBotDetail? = { null }
@@ -45,6 +49,7 @@ fun AidenRemoteCoordinator.botSaveHost(): AidenBotSaveHost = pairingMemo("bot-sa
         client = { if (samePairing()) client.value else null },
         waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client) && samePairing() },
         launch = { block -> launchDetached(block) },
+        show = pinnedBotShow(),
         cache = pinnedBotCache(),
         cached = { id -> if (samePairing()) botCache.getBotDetail(id) else null }
     )
@@ -135,7 +140,7 @@ class AidenBotIdentityEditor(
     private val refresh: (suspend () -> AidenBotDetail)? = null,
     /** The Mac's Bot after a save or a refresh: tell the screens behind. */
     private val onSaved: (AidenBotDetail) -> Unit = {},
-    /** What the page shows changed (an edit, a rollback, the Mac's Bot): the cache follows it, so every screen shows it at once. */
+    /** What the page shows changed (an edit, a rollback, the Mac's Bot): every screen shows it at once, and only [onSaved]'s Bot is kept. */
     private val onShown: (AidenBotDetail) -> Unit = {},
     private val waitForConnection: (suspend () -> Boolean)? = null,
     private val holdMillis: Long = AIDEN_BOT_SAVE_HOLD_MILLIS,
@@ -232,8 +237,9 @@ class AidenBotIdentityEditor(
 }
 
 /**
- * An editor that saves through the Mac in [host]'s pairing. The pinned cache holds what it
- * shows, so the change appears on every screen at once and goes back with a rollback.
+ * An editor that saves through the Mac in [host]'s pairing. Every screen shows what it shows
+ * at once ([AidenBotSaveHost.show]), and it goes back with a rollback; only the Mac's answer is
+ * kept ([AidenBotSaveHost.cache]), so a relaunch mid-save shows the Mac's Bot (as iOS does).
  */
 fun aidenBotIdentityEditor(
     bot: AidenBotDetail,
@@ -243,8 +249,11 @@ fun aidenBotIdentityEditor(
     bot,
     save = { saved, patch -> host.connected().updateBotIdentity(saved.id, saved.revision, patch) },
     refresh = { host.connected().bot(bot.id) },
-    onSaved = onSaved,
-    onShown = host.cache,
+    onSaved = { confirmed ->
+        host.cache(confirmed)
+        onSaved(confirmed)
+    },
+    onShown = host.show,
     waitForConnection = host.waitForConnection
 )
 

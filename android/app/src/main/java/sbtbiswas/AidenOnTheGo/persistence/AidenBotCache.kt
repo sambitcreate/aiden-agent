@@ -102,6 +102,7 @@ class AidenBotCache(private val storageDir: File) {
         } catch (_: Exception) {}
     }
 
+    /** Keeps a Bot the Mac sent or confirmed, in memory and on disk. */
     @Synchronized
     fun putBotDetail(detail: AidenBotDetail) {
         val map = _botDetails.value.toMutableMap()
@@ -112,6 +113,16 @@ class AidenBotCache(private val storageDir: File) {
             val file = File(dir, "${detail.id}.json")
             file.writeText(json.encodeToString(detail), Charsets.UTF_8)
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Shows [detail] on every screen without keeping it: an edit still on its way to the Mac
+     * (R15). Only [putBotDetail], with what the Mac confirmed, reaches the disk, so a process
+     * that dies mid-save comes back showing the Mac's Bot, as on iOS.
+     */
+    @Synchronized
+    fun showBotDetail(detail: AidenBotDetail) {
+        _botDetails.value = _botDetails.value + (detail.id to detail)
     }
 
     @Synchronized

@@ -171,6 +171,15 @@ class AidenRemoteCoordinator(
     }
 
     /**
+     * Shows a Bot detail the Mac hasn't confirmed (an edit on its way, or a rollback) on every
+     * screen without writing it to disk, pinned to the pairing like [pinnedBotCache].
+     */
+    fun pinnedBotShow(): (AidenBotDetail) -> Unit {
+        val pairing = activePairing
+        return { detail -> if (holdsPairing(pairing)) botCache.showBotDetail(detail) }
+    }
+
+    /**
      * Runs [block] on the coordinator's own scope, which outlives every screen. For work a
      * person started and may leave behind: a settings pick still saving after they back out.
      */
