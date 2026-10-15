@@ -1,5 +1,23 @@
 import type { Chat } from "./types";
+import {
+  readChatDraftGitMemory,
+  rememberChatDraftGitMemory,
+  type ChatDraftGitMode,
+} from "./chat-draft-git-memory";
+import type { FirstMessageWorktreeRequest } from "../shared/worktree-on-send";
 import { discardComposerDraft, loadComposerDraft } from "./composer-draft-store";
+
+export type { ChatDraftGitMode } from "./chat-draft-git-memory";
+
+/** New-worktree settings. Nothing touches disk until the first send. */
+export interface ChatDraftWorktree {
+  /** Local branch, remote-tracking branch (`origin/main`), or `HEAD`. */
+  readonly baseRef: string;
+  /** Fetch the base from its upstream remote first. */
+  readonly fromOrigin: boolean;
+  /** Explicit branch name; omitted means Auto (`aiden/<slug of the first message>`). */
+  readonly branchName?: string;
+}
 
 /** A new-agent surface is renderer-only until its first user message commits. */
 export interface ChatDraft {
@@ -9,6 +27,27 @@ export interface ChatDraft {
   readonly initialText?: string;
   /** The composer holds text or attachments. A draft with content is never reused. */
   readonly hasContent: boolean;
+  /** Run in this checkout, or in a new worktree created on first send. */
+  readonly gitMode: ChatDraftGitMode;
+  /**
+   * New-worktree settings, kept while toggling back to This checkout. Absent
+   * until a base is known (remembered, or chosen in the branch menu).
+   */
+  readonly worktree?: ChatDraftWorktree;
+}
+
+/** The git mode and worktree base remembered for a workspace. */
+function rememberedGitState(
+  workspaceId: string,
+  gitMode?: ChatDraftGitMode,
+): Pick<ChatDraft, "gitMode" | "worktree"> {
+  const memory = readChatDraftGitMemory(workspaceId);
+  return {
+    gitMode: gitMode ?? memory.gitMode,
+    ...(memory.baseRef
+      ? { worktree: { baseRef: memory.baseRef, fromOrigin: memory.fromOrigin ?? false } }
+      : {}),
+  };
 }
 
 const drafts = new Map<string, ChatDraft>();
@@ -39,6 +78,7 @@ export function createChatDraft(
   workspaceId: string,
   id = crypto.randomUUID(),
   initialText?: string,
+  options: { gitMode?: ChatDraftGitMode } = {},
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   // Multiple New activations can supersede navigation before a pane mounts.
@@ -57,6 +97,7 @@ export function createChatDraft(
     sending: false,
     hasContent: Boolean(initialText?.trim()),
     ...(initialText ? { initialText } : {}),
+    ...rememberedGitState(workspaceId, options.gitMode),
   };
   drafts.set(id, draft);
   notify();
@@ -66,8 +107,85 @@ export function createChatDraft(
 export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "title">): void {
   const draft = drafts.get(id);
   if (!draft || draft.sending) throw new Error("Wait for the first message to finish saving.");
-  drafts.set(id, { ...draft, chat: { ...draft.chat, ...update } });
+  const movesWorkspace = update.workspaceId !== undefined && update.workspaceId !== draft.chat.workspaceId;
+  const { worktree: _previousWorktree, ...withoutWorktree } = draft;
+  drafts.set(id, {
+    ...(movesWorkspace ? withoutWorktree : draft),
+    // A draft that moves starts from the git mode remembered for its new workspace.
+    ...(movesWorkspace ? rememberedGitState(update.workspaceId!) : {}),
+    chat: { ...draft.chat, ...update },
+  });
   notify();
+}
+
+function settableDraft(id: string): ChatDraft {
+  const draft = drafts.get(id);
+  if (!draft || draft.sending) throw new Error("Wait for the first message to finish saving.");
+  return draft;
+}
+
+function rememberDraftGitState(draft: ChatDraft): void {
+  if (!draft.chat.workspaceId) return;
+  rememberChatDraftGitMemory(draft.chat.workspaceId, {
+    gitMode: draft.gitMode,
+    ...(draft.worktree
+      ? { baseRef: draft.worktree.baseRef, fromOrigin: draft.worktree.fromOrigin }
+      : {}),
+  });
+}
+
+/** Switch between This checkout and New worktree, and remember it for the workspace. */
+export function setChatDraftGitMode(id: string, gitMode: ChatDraftGitMode): void {
+  const draft = settableDraft(id);
+  if (draft.gitMode === gitMode) return;
+  const next = { ...draft, gitMode };
+  drafts.set(id, next);
+  rememberDraftGitState(next);
+  notify();
+}
+
+/**
+ * Change the draft's New worktree settings. The base and from-origin choice
+ * are remembered for the workspace; a branch name belongs to this draft only.
+ * Pass `branchName: undefined` (or blank) to go back to Auto.
+ */
+export function updateChatDraftWorktree(
+  id: string,
+  update: { baseRef?: string; fromOrigin?: boolean; branchName?: string },
+): void {
+  const draft = settableDraft(id);
+  const baseRef = update.baseRef ?? draft.worktree?.baseRef;
+  if (!baseRef) throw new Error("Choose a base branch for the new worktree.");
+  const branchName = "branchName" in update
+    ? update.branchName?.trim() || undefined
+    : draft.worktree?.branchName;
+  const worktree: ChatDraftWorktree = {
+    baseRef,
+    fromOrigin: update.fromOrigin ?? draft.worktree?.fromOrigin ?? false,
+    ...(branchName ? { branchName } : {}),
+  };
+  const next = { ...draft, worktree };
+  drafts.set(id, next);
+  rememberDraftGitState(next);
+  notify();
+}
+
+/**
+ * The `worktree` field of the first-message request, or undefined in This
+ * checkout mode. The draft id is the idempotency key, so a retry or a double
+ * send never creates a second worktree.
+ */
+export function chatDraftWorktreeRequest(draft: ChatDraft): FirstMessageWorktreeRequest | undefined {
+  if (draft.gitMode !== "worktree") return undefined;
+  if (!draft.worktree) throw new Error("Choose a base branch for the new worktree.");
+  if (!draft.chat.workspaceId) throw new Error("Choose a workspace for the new worktree.");
+  return {
+    sourceWorkspaceId: draft.chat.workspaceId,
+    baseRef: draft.worktree.baseRef,
+    fromOrigin: draft.worktree.fromOrigin,
+    ...(draft.worktree.branchName ? { branchName: draft.worktree.branchName } : {}),
+    idempotencyKey: draft.chat.id,
+  };
 }
 
 /** The mounted composer reports whether this draft holds text or attachments. */
