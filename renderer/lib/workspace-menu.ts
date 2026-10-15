@@ -147,16 +147,18 @@ export function newCloneId(randomUUID: () => string = () => crypto.randomUUID())
   return `clone_${randomUUID().replace(/[^A-Za-z0-9]/gu, "")}`.slice(0, 64);
 }
 
-const SCRATCH_FOLDER =
-  /^(?:\/Users\/[^/]+|\/home\/[^/]+|\/root|[A-Za-z]:\\Users\\[^\\]+)[/\\]aiden[/\\]([a-z]{3,4}-[a-z]{3,4}-[a-z]{3,4})$/u;
-
 /**
- * A scratch workspace is a generated `~/aiden/<word-word-word>` folder named
- * after its slug (see `main/services/scratch-workspace.ts`). Workspaces carry
- * no scratch flag, so the folder shape is the signal.
+ * Why a draft can't change workspace right now, or undefined when it can.
+ * Every way into the workspace menu (chip, headline, palette Clone, ⌘⇧O)
+ * shares this: a draft being sent must not be retargeted mid-send.
  */
-export function isScratchWorkspace(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">): boolean {
-  if (!workspace.folderPath || workspace.managedWorktree) return false;
-  const slug = SCRATCH_FOLDER.exec(workspace.folderPath)?.[1];
-  return slug !== undefined && slug === workspace.name;
+export function workspaceChangeBusyReason(state: {
+  sending: boolean;
+  generating: boolean;
+  gitBusy: boolean;
+}): string | undefined {
+  if (state.sending) return "Wait for the message to finish sending before changing workspaces.";
+  if (state.generating) return "Stop the current response before changing workspaces.";
+  if (state.gitBusy) return "Wait for the current Git operation to finish before switching workspaces.";
+  return undefined;
 }

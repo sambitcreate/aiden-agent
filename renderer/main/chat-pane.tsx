@@ -15,6 +15,7 @@ import { NewChatHeadline } from "../components/new-chat-headline";
 import type { WorkspaceMenuRequest } from "../components/workspace-picker";
 import { registerDraftWorkspaceMenu, type DraftWorkspaceMenuView } from "../lib/draft-workspace-menu";
 import { adoptWorkspace } from "../lib/use-workspace-path-intake";
+import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   saveComposerDraftText,
   seedComposerAttachments,
@@ -2364,12 +2365,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
+  // One busy signal for every way of changing a draft's workspace (chip,
+  // headline, palette Clone, ⌘⇧O): never retarget a draft mid-send.
+  const workspaceChangeBusy = workspaceChangeBusyReason({
+    sending: draft?.sending === true,
+    generating: isGenerating || isStartingGeneration,
+    gitBusy: environmentPanel.gitOperationBusy,
+  });
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before changing this chat's workspace.");
       }
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+      if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
       if (environmentPanel.gitOperationBusy) {
         throw new Error(
           "Wait for the current Git operation to finish before switching workspaces.",
@@ -2402,6 +2411,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       isNewChat,
       qc,
       selectWorkspace,
+      workspaceChangeBusy,
     ],
   );
 
@@ -2410,6 +2420,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       throw new Error("Reload Aiden before creating a scratch workspace from this chat.");
     }
     if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
+    if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
     if (environmentPanel.editorState.dirty)
       throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
     if (environmentPanel.editorState.saving)
@@ -2431,6 +2442,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isNewChat,
     moveNewChatToWorkspace,
     qc,
+    workspaceChangeBusy,
   ]);
 
   // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
@@ -2441,11 +2453,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       throw new Error("Reload Aiden before changing this chat's workspace.");
     }
     if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+    if (workspaceChangeBusy) throw new Error(workspaceChangeBusy);
     const workspace = await workspacesApi.createFromFolder();
     if (!workspace) return;
     await adoptWorkspace(qc, workspace);
     await moveNewChatToWorkspace(workspace.id);
-  }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc]);
+  }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
 
   // The headline name and app-level entry points open the composer's menu.
   const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
@@ -2718,7 +2731,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       workspace={effectiveWorkspace}
       workspaces={workspaces}
       onChooseWorkspace={
-        workspaceMenuAvailable && !settingsBlockedReason ? () => openWorkspaceMenu("list") : undefined
+        workspaceMenuAvailable && !settingsBlockedReason && !workspaceChangeBusy
+          ? () => openWorkspaceMenu("list")
+          : undefined
       }
     />
   );

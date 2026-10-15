@@ -12,15 +12,25 @@ export interface DraftWorkspaceMenuHandle {
   openMenu: (view: DraftWorkspaceMenuView) => void;
 }
 
-const handles = new Map<string, DraftWorkspaceMenuHandle>();
-const pendingMenus = new Map<string, DraftWorkspaceMenuView>();
+/** A request for a pane that has not mounted is kept only this long. */
+export const PENDING_DRAFT_WORKSPACE_MENU_MS = 3_000;
 
-export function registerDraftWorkspaceMenu(chatId: string, handle: DraftWorkspaceMenuHandle): () => void {
+const handles = new Map<string, DraftWorkspaceMenuHandle>();
+// At most one request waits for a pane: a newer request replaces it, and it
+// expires so a pane that never mounts (failed navigation) leaves nothing behind.
+let pending: { chatId: string; view: DraftWorkspaceMenuView; at: number } | null = null;
+
+export function registerDraftWorkspaceMenu(
+  chatId: string,
+  handle: DraftWorkspaceMenuHandle,
+  now = Date.now(),
+): () => void {
   handles.set(chatId, handle);
-  const pending = pendingMenus.get(chatId);
-  if (pending) {
-    pendingMenus.delete(chatId);
-    handle.openMenu(pending);
+  if (pending && now - pending.at > PENDING_DRAFT_WORKSPACE_MENU_MS) pending = null;
+  if (pending?.chatId === chatId) {
+    const { view } = pending;
+    pending = null;
+    handle.openMenu(view);
   }
   return () => {
     if (handles.get(chatId) === handle) handles.delete(chatId);
@@ -32,14 +42,19 @@ export function draftWorkspaceMenu(chatId: string | undefined): DraftWorkspaceMe
   return chatId ? handles.get(chatId) : undefined;
 }
 
-/** Open the draft's menu now, or as soon as its pane mounts. */
-export function requestDraftWorkspaceMenu(chatId: string, view: DraftWorkspaceMenuView): void {
+/** Open the draft's menu now, or when its pane mounts within a few seconds. */
+export function requestDraftWorkspaceMenu(
+  chatId: string,
+  view: DraftWorkspaceMenuView,
+  now = Date.now(),
+): void {
   const handle = handles.get(chatId);
   if (handle) {
+    pending = null;
     handle.openMenu(view);
     return;
   }
-  pendingMenus.set(chatId, view);
+  pending = { chatId, view, at: now };
 }
 
 /** The chat id in a `/chat/<id>` path (the pane a draft is shown in), if any. */

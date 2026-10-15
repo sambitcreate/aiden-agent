@@ -64,6 +64,11 @@ interface WorkspacePickerProps {
   /** Register a folder through the native dialog and move the draft there. */
   onOpenFolder?: () => Promise<void>;
   blockedReason?: string;
+  /**
+   * Set while the draft is being sent, a response runs or Git is busy: the
+   * menu won't open on request and its rows can't change the workspace.
+   */
+  busyReason?: string;
   openRequest?: WorkspaceMenuRequest;
   /** Where focus lands when the menu closes (the composer input). */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
@@ -79,6 +84,7 @@ export function WorkspacePicker({
   onCreateScratchWorkspace,
   onOpenFolder,
   blockedReason,
+  busyReason,
   openRequest,
   returnFocusRef,
 }: WorkspacePickerProps) {
@@ -94,13 +100,13 @@ export function WorkspacePicker({
   React.useEffect(() => {
     if (!openRequest || openRequest.nonce === handledRequest.current) return;
     handledRequest.current = openRequest.nonce;
-    if (blockedReason) {
-      toast.error(blockedReason);
+    if (blockedReason || busyReason) {
+      toast.info(blockedReason ?? busyReason);
       return;
     }
     setView(openRequest.view);
     setOpen(true);
-  }, [blockedReason, openRequest]);
+  }, [blockedReason, busyReason, openRequest]);
 
   const close = React.useCallback(() => {
     setOpen(false);
@@ -108,8 +114,8 @@ export function WorkspacePicker({
   }, []);
 
   const perform = async (key: string, action: () => Promise<void>) => {
-    if (blockedReason) {
-      toast.error(blockedReason);
+    if (blockedReason || busyReason) {
+      toast.error(blockedReason ?? busyReason);
       return;
     }
     if (pending) return;
@@ -195,7 +201,7 @@ export function WorkspacePicker({
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
               pending={pending}
-              disabled={pending !== null || Boolean(blockedReason)}
+              disabled={pending !== null || Boolean(blockedReason || busyReason)}
               onChooseWorkspace={(workspaceId) => {
                 if (workspaceId === activeWorkspaceId) {
                   close();
@@ -460,6 +466,7 @@ const CloneView = React.forwardRef<
   const urlId = React.useId();
   const destinationId = React.useId();
   const helpId = React.useId();
+  const invalidId = React.useId();
   const [url, setUrl] = React.useState("");
   const [destination, setDestination] = React.useState("");
   const [destinationEdited, setDestinationEdited] = React.useState(false);
@@ -467,6 +474,9 @@ const CloneView = React.forwardRef<
   const [cloneId, setCloneId] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<WorkspaceCloneProgress | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // A clone that succeeded stays busy until the draft has moved, so Clone
+  // can't start a second clone in the meantime.
+  const [finishing, setFinishing] = React.useState(false);
   const activeCloneRef = React.useRef<string | null>(null);
   const typedUrl = url.trim();
 
@@ -507,7 +517,8 @@ const CloneView = React.forwardRef<
   const suggested = preview.state === "ready" && preview.url === typedUrl ? preview.destination : "";
   const shownDestination = destinationEdited ? destination : suggested;
   const invalidReason = preview.state === "invalid" && preview.url === typedUrl ? preview.reason : null;
-  const cloning = cloneId !== null;
+  const running = cloneId !== null;
+  const cloning = running || finishing;
   const canClone = !cloning && Boolean(suggested) && (!destinationEdited || destination.trim().length > 0);
 
   React.useEffect(() => {
@@ -550,16 +561,30 @@ const CloneView = React.forwardRef<
         url: typedUrl,
         ...(destinationEdited ? { destination: destination.trim() } : {}),
       });
-      if (activeCloneRef.current !== id) return;
+      if (activeCloneRef.current !== id) {
+        // Cancelled, but Git finished first: the workspace exists in main, so
+        // refresh the list. The draft stays where it is.
+        if (result.ok) {
+          await adoptWorkspace(queryClient, result.workspace);
+          toast.info(`${result.workspace.name} finished cloning before it could be cancelled. It is in your workspaces.`);
+        }
+        return;
+      }
       activeCloneRef.current = null;
-      setCloneId(null);
-      setProgress(null);
       if (!result.ok) {
+        setCloneId(null);
+        setProgress(null);
         setError(cloneFailureMessage(result));
         return;
       }
-      await adoptWorkspace(queryClient, result.workspace);
-      await onCloned(result.workspace);
+      setFinishing(true);
+      setCloneId(null);
+      try {
+        await adoptWorkspace(queryClient, result.workspace);
+        await onCloned(result.workspace);
+      } finally {
+        setFinishing(false);
+      }
     } catch (cloneError) {
       if (activeCloneRef.current !== id) return;
       activeCloneRef.current = null;
@@ -592,7 +617,7 @@ const CloneView = React.forwardRef<
           disabled={cloning}
           placeholder="owner/repo or https://…"
           aria-invalid={invalidReason ? true : undefined}
-          aria-describedby={helpId}
+          aria-describedby={invalidReason ? `${invalidId} ${helpId}` : helpId}
           onChange={(event) => {
             setUrl(event.target.value);
             setError(null);
@@ -604,7 +629,11 @@ const CloneView = React.forwardRef<
             }
           }}
         />
-        {invalidReason ? <p className="text-small text-secondary">{invalidReason}</p> : null}
+        {invalidReason ? (
+          <p id={invalidId} className="text-small text-secondary">
+            {invalidReason}
+          </p>
+        ) : null}
       </div>
       <div className="flex flex-col gap-1 px-1.5 pt-1">
         <label htmlFor={destinationId} className="text-small text-tertiary">
@@ -626,8 +655,14 @@ const CloneView = React.forwardRef<
         Uses your git credentials. Runs only when you press Clone.
       </p>
       {cloning ? (
-        <div role="status" className="flex flex-col gap-1.5 px-1.5 pt-1" data-clone-progress>
-          <span className="text-small text-secondary">{cloneProgressLabel(progress)}</span>
+        <div className="flex flex-col gap-1.5 px-1.5 pt-1" data-clone-progress>
+          {/* Announce phase changes only; the percentage lives on the progress bar. */}
+          <span role="status" className="sr-only">
+            {finishing ? "Opening the repository" : (progress?.phase ?? "Cloning")}
+          </span>
+          <span aria-hidden="true" className="text-small text-secondary">
+            {finishing ? "Opening…" : cloneProgressLabel(progress)}
+          </span>
           <div
             role="progressbar"
             aria-label="Clone progress"
@@ -650,7 +685,7 @@ const CloneView = React.forwardRef<
       ) : null}
       <div className="flex justify-end gap-2 px-1.5 pb-1 pt-2">
         {cloning ? (
-          <Button variant="filled" size="small" onClick={cancel}>
+          <Button variant="filled" size="small" disabled={finishing} onClick={cancel}>
             Cancel
           </Button>
         ) : (

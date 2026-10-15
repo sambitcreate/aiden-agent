@@ -9,7 +9,8 @@ import { NewChatHeadline } from "./new-chat-headline";
 import { Button, TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { Workspace } from "../lib/types";
-import type { WorkspacePathInspection } from "../shared/workspace-intake";
+import { workspaceCloneId, type WorkspacePathInspection } from "../shared/workspace-intake";
+import { queryKeys } from "../lib/queries";
 
 // The real picker with IPC faked at the preload bridge. Boolean and string
 // oracles throughout: a failing assert on a happy-dom node would print the DOM.
@@ -19,6 +20,8 @@ let calls: BotTestIpcCall[];
 let handlers: Record<string, (...args: unknown[]) => unknown>;
 let selected: string[];
 let scratchCreated: number;
+/** When set, moving the draft waits for this before it finishes. */
+let selectGate: Promise<void> | null;
 
 function workspace(id: string, name: string, createdAt: number, extra: Partial<Workspace> = {}): Workspace {
   return { id, name, folderPath: `/Users/me/projects/${name}`, permission: "ask", createdAt, updatedAt: createdAt, ...extra };
@@ -40,6 +43,7 @@ beforeEach(() => {
   localStorage.clear();
   selected = [];
   scratchCreated = 0;
+  selectGate = null;
   handlers = {
     "chats:list": () => [],
     "settings:get": () => null,
@@ -67,11 +71,13 @@ function Harness({
   activeWorkspaceId,
   request,
   blockedReason,
+  busyReason,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId?: string;
   request?: WorkspaceMenuRequest;
   blockedReason?: string;
+  busyReason?: string;
 }) {
   return (
     <QueryClientProvider client={queryClient}>
@@ -81,6 +87,7 @@ function Harness({
             workspaces={workspaces}
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={async (id) => {
+              if (selectGate) await selectGate;
               selected.push(id);
             }}
             onCreateScratchWorkspace={async () => {
@@ -89,6 +96,7 @@ function Harness({
             onOpenFolder={async () => undefined}
             openRequest={request}
             blockedReason={blockedReason}
+            busyReason={busyReason}
             returnFocusRef={composerRef}
             trigger={<Button aria-label="Choose a workspace">Workspace</Button>}
           />
@@ -189,7 +197,7 @@ test("Scratch chat keeps today's scratch-folder behaviour", async () => {
   });
   await wait();
   assert.equal(scratchCreated, 1);
-  assert.equal(screen.queryByRole("dialog"), null, "the menu closes");
+  assert.equal(screen.queryByRole("dialog") === null, true, "the menu closes");
 });
 
 test("a typed path offers Open for a folder and moves the draft to the registered workspace", async () => {
@@ -293,7 +301,7 @@ test("a slow answer for an older path never replaces the newer one", async () =>
   });
   await wait();
   assert.ok(screen.queryByRole("option", { name: /^Open \/Users\/me\/ab/u }) !== null);
-  assert.equal(screen.queryByRole("option", { name: /Create folder/u }), null);
+  assert.equal(screen.queryByRole("option", { name: /Create folder/u }) === null, true);
 });
 
 async function startCloneView() {
@@ -329,14 +337,16 @@ test("Clone shows progress for its own clone only, then a failure inline with th
   };
   assert.equal(request.url, "acme/site");
   assert.equal(request.destination, undefined, "an untouched destination is main's default");
-  assert.match(request.cloneId, /^[A-Za-z0-9_-]{8,64}$/u);
+  assert.equal(workspaceCloneId(request.cloneId), request.cloneId, "main accepts the clone id");
 
   await act(async () => {
     emitBotTestNotification("workspaces:clone-progress", { cloneId: "someone-elses", phase: "Resolving deltas", percent: 90 });
     emitBotTestNotification("workspaces:clone-progress", { cloneId: request.cloneId, phase: "Receiving objects", percent: 40 });
   });
   assert.ok(screen.queryByText("Receiving objects · 40%") !== null);
-  assert.equal(screen.queryByText(/Resolving deltas/u), null);
+  // Only the phase is announced; the percentage stays on the progress bar.
+  assert.equal(screen.getByRole("status").textContent, "Receiving objects");
+  assert.equal(screen.queryByText(/Resolving deltas/u) === null, true);
   assert.equal(screen.getByRole("progressbar", { name: "Clone progress" }).getAttribute("aria-valuenow"), "40");
 
   await act(async () => {
@@ -346,7 +356,7 @@ test("Clone shows progress for its own clone only, then a failure inline with th
   await wait();
   assert.equal(screen.getByRole("alert").textContent, "That repository wasn't found, or you don't have access to it.");
   assert.equal(url.value, "acme/site");
-  assert.equal(screen.queryByRole("progressbar"), null);
+  assert.equal(screen.queryByRole("progressbar") === null, true);
   assert.deepEqual(selected, []);
 });
 
@@ -365,7 +375,7 @@ test("an edited destination is sent, and a finished clone moves the draft there"
   const request = calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { destination?: string };
   assert.equal(request.destination, "~/code/site");
   assert.deepEqual(selected, ["site"]);
-  assert.equal(screen.queryByRole("dialog"), null, "the menu closes on success");
+  assert.equal(screen.queryByRole("dialog") === null, true, "the menu closes on success");
 });
 
 test("Esc during a clone cancels it, then steps back to the list", async () => {
@@ -397,7 +407,7 @@ test("Esc closes the list and returns focus to the composer", async () => {
     fireEvent.keyDown(search(), { key: "Escape" });
   });
   await wait();
-  assert.equal(screen.queryByRole("combobox", { name: "Search workspaces" }), null);
+  assert.equal(screen.queryByRole("combobox", { name: "Search workspaces" }) === null, true);
   assert.equal(document.activeElement === screen.getByRole("textbox", { name: "Composer" }), true);
 });
 
@@ -414,12 +424,16 @@ test("the headline names the workspace as a menu button, and a scratch chat asks
 
   // Without a way to change the workspace the name is plain text.
   rerender(<NewChatHeadline workspace={project} workspaces={[project]} />);
-  assert.equal(screen.queryByRole("button", { name: "api" }), null);
+  assert.equal(screen.queryByRole("button", { name: "api" }) === null, true);
 
-  const scratch = { ...workspace("s", "calm-moon-run", 1), folderPath: "/Users/me/aiden/calm-moon-run" };
+  // Only a workspace made by Scratch chat is a scratch chat, whatever its folder.
+  const lookalike = { ...workspace("l", "calm-moon-run", 1), folderPath: "/Users/me/aiden/calm-moon-run" };
+  rerender(<NewChatHeadline workspace={lookalike} workspaces={[lookalike]} onChooseWorkspace={() => undefined} />);
+  assert.ok(screen.queryByRole("button", { name: "calm-moon-run" }) !== null);
+  const scratch = { ...workspace("s", "Landing page", 1), folderPath: "/srv/home/me/aiden/x", scratch: true as const };
   rerender(<NewChatHeadline workspace={scratch} workspaces={[scratch]} onChooseWorkspace={() => undefined} />);
   assert.ok(screen.queryByText("What’s on your mind?") !== null);
-  assert.equal(screen.queryByRole("button"), null);
+  assert.equal(screen.queryByRole("button") === null, true);
 });
 
 test("a blocked picker stays closed, even when asked to open, and describes why on its trigger", async () => {
@@ -438,8 +452,108 @@ test("a blocked picker stays closed, even when asked to open, and describes why 
     );
   });
   await wait();
-  assert.equal(screen.queryByRole("combobox", { name: "Search workspaces" }), null);
+  assert.equal(screen.queryByRole("combobox", { name: "Search workspaces" }) === null, true);
   const describedBy = trigger.getAttribute("aria-describedby") ?? "";
   assert.equal(document.getElementById(describedBy)?.textContent, reason);
   assert.equal(document.getElementById(describedBy)?.getAttribute("role"), "status");
+});
+
+test("a busy draft's menu won't open on request, and its rows can't move the draft", async () => {
+  const busy = "Wait for the message to finish sending before changing workspaces.";
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} />);
+  });
+  await act(async () => {
+    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} request={{ nonce: 1, view: "clone" }} />);
+  });
+  await wait();
+  assert.equal(screen.queryByRole("dialog") === null, true, "the headline, palette and ⌘⇧O requests are refused");
+
+  // Already open when the send starts: the rows stop working.
+  await act(async () => {
+    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" request={{ nonce: 2, view: "list" }} />);
+  });
+  await wait();
+  await act(async () => {
+    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} request={{ nonce: 2, view: "list" }} />);
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("option", { name: /^docs/u }));
+    fireEvent.click(screen.getByRole("option", { name: /^Scratch chat/u }));
+  });
+  await wait();
+  assert.deepEqual([selected, scratchCreated], [[], 0]);
+});
+
+test("the invalid-URL reason describes the URL field", async () => {
+  handlers["workspaces:clonePreview"] = () => ({ ok: false, code: "invalid-url", reason: "Enter a repository URL." });
+  await openMenu(MANY, "api", "clone");
+  const url = screen.getByLabelText("Git URL or owner/repo") as HTMLInputElement;
+  await type(url, "not a url");
+  await wait(300);
+  const describedBy = (url.getAttribute("aria-describedby") ?? "").split(" ");
+  assert.ok(describedBy.some((id) => document.getElementById(id)?.textContent === "Enter a repository URL."));
+  assert.equal(url.getAttribute("aria-invalid"), "true");
+});
+
+test("a finished clone stays busy until the draft has moved, so it can't start twice", async () => {
+  let release!: () => void;
+  selectGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  handlers["workspaces:clone"] = () => ({ ok: true, workspace: workspace("site", "site", 5), destination: "/x/site" });
+  await startCloneView();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+  });
+  await wait();
+  assert.equal(screen.queryByRole("button", { name: "Clone" }) === null, true);
+  assert.equal((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled, true);
+  assert.equal((screen.getByLabelText("Git URL or owner/repo") as HTMLInputElement).disabled, true);
+  await act(async () => {
+    release();
+  });
+  await wait();
+  assert.deepEqual(selected, ["site"]);
+  assert.equal(calls.filter((call) => call.channel === "workspaces:clone").length, 1);
+});
+
+test("a clone that finishes after Cancel is added to the list but does not move the draft", async () => {
+  let finish!: (value: unknown) => void;
+  handlers["workspaces:clone"] = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  await startCloneView();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+  assert.ok(calls.some((call) => call.channel === "workspaces:cloneCancel"));
+  await act(async () => {
+    finish({ ok: true, workspace: workspace("late", "late", 5), destination: "/x/late" });
+  });
+  await wait();
+  const cached = queryClient.getQueryData<Workspace[]>(queryKeys.workspaces) ?? [];
+  assert.equal(cached.some((entry) => entry.id === "late"), true, "the registered clone is listed");
+  assert.deepEqual(selected, []);
+});
+
+test("closing the menu mid-clone cancels the clone", async () => {
+  handlers["workspaces:clone"] = () => new Promise(() => undefined);
+  await startCloneView();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+  });
+  const cloneId = (calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { cloneId: string }).cloneId;
+  // The chip toggles the menu closed (the same close path as clicking outside).
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose a workspace" }));
+  });
+  await wait();
+  assert.equal(screen.queryByRole("dialog") === null, true);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:cloneCancel")?.args, [cloneId]);
 });

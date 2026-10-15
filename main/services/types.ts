@@ -143,6 +143,11 @@ export interface Workspace {
   memoryEnabled?: boolean;
   /** Present only for worktrees created and owned by Aiden. */
   managedWorktree?: ManagedWorktree;
+  /**
+   * Set when the workspace was created by Scratch chat (a generated
+   * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
+   */
+  scratch?: true;
   createdAt: number;
   updatedAt: number;
 }

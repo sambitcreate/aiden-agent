@@ -1,11 +1,10 @@
 import type { Workspace } from "../lib/types";
 import { workspaceDisplayName } from "../lib/workspace-path-display";
-import { isScratchWorkspace } from "../lib/workspace-menu";
 
 /**
  * The new-chat empty state's title. It names where the draft will run, and
  * the name opens the same workspace menu as the composer chip. A scratch chat
- * has no project to name.
+ * (created by Scratch chat, so marked `scratch`) has no project to name.
  */
 export function NewChatHeadline({
   workspace,
@@ -14,11 +13,11 @@ export function NewChatHeadline({
 }: {
   workspace?: Workspace;
   workspaces: readonly Workspace[];
-  /** Opens the workspace menu; omitted when the workspace can't change. */
+  /** Opens the workspace menu; omitted while the workspace can't change (busy or blocked). */
   onChooseWorkspace?: () => void;
 }) {
   if (!workspace) return <>What would you like to work on?</>;
-  if (isScratchWorkspace(workspace)) return <>What’s on your mind?</>;
+  if (workspace.scratch) return <>What’s on your mind?</>;
   const name = workspaceDisplayName(workspace, workspaces);
   return (
     <span data-new-chat-headline>

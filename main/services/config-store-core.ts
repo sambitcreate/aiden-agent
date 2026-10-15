@@ -194,9 +194,12 @@ function normalizePortableConfig(value: unknown): {
   };
 }
 
-function normalizeWorkspace(w: Workspace): Workspace {
+function normalizeWorkspace(workspace: Workspace): Workspace {
+  // Only a literal `true` marks a scratch workspace; anything else is dropped.
+  const { scratch, ...w } = workspace;
   return {
     ...w,
+    ...(scratch === true ? { scratch } : {}),
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),

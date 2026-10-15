@@ -39,6 +39,7 @@ import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
+import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
@@ -1891,6 +1892,11 @@ export function Composer({
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
                 onOpenFolder={onOpenFolderAsWorkspace}
+                busyReason={workspaceChangeBusyReason({
+                  sending: sending || firstSendPending,
+                  generating: isGenerating,
+                  gitBusy: gitOperationBusy,
+                })}
                 openRequest={workspaceMenuRequest}
                 returnFocusRef={inputRef}
                 blockedReason={workspaceChangeBlockedReason}

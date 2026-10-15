@@ -5,10 +5,10 @@ import type { Workspace } from "./types";
 import {
   cloneFailureMessage,
   cloneProgressLabel,
-  isScratchWorkspace,
   isWorkspacePathQuery,
   newCloneId,
   workspaceMenuList,
+  workspaceChangeBusyReason,
   workspacePathRow,
 } from "./workspace-menu";
 import { workspaceCloneId } from "../shared/workspace-intake";
@@ -149,19 +149,10 @@ test("clone ids pass main's routing validation and differ per clone", () => {
   assert.equal(workspaceCloneId(newCloneId(() => "a-b-c-d-e-f-g-h")), "clone_abcdefgh");
 });
 
-test("scratch workspaces are generated ~/aiden slug folders named after the slug", () => {
-  const scratch = (folderPath: string, name: string, extra: Partial<Workspace> = {}) =>
-    isScratchWorkspace({ name, folderPath, ...extra });
-  assert.equal(scratch("/Users/me/aiden/calm-moon-run", "calm-moon-run"), true);
-  assert.equal(scratch("/home/me/aiden/bold-tree-glow", "bold-tree-glow"), true);
-  // Renamed, nested, elsewhere, or a worktree: not a scratch chat.
-  assert.equal(scratch("/Users/me/aiden/calm-moon-run", "Landing page"), false);
-  assert.equal(scratch("/Users/me/projects/aiden/calm-moon-run", "calm-moon-run"), false);
-  assert.equal(scratch("/Users/me/aiden/aiden-agent", "aiden-agent"), false);
-  assert.equal(
-    scratch("/Users/me/aiden/calm-moon-run", "calm-moon-run", {
-      managedWorktree: { repositoryPath: "/r", worktreePath: "/w", branch: "b", createdFromHead: "c" },
-    }),
-    false,
-  );
+test("a busy draft names the first thing to wait for", () => {
+  const idle = { sending: false, generating: false, gitBusy: false };
+  assert.equal(workspaceChangeBusyReason(idle), undefined);
+  assert.match(workspaceChangeBusyReason({ ...idle, gitBusy: true }) ?? "", /Git operation/u);
+  assert.match(workspaceChangeBusyReason({ ...idle, generating: true, gitBusy: true }) ?? "", /current response/u);
+  assert.match(workspaceChangeBusyReason({ sending: true, generating: true, gitBusy: true }) ?? "", /finish sending/u);
 });
