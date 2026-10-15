@@ -11,6 +11,13 @@ import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-m
 import { commitSkillInvocationForAppend } from "./skill-invocation-turn.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import type {
+  FirstMessageWorktreeInfo,
+  FirstMessageWorktreeProgress,
+  FirstMessageWorktreeRequest,
+  FirstMessageWorktreeResult,
+} from "../../renderer/shared/worktree-on-send.js";
+import { FirstMessageWorktreeError } from "./first-message-worktree.js";
 
 type Owner = Pick<RendererDocumentOwner, "documentId" | "isDestroyed" | "onInvalidated">;
 
@@ -33,6 +40,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
   const pending = new Map<string, { ownerId: string; fingerprint: string; promise: Promise<Chat> }>();
 
   return (input: ParsedChatFirstMessage, owner: Owner): Promise<Chat> => {
+    if (input.worktree) throw new Error("A first message in a new worktree needs the worktree commit path.");
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     if (deps.requiresReconciliation(owner.documentId)) {
       throw new Error(appendReconciliationFailureMessage("blocked"));
@@ -154,5 +162,60 @@ export function createFirstMessageCommitter(deps: Dependencies) {
       }
     })();
     return entry.promise;
+  };
+}
+
+const WORKTREE_FAILURE_REASONS = {
+  preparing: "Aiden couldn't prepare the new worktree.",
+  fetching: "Aiden couldn't fetch the base branch.",
+  creating: "Aiden couldn't create the new worktree.",
+  ready: "Aiden couldn't create the new worktree.",
+} as const;
+
+function worktreeFailure(error: unknown): FirstMessageWorktreeResult<never> {
+  const phase = error instanceof FirstMessageWorktreeError ? error.phase : "preparing";
+  const message = error instanceof Error ? error.message.trim() : "";
+  return {
+    ok: false,
+    code: "worktree-failed",
+    reason: WORKTREE_FAILURE_REASONS[phase],
+    ...(message ? { detail: [...message].slice(0, 500).join("") } : {}),
+  };
+}
+
+interface WorktreeCommitDependencies {
+  /** The ordinary first-message commit, run against the new worktree workspace. */
+  commit(input: ParsedChatFirstMessage, owner: Owner): Promise<Chat>;
+  ensureWorktree(
+    request: FirstMessageWorktreeRequest,
+    seed: string,
+    owner: Owner,
+    onProgress: (progress: FirstMessageWorktreeProgress) => void,
+  ): Promise<FirstMessageWorktreeInfo>;
+}
+
+/**
+ * First send with New worktree: create (or reuse) the draft's managed worktree,
+ * then save the chat in it. A worktree failure saves nothing and returns a
+ * recoverable `worktree-failed` result; chat-save failures throw as usual and
+ * leave the worktree recorded for the retry.
+ */
+export function createWorktreeFirstMessageCommitter(deps: WorktreeCommitDependencies) {
+  return async (
+    input: ParsedChatFirstMessage,
+    owner: Owner,
+    onProgress: (progress: FirstMessageWorktreeProgress) => void = () => undefined,
+  ): Promise<FirstMessageWorktreeResult<Chat>> => {
+    const { worktree: request, ...plain } = input;
+    if (!request) throw new Error("This first message did not ask for a worktree.");
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    let worktree: FirstMessageWorktreeInfo;
+    try {
+      worktree = await deps.ensureWorktree(request, input.content || input.title || "", owner, onProgress);
+    } catch (error) {
+      return worktreeFailure(error);
+    }
+    const chat = await deps.commit({ ...plain, workspaceId: worktree.workspaceId }, owner);
+    return { ok: true, chat, worktree };
   };
 }

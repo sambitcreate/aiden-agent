@@ -8,6 +8,11 @@ import type {
   WorkspaceOpenPathResult,
   WorkspacePathInspection,
 } from "../shared/workspace-intake";
+import type {
+  FirstMessageWorktreeProgress,
+  FirstMessageWorktreeRequest,
+  FirstMessageWorktreeResult,
+} from "../shared/worktree-on-send";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -1295,6 +1300,27 @@ export const chatsApi = {
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
   }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
+  /**
+   * First send with New worktree. Main creates (or, for the same draft,
+   * reuses) the managed worktree before saving the chat in it. A worktree
+   * failure saves nothing and resolves `{ ok: false, code: "worktree-failed" }`;
+   * chat-save failures reject as `createWithFirstMessage` does.
+   */
+  createWithFirstMessageInWorktree: (input: {
+    draftId: string;
+    title?: string;
+    /** The draft's workspace; must equal `worktree.sourceWorkspaceId`. */
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+    turnId: string;
+    message: { role: "user"; content: string; attachments?: Attachment[] };
+    skillInvocation?: SkillInvocationV1;
+    worktree: FirstMessageWorktreeRequest;
+  }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
+  /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
+  onFirstMessageWorktreeProgress: (handler: (progress: FirstMessageWorktreeProgress) => void) =>
+    onNotification<FirstMessageWorktreeProgress>("chats:first-message-worktree-progress", handler),
   createAssistant: (input: { providerId?: string; model?: string }) =>
     invokeChatMutation<Chat>("chats:createAssistant", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
