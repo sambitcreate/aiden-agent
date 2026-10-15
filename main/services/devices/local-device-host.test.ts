@@ -582,6 +582,47 @@ test("streaming revocation and service shutdown fence a late local-host restart"
   }
 });
 
+test("streaming revocation keeps needs-consent when an initial local-host start is cancelled", async () => {
+  await withHost(async (harness) => {
+    await writeFile(path.join(harness.baseDir, "consent.json"), JSON.stringify({ version: 1, streaming: true }));
+    const resolving = deferred();
+    const releaseResolution = deferred();
+    harness.deps.resolveNodePath = async () => {
+      resolving.resolve();
+      await releaseResolution.promise;
+      return "/opt/node/bin/node";
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const service = createDeviceService({
+      baseDir: harness.baseDir,
+      host,
+      startProxy: async () => { throw new Error("no stream was opened"); },
+      fetch: async () => { throw new Error("a cancelled start must not list devices"); },
+    });
+    try {
+      const refresh = service.refresh();
+      await resolving.promise;
+      const revoked = await service.revokeConsent("streaming");
+      assert.equal(revoked.hostStatus, "needs-consent");
+      releaseResolution.resolve();
+      const settled = await refresh;
+      assert.equal(settled.hostStatus, "needs-consent");
+      assert.equal(service.state().consent.streaming, false);
+      assert.equal(service.state().hostStatuses.local.status, "needs-consent");
+      assert.equal(host.current(), null);
+      assert.equal(harness.children.length, 0);
+
+      harness.deps.resolveNodePath = async () => { throw new Error("current runtime failure"); };
+      const retried = await service.grantConsent("streaming");
+      assert.equal(retried.hostStatus, "error", "a current start still reports its failure");
+      assert.match(retried.hostStatuses.local.detail ?? "", /current runtime failure/u);
+    } finally {
+      releaseResolution.resolve();
+      await service.stop();
+    }
+  });
+});
+
 test("agent-device starts in HTTP mode only when agent access is requested", async () => {
   await withHost(async (harness) => {
     const host = createLocalDeviceHost(harness.deps);
