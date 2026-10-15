@@ -1,3 +1,4 @@
+import { isMcpToolHidden } from "../../../renderer/shared/mcp-exposure.js";
 import type { SubagentMcpReadHost } from "./subagent-mcp-read.js";
 import {
   normalizeSubagentMcpInventoryV2,
@@ -24,6 +25,9 @@ export function createSubagentMcpMutationHost(readHost: SubagentMcpReadHost): Su
     const server = await readHost.resolveServer(binding.serverId, signal);
     if (!server?.enabled || server.transport === "stdio") {
       throw new Error("Subagent MCP mutation requires a configured remote server.");
+    }
+    if (isMcpToolHidden(server, binding.tool.toolName)) {
+      throw new Error("MCP mutation binding changed.");
     }
     let release!: () => void;
     const held = new Promise<void>((resolve) => {

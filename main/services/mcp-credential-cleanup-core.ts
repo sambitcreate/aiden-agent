@@ -1,4 +1,5 @@
 import type { McpServer } from "./types.js";
+import { mcpServerExposure, type McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import { createHash } from "node:crypto";
 
 export interface McpCredentialConnectionSnapshot {
@@ -21,6 +22,15 @@ export interface McpRuntimeConnectionSnapshot extends McpCredentialConnectionSna
   name: string;
   description?: string;
   enabled: boolean;
+  /**
+   * Model exposure. Present only when non-default, so servers that never
+   * changed exposure keep the snapshot (and fingerprints) they had before.
+   * Deliberately absent from the credential and authority snapshots: hiding a
+   * tool fences live leases and child scopes without touching sign-in or
+   * long-lived Bot and schedule approvals.
+   */
+  exposure?: McpExposure;
+  hiddenTools?: string[];
 }
 
 export interface PendingMcpCredentialCleanupV1 {
@@ -123,6 +133,16 @@ export function mcpRuntimeConnectionSnapshot(server: McpServer): McpRuntimeConne
     name: server.name,
     ...(server.description !== undefined ? { description: server.description } : {}),
     enabled: server.enabled,
+    ...mcpRuntimeExposureFields(server),
+  };
+}
+
+function mcpRuntimeExposureFields(server: McpServer): Pick<McpRuntimeConnectionSnapshot, "exposure" | "hiddenTools"> {
+  const exposure = mcpServerExposure(server);
+  const hiddenTools = [...new Set(server.hiddenTools ?? [])].sort();
+  return {
+    ...(exposure !== "auto" ? { exposure } : {}),
+    ...(hiddenTools.length ? { hiddenTools } : {}),
   };
 }
 

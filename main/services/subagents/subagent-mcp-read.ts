@@ -3,6 +3,7 @@ import { types as utilTypes } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { isMcpToolHidden } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpRuntimeConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
 import { assertUniqueMcpAgentToolNames, mcpScopedAgentToolName } from "../mcp-tool-identity.js";
 import type { McpServer } from "../types.js";
@@ -692,7 +693,8 @@ async function withExactRemoteTool<T>(input: {
 }): Promise<T> {
   assertReadBinding(input.scope, input.binding);
   const server = await input.host.resolveServer(input.scope.serverId, input.signal);
-  if (!server?.enabled || server.transport === "stdio") {
+  // A tool hidden after approval is refused before any remote dispatch.
+  if (!server?.enabled || server.transport === "stdio" || isMcpToolHidden(server, input.binding.toolName)) {
     return drift();
   }
   let connectionRevision: string | undefined;

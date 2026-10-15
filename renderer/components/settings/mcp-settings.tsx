@@ -376,7 +376,7 @@ export function McpSettings() {
                         {live.get(s.id)!.error}
                       </Text>
                     ) : null}
-                    <McpExposureControls server={s} toolCount={live.get(s.id)?.toolCount} onSave={saveExposure} />
+                    <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
                   </div>
                   <Button
                     variant="filled"

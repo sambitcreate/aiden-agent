@@ -487,6 +487,30 @@ test("the Tools list shows every discovered tool and hiding one saves it in hidd
   assert.deepEqual(savedServers(calls)[0]?.hiddenTools, ["write_file", "read_file"]);
 });
 
+test("a same-count rediscovery refreshes the Tools list while open and after reopening", async () => {
+  let inventory = [{ name: "old_tool" }];
+  const calls = mount({
+    "mcp:liveStatus": () => [{ serverId: "mcp-files", state: "connected", toolCount: 1, toolsRevision: "rev-old" }],
+    "mcp:toolList": () => inventory,
+  });
+  const toggle = await screen.findByRole("button", { name: "Tools" });
+  fireEvent.click(toggle);
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use old_tool" }));
+
+  inventory = [{ name: "new_tool" }];
+  act(() =>
+    emitBotTestNotification("mcp:statusChanged", { serverId: "mcp-files", state: "connected", toolCount: 1, toolsRevision: "rev-new" }),
+  );
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use new_tool" }));
+  assert.equal(screen.queryByRole("switch", { name: "Let the model use old_tool" }), null);
+
+  fireEvent.click(toggle);
+  fireEvent.click(toggle);
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use new_tool" }));
+  assert.equal(screen.queryByRole("switch", { name: "Let the model use old_tool" }), null);
+  assert.equal(channelCalls(calls, "mcp:toolList").length, 2);
+});
+
 test("before any discovery the Tools list can load tools with a connection test that saves nothing", async () => {
   const calls = mount({
     "mcp:toolList": () => null,

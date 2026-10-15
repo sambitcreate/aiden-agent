@@ -35,12 +35,12 @@ function toolRows(inventory: readonly McpToolSummary[], hidden: readonly string[
 
 export function McpExposureControls({
   server,
-  toolCount,
+  toolsRevision,
   onSave,
 }: {
   server: McpServer;
-  /** Tool count from live status; a change refreshes the tool list. */
-  toolCount: number | undefined;
+  /** Inventory revision from live status; a change refreshes the tool list. */
+  toolsRevision: string | undefined;
   /** Persist the edited server (the caller refreshes queries and reports errors). */
   onSave: (server: McpServer) => Promise<void>;
 }) {
@@ -81,7 +81,7 @@ export function McpExposureControls({
         >
           <McpToolSwitches
             server={server}
-            toolCount={toolCount}
+            toolsRevision={toolsRevision}
             disabled={saving}
             onHiddenChange={(hiddenTools) => void save({ exposure: server.exposure, hiddenTools: hiddenTools.length ? hiddenTools : undefined })}
           />
@@ -94,16 +94,16 @@ export function McpExposureControls({
 /** Mounted only while the Tools disclosure is open, so closed rows never read the list. */
 function McpToolSwitches({
   server,
-  toolCount,
+  toolsRevision,
   disabled,
   onHiddenChange,
 }: {
   server: McpServer;
-  toolCount: number | undefined;
+  toolsRevision: string | undefined;
   disabled: boolean;
   onHiddenChange: (hiddenTools: string[]) => void;
 }) {
-  const list = useMcpToolList(server.id, toolCount);
+  const list = useMcpToolList(server.id, toolsRevision);
   const [loaded, setLoaded] = React.useState<McpToolSummary[] | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
