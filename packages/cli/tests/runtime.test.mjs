@@ -37,10 +37,10 @@ function rpcCommands(args, options) {
 	return rpcCommandDetails(args, options).map((command) => command.name);
 }
 
-function makeProbeSkill(root, name) {
+function makeProbeSkill(root, name, description = "Skill discovery policy probe.") {
 	const dir = path.join(root, name);
 	mkdirSync(dir, { recursive: true });
-	writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Skill discovery policy probe.\n---\nProbe body.\n`);
+	writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nProbe body.\n`);
 	return dir;
 }
 
@@ -209,6 +209,31 @@ test("desktop skills folders (~/.aiden/skills priority set) feed CLI commands", 
 		assert.ok(commands.includes("skill:injection-probe"), `injected skill missing from: ${commands.join(", ")}`);
 	} finally {
 		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("built CLI keeps native and explicit skills ahead of same-name automatic skills", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-collision-"));
+	const home = path.join(root, "home");
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	for (const dir of [home, agentDir, project]) mkdirSync(dir);
+	makeProbeSkill(path.join(home, ".aiden", "skills"), "native-collision", "Automatic native collision probe.");
+	makeProbeSkill(path.join(agentDir, "skills"), "native-collision", "Native agent skill wins.");
+	makeProbeSkill(path.join(home, ".aiden", "skills"), "explicit-collision", "Automatic explicit collision probe.");
+	const explicitPath = makeProbeSkill(path.join(root, "explicit"), "explicit-collision", "User explicit skill wins.");
+	const options = { cwd: project, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+	const skill = (details, name) => details.find((command) => command.name === `skill:${name}`);
+	try {
+		const details = rpcCommandDetails(["--skill", explicitPath], options);
+		assert.equal(skill(details, "native-collision")?.description, "Native agent skill wins.");
+		assert.equal(skill(details, "explicit-collision")?.description, "User explicit skill wins.");
+		assert.equal(skill(details, "explicit-collision")?.sourceInfo?.path, path.join(explicitPath, "SKILL.md"));
+		const disabled = rpcCommandDetails(["--no-skills", "--skill", explicitPath], options);
+		assert.equal(skill(disabled, "explicit-collision")?.description, "User explicit skill wins.");
+		assert.equal(skill(disabled, "native-collision"), undefined);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 

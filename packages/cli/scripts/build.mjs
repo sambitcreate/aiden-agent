@@ -122,7 +122,7 @@ const skillDiscoveryPlugin = {
 ${original}`);
       const existing = "this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths)";
       if (source.split(existing).length !== 2) throw new Error("Pi skill path composition changed; review the Aiden trust integration.");
-      source = source.replace(existing, "this.mergePaths([...cliEnabledSkills, ...aidenSkills.map((skill) => skill.path), ...enabledSkills], this.additionalSkillPaths)");
+      source = source.replace(existing, "this.mergePaths([...cliEnabledSkills, ...enabledSkills], [...this.additionalSkillPaths, ...aidenSkills.map((skill) => skill.path)])");
       return { contents: `import { homedir } from "node:os";\nimport { desktopSkillDiscoveryPaths } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\n` + source, loader: "js", resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /pi-coding-agent\/dist\/core\/trust-manager\.js$/ }, (args) => {
