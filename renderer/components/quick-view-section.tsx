@@ -93,7 +93,6 @@ export function QuickViewSection({
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<DragState | null>(null);
   const [dragging, setDragging] = React.useState(false);
-  const [announcement, setAnnouncement] = React.useState("");
   const { hidden, open, onTransitionEnd } = useCollapsibleBody(collapsed, bodyRef);
 
   const setTranslate = (dy: number | null) => {
@@ -178,7 +177,6 @@ export function QuickViewSection({
     const to = event.key === "ArrowUp" ? index - 1 : index + 1;
     if (to < 0 || to >= count) return;
     onMove(id, to);
-    setAnnouncement(`${title} moved to position ${to + 1} of ${count}`);
   };
 
   const HeaderActionIcon = headerAction?.kind === "external" ? ArrowUpRight : PanelRightOpen;
@@ -281,9 +279,6 @@ export function QuickViewSection({
           <div className="px-1 pb-1">{children}</div>
         </div>
       </div>
-      <span className="sr-only" role="status" aria-live="polite">
-        {announcement}
-      </span>
     </section>
   );
 }

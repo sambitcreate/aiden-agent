@@ -80,7 +80,6 @@ test("the grip moves the section with arrow keys and stops at the ends", () => {
   rerender(<Harness index={0} onMove={(id, to) => moves.push([id, to])} />);
   fireEvent.keyDown(screen.getByRole("button", { name: "Move Changes" }), { key: "ArrowUp" });
   assert.deepEqual(moves, [["changes", 0], ["changes", 2]]);
-  assert.match(screen.getByRole("status").textContent ?? "", /Changes moved to position 3 of 3/);
 });
 
 test("dragging the grip past the next card's midpoint drops it there and clears the preview", () => {
