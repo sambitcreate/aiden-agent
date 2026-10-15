@@ -26,8 +26,8 @@ import {
 import {
   ChatPullRequestStateIcon,
   chatPullRequestStateLabel,
-  openPullRequestExternal,
 } from "./chat-pull-requests";
+import { useLinkOpener } from "../lib/link-opener";
 import { GitBranchPicker } from "./git-branch-picker";
 import { GitCommitDialog } from "./git-commit-dialog";
 import { GitPushDialog } from "./git-push-dialog";
@@ -327,11 +327,12 @@ export function EnvironmentRows({
 
 /** The chat's pull request, shown only once one exists; opens it on GitHub. */
 function PullRequestRow({ view }: { view: ChatPullRequestView }) {
+  const { openLink } = useLinkOpener();
   const state = chatPullRequestStateLabel(view);
   return (
     <button
       type="button"
-      onClick={() => openPullRequestExternal(view.url)}
+      onClick={() => openLink(view.url)}
       aria-label={`Pull request #${view.number}, ${state}. Opens on GitHub`}
       className={ROW}
     >

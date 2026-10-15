@@ -195,25 +195,19 @@ const PR_VIEW: ChatPullRequestView = {
 test("the Pull request row appears once the chat has a PR and opens it on GitHub", async () => {
   const calls = installRepoIpc({}, {
     [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+    "browser:open-external": () => undefined,
   });
-  const opened: unknown[][] = [];
-  const open = mock.method(window, "open", (...args: unknown[]) => {
-    opened.push(args);
-    return null;
+  renderChangesRows({ chatId: "chat-1" });
+  const row = await screen.findByRole("button", {
+    name: "Pull request #42, Open. Opens on GitHub",
   });
-  try {
-    renderChangesRows({ chatId: "chat-1" });
-    const row = await screen.findByRole("button", {
-      name: "Pull request #42, Open. Opens on GitHub",
-    });
-    assert.ok(row.textContent?.includes("#42 Quick View cards"));
-    fireEvent.click(row);
-    assert.equal(opened.length, 1);
-    assert.equal(opened[0]?.[0], PR_VIEW.url);
-    assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL && call.args[0] === "chat-1"));
-  } finally {
-    open.mock.restore();
-  }
+  assert.ok(row.textContent?.includes("#42 Quick View cards"));
+  fireEvent.click(row);
+  // Outside the app-wide link router the PR opens in the system browser.
+  await waitFor(() =>
+    assert.ok(calls.some((call) => call.channel === "browser:open-external" && call.args[0] === PR_VIEW.url)),
+  );
+  assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL && call.args[0] === "chat-1"));
 });
 
 test("a merged PR without a title, or with an empty one, is named by its branch", async () => {
