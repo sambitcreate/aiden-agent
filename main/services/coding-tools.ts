@@ -1086,6 +1086,7 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
 }
 
 async function commitPinnedEdit(input: {
+  binary?: string;
   root: string;
   rootIdentity: PinnedWorkspaceRootIdentity;
   relativePath: string;
@@ -1108,7 +1109,7 @@ async function commitPinnedEdit(input: {
     String(input.updated.length),
   ];
   await new Promise<void>((resolve, reject) => {
-    const child = execFile(resolveSubagentFileMutatorBinary(), args, {
+    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
       encoding: "utf8",
       maxBuffer: 1024,
       timeout: 120_000,
@@ -1127,7 +1128,7 @@ async function commitPinnedEdit(input: {
   });
 }
 
-function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
+function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool {
   return {
     name: "edit_file",
     label: "Edit File",
@@ -1185,6 +1186,7 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         ? await fs.stat(root, { bigint: true })
         : null;
       await commitPinnedEdit({
+        binary,
         root,
         rootIdentity: workspace.exactIdentity ?? {
           device: rootStat!.dev.toString(),
@@ -1874,6 +1876,8 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
  */
 export interface CodingToolOptions {
   pathPrefix?: string | (() => string | null | undefined);
+  /** Trusted native helper from the application installation, if packaged outside Electron. */
+  fileMutatorBinary?: string;
 }
 
 export function runCommandEnv(
@@ -2043,7 +2047,7 @@ function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: Coding
     declarePiRuntimeReplay(withForegroundReadScope(makeParentListDir(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGlob(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentGrep(workspace)), "safe"),
-    declarePiRuntimeReplay(makeEditFile(workspace), "never"),
+    declarePiRuntimeReplay(makeEditFile(workspace, options.fileMutatorBinary), "never"),
     declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
     declarePiRuntimeReplay(makeRunCommand(workspace, options), "never"),
   ];
@@ -2069,8 +2073,9 @@ export function buildPinnedCodingTools(
   testObserver?: WorkspaceRootGuard["testObserver"],
   /** Optional authority-proven identity captured before the tool set is built. */
   expectedIdentity?: PinnedWorkspaceRootIdentity,
+  options: CodingToolOptions = {},
 ): AgentTool[] {
-  return buildParentCodingToolSet(pinWorkspaceRoot(root, testObserver, expectedIdentity));
+  return buildParentCodingToolSet(pinWorkspaceRoot(root, testObserver, expectedIdentity), options);
 }
 
 /**
