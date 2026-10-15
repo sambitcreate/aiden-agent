@@ -199,8 +199,9 @@ class AidenSimulatorsViewModel(
         viewModelScope.launch {
             try {
                 remote.simulators(null)
+                val refreshedListing = remote.simulators(chatId)
                 val selectedBeforeRefresh = _viewer.value.selectedDeviceId
-                applyListing(remote.simulators(chatId))
+                applyListing(refreshedListing)
                 // applyListing already connected a replacement when selection changed.
                 if (_viewer.value.open && _viewer.value.error == null &&
                     _viewer.value.selectedDeviceId == selectedBeforeRefresh) connectSelected()

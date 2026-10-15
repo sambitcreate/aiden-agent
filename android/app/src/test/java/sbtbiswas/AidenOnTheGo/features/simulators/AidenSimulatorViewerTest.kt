@@ -311,13 +311,17 @@ class AidenSimulatorViewerTest {
         val sessions = mutableListOf<String>()
         val created = mutableListOf<AidenSimulatorStreamSession<ImageBitmap>>()
         var nextListing: CompletableDeferred<AidenSimulatorListing>? = null
+        var nextChatListing: CompletableDeferred<AidenSimulatorListing>? = null
         var nextOpen: CompletableDeferred<AidenSimulatorDevice>? = null
 
         override val hasAccess: Boolean get() = access
         override suspend fun simulators(chatId: String?): AidenSimulatorListing {
             listingRequests += chatId
-            val pending = nextListing
-            nextListing = null
+            val pending = if (chatId != null && nextChatListing != null) {
+                nextChatListing.also { nextChatListing = null }
+            } else {
+                nextListing.also { nextListing = null }
+            }
             return pending?.await() ?: listing
         }
         override suspend fun open(deviceId: String): AidenSimulatorDevice {
@@ -463,6 +467,32 @@ class AidenSimulatorViewerTest {
 
         assertEquals(ipad, model.viewer.value.selectedDeviceId)
         assertEquals(listOf(iphone, ipad), remote.sessions)
+        assertTrue(model.session.value === remote.created.last())
+        model.closeViewer()
+    }
+
+    @Test
+    fun hostRetryUsesTheSelectionAtListingApplicationAfterAPickerChange() {
+        val base = fixtureListing
+        val both = base.copy(
+            devices = base.devices.map { if (it.id == ipad) it.copy(booted = true) else it },
+            chatDeviceIds = listOf(iphone, ipad)
+        )
+        val remote = FakeRemote(both, liveSessions = true)
+        val model = AidenSimulatorsViewModel("chat_1", remote)
+        model.refreshChatDevices()
+        model.openViewer()
+
+        val delayedListing = CompletableDeferred<AidenSimulatorListing>()
+        remote.nextChatListing = delayedListing
+        model.retryHost()
+        model.selectDevice(ipad)
+        assertEquals(listOf(iphone, ipad), remote.sessions)
+
+        // Retry began on A, but B was selected when the fetched listing removed it.
+        delayedListing.complete(both.copy(chatDeviceIds = listOf(iphone)))
+        assertEquals(iphone, model.viewer.value.selectedDeviceId)
+        assertEquals(listOf(iphone, ipad, iphone), remote.sessions)
         assertTrue(model.session.value === remote.created.last())
         model.closeViewer()
     }
