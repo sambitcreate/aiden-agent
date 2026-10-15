@@ -13,8 +13,8 @@ import type {
 } from "../../bot-runtime-authority.js";
 import type { BotOrdinaryCapabilityKind } from "../../bot-capability-catalog-core.js";
 import type { BotRuntimeResolvedSkill } from "../../bot-skill-inventory.js";
-import type { McpServerInstructionSnapshot } from "../../mcp-server-instructions.js";
-import { mcpAgentToolName } from "../../mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolName } from "../../mcp-tool-identity.js";
+import { tagMcpAgentTool } from "../../mcp-agent-tool-descriptor.js";
 import { botMcpLiveToolGrantFacts } from "../../bot-tool-authority.js";
 import type { SubagentMcpRemoteTool } from "../../subagents/subagent-mcp-read.js";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "../../skill-registry.js";
@@ -31,8 +31,22 @@ import { botIngressAllowsTool } from "../bot-tool-policy.js";
 import { fakeBot } from "./fixtures.js";
 
 export const MAIL_SERVER = { id: "conn-mail", name: "Mail" } as const;
-export const SEND_EMAIL_TOOL = mcpAgentToolName(MAIL_SERVER, "send_email");
-export const READ_INBOX_TOOL = mcpAgentToolName(MAIL_SERVER, "read_inbox");
+const MAIL_INVENTORY = { configured: [MAIL_SERVER], inventory: ["send_email", "read_inbox"] };
+export const SEND_EMAIL_TOOL = mcpAgentToolName(MAIL_SERVER, "send_email", MAIL_INVENTORY);
+export const READ_INBOX_TOOL = mcpAgentToolName(MAIL_SERVER, "read_inbox", MAIL_INVENTORY);
+/**
+ * The Mail tools as the MCP manager builds them: generated names carrying
+ * their MCP identity and the tools/list entry they were built from.
+ */
+const MAIL_BUILT_TOOLS = mailRemoteTools().map((remote) =>
+  tagMcpAgentTool(
+    markMcpAgentTool(
+      { name: mcpAgentToolName(MAIL_SERVER, remote.name, MAIL_INVENTORY) },
+      { serverId: MAIL_SERVER.id, toolName: remote.name },
+    ),
+    remote,
+  ),
+);
 
 /** The tools/list entries the Mail server advertised when the Bot was granted them. */
 export function mailRemoteTools(): SubagentMcpRemoteTool[] {
@@ -232,8 +246,6 @@ export interface AssemblyDepsOptions {
   candidates: (authority: BotRuntimeEffectiveAuthority) => BotToolCandidate[];
   approve?: (request: BotApprovalRequest) => Promise<"allow" | "deny">;
   approvalFor?: (toolName: string, call: BotToolCallCheck) => Promise<BotApprovalRequirement | null | undefined>;
-  /** MCP server instructions captured while "discovering" the connection tools. */
-  guidance?: McpServerInstructionSnapshot[];
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
@@ -252,14 +264,13 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
           supportsImages: state.supportsImages,
           fileLocations: admission.authority.files.botHome ? 1 : 0,
           catalog: async () => state.catalog,
-          mcpServers: async () => [MAIL_SERVER],
+          mcpTools: async () => MAIL_BUILT_TOOLS,
           liveMcpTools: async () =>
-            new Map(state.liveMailTools.map((tool) => [mcpAgentToolName(MAIL_SERVER, tool.name), tool] as const)),
+            new Map(state.liveMailTools.map((tool) => [mcpAgentToolName(MAIL_SERVER, tool.name, MAIL_INVENTORY), tool] as const)),
           skills: async () => ({ snapshot: state.skillSnapshot, resolved: [resolvedNotesSkill(state.skillSnapshot)] }),
         }),
       candidates: async (_botId, admission) => ({
         tools: options.candidates(admission.authority),
-        guidance: options.guidance ?? [],
       }),
       ...(options.approvalFor === undefined
         ? {}

@@ -34,6 +34,8 @@ import {
   type GenerationContextScope,
 } from "./context-profile.js";
 import { buildAgentTools } from "./tools.js";
+import { ambientRuntimeToolEstimate } from "./context-pressure-tools.js";
+import { mcpManager } from "./mcp.js";
 import { draftUserPiMessage } from "./generation-messages.js";
 
 const generationProfiles = new Map<string, GenerationContextProfile>();
@@ -138,8 +140,20 @@ async function ambientContextOptions(
     await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
   const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
+  // Codemode turns declare codemode/tool_search instead of MCP tools; other
+  // turns declare the MCP tools this process already built (never connecting).
+  const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
+  const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
+    const mcpTools = codemode ? [] : await configStore.listMcpServers()
+      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled).map((server) => server.id)))
+      .catch(() => []);
+    const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
+    if (!extra.length) return options;
+    const names = new Set(options.tools.map((tool) => tool.name));
+    return { ...options, tools: [...options.tools, ...extra.filter((tool) => !names.has(tool.name))] };
+  };
   const cached = ambientProfiles.get(chatId);
-  if (cached?.key === key) return cached.options;
+  if (cached?.key === key) return withRuntimeTools(cached.options);
   const settings = await configStore.getSettings();
   const skillsEnabled = settings.skillsEnabled !== false;
   const skillSnapshot =
@@ -185,7 +199,7 @@ async function ambientContextOptions(
     promptSections: sections,
   };
   ambientProfiles.set(chatId, { key, options });
-  return options;
+  return withRuntimeTools(options);
 }
 
 async function journalMessages(

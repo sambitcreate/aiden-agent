@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mcpResourceToolName } from "./mcp-resources.js";
-import { mcpAgentToolName } from "./mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolName, mcpAgentToolNames } from "./mcp-tool-identity.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
@@ -486,11 +486,8 @@ test("main MCP publication requires an exact fresh connection and tool join", ()
     exactFingerprint: connection.exactFingerprint,
     tools: [{ ...mcpTool }],
   };
-  const exact = exactBotMcpToolNames(
-    customAuthority,
-    [currentConnection],
-    (sourceId, name) => `${sourceId}__${name}`,
-  );
+  const built = [markMcpAgentTool({ name: "calendar__calendar_events" }, { serverId: "calendar", toolName: "calendar_events" })];
+  const exact = exactBotMcpToolNames(customAuthority, [currentConnection], built);
   assert.equal(exact.get("calendar__calendar_events")?.exactFingerprint, mcpTool.exactFingerprint);
   assert.throws(
     () => exactBotMcpToolNames(
@@ -499,10 +496,33 @@ test("main MCP publication requires an exact fresh connection and tool join", ()
         ...currentConnection,
         tools: [{ ...mcpTool, outputSchemaFingerprint: fingerprint("changed") }],
       }],
-      (sourceId, name) => `${sourceId}__${name}`,
+      built,
     ),
     /connection tool changed/u,
   );
+  // An exact grant whose tool was not built (or a same-named tool without MCP identity) is not offered.
+  assert.equal(exactBotMcpToolNames(customAuthority, [currentConnection], []).size, 0);
+  assert.equal(exactBotMcpToolNames(customAuthority, [currentConnection], [{ name: "calendar__calendar_events" }]).size, 0);
+});
+
+test("Bot MCP grants follow the built tool's name when it collides outside the catalog's first 32 tools", () => {
+  const server = { id: "calendar", name: "Calendar" };
+  // Sorted: the granted tool, 35 fillers, then a tool that sanitizes to the
+  // granted tool's name. The catalog lists only the first 32.
+  const inventory = ["events_list", ...Array.from({ length: 35 }, (_, index) => `events_m${String(index).padStart(2, "0")}`), "events~list"];
+  const catalogSubset = [...inventory].sort().slice(0, 32);
+  assert.ok(catalogSubset.includes("events_list") && !catalogSubset.includes("events~list"));
+  const builtNames = mcpAgentToolNames(server, [server], inventory);
+  const builtName = builtNames.get("events_list")!;
+  // The old join recomputed names from the subset and so missed the live tool.
+  assert.notEqual(builtName, mcpAgentToolName(server, "events_list", { configured: [server], inventory: catalogSubset }));
+  const grant = { ...mcpTool, name: "events_list" };
+  const authority = { ...customAuthority, connections: [{ ...connection, tools: [grant] }] };
+  const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true }, tools: [grant] };
+  const built = inventory.map((toolName) => markMcpAgentTool({ name: builtNames.get(toolName)! }, { serverId: server.id, toolName }));
+  const admitted = exactBotMcpToolNames(authority, [current], built);
+  assert.deepEqual([...admitted.keys()], [builtName]);
+  assert.equal(admitted.get(builtName)?.effect, "mutating", "approval facts are keyed by the live name");
 });
 
 test("subagent MCP projection joins connection, combined schema, output, effect, and exact facts", () => {
@@ -743,8 +763,11 @@ test("existing Full and Custom Bot MCP grants never admit the separate resource 
   const current = { ...connection, option: { id: "opaque", label: "Calendar", available: true } };
   for (const accessMode of ["full", "custom"] as const) {
     const authority = { ...customAuthority, accessMode };
-    const admitted = exactBotMcpToolNames(authority, [current], (_id, name) => mcpAgentToolName(server, name));
-    assert.equal(admitted.has(mcpAgentToolName(server, mcpTool.name)), true);
+    const admitted = exactBotMcpToolNames(authority, [current], [
+      markMcpAgentTool({ name: mcpAgentToolName(server, "calendar_events", { configured: [server], inventory: ["calendar_events"] }) }, { serverId: server.id, toolName: "calendar_events" }),
+      { name: mcpResourceToolName(server) },
+    ]);
+    assert.equal(admitted.has("calendar__calendar_events"), true);
     assert.equal(admitted.has(mcpResourceToolName(server)), false);
   }
 });

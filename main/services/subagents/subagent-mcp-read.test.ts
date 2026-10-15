@@ -509,6 +509,34 @@ test("approved tools expose deterministic exact bindings and sanitize bounded re
   assert.deepEqual(h.calls[0]?.args, { query: "hello" });
 });
 
+test("servers whose ids share a readable prefix keep distinct child tool names that route to their own server", async () => {
+  const dashed = harness();
+  dashed.setServer(configuredServer({ id: "my-server", name: "My Server" }));
+  const underscored = harness();
+  underscored.setServer(configuredServer({ id: "my_server", name: "My Server" }));
+  const byId = new Map([["my-server", dashed], ["my_server", underscored]]);
+  const host: SubagentMcpReadHost = {
+    resolveServer: (serverId, signal) => byId.get(serverId)!.host.resolveServer(serverId, signal),
+    withClient: (server, signal, operation) => byId.get(server.id)!.host.withClient(server, signal, operation),
+  };
+  const scopes = [await approvedScope(dashed), await approvedScope(underscored)];
+
+  const bindings = subagentMcpApprovalBindings(scopes);
+  const names = bindings.map(({ childAgentToolName }) => childAgentToolName);
+  assert.equal(new Set(names).size, 2);
+  assert.deepEqual(bindings.map(({ serverId }) => serverId), ["my-server", "my_server"]);
+
+  const tools = await createReadOnlySubagentMcpTools({ scopes, host, consumeNetworkOperation: () => undefined });
+  assert.deepEqual(tools.map(({ name }) => name), names);
+  await tools[1]!.execute("call-underscored", { query: "which" });
+  assert.equal(underscored.calls.length, 1);
+  assert.equal(dashed.calls.length, 0);
+
+  // A lone server keeps its readable name; only colliding peers add the hash.
+  const [alone] = subagentMcpApprovalBindings([scopes[0]!]);
+  assert.equal(alone!.childAgentToolName, "my_server__lookup");
+});
+
 test("connection, schema, and effect drift fail closed before invocation", async () => {
   for (const mutate of [
     (h: Harness) => h.setServer({ ...h.getServer()!, url: "https://drift.example.test" }),
@@ -710,4 +738,30 @@ test("discovery is bounded, rejects unsafe inventories, and sanitizes host failu
   );
   assert.equal(await rejectionCode(inspect(h)), "invalid_binding");
   assert.equal(h.listSignals.length, listedBeforeStdio);
+});
+
+test("structured-only read tools return their structured content to children, redacted and bounded", async () => {
+  const h = harness();
+  const scope = await approvedScope(h);
+  const tools = await createReadOnlySubagentMcpTools({
+    scopes: [scope], host: h.host, consumeNetworkOperation: () => undefined, policy: { maxResultBytes: 4096 },
+  });
+  const run = async (result: Record<string, unknown>) => {
+    h.setCall(async () => result);
+    const output = await tools[0]!.execute(`call-${Math.random()}`, { query: "hello" });
+    return output.content[0]?.type === "text" ? output.content[0].text : "";
+  };
+  const structured = await run({ content: [], structuredContent: { status: "open", owner: SECRET, items: [1, 2] } });
+  assert.match(structured, /untrusted external data/u);
+  assert.match(structured, /"status":"open"/u);
+  assert.match(structured, /"items":\[1,2\]/u);
+  assert.doesNotMatch(structured, /no textual result/u);
+  assert.doesNotMatch(structured, new RegExp(SECRET, "u"));
+  // A text block that already serializes the same JSON is not repeated.
+  const payload = { status: "open" };
+  const echoed = await run({ content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload });
+  assert.equal(echoed.match(/"status"/gu)?.length, 1);
+  const large = await run({ content: [], structuredContent: { rows: Array.from({ length: 2_000 }, (_, index) => ({ index })) } });
+  assert.ok(Buffer.byteLength(large, "utf8") <= 4096);
+  assert.match(large, /truncated/u);
 });

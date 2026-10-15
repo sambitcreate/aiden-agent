@@ -126,23 +126,21 @@ export function settleMcpServerDiscovery<S extends { readonly name: string }, R>
   );
 }
 
-export interface McpServerDiscoveryResult<I> {
+export interface McpServerDiscoveryResult {
   readonly tools: readonly AgentTool[];
-  readonly instructions?: I;
 }
 
 /**
- * Merge per-server discovery in configuration order. A server's tools and
- * instructions are accepted together, only after its tool names prove unique
- * against servers already accepted. Strict callers fail closed on the first
+ * Merge per-server discovery in configuration order. A server's tools are
+ * accepted only after their names prove unique against servers already
+ * accepted. Strict callers fail closed on the first
  * unavailable server; others report it and continue without its tools.
  */
-export function mergeMcpServerDiscovery<S extends { readonly name: string }, I>(
+export function mergeMcpServerDiscovery<S extends { readonly name: string }>(
   servers: readonly S[],
-  settled: readonly PromiseSettledResult<McpServerDiscoveryResult<I>>[],
+  settled: readonly PromiseSettledResult<McpServerDiscoveryResult>[],
   options: {
     strict?: boolean;
-    onServerInstructions?: (instructions: I) => void;
     onUnavailable?: (server: S, error: unknown) => void;
   } = {},
 ): AgentTool[] {
@@ -153,7 +151,6 @@ export function mergeMcpServerDiscovery<S extends { readonly name: string }, I>(
       if (result.status === "rejected") throw result.reason;
       assertUniqueMcpAgentToolNames([...all, ...result.value.tools]);
       all.push(...result.value.tools);
-      if (result.value.instructions) options.onServerInstructions?.(result.value.instructions);
     } catch (error) {
       if (options.strict) {
         throw new Error(
@@ -216,26 +213,25 @@ function waitFor(pending: Promise<unknown>, signal: AbortSignal | undefined): Pr
  * tool_search rather than declared to the provider. Servers that finish within
  * `windowMs` are merged exactly like {@link mergeMcpServerDiscovery}; the rest
  * keep discovering under their own budget and, once done, join `late` if their
- * tool names stay unique. Late servers never contribute prompt instructions,
- * so the turn's prompt and declarations stay stable while they arrive.
+ * tool names stay unique. Late servers never change the turn's base prompt or
+ * declared tools while they arrive.
  */
-export async function admitMcpServerDiscovery<S extends { readonly name: string }, I>(
+export async function admitMcpServerDiscovery<S extends { readonly name: string }>(
   servers: readonly S[],
-  discover: (server: S) => Promise<McpServerDiscoveryResult<I>>,
+  discover: (server: S) => Promise<McpServerDiscoveryResult>,
   options: {
     budgetMs: number;
     windowMs: number;
     signal?: AbortSignal;
-    onServerInstructions?: (instructions: I) => void;
     onUnavailable?: (server: S, error: unknown) => void;
   },
 ): Promise<{ tools: AgentTool[]; late: McpLateDiscovery }> {
-  const results: (PromiseSettledResult<McpServerDiscoveryResult<I>> | undefined)[] = servers.map(() => undefined);
+  const results: (PromiseSettledResult<McpServerDiscoveryResult> | undefined)[] = servers.map(() => undefined);
   let admitted = false;
   const accepted: AgentTool[] = [];
   const late: AgentTool[] = [];
   let pending = 0;
-  const acceptLate = (server: S, result: PromiseSettledResult<McpServerDiscoveryResult<I>>) => {
+  const acceptLate = (server: S, result: PromiseSettledResult<McpServerDiscoveryResult>) => {
     try {
       if (result.status === "rejected") throw result.reason;
       assertUniqueMcpAgentToolNames([...accepted, ...late, ...result.value.tools]);
@@ -271,7 +267,7 @@ export async function admitMcpServerDiscovery<S extends { readonly name: string 
   accepted.push(...mergeMcpServerDiscovery(
     readyIndexes.map((index) => servers[index]!),
     readyIndexes.map((index) => results[index]!),
-    { onServerInstructions: options.onServerInstructions, onUnavailable: options.onUnavailable },
+    { onUnavailable: options.onUnavailable },
   ));
   return {
     tools: accepted,
@@ -341,6 +337,12 @@ export class McpBuiltToolsMemo<T> {
     if (same && entry.isCurrent()) return entry.value;
     this.entries.delete(id);
     return undefined;
+  }
+
+  /** The current value for `id` without checking dependencies; never connects or builds. */
+  peek(id: string): T | undefined {
+    const entry = this.entries.get(id);
+    return entry?.isCurrent() ? entry.value : undefined;
   }
 
   set(id: string, dependencies: readonly unknown[], isCurrent: () => boolean, value: T): void {

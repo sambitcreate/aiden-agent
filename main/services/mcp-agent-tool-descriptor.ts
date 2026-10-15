@@ -5,7 +5,7 @@ import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
  * hold narrower authority (Bot grants) can compare the executable tool's own
  * schema and effect facts instead of trusting its name.
  */
-const descriptors = new WeakMap<object, SubagentMcpRemoteTool>();
+const MCP_TOOL_DESCRIPTOR = Symbol.for("aiden.mcpAgentToolDescriptor");
 
 /** The authority-relevant projection of one tools/list entry. */
 export function mcpRemoteToolDescriptor(tool: {
@@ -27,12 +27,12 @@ export function mcpRemoteToolDescriptor(tool: {
   };
 }
 
+/** Attach the tools/list entry to a built MCP agent tool (survives object spread, like its identity). */
 export function tagMcpAgentTool<T extends object>(agentTool: T, remote: Parameters<typeof mcpRemoteToolDescriptor>[0]): T {
-  descriptors.set(agentTool, mcpRemoteToolDescriptor(remote));
-  return agentTool;
+  return Object.assign(agentTool, { [MCP_TOOL_DESCRIPTOR]: Object.freeze(mcpRemoteToolDescriptor(remote)) });
 }
 
 /** The tools/list entry this agent tool was built from, when it is an MCP tool. */
 export function mcpAgentToolDescriptor(agentTool: object): SubagentMcpRemoteTool | undefined {
-  return descriptors.get(agentTool);
+  return (agentTool as { [MCP_TOOL_DESCRIPTOR]?: SubagentMcpRemoteTool })[MCP_TOOL_DESCRIPTOR];
 }

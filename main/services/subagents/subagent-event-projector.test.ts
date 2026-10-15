@@ -913,7 +913,7 @@ test("privileged child tools use truthful closed activity classes", () => {
     ["run_command", "Preparing a command", "inspecting"],
     ["web_search", "Using public-web access", "inspecting"],
     ["subagent", "Preparing a delegation", "inspecting"],
-    ["docs__publish_012345abcdef", "Preparing connector access", "inspecting"],
+    ["docs__publish", "Preparing connector access", "inspecting"],
     ["future_private_tool", "Preparing a tool", "inspecting"],
   ] as const;
 

@@ -32,6 +32,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
+import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
@@ -801,6 +802,23 @@ test("nested result redaction removes stale structured data before the script re
   assert.equal(result?.role, "toolResult");
   if (result?.role !== "toolResult") throw new Error("Missing codemode result");
   assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { content: [{ type: "text", text: "redacted" }], hasStructured: false });
+});
+
+test("nested MCP calls hand the script their full result while the parent transcript stays bounded", async () => {
+  let harness!: PiAgentRuntimeHarness;
+  const codemode = createPiCodemodeTool({ tools: () => harness.state.tools, executeTool: (...args) => harness.executeNestedToolCall(...args) });
+  const long = `HEAD${"x".repeat(120_000)}TAIL`;
+  const remote: AgentTool = Object.assign({ name: "mcp_remote", label: "Remote", description: "Remote", parameters: Type.Object({}),
+    execute: () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: long }], structuredContent: { rows: Array.from({ length: 2_000 }, (_, id) => ({ id })) } })) }, { codemode: true });
+  ({ harness } = testHarness([
+    fauxAssistantMessage([fauxToolCall("codemode", { code: 'const r = await tools.mcp_remote({}); text({ length: r.content[0].text.length, rows: r.structuredContent.rows.length });' })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ], { initialState: { tools: [remote, codemode] } }));
+  await harness.prompt("run");
+  const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+  if (result?.role !== "toolResult") throw new Error("Missing codemode result");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { length: long.length, rows: 2_000 });
+  assert.ok(JSON.stringify(harness.state.messages).length < 40_000);
 });
 
 test("nested call arguments are retained within per-call and per-script budgets that reset for each parent", async () => {

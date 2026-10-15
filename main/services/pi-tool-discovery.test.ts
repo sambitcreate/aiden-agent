@@ -105,14 +105,26 @@ test("tool_search exposes JSON schemas without executing tools and honors cancel
   await assert.rejects(discovery.toolSearch.execute("cancelled", { query: "read" }, AbortSignal.abort()), /abort/i);
 });
 
-test("namespace output is bounded and oversized inventories reject instead of partially exposing authority", () => {
+test("namespace output is bounded and oversized inventories degrade to a marked, capped search", () => {
   const tools = Array.from({ length: 150 }, (_, index) => ({ ...tool(`tool_${index}`, "mcp:one"), description: "x".repeat(1024) }));
   const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true });
   const result = discovery.describeNamespace("mcp:one");
   assert.equal(result.truncated, true);
   assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 32768);
-  const excessive = createPiToolDiscovery({ tools: () => Array.from({ length: 513 }, (_, i) => tool(`tool_${i}`)), isCallable: () => true });
-  assert.throws(() => excessive.searchTools(""), /exceeds 512/);
+  const reported: number[] = [];
+  const excessive = createPiToolDiscovery({
+    tools: () => Array.from({ length: 600 }, (_, i) => tool(`tool_${i}`)),
+    isCallable: () => true,
+    onInventoryTruncated: (total) => reported.push(total),
+  });
+  const capped = excessive.searchTools("tool_5");
+  assert.equal(capped.inventoryTruncated, true);
+  assert.equal(names(capped)[0], "tool_5");
+  // Only the first 512 callable tools are searchable.
+  assert.deepEqual(names(excessive.searchTools("tool_599")), []);
+  assert.deepEqual(names(excessive.searchTools("tool_511")), ["tool_511"]);
+  assert.deepEqual(reported, [600]);
+  assert.equal(createPiToolDiscovery({ tools: () => [tool("one")], isCallable: () => true }).searchTools("").inventoryTruncated, undefined);
 });
 
 
@@ -168,4 +180,54 @@ test("tool_search waits for servers still discovering and stops waiting when can
   const searching = discovery.toolSearch.execute("second", { query: "docs" });
   setTimeout(arrive, 10);
   assert.deepEqual(names((await searching).structuredContent as JsonObject), ["docs_search"]);
+});
+
+function mcpTool(name: string, description: string, server: { namespace: string; label: string; alias: string; description?: string }): PiDiscoverableTool {
+  return { ...tool(name), description, discovery: Object.freeze({ ...server }) };
+}
+
+const linearServer = { namespace: "mcp:aaaaaaaaaaaaaaaaaaaaaaaa", label: "Linear", alias: "linear", description: "Issue tracking for product teams" };
+const githubServer = { namespace: "mcp:bbbbbbbbbbbbbbbbbbbbbbbb", label: "GitHub Work", alias: "github_work" };
+
+test("natural-language queries rank by any matching word instead of requiring all of them", () => {
+  const inventory = [
+    mcpTool("linear__create_issue", "Create an issue in a Linear team", linearServer),
+    mcpTool("linear__list_projects", "List projects", linearServer),
+    mcpTool("github_work__createPullRequest", "Open a pull request", githubServer),
+    mcpTool("github_work__create_issue", "Create a GitHub issue", githubServer),
+    tool("read_file"),
+  ];
+  const discovery = createPiToolDiscovery({ tools: () => inventory, isCallable: () => true });
+  const ranked = names(discovery.searchTools("create a new issue in linear"));
+  assert.equal(ranked[0], "linear__create_issue");
+  assert.ok(ranked.includes("github_work__create_issue"));
+  assert.ok(!ranked.includes("read_file"));
+  // camelCase names split into words; plurals and -ing forms stem to the same word.
+  assert.equal(names(discovery.searchTools("pull requests"))[0], "github_work__createPullRequest");
+  assert.deepEqual(names(discovery.searchTools("creating issues")).slice(0, 2).sort(), ["github_work__create_issue", "linear__create_issue"]);
+  // A name match outranks the same word in a description.
+  assert.deepEqual(names(discovery.searchTools("projects")), ["linear__list_projects", "read_file"]);
+  // Only stop words: list everything instead of matching nothing.
+  assert.equal(names(discovery.searchTools("the", { limit: 20 })).length, inventory.length);
+  assert.deepEqual(names(discovery.searchTools("zebra")), []);
+});
+
+test("namespaces accept the service name and tool-name prefix as case- and separator-insensitive aliases", () => {
+  const inventory = [
+    mcpTool("linear__create_issue", "Create an issue", linearServer),
+    mcpTool("github_work__create_issue", "Create an issue", githubServer),
+  ];
+  const discovery = createPiToolDiscovery({ tools: () => inventory, isCallable: () => true });
+  for (const alias of ["github_work", "GitHub Work", "github-work", "GITHUB_WORK", githubServer.namespace]) {
+    assert.deepEqual(names(discovery.searchTools("issue", { namespace: alias })), ["github_work__create_issue"], alias);
+    assert.equal(discovery.describeNamespace(alias).namespace, githubServer.namespace, alias);
+  }
+  assert.equal(discovery.describeNamespace("linear").alias, "linear");
+  assert.deepEqual(names(discovery.searchTools("issue", { namespace: "gitlab" })), []);
+  assert.throws(() => discovery.describeNamespace("gitlab"), /Unknown or unavailable/u);
+  // Two services answering to one alias fail rather than guess.
+  const twin = mcpTool("github_work_2__x", "x", { ...githubServer, namespace: "mcp:cccccccccccccccccccccccc", alias: "github_work_2" });
+  const ambiguous = createPiToolDiscovery({ tools: () => [...inventory, twin], isCallable: () => true });
+  assert.throws(() => ambiguous.describeNamespace("GitHub Work"), /matches several services/u);
+  assert.equal(ambiguous.describeNamespace("github_work_2").namespace, "mcp:cccccccccccccccccccccccc");
 });

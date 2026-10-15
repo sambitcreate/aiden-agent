@@ -22,6 +22,20 @@ export interface ConnectionBounds {
   disconnectWaitMs?: number;
 }
 
+export type ConnectionLifecycleEvent =
+  | { type: "connecting" }
+  | { type: "connected" }
+  | { type: "failed"; error: unknown }
+  | { type: "closed" };
+
+export interface ConnectionCacheOptions extends ConnectionBounds {
+  /**
+   * Observes each id's current connection: attempts that start, publish, fail
+   * or end. Superseded attempts report `closed`, never `failed`.
+   */
+  onLifecycle?: (id: string, event: ConnectionLifecycleEvent) => void;
+}
+
 const DEFAULT_DISCONNECT_WAIT_MS = 2_000;
 const SHUT_DOWN = "MCP connections are shut down.";
 
@@ -102,7 +116,15 @@ export class GenerationBoundConnectionCache<T> {
   private readonly pending = new Map<string, PendingConnection<T>>();
   private closed = false;
 
-  constructor(private readonly bounds: ConnectionBounds = {}) {}
+  constructor(private readonly bounds: ConnectionCacheOptions = {}) {}
+
+  private lifecycle(id: string, event: ConnectionLifecycleEvent): void {
+    try {
+      this.bounds.onLifecycle?.(id, event);
+    } catch {
+      // Observers never change connection outcomes.
+    }
+  }
 
   async getOrConnect(
     id: string,
@@ -157,8 +179,10 @@ export class GenerationBoundConnectionCache<T> {
       // SDK close callbacks must not recursively close the transport, and a
       // delayed callback from an old client must not evict its replacement.
       cancelled = true;
+      const wasCurrent = this.pending.get(id) === attempt || this.connected.get(id) === connectedRecord;
       if (this.pending.get(id) === attempt) this.pending.delete(id);
       if (this.connected.get(id) === connectedRecord) this.connected.delete(id);
+      if (wasCurrent) this.lifecycle(id, { type: "closed" });
     };
     let begin!: () => void;
     const admitted = new Promise<void>((resolve) => {
@@ -176,7 +200,9 @@ export class GenerationBoundConnectionCache<T> {
             closeAgainAfterSettled(connecting, () => close(value));
           });
         } catch (error) {
+          const current = this.generation(id) === generation && this.pending.get(id) === attempt;
           await closeOnce();
+          if (current) this.lifecycle(id, { type: "failed", error });
           throw error;
         }
         if (!isCurrent()) {
@@ -184,12 +210,14 @@ export class GenerationBoundConnectionCache<T> {
           throw new Error("The MCP connection was superseded.");
         }
         this.connected.set(id, connectedRecord);
+        this.lifecycle(id, { type: "connected" });
         return value;
       } finally {
         if (this.pending.get(id) === attempt) this.pending.delete(id);
       }
     })();
     this.pending.set(id, attempt);
+    this.lifecycle(id, { type: "connecting" });
     begin();
     return attempt.promise;
   }
@@ -200,6 +228,7 @@ export class GenerationBoundConnectionCache<T> {
     const connected = this.connected.get(id);
     this.pending.delete(id);
     this.connected.delete(id);
+    if (pending || connected) this.lifecycle(id, { type: "closed" });
     await Promise.all([pending?.cancel(), connected?.close()]);
     // Let a cancelled attempt finish its own teardown, so a caller that
     // disconnects and then exits does not leave a half-open transport behind.
@@ -222,6 +251,7 @@ export class GenerationBoundConnectionCache<T> {
     const connected = this.connected.get(id);
     if (!connected) return false;
     this.connected.delete(id);
+    this.lifecycle(id, { type: "closed" });
     await connected.close();
     return true;
   }
