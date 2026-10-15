@@ -46,11 +46,13 @@ test("Aiden palettes replace pi's built-in dark and light themes", () => {
 	const light = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", "light.json"), "utf-8"));
 	assert.equal(dark.name, "dark");
 	assert.equal(light.name, "light");
-	// Accent anchors from renderer/shared/appearance.ts THEME_PRESETS.
-	assert.equal(dark.vars.accent, "#3E97F6");
-	assert.equal(light.vars.accent, "#006AD6");
-	assert.equal(dark.vars.text, "#D1D4DA");
-	assert.equal(light.vars.text, "#3D3F41");
+	// themes.test.mjs owns palette fidelity to appearance.ts; here the bundle
+	// must carry the generated builtins rather than pi's originals.
+	const piThemeDir = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "interactive", "theme");
+	for (const [name, bundled] of [["dark", dark], ["light", light]]) {
+		assert.deepEqual(bundled, JSON.parse(readFileSync(join(pkgDir, "themes", "builtin", `${name}.json`), "utf-8")));
+		assert.notDeepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
+	}
 });
 
 test("all theme presets and pi originals ship beside the bundle", () => {
