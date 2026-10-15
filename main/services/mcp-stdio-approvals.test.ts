@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { mcpStdioLaunchFingerprint } from "./mcp-field-secrets-core.js";
-import { createMcpStdioApprovalStore, publishWithLaunchApproval, reconcileLaunchApprovals } from "./mcp-stdio-approvals.js";
+import { createMcpStdioApprovalStore, publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
 
 const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["server"], enabled: true };
@@ -125,23 +125,20 @@ test("reconciling against config never approves a hand-edited command and forget
   assert.equal(await approvals.isApproved(local), false);
 });
 
-test("reconciling against a stale cached config keeps the launch that reached disk approved", async (t) => {
+test("a save that reached disk keeps its launch approved until the next successful save", async (t) => {
   const { approvals } = await store(t);
-  const old: McpServer = { ...local, command: "node", args: ["old.js"] };
+  const remote: McpServer = { id: local.id, name: "Files", transport: "http", url: "https://files.example", enabled: true };
   const onDisk: McpServer = { ...local, command: "node", args: ["new.js"] };
-  await approvals.approve(old);
-  // The editor save reached disk but publication failed, so the cache still holds old.js.
+  // A remote server is switched to a local command; the file is written but publication fails,
+  // so the in-memory config may still say it is remote. Nothing prunes the new approval.
   await assert.rejects(publishWithLaunchApproval(approvals, onDisk, true, async () => { throw new Error("directory sync failed"); }), /directory sync failed/u);
-  // The next save's cache-only sync reconciles against the stale record.
-  await reconcileLaunchApprovals(approvals, local.id, old);
-  assert.equal(await approvals.isApproved(onDisk), true, "the launch on disk can still run");
-  assert.equal(await approvals.isApproved(old), true);
+  assert.equal(await approvals.isApproved(onDisk), true, "the launch on disk can run");
+  assert.equal(await approvals.isApproved(remote), true, "remote servers never need approval");
   // A hand edit is still refused: approval is checked against the exact launch.
-  assert.equal(await approvals.isApproved({ ...local, command: "node", args: ["evil.js"] }), false);
-  // A removed server, or one that no longer runs locally, forgets its approvals.
-  await reconcileLaunchApprovals(approvals, local.id, { id: local.id, name: "Files", transport: "http", url: "https://files.example", enabled: true });
+  assert.equal(await approvals.isApproved({ ...onDisk, args: ["evil.js"] }), false);
+  // The next successful save prunes to the launch it published.
+  const next: McpServer = { ...onDisk, args: ["newer.js"] };
+  await publishWithLaunchApproval(approvals, next, true, async () => next);
+  assert.equal(await approvals.isApproved(next), true);
   assert.equal(await approvals.isApproved(onDisk), false);
-  await approvals.approve(old);
-  await reconcileLaunchApprovals(approvals, local.id, undefined);
-  assert.equal(await approvals.isApproved(old), false);
 });
