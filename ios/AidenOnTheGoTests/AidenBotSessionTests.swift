@@ -2542,6 +2542,36 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(onDisk.map(\.text), ["Left last launch", "Plan my week."], "both survive a relaunch")
     }
 
+    func testARestoreThatLandsAfterAnAccessLossPurgeIsDropped() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        // The last launch left one unsent message on disk.
+        let lastLaunch = model(FakeBotSessionTransport(), key: key, cache: AidenBotSessionCache(), store: store)
+        _ = await lastLaunch.send("Left last launch")
+        try await stored(store, key, count: 1)
+        lastLaunch.release()
+
+        // A new launch reads the file, and is held before the read reaches the chat.
+        let gate = TestGate()
+        gate.hold()
+        await store.setAfterRead { await gate.pass() }
+        let relaunched = model(FakeBotSessionTransport(), key: key, cache: AidenBotSessionCache(), store: store)
+        _ = await relaunched.send("Plan my week.")
+        try await waitUntil({ gate.isHolding }, what: "the restore to read the file")
+
+        // Access is lost while the restore is held.
+        let blocked = try session(.interrupted, blocked: .accessChanged)
+        _ = await relaunched.apply(AidenBotSessionEvent(botId: botID, epoch: "epoch_a", seq: 4, kind: .snapshot(blocked)))
+        XCTAssertEqual(relaunched.outbox, [])
+
+        gate.releaseAll()
+        await relaunched.restoreOutbox()
+        XCTAssertEqual(relaunched.outbox, [], "the restore lands after the purge and brings nothing back")
+        XCTAssertEqual(relaunched.errorMessage, "That message wasn’t sent. Please try again.")
+        XCTAssertTrue(relaunched.isAccessBlocked)
+        try await stored(store, key, count: 0)
+    }
+
     func testAMessageStillUnsentAfterADaySaysCouldntSendInsteadOfGoingOutLate() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, root) = temporaryStore()
@@ -4107,5 +4137,5 @@ final class AidenBotChatPolishTests: XCTestCase {
 
 extension AidenBotOutboxStore {
     /// Test seam: what a chat would restore, without the unreadable flag.
-    func load(_ key: AidenBotSessionKey) -> [AidenBotOutgoingMessage] { restore(key).messages }
+    func load(_ key: AidenBotSessionKey) async -> [AidenBotOutgoingMessage] { await restore(key).messages }
 }

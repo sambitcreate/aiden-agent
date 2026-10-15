@@ -523,7 +523,18 @@ actor AidenBotOutboxStore {
     /// old is the Mac's now. A file this build can't read (too large, damaged,
     /// or a newer version) is set aside beside it, never deleted, and the chat
     /// starts a new one.
-    func restore(_ key: AidenBotSessionKey) -> (messages: [AidenBotOutgoingMessage], unreadable: Bool) {
+    func restore(_ key: AidenBotSessionKey) async -> (messages: [AidenBotOutgoingMessage], unreadable: Bool) {
+        let restored = readFile(key)
+        await afterRead?()
+        return restored
+    }
+
+    /// Tests only: awaited by `restore` once it has read the file, before it hands the messages back.
+    private var afterRead: (@Sendable () async -> Void)?
+
+    func setAfterRead(_ hook: (@Sendable () async -> Void)?) { afterRead = hook }
+
+    private func readFile(_ key: AidenBotSessionKey) -> (messages: [AidenBotOutgoingMessage], unreadable: Bool) {
         knownDevices[key.instanceId, default: []].insert(key.deviceId)
         let url = fileURL(key)
         let data: Data
@@ -895,6 +906,8 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
     /// The previous launch's file has been read and merged; disk writes wait for it.
     @ObservationIgnored private var outboxRestored = false
+    /// Bumped by each access-loss purge: a restore that started before one drops what it read.
+    @ObservationIgnored private var purgeGeneration = 0
     @ObservationIgnored private var released = false
     @ObservationIgnored private let requestLimit: Duration
     @ObservationIgnored private let now: () -> Date
@@ -1338,7 +1351,7 @@ final class AidenBotSessionModel {
     }
 
     /// Adds what a previous launch left on disk, once, before the first snapshot sends it.
-    private func restoreOutbox() async {
+    func restoreOutbox() async {
         guard outboxStore != nil else { return }
         startRestore()
         await restoreTask?.value
@@ -1347,10 +1360,12 @@ final class AidenBotSessionModel {
     /// Starts the one restore of this chat's file, unless it has started. Until it has merged the file,
     /// nothing is written to disk.
     private func startRestore() {
-        guard restoreTask == nil, let cacheKey, let outboxStore else { return }
+        guard restoreTask == nil, !outboxRestored, let cacheKey, let outboxStore else { return }
+        let generation = purgeGeneration
         restoreTask = Task { [weak self] in
             let (stored, unreadable) = await outboxStore.restore(cacheKey)
-            guard let self else { return }
+            // Access was lost while the file was read: what it held stays purged, in memory and on disk.
+            guard let self, !Task.isCancelled, generation == self.purgeGeneration else { return }
             if unreadable { self.restoreNotice = AidenBotSessionCopy.outboxUnrestorable }
             let known = Set(self.outbox.map(\.key))
             let now = self.now()
@@ -1541,11 +1556,15 @@ final class AidenBotSessionModel {
     private func purgeForAccessLoss() {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()
+        purgeGeneration += 1
+        restoreTask?.cancel()
         outbox = []
         if let cacheKey {
             cache.purge(cacheKey)
             outboxStore?.submit(.remove, for: cacheKey)
         }
+        // Nothing is left on disk to wait for: later messages are written as usual.
+        outboxRestored = true
         if hadUnsent { errorMessage = "That message wasn’t sent. Please try again." }
     }
 
