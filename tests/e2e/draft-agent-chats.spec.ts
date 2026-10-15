@@ -185,3 +185,137 @@ test("unreadable private history preserves candidates without leaving a future m
   });
   expect((await index(aiden.userDataDir)).some((chat) => chat.id === "created-after-migration")).toBe(true);
 });
+
+async function addWorkspace(page: import("@playwright/test").Page, name: string): Promise<string> {
+  const created = await page.evaluate(async (workspaceName) => {
+    const bridge = (window as unknown as {
+      aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+    }).aidenAPI.ipc;
+    return bridge.invoke<{ id: string }>("workspaces:create", { name: workspaceName, permission: "ask" });
+  }, name);
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+  return created.id;
+}
+
+test("the sidebar + starts a draft in its workspace and reuses only an empty draft", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await addWorkspace(page, "Second workspace");
+  const sidebar = page.locator("[data-sidebar]");
+  const header = sidebar.getByRole("button", { name: /^(Expand|Collapse) Second workspace/u });
+  const plus = sidebar.getByRole("button", { name: "New chat in Second workspace", exact: true });
+  const draftRows = sidebar.locator("[data-draft-chat]");
+  const composer = page.locator("textarea");
+
+  // Expanding a workspace never starts a chat or replaces the open draft.
+  const draftId = () => draftRows.getAttribute("data-draft-chat");
+  const initialDraft = await draftId();
+  expect(initialDraft).toBeTruthy();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(draftRows).toHaveCount(1);
+  expect(await draftId()).toBe(initialDraft);
+
+  // The + is hidden until hover or keyboard focus, and stays keyboard reachable.
+  await page.mouse.move(1, 1);
+  await expect(plus).toHaveCSS("opacity", "0");
+  await plus.focus();
+  await expect(plus).toHaveCSS("opacity", "1");
+  await plus.press("Enter");
+  await expect(composer).toBeFocused();
+  await expect.poll(draftId).not.toBe(initialDraft);
+  await expect(draftRows).toHaveCount(1);
+  await expect(draftRows).toHaveText("New chat");
+  await expect(draftRows).toHaveAttribute("aria-current", "page");
+  const secondDraft = await draftId();
+
+  // An empty draft is reused by every entry point instead of stacking drafts.
+  await header.hover();
+  await plus.click();
+  await expect(composer).toBeFocused();
+  expect(await draftId()).toBe(secondDraft);
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await expect(composer).toBeFocused();
+  expect(await draftId()).toBe(secondDraft);
+  await expect(draftRows).toHaveCount(1);
+
+  // A draft with text is never reused.
+  await composer.fill("Keep typing here");
+  await header.hover();
+  await plus.click();
+  await expect.poll(draftId).not.toBe(secondDraft);
+  await expect(composer).toHaveValue("");
+  await expect(composer).toBeFocused();
+  await expect(draftRows).toHaveCount(1);
+
+  await composer.fill("Started from the sidebar plus");
+  await composer.press("Enter");
+  await expect.poll(async () => (await regularChats(aiden.userDataDir)).length).toBe(1);
+  const [chat] = await regularChats(aiden.userDataDir);
+  expect(chat.workspaceId).toBe(workspaceId);
+  // Once the first send lists the real chat, the draft row goes away.
+  await expect(draftRows).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: /Started from the sidebar plus/u })).toBeVisible();
+});
+
+test("New chat in… opens a draft in the chosen workspace from the chevron, the shortcut and the menu", async ({ aiden }) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  const targetId = await addWorkspace(page, "Palette target");
+  const composer = page.locator("textarea");
+  const search = page.getByRole("combobox", { name: "Search workspaces" });
+  const palette = page.locator("[data-command-palette-content]");
+  const options = page.getByRole("option");
+
+  // Chevron beside New Agent.
+  await page.getByRole("button", { name: "New Agent", exact: true }).hover();
+  await page.getByRole("button", { name: "New chat in…", exact: true }).click();
+  await expect(search).toBeFocused();
+  // Most recent first: the new workspace was added after the default one.
+  await expect(options).toHaveText([/^Palette target/u, /current$/u, /Open folder…/u]);
+  await expect(options.nth(1)).toHaveAttribute("aria-current", "true");
+  // Esc returns to the command list, then closes the palette.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("combobox", { name: /^Search commands/u })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+
+  // Native File menu item.
+  await app.evaluate(({ Menu }) => {
+    const find = (items: Electron.MenuItem[]): Electron.MenuItem | undefined => {
+      for (const item of items) {
+        if (item.label === "New Chat in…") return item;
+        const nested = item.submenu ? find(item.submenu.items) : undefined;
+        if (nested) return nested;
+      }
+      return undefined;
+    };
+    const item = find(Menu.getApplicationMenu()?.items ?? []);
+    if (!item) throw new Error("New Chat in… is missing from the application menu");
+    item.click();
+  });
+  await expect(search).toBeFocused();
+  // Esc returns to the command list, then closes the palette.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("combobox", { name: /^Search commands/u })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+
+  // Keyboard shortcut from outside a text field (inside one, the native menu
+  // accelerator owns it, which the menu step above exercises).
+  await page.getByRole("button", { name: "New Agent", exact: true }).focus();
+  await page.keyboard.press("ControlOrMeta+Shift+N");
+  await expect(search).toBeFocused();
+  await search.fill("palette");
+  await expect(options).toHaveText([/^Palette target/u]);
+  await page.keyboard.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect(page.locator("[data-sidebar] [data-draft-chat]")).toHaveCount(1);
+
+  await composer.fill("Started from New chat in");
+  await composer.press("Enter");
+  await expect.poll(async () => (await regularChats(aiden.userDataDir)).length).toBe(1);
+  expect((await regularChats(aiden.userDataDir))[0].workspaceId).toBe(targetId);
+});
