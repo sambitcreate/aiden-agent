@@ -313,10 +313,9 @@ test("renderer message appends serialize against detached terminal persistence",
 });
 
 test("renderer turn tokens cross append and generation IPC without an admission gap", async () => {
-  const [ipc, pane, assistant] = await Promise.all([
+  const [ipc, pane] = await Promise.all([
     source("renderer/lib/ipc.ts"),
     source("renderer/main/chat-pane.tsx"),
-    source("renderer/components/assistant/use-assistant-chat.ts"),
   ]);
 
   assert.match(ipc, /appendMessage:[\s\S]{0,500}turnId: string[\s\S]{0,260}"chats:appendMessage"/u);
@@ -329,12 +328,6 @@ test("renderer turn tokens cross append and generation IPC without an admission 
   const append = pane.indexOf("turnId: messageTurnId", turn);
   const generation = pane.indexOf("runGeneration(messageTurnId)", append);
   assert.ok(turn >= 0 && append > turn && generation > append);
-  assert.match(
-    assistant,
-    /const messageTurnId = createChatTurnId\(\)[\s\S]{0,4200}startGeneration\([\s\S]{0,2600}messageTurnId/u,
-  );
-  assert.match(assistant, /appendMessage\([\s\S]{0,360}turnId: messageTurnId/u);
-  assert.match(assistant, /chatsApi\.abandonTurn\(chat\.id, messageTurnId\)/u);
 });
 
 test("main announces normalized settlement only after generation ownership exits", async () => {

@@ -69,6 +69,18 @@ test("new work resolves away from a hidden active or default model", async () =>
   );
 });
 
+test("readiness requires the selected model to exist on a usable live provider", async () => {
+  const { isModelSelectionAvailable } = await import("./use-model-selection");
+  const selection = { providerId: "google", model: "gemini-pro" };
+  assert.equal(isModelSelectionAvailable(selection, [provider()]), true);
+  assert.equal(
+    isModelSelectionAvailable({ providerId: "google", model: "removed-model" }, [provider()]),
+    false,
+  );
+  assert.equal(isModelSelectionAvailable(selection, [provider({ hasKey: false })]), false);
+  assert.equal(isModelSelectionAvailable(selection, undefined), false);
+});
+
 test("same-window model writes notify every mounted consumer", async () => {
   const values = new Map<string, string>();
   const events = new EventTarget();
