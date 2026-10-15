@@ -9,6 +9,8 @@ import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context"
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
+import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
+import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -38,7 +40,7 @@ import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
-import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
+import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 
@@ -48,9 +50,11 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <CommandSystemProvider>
-            <RootContent />
-          </CommandSystemProvider>
+          <RoutedBotPanelProvider>
+            <CommandSystemProvider>
+              <RootContent />
+            </CommandSystemProvider>
+          </RoutedBotPanelProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
@@ -61,6 +65,7 @@ function RootContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
+  const botPanel = useBotPanelActions();
   const terminal = useWorkspaceTerminal();
   const capabilities = useAppCapabilities();
   const { activeId } = useActiveWorkspace();
@@ -138,6 +143,13 @@ function RootContent() {
   useCommandHandler(
     "environment.toggle",
     () => {
+      // In a Bot chat the shortcut is the Bot panel's; the workspace panel stays as it is.
+      const target = environmentToggleTarget(pathname);
+      if (target === "bot-panel") {
+        botPanel.toggle();
+        return;
+      }
+      if (target === "none") return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
@@ -149,6 +161,8 @@ function RootContent() {
   useCommandHandler(
     "quick-view.toggle",
     () => {
+      // Quick View is suppressed on Bots pages; toggling it there would change hidden state.
+      if (isBotsPath(pathname)) return;
       if (environmentPanel.gitOperationBusy) {
         toast.info("Wait for the current Git operation to finish before changing panels.");
         return;
@@ -296,18 +310,7 @@ function RootContent() {
     });
   }, [queryClient]);
 
-  React.useEffect(() => {
-    return onNotification("bots:changed", () => {
-      invalidateBotCanonicalPhotos();
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.bots }),
-        queryClient.invalidateQueries({ queryKey: ["bot"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-live-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["bot-telegram-binding"] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
-      ]);
-    });
-  }, [queryClient]);
+  useBotNotificationsSync(queryClient);
 
   React.useEffect(
     () =>

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BotRendererCanonicalPhoto } from "../../shared/bots";
-import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
 import { BotsView } from "../bots-view";
 import { mountWithBotRouter } from "./test-providers";
 import { botFixture } from "./test-fixtures";
@@ -26,8 +25,6 @@ const EXISTING_PHOTO: BotRendererCanonicalPhoto = {
  * reads from the store, so the avatar only changes when the write lands.
  */
 function photoIpc(initial: BotRendererCanonicalPhoto | null) {
-  // The photo cache is process-wide; a photo cached by an earlier test must not answer this one.
-  invalidateBotCanonicalPhotos();
   let photo = initial;
   const calls: BotTestIpcCall[] = installBotTestIpc({
     "bots:list": () => [botFixture()],

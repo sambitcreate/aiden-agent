@@ -61,6 +61,7 @@ import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import { MAX_MCP_RESPONSE_BYTES } from "./mcp-fetch-policy.js";
 import { normalizeMcpToolInputSchema } from "./mcp-tool-schema.js";
+import { mcpRemoteToolDescriptor, tagMcpAgentTool } from "./mcp-agent-tool-descriptor.js";
 import {
   admitMcpServerDiscovery,
   asMcpDeadlineError,
@@ -289,14 +290,9 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
           listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, botMcpRequestOptions(pageSignal)),
         });
         isCurrent();
-        return tools.map(({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
-          name,
-          ...(description === undefined ? {} : { description }),
-          ...(inputSchema === undefined ? {} : { inputSchema }),
-          ...(outputSchema === undefined ? {} : { outputSchema }),
-          ...(annotations === undefined ? {} : { annotations }),
-          ...(execution === undefined ? {} : { execution }),
-        }));
+        // The same projection the live agent tools carry, so the Bot's live
+        // admission compares like with like.
+        return tools.map((tool) => mcpRemoteToolDescriptor(tool));
       } finally {
         await client.close().catch(() => undefined);
       }
@@ -672,7 +668,9 @@ class McpManager {
       const { outputSchema, ...shown } = mcpAgentToolPresentation(server.name, t);
       return { ...shown, ...(outputSchema ? { outputSchema: Type.Unsafe(outputSchema) } : {}) };
     };
-    const agentTools = exposure.tools.map((t): AgentTool => markMcpAgentTool(markToolOutputSource({
+    // Each tool carries its MCP identity (for grant joins) and the exact
+    // tools/list entry it was built from (for live schema/effect checks).
+    const agentTools = exposure.tools.map((t): AgentTool => tagMcpAgentTool(markMcpAgentTool(markToolOutputSource({
       name: toolNames.get(t.name)!,
       // Bounded description (title fallback), `server/tool` label, structured-content schema.
       ...presentation(t),
@@ -694,7 +692,7 @@ class McpManager {
           );
         });
       },
-    }), { serverId: server.id, toolName: t.name }));
+    }), { serverId: server.id, toolName: t.name }), t));
     const instructions = snapshotMcpServerInstructions(server, resourceTool ? [...agentTools, resourceTool] : agentTools, metadata.instructions);
     // One frozen namespace record per server: every tool references it, so the
     // server's guidance is held and validated once rather than per tool.

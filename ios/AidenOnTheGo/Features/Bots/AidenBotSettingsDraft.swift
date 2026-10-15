@@ -108,14 +108,6 @@ struct AidenBotCustomAccessDraft: Equatable {
         guard let selection = try? selection() else { return false }
         return catalog.containsAvailable(selection)
     }
-
-    mutating func selectProvider(_ providerID: String, catalog: AidenBotCapabilityCatalog) {
-        guard let provider = catalog.providers.first(where: {
-            $0.id == providerID && $0.available
-        }), let model = provider.models.first(where: \.available) else { return }
-        self.providerID = provider.id
-        modelID = model.id
-    }
 }
 
 func aidenBotVisibleCapabilityOptions(
@@ -157,6 +149,26 @@ enum AidenBotEditorMode: Identifiable, Sendable {
         switch self {
         case let .create(defaultAccess): "create-\(String(describing: defaultAccess))"
         case let .edit(botID): "edit-\(botID)"
+        }
+    }
+}
+
+/// Whether the Bot's model needs a separate model for photos and screenshots.
+/// New Bot and Advanced both show the Photos row, or the reason there is none, from this.
+enum AidenBotPhotoModelNeed: Equatable {
+    /// The Bot's model reads images itself.
+    case none
+    /// The Bot's model reads text only and the Mac has a model that reads images.
+    case choose
+    /// The Bot's model reads text only and no model that reads images is set up on the Mac.
+    case unavailable
+}
+
+extension AidenBotCapabilityCatalog {
+    /// A model that reads images and that the Mac can run now.
+    var hasUsableImageModel: Bool {
+        providers.contains { provider in
+            provider.available && provider.models.contains(where: { $0.available && $0.supportsImages })
         }
     }
 }
@@ -236,11 +248,26 @@ struct AidenBotEditorDraft: Equatable {
         return AidenBotModelSelection(providerId: provider.id, modelId: model.id)
     }
 
+    func photoModelNeed(catalog: AidenBotCapabilityCatalog) -> AidenBotPhotoModelNeed {
+        guard catalog.model(providerId: customAccess.providerID, modelId: customAccess.modelID)?.supportsImages == false
+        else { return .none }
+        return catalog.hasUsableImageModel ? .choose : .unavailable
+    }
+
+    /// Why New Bot shows no Photos row for a text-only model (`photoModelNeed == .unavailable`).
+    func noImageModelNote(catalog: AidenBotCapabilityCatalog) -> String {
+        let label = catalog.model(providerId: customAccess.providerID, modelId: customAccess.modelID)?.label
+            ?? "This model"
+        return "\(label) reads text only, and no model that reads images is set up on your Mac."
+    }
+
     func visionSelection(catalog: AidenBotCapabilityCatalog) throws -> AidenBotModelSelection? {
         guard catalog.model(
             providerId: customAccess.providerID,
             modelId: customAccess.modelID
         )?.supportsImages != true else { return nil }
+        // With nothing on the Mac that reads images the Bot reads text only, as on the desktop.
+        guard catalog.hasUsableImageModel else { return nil }
         guard let visionProviderID, let visionModelID,
               let model = catalog.model(providerId: visionProviderID, modelId: visionModelID),
               model.available, model.supportsImages,
@@ -259,13 +286,38 @@ struct AidenBotEditorDraft: Equatable {
             visionModelID = nil
             return
         }
+        // Keep a photo model only while the Mac can still run it.
         if let visionProviderID, let visionModelID,
+           catalog.containsAvailable(providerId: visionProviderID, modelId: visionModelID),
            catalog.model(providerId: visionProviderID, modelId: visionModelID)?.supportsImages == true {
             return
         }
         let suggestion = Self.suggestedVisionSelection(catalog: catalog, primary: customAccess)
         visionProviderID = suggestion?.providerId
         visionModelID = suggestion?.modelId
+    }
+
+    /// Picks the Bot's model and keeps a photo model only while it is needed.
+    /// A model the Mac can't run changes nothing and returns false.
+    @discardableResult
+    mutating func selectModel(providerID: String, modelID: String, catalog: AidenBotCapabilityCatalog) -> Bool {
+        guard let provider = catalog.providers.first(where: { $0.id == providerID }), provider.available,
+              provider.models.contains(where: { $0.id == modelID && $0.available }) else { return false }
+        customAccess.providerID = providerID
+        customAccess.modelID = modelID
+        reconcileVisionSelection(catalog: catalog)
+        return true
+    }
+
+    /// Picks the model photos and screenshots go to; only a usable model that reads images.
+    @discardableResult
+    mutating func selectVisionModel(providerID: String, modelID: String, catalog: AidenBotCapabilityCatalog) -> Bool {
+        guard let provider = catalog.providers.first(where: { $0.id == providerID }), provider.available,
+              provider.models.contains(where: { $0.id == modelID && $0.available && $0.supportsImages })
+        else { return false }
+        visionProviderID = providerID
+        visionModelID = modelID
+        return true
     }
 
     func accessUpdate(catalog: AidenBotCapabilityCatalog) throws -> AidenBotAccessUpdate {

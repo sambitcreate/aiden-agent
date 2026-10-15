@@ -7,6 +7,7 @@
 // that sees a different epoch or a gap re-subscribes for a fresh snapshot.
 
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service.js";
+import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
@@ -44,7 +45,22 @@ export function botQuestionAnswerText(details: unknown): string | undefined {
 export interface BotTranscriptToolCall {
   id: string;
   name: string;
+  /** The phase this call puts its Bot in (`botToolPhase`). */
+  kind: BotToolPhase;
+  /** Past tense, for recaps: "Read 1 file", "Used Notion". */
+  label: string;
+  /** A short, safe object of the action, built and redacted in main. */
+  detail?: string;
+  /** The connection's display label, for connection tools. */
+  app?: string;
 }
+
+/**
+ * How a tool call ended. `blocked`: the Bot's access or the person refused it
+ * before it ran. `stopped`: the person stopped the reply, or the app restarted,
+ * while it ran; not a problem to report.
+ */
+export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
 
 export type BotTranscriptEntry =
   | {
@@ -77,6 +93,10 @@ export type BotTranscriptEntry =
       toolCallId: string;
       toolName: string;
       isError: boolean;
+      status: BotToolResultStatus;
+      /** From the answer that made the call to its result. */
+      durationMs?: number;
+      at?: number;
     }
   | {
       id: string;
@@ -162,6 +182,33 @@ export function botRetryableFailedTurn(
   return last?.type === "failed_turn" && last.retryText !== null ? last : null;
 }
 
+/** The step behind the current phase, for the Mac's hover peek and Detailed steps. */
+export interface BotLiveActivityStep {
+  kind: BotToolPhase;
+  /** Present tense, the phase word: "Reading", "Using Notion". */
+  label: string;
+  detail?: string;
+}
+
+/** What a Bot in a running turn is doing now (spec §5). Null when no turn runs. */
+export interface BotLiveActivity {
+  phase: BotActivityPhase;
+  /** The connection's label, for `app`. */
+  app?: string;
+  /** When the turn started, for elapsed time. */
+  startedAt: number;
+  step?: BotLiveActivityStep;
+}
+
+/** A message waiting for the running turn: a follow-up (queued) or a steer (joins at the next step). */
+export interface BotQueuedMessage {
+  /** The durable submission id; Remove withdraws it. */
+  submissionId: string;
+  mode: "steer" | "followUp";
+  text: string;
+  imageCount: number;
+}
+
 export interface BotLiveSnapshot {
   botId: string;
   epoch: string;
@@ -172,6 +219,10 @@ export interface BotLiveSnapshot {
   state: BotSessionState;
   /** The question the Bot is waiting on, or null. */
   question: BotPendingQuestion | null;
+  /** What the Bot is doing in the running turn, or null. */
+  activity: BotLiveActivity | null;
+  /** Messages waiting for the running turn, oldest first. */
+  queued: BotQueuedMessage[];
 }
 
 export type BotLiveEventBody =
@@ -179,17 +230,32 @@ export type BotLiveEventBody =
   | { type: "partial"; text: string | null }
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
+  | { type: "activity"; activity: BotLiveActivity | null }
+  | { type: "queued"; queued: BotQueuedMessage[] }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
   | { type: "snapshot"; snapshot: BotLiveSnapshot };
 
 export type BotLiveEvent = { botId: string; epoch: string; seq: number } & BotLiveEventBody;
 
-/** What a Bot list row shows, read from the same projection. */
+/** What a Bots sidebar row shows, read from the same projection. */
 export interface BotLiveSummary {
   botId: string;
   preview: string | null;
   updatedAt: number | null;
   state: BotSessionState;
+  /** An approval or an A–E question is waiting on the person ("Needs you"). */
+  needsYou: boolean;
+  /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
+  lastReplyAt: number | null;
+}
+
+/** When the newest reply with visible text arrived, or null when none has a time. */
+export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "assistant" && entry.text.trim() && entry.at !== undefined) return entry.at;
+  }
+  return null;
 }
 
 /** The last thing worth previewing in a list row: the newest visible message text. */
@@ -240,5 +306,9 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, state: event.state };
     case "question":
       return { ...snapshot, seq: event.seq, question: event.question };
+    case "activity":
+      return { ...snapshot, seq: event.seq, activity: event.activity };
+    case "queued":
+      return { ...snapshot, seq: event.seq, queued: event.queued };
   }
 }

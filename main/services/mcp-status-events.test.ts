@@ -109,3 +109,24 @@ test("identical updates are not re-sent, errors are capped, and removal is pushe
   assert.equal(events.length, 2);
   assert.deepEqual(registry.snapshot(), []);
 });
+
+test("a same-count rediscovery with different tools is pushed with a new inventory revision", () => {
+  const registry = new McpLiveStatusRegistry();
+  const events: McpLiveStatus[] = [];
+  registry.subscribe((status) => events.push(status));
+  registry.inventory("docs", { toolCount: 1, resources: false, tools: [{ name: "old_tool" }] });
+  const first = events[events.length - 1]!.toolsRevision;
+  registry.inventory("docs", { toolCount: 1, resources: false, tools: [{ name: "new_tool" }] });
+  assert.equal(events.length, 2, "the replacement is pushed although the count is unchanged");
+  const second = events[events.length - 1]!.toolsRevision;
+  assert.ok(first && second && first !== second);
+  assert.deepEqual(registry.tools("docs"), [{ name: "new_tool" }]);
+
+  // Reconnecting keeps the revision; an identical rediscovery is not re-sent.
+  registry.connecting("docs");
+  assert.equal(events[events.length - 1]!.toolsRevision, second);
+  registry.inventory("docs", { toolCount: 1, resources: false, tools: [{ name: "new_tool" }] });
+  const pushes = events.length;
+  registry.inventory("docs", { toolCount: 1, resources: false, tools: [{ name: "new_tool" }] });
+  assert.equal(events.length, pushes);
+});

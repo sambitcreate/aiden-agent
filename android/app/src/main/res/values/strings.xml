@@ -470,6 +470,8 @@
     <string name="bots_row_yesterday">Yesterday</string>
     <string name="bot_menu_profile">Profile</string>
     <string name="bot_menu_files">Files</string>
+    <string name="bot_menu_memory">Memory</string>
+    <string name="bot_menu_advanced">Advanced</string>
     <string name="bot_field_name">Name</string>
     <string name="bot_name_fallback_your_bot">your Bot</string>
     <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
@@ -652,6 +654,7 @@
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
+    <string name="bot_editor_model_gone">That model isn’t available any more. Choose another one.</string>
     <string name="bot_editor_later_hint">You can change its look, instructions and what it can use later.</string>
     <string name="bot_editor_instructions_load_failed">Aiden couldn’t load the instructions. Try again.</string>
     <string name="bot_editor_name_placeholder">Like Meal Planner or Chief of Staff</string>

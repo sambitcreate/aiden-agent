@@ -39,8 +39,11 @@ export function PresetSetupDialog({
     ]);
     await onSaved?.();
   };
+  // A saved record that failed validation (e.g. a tampered origin) is repaired
+  // by starting from the official address; valid custom paths are kept.
+  const initialUrl = state.invalidRecord ? preset.url : (server?.url ?? preset.url);
   const [name, setName] = React.useState(server?.name ?? preset.name);
-  const [url, setUrl] = React.useState(server?.url ?? preset.url);
+  const [url, setUrl] = React.useState(initialUrl);
   const [key, setKey] = React.useState("");
   const [hasKey, setHasKey] = React.useState(state.ready);
   const [authorized, setAuthorized] = React.useState(state.ready);
@@ -50,6 +53,10 @@ export function PresetSetupDialog({
   const storedForSignIn = React.useRef(false);
   const confirmed = React.useRef(false);
   const cancelledSignIn = React.useRef(false);
+  // Closing while the sign-in save is still in flight must not authorize, and
+  // the provisional record is removed once that save settles.
+  const closed = React.useRef(false);
+  const signInSavePending = React.useRef(false);
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
@@ -61,7 +68,7 @@ export function PresetSetupDialog({
     if (open) {
       setConnectionError(null);
       setName(server?.name ?? preset.name);
-      setUrl(server?.url ?? preset.url);
+      setUrl(initialUrl);
       setKey("");
       setHasKey(state.ready);
       setAuthorized(state.ready);
@@ -69,8 +76,9 @@ export function PresetSetupDialog({
       setEnabled(server?.enabled ?? true);
       storedForSignIn.current = false;
       confirmed.current = false;
+      closed.current = false;
     }
-  }, [open, server, preset, state.enabled, state.ready, state.needsSignIn]);
+  }, [open, server, preset, initialUrl, state.enabled, state.ready, state.needsSignIn]);
 
   const build = (): McpServer => ({
     id: state.serverId,
@@ -109,21 +117,39 @@ export function PresetSetupDialog({
       const address = url.trim() || preset.url;
       const record: McpServer = server && !storedForSignIn.current ? { ...server, url: address } : build();
       if (!server || storedForSignIn.current) {
-        await mcpApi.save(record);
+        signInSavePending.current = true;
+        try {
+          await mcpApi.save(record);
+        } finally {
+          signInSavePending.current = false;
+        }
         storedForSignIn.current = true;
       } else if (server.url !== address) {
         await mcpApi.save(record);
       }
+      if (closed.current || cancelledSignIn.current) return;
       await mcpApi.authorize(record);
       setAuthorized(true);
       setNeedsSignIn(false);
       await refresh();
       toast.success(`Authorized — you're signed in to ${preset.name}.`);
     } catch (error) {
-      if (!cancelledSignIn.current) toast.error(error instanceof Error ? error.message : String(error));
+      if (!cancelledSignIn.current && !closed.current)
+        toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setAuthorizing(false);
+      if (closed.current) discardSignInRecord();
     }
+  };
+
+  /** Removes a record stored only so a new preset could sign in. */
+  const discardSignInRecord = () => {
+    if (!storedForSignIn.current || confirmed.current || signInSavePending.current) return;
+    storedForSignIn.current = false;
+    void mcpApi
+      .remove(state.serverId)
+      .catch(() => undefined)
+      .then(refresh);
   };
 
   const cancelSignIn = async () => {
@@ -148,14 +174,9 @@ export function PresetSetupDialog({
 
   const closeDialog = (next: boolean) => {
     if (!next) {
+      closed.current = true;
       if (authorizing) void cancelSignIn();
-      if (storedForSignIn.current && !confirmed.current) {
-        storedForSignIn.current = false;
-        void mcpApi
-          .remove(state.serverId)
-          .catch(() => undefined)
-          .then(refresh);
-      }
+      discardSignInRecord();
     }
     onOpenChange(next);
   };
@@ -266,7 +287,10 @@ export function PresetSetupDialog({
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong">This saved connection needs repair</Text>
           <Text variant="small">
-            {state.error} Saving here restores {preset.name}’s official settings.
+            {state.error}{" "}
+            {state.invalidRecord
+              ? `Saving here restores ${preset.name}’s official settings.`
+              : "Try again, or re-enter your credentials below."}
           </Text>
         </Callout>
       ) : null}

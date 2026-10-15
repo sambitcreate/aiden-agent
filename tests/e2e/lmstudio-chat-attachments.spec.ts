@@ -96,7 +96,7 @@ test("deterministic LM Studio chat sends the exact keyless multimodal payload", 
   // The mock can complete before a transient Stop button paints. The durable
   // assistant message after the streaming-reveal handoff is the contract.
   await expect(page.getByRole("button", { name: "Copy message" })).toHaveCount(2);
-  await expect(page.locator(".streaming-reveal")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
   const assistantResponse = page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true });
   await expect(assistantResponse).toHaveCount(1);
   await expect(assistantResponse).toBeVisible();

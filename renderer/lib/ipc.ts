@@ -1391,6 +1391,12 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Remove a queued message before its turn starts. */
+  withdraw: (botId: string, submissionId: string) =>
+    invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
+      botId,
+      submissionId,
+    }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
   approve: (waitId: string, decision: "allow" | "deny") =>
     invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),

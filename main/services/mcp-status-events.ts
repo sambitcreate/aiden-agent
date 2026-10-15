@@ -3,6 +3,7 @@
 // sign-in health. Main pushes each change to the renderer (`mcp:statusChanged`);
 // nothing polls. Payloads stay small: no tool names, no raw errors past a cap.
 
+import { createHash } from "node:crypto";
 import type { McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 
 export type { McpLiveState, McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
@@ -29,12 +30,26 @@ function errorText(error: unknown): string {
   return line.length > MAX_ERROR_CHARS ? `${line.slice(0, MAX_ERROR_CHARS - 1)}…` : line;
 }
 
+function toolsRevision(tools: readonly McpToolSummary[]): string {
+  return createHash("sha256").update(JSON.stringify(tools)).digest("hex").slice(0, 16);
+}
+
+/** The last known inventory fields, carried across connection-state changes. */
+function inventoryFields(previous: McpLiveStatus | undefined): Pick<McpLiveStatus, "toolCount" | "toolsRevision" | "resources"> {
+  return {
+    ...(previous?.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
+    ...(previous?.toolsRevision === undefined ? {} : { toolsRevision: previous.toolsRevision }),
+    ...(previous?.resources ? { resources: true } : {}),
+  };
+}
+
 function same(left: McpLiveStatus | undefined, right: McpLiveStatus): boolean {
   return (
     left !== undefined &&
     left.state === right.state &&
     left.error === right.error &&
     left.toolCount === right.toolCount &&
+    left.toolsRevision === right.toolsRevision &&
     left.resources === right.resources &&
     left.needsSignIn === right.needsSignIn
   );
@@ -68,8 +83,7 @@ export class McpLiveStatusRegistry {
       serverId,
       state: "connecting",
       // Keep the last known inventory visible while reconnecting.
-      ...(previous?.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
-      ...(previous?.resources ? { resources: true } : {}),
+      ...inventoryFields(previous),
     });
   }
 
@@ -78,17 +92,18 @@ export class McpLiveStatusRegistry {
     this.publish({
       serverId,
       state: "connected",
-      ...(previous?.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
-      ...(previous?.resources ? { resources: true } : {}),
+      ...inventoryFields(previous),
     });
   }
 
   inventory(serverId: string, inventory: { toolCount: number; resources: boolean; tools?: readonly { name: string; title?: string }[] }): void {
     if (inventory.tools) this.toolLists.set(serverId, toolSummaries(inventory.tools));
+    const tools = this.toolLists.get(serverId);
     this.publish({
       serverId,
       state: "connected",
       toolCount: inventory.toolCount,
+      ...(tools ? { toolsRevision: toolsRevision(tools) } : {}),
       ...(inventory.resources ? { resources: true } : {}),
     });
   }
@@ -104,8 +119,7 @@ export class McpLiveStatusRegistry {
     this.publish({
       serverId,
       state: "closed",
-      ...(previous.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
-      ...(previous.resources ? { resources: true } : {}),
+      ...inventoryFields(previous),
     });
   }
 

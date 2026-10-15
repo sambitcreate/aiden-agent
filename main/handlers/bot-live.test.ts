@@ -39,13 +39,26 @@ function fakeProjection() {
         partial: null,
         state: { kind: "idle" },
         question: null,
+        activity: null,
+        queued: [],
       };
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },
     notifyState: () => undefined,
     refresh: async () => undefined,
     refreshQuestion: async () => undefined,
-    summary: async (botId) => ({ botId, preview: "hi", updatedAt: 1, state: { kind: "idle" } }),
+    notifyStopping: () => undefined,
+    notifyResuming: () => undefined,
+    cancelStopping: () => undefined,
+    refreshActivity: async () => undefined,
+    summary: async (botId) => ({
+      botId,
+      preview: "hi",
+      updatedAt: 1,
+      state: { kind: "idle" },
+      needsYou: true,
+      lastReplyAt: 1,
+    }),
     close: async () => undefined,
   };
   return {
@@ -124,6 +137,8 @@ test("the list summary comes from the projection", async () => {
     preview: "hi",
     updatedAt: 1,
     state: { kind: "idle" },
+    needsYou: true,
+    lastReplyAt: 1,
   });
 });
 

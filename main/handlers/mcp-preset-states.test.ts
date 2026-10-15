@@ -39,6 +39,7 @@ test("a saved preset pointing at a foreign origin is reported on that preset onl
   assert.equal(bad.configured, true);
   assert.equal(bad.ready, false);
   assert.match(bad.error ?? "", /official secure server/u);
+  assert.equal(bad.invalidRecord, true);
   const good = result.find((entry) => entry.preset.id === second.id)!;
   assert.deepEqual(
     { configured: good.configured, ready: good.ready, error: good.error },
@@ -55,6 +56,7 @@ test("a credential lookup failure marks that preset unready instead of rejecting
   const failed = result.find((entry) => entry.preset.id === first!.id)!;
   assert.equal(failed.ready, false);
   assert.equal(failed.error, "Keychain is locked");
+  assert.equal(failed.invalidRecord, undefined, "a valid record is not rebuilt over a credential error");
   assert.ok(result.filter((entry) => entry.preset.id !== first!.id).every((entry) => !entry.error && !entry.configured));
 });
 

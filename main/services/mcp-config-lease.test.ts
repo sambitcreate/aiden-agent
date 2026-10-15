@@ -69,6 +69,25 @@ test("runtime configuration reconciliation invalidates only changed servers", ()
   assert.throws(() => changed.assertCurrent(), /configuration changed/u);
 });
 
+test("an exposure-only change fences live leases; restating the default does not", () => {
+  const registry = new McpConfigurationLeaseRegistry();
+  const hidden = registry.acquire("server-1");
+  const exposure = registry.acquire("server-2");
+  const untouched = registry.acquire("server-3");
+  invalidateChangedMcpConfigurationLeases(
+    [server(), server({ id: "server-2" }), server({ id: "server-3" })],
+    [
+      server({ hiddenTools: ["lookup"] }),
+      server({ id: "server-2", exposure: "hidden" }),
+      server({ id: "server-3", exposure: "auto", hiddenTools: [] }),
+    ],
+    registry,
+  );
+  assert.throws(() => hidden.assertCurrent(), /configuration changed/u);
+  assert.throws(() => exposure.assertCurrent(), /configuration changed/u);
+  untouched.assertCurrent();
+});
+
 test("two-sided publication invalidates a lease acquired while commit awaits", async () => {
   const registry = new McpConfigurationLeaseRegistry();
   let release!: () => void;
