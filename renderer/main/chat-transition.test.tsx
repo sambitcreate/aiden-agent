@@ -147,9 +147,9 @@ test("a committed append is not presented as unsent when generation start later 
     "const handleStop = React.useCallback",
   );
   const append = handleSend.indexOf("await chatsApi.appendMessage(");
-  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  const start = handleSend.indexOf("runGeneration(messageTurnId)");
   assert.ok(append >= 0 && start > append);
-  assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
+  assert.match(handleSend, /if \(!started\.ok && mountedRef\.current[^)]*\)\s*\{\s*setError/u);
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
 });
 
@@ -323,7 +323,7 @@ test("a pre-append assistant read cannot hide controls for the newer user turn",
   const pane = source("./chat-pane.tsx");
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   const install = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(install >= 0 && start > install);
 
   const queryClient = new QueryClient();
@@ -389,7 +389,7 @@ test("first-message promotion seeds the real cache before releasing draft state 
   const seed = send.indexOf("await installAppendedChatSnapshot(qc, chatId, updated)");
   const promote = send.indexOf("finishChatDraftSend(chatId, true)");
   const ownerGuard = send.indexOf("(firstDraft && (!mountedRef.current || chatIdRef.current !== chatId))");
-  const start = send.indexOf("await runGeneration(messageTurnId)");
+  const start = send.indexOf("runGeneration(messageTurnId)");
   assert.ok(seed >= 0 && promote > seed && ownerGuard > promote && start > ownerGuard);
   assert.match(send, /await chatsApi\.abandonTurn\(chatId, messageTurnId\)/u);
   assert.doesNotMatch(send, /navigate\(/u);
