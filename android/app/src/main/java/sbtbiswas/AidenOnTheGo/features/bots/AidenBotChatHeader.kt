@@ -194,7 +194,7 @@ fun AidenBotChatTopBar(
                     if (canDelete) {
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_delete), color = palette.danger) },
+                            text = { Text(stringResource(R.string.action_delete), color = aidenBotErrorTextColor()) },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = palette.danger) },
                             onClick = {
                                 menuOpen = false

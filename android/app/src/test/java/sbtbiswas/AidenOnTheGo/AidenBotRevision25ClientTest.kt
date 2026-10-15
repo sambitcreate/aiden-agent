@@ -340,4 +340,45 @@ class AidenBotRevision25ClientTest {
                 .map { (it as JsonPrimitive).content }
         )
     }
+
+    @Test
+    fun theBotActivityGrantIsNegotiatedAndASendCarriesItsMode() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"capabilities":["chat:read","chat:write","bot:read","bot:write","bot:activity"]}"""
+        ))
+        val granted = client.updateDeviceCapabilities(listOf(AidenRemoteCapability.BOT_ACTIVITY))
+        assertTrue(granted.contains(AidenRemoteCapability.BOT_ACTIVITY))
+        assertEquals(
+            listOf("bot:activity"),
+            Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.getValue("accepts").jsonArray
+                .map { (it as JsonPrimitive).content }
+        )
+
+        val activity = fixture.getValue("botActivity").jsonObject.getValue("send")
+        server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
+        val key = UUID.randomUUID()
+        val receipt = client.sendBotMessage("bot_fixture_01", "Keep it vegetarian.", key, AidenStreamInputMode.STEER, supportsBotActivity = true)
+        assertEquals("19", receipt.submissionId)
+        val steer = server.takeRequest()
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01/messages", steer.path)
+        assertEquals(key.toString(), steer.getHeader("Idempotency-Key"))
+        assertEquals(activity.jsonObject.getValue("request"), Json.parseToJsonElement(steer.body.readUtf8()))
+
+        // The session transport sends what the controller froze, whatever the Mac announces now,
+        // so a retry under the same key is the same request.
+        server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
+        sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotSessionTransport(client)
+            .send("bot_fixture_01", "Keep it vegetarian.", UUID.randomUUID(), AidenStreamInputMode.STEER)
+        assertEquals(activity.jsonObject.getValue("request"), Json.parseToJsonElement(server.takeRequest().body.readUtf8()))
+
+        // Without a mode, or to a Mac that doesn't take one, the body is the revision-29 body.
+        for (mode in listOf(null, AidenStreamInputMode.STEER)) {
+            server.enqueue(ok(activity.jsonObject.getValue("response"), 202))
+            client.sendBotMessage("bot_fixture_01", "Hi", UUID.randomUUID(), mode)
+            assertEquals(
+                Json.parseToJsonElement("""{"text":"Hi"}"""),
+                Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            )
+        }
+    }
 }

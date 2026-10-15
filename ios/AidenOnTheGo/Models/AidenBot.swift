@@ -431,6 +431,8 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let access: AidenBotAccessView
     let modelSelection: AidenBotModelSelection?
     let visionModelSelection: AidenBotModelSelection?
+    /// Revision 30 (`bot:activity`): the Bot's Chat activity choice.
+    let chatActivity: AidenBotChatActivity?
     let createdAt: Date
     let updatedAt: Date
     let revision: String
@@ -476,6 +478,11 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             from: values,
             forKey: .visionModelSelection
         )
+        chatActivity = try AidenBotWire.optional(
+            AidenBotChatActivity.self,
+            from: values,
+            forKey: .chatActivity
+        )
         let createdTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         createdAt = createdTimestamp.date
         let updatedTimestamp = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt)
@@ -516,6 +523,37 @@ struct AidenBotModelSelection: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case providerId, modelId
     }
+}
+
+/// A Bot's Chat activity choice (spec §7, contract revision 30).
+enum AidenBotChatActivityLevel: String, Codable, CaseIterable, Sendable {
+    case quiet, summary, detailed
+}
+
+enum AidenBotChatActivityWording: String, Codable, CaseIterable, Sendable {
+    case follows, thinking
+}
+
+struct AidenBotChatActivity: Codable, Equatable, Sendable {
+    var level: AidenBotChatActivityLevel
+    var wording: AidenBotChatActivityWording
+
+    /// What a Bot that never chose shows: Quiet, Follows the work.
+    static let standard = AidenBotChatActivity(level: .quiet, wording: .follows)
+
+    init(level: AidenBotChatActivityLevel, wording: AidenBotChatActivityWording) {
+        self.level = level
+        self.wording = wording
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["level", "wording"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        level = try values.decode(AidenBotChatActivityLevel.self, forKey: .level)
+        wording = try values.decode(AidenBotChatActivityWording.self, forKey: .wording)
+    }
+
+    private enum CodingKeys: String, CodingKey { case level, wording }
 }
 
 struct AidenBotCreateRequest: Codable, Equatable, Sendable {
@@ -578,14 +616,16 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
     let purpose: String?
     let instructions: String?
     let avatar: AidenBotSemanticAvatar?
+    let chatActivity: AidenBotChatActivity?
 
     init(
         name: String? = nil,
         purpose: String? = nil,
         instructions: String? = nil,
-        avatar: AidenBotSemanticAvatar? = nil
+        avatar: AidenBotSemanticAvatar? = nil,
+        chatActivity: AidenBotChatActivity? = nil
     ) throws {
-        guard name != nil || purpose != nil || instructions != nil || avatar != nil else {
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
         if let name { try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false) }
@@ -595,6 +635,7 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
         self.purpose = purpose
         self.instructions = instructions
         self.avatar = avatar
+        self.chatActivity = chatActivity
     }
 
     /// A patch body from an older client may still carry `openingGreeting`;
@@ -624,13 +665,14 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
         } else {
             avatar = nil
         }
-        guard name != nil || purpose != nil || instructions != nil || avatar != nil else {
+        chatActivity = try values.decodeIfPresent(AidenBotChatActivity.self, forKey: .chatActivity)
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, purpose, instructions, avatar
+        case name, purpose, instructions, avatar, chatActivity
     }
 }
 

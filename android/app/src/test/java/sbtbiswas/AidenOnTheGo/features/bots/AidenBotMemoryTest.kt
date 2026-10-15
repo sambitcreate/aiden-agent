@@ -1,5 +1,10 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -17,6 +22,7 @@ import java.util.Locale
 import java.util.UUID
 
 /** Profile → Memory, driven through [AidenBotMemoryController] against the shared fixture views. */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AidenBotMemoryTest {
     private val json = AidenBotWireJson.json
     private val fixture: JsonObject by lazy {
@@ -44,14 +50,21 @@ class AidenBotMemoryTest {
         val failures = ArrayDeque<Exception>()
         /** The view the next successful edit answers with; by default the edit is applied here. */
         var nextView: AidenBotMemory? = null
+        /** Holds the next edits until completed, so a test can look at the page meanwhile. */
+        var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+        /** Failures the next reads throw, in order. */
+        val readFailures = ArrayDeque<Exception>()
 
         override suspend fun memory(botId: String): AidenBotMemory {
             reads += 1
+            readFailures.removeFirstOrNull()?.let { throw it }
             return view
         }
 
         override suspend fun edit(botId: String, edit: AidenBotMemoryEdit, key: UUID): AidenBotMemory {
             calls += Call(edit, key)
+            gate?.await()
             failures.removeFirstOrNull()?.let { throw it }
             view = nextView ?: apply(view, edit)
             nextView = null
@@ -260,5 +273,83 @@ class AidenBotMemoryTest {
         assertEquals(AidenBotMemoryError.NOT_FOUND, aidenBotMemoryError(refusal(404, AidenRemoteErrorCode.MEMORY_ENTRY_NOT_FOUND)))
         assertEquals(AidenBotMemoryError.FAILED, aidenBotMemoryError(refusal(422, AidenRemoteErrorCode.INVALID_REQUEST)))
         assertEquals(AidenBotMemoryError.FAILED, aidenBotMemoryError(IOException("offline")))
+    }
+
+    // --- R15: memory edits apply at once and go back on failure ---
+
+    @Test
+    fun anEditShowsItsNewWordsAtOnceAndAFailurePutsThemBackWithTheDialogOpen() = runTest {
+        val mac = FakeMac(view).apply { gate = CompletableDeferred() }
+        val controller = loaded(mac)
+        val entry = view.user.entries.first()
+        controller.beginEdit(AidenBotMemoryTarget.USER, entry)
+        controller.updateDraft("Prefers short answers.")
+        mac.failures += refusal(422, AidenRemoteErrorCode.MEMORY_BLOCKED)
+        val saving = async { controller.saveEdit() }
+        runCurrent()
+        assertNull("the dialog closed at once", controller.state.value.editing)
+        assertEquals("Prefers short answers.", controller.state.value.view?.user?.entries?.first()?.text)
+        mac.gate!!.complete(Unit)
+        assertFalse(saving.await())
+        assertEquals("back as it was", entry.text, controller.state.value.view?.user?.entries?.first()?.text)
+        val reopened = controller.state.value.editing!!
+        assertEquals("on the person's words", "Prefers short answers.", reopened.text)
+        assertEquals(AidenBotMemoryError.BLOCKED, reopened.error)
+    }
+
+    @Test
+    fun aDeleteAndAnEraseApplyAtOnceAndComeBackOnFailure() = runTest {
+        val mac = FakeMac(view).apply { gate = CompletableDeferred() }
+        val controller = loaded(mac)
+        val gone = view.user.entries.last()
+        mac.failures += IOException("offline")
+        val deleting = async { controller.delete(AidenBotMemoryTarget.USER, gone.id) }
+        runCurrent()
+        assertEquals("the row went at once", listOf(view.user.entries.first()), controller.state.value.view?.user?.entries)
+        mac.gate!!.complete(Unit)
+        assertFalse(deleting.await())
+        assertEquals(view.user.entries, controller.state.value.view?.user?.entries)
+
+        mac.gate = CompletableDeferred()
+        mac.failures += IOException("offline")
+        val erasing = async { controller.erase() }
+        runCurrent()
+        assertEquals(AidenBotMemorySummary.Empty, AidenBotMemorySummary.of(controller.state.value.view!!))
+        mac.gate!!.complete(Unit)
+        assertFalse(erasing.await())
+        assertEquals(AidenBotMemorySummary.Things(3), AidenBotMemorySummary.of(controller.state.value.view!!))
+        assertTrue(controller.state.value.eraseFailed)
+    }
+
+    @Test
+    fun aViewTheMacSentMeanwhileIsNotRolledBack() = runTest {
+        val mac = FakeMac(view).apply { gate = CompletableDeferred() }
+        val controller = loaded(mac)
+        mac.failures += IOException("offline")
+        val deleting = async { controller.delete(AidenBotMemoryTarget.USER, view.user.entries.last().id) }
+        runCurrent()
+        // The page reloads while the delete waits: the Mac's newer view stands, even when the
+        // reload after the failure can't reach the Mac.
+        mac.view = edited
+        controller.load()
+        mac.readFailures += IOException("offline")
+        mac.gate!!.complete(Unit)
+        assertFalse(deleting.await())
+        assertEquals(edited, controller.state.value.view)
+    }
+
+    @Test
+    fun thePageWaitsForTheMacOnSkeletonsAndThenSaysItCouldNotLoad() = runTest {
+        val connection = CompletableDeferred<Boolean>()
+        val controller = AidenBotMemoryController(view.botId, FakeMac(view), waitForConnection = { connection.await() })
+        val loading = async { controller.load() }
+        runCurrent()
+        assertTrue("skeletons while the Mac connects", controller.state.value.isLoading)
+        advanceTimeBy(AIDEN_BOT_SAVE_HOLD_MILLIS + 1)
+        assertFalse(loading.await())
+        assertTrue(controller.state.value.loadFailed)
+
+        val connected = AidenBotMemoryController(view.botId, FakeMac(view), waitForConnection = { true })
+        assertTrue(connected.load())
     }
 }

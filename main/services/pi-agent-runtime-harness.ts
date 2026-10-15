@@ -327,6 +327,15 @@ class PiManagedCancellationError extends Error {
   }
 }
 
+/**
+ * True when `onJournalError` reports that Stop interrupted a journal write
+ * rather than that the write failed. The write may still land, so the host
+ * must still treat the journal as unhealthy and recover the visible turn.
+ */
+export function isPiManagedCancellationError(error: unknown): boolean {
+  return error instanceof PiManagedCancellationError;
+}
+
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }

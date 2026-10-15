@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -281,9 +283,26 @@ internal object AidenImageGenerationPlaceholderState {
         kind == AidenAgentStep.Kind.TOOL && toolName == TOOL_NAME
 }
 
+/** Battery saver for a whole screen, from one receiver; null where no screen provides it. */
+internal val LocalAidenPowerSave = compositionLocalOf<Boolean?> { null }
+
+/**
+ * Gives [content] one battery-saver receiver to share, so a screen of glancing faces and
+ * skeletons registers one, not one per avatar.
+ */
+@Composable
+internal fun AidenPowerSaveScope(content: @Composable () -> Unit) {
+    val powerSave = aidenRegisteredPowerSaveMode()
+    CompositionLocalProvider(LocalAidenPowerSave provides powerSave, content = content)
+}
+
+/** True while Android battery saver is on: the screen's shared value, or its own receiver outside one. */
+@Composable
+internal fun aidenPowerSaveMode(): Boolean = LocalAidenPowerSave.current ?: aidenRegisteredPowerSaveMode()
+
 /** True while Android battery saver is on; tracks changes while composed. */
 @Composable
-internal fun aidenPowerSaveMode(): Boolean {
+private fun aidenRegisteredPowerSaveMode(): Boolean {
     val context = LocalContext.current
     val powerManager = remember(context) { context.getSystemService(PowerManager::class.java) }
     var powerSave by remember { mutableStateOf(powerManager?.isPowerSaveMode == true) }

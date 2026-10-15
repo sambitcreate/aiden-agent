@@ -300,7 +300,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSug
                 }
             }
         }
-        error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+        error?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
     }
 
     val cl = client
@@ -452,7 +452,7 @@ private fun AidenBotRoutineEditorDialog(
                         }
                     )
                 }
-                error?.let { Text(it, color = palette.danger, style = MaterialTheme.typography.bodySmall) }
+                error?.let { Text(it, color = aidenBotErrorTextColor(), style = MaterialTheme.typography.bodySmall) }
             }
         },
         confirmButton = {
