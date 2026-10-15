@@ -17,7 +17,7 @@ import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { createCliMcpPool, mcpCredentialSignature } from "./mcp.ts";
 import { createCliWebSearch } from "./extensions/web-search.ts";
 import { join } from "node:path";
-import { mkdir, lstat, chmod, realpath, stat, rm } from "node:fs/promises";
+import { mkdir, lstat, chmod, rm } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createHmac } from "node:crypto";
 import { createBotStore } from "../../../main/services/bot-store-core.js";
@@ -39,6 +39,7 @@ import { buildBotFileTools, type BotFileToolLocation } from "../../../main/servi
 import { buildPinnedCodingTools } from "../../../main/services/coding-tools.js";
 import { protectAdmittedBotTool } from "../../../main/services/bot-tool-authority.js";
 import type { AidenRemoteStateDocument } from "../../../main/services/aiden-remote-state.js";
+import { verifyApprovedRootIdentity } from "../../../main/services/aiden-remote-approved-roots.js";
 import type { BotAccessUpdate, BotChatAccessUpdate, BotNoticeAcknowledgement } from "../../../renderer/shared/bot-capabilities.js";
 import type { BotCreateInput, BotUpdateInput } from "../../../renderer/shared/bots.js";
 import { JsonStore, readJson } from "./state.ts";
@@ -154,10 +155,10 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     for (const grant of authority.files.approvedLocations) {
       const candidate = approvedRoots().find((item) => item.id === grant.sourceId);
       if (!candidate) throw new Error("The approved Bot folder is unavailable.");
-      const canonical = await realpath(candidate.folderPath), info = await stat(canonical, { bigint: true });
-      if (canonical !== candidate.folderPath || !info.isDirectory() || info.dev.toString() !== candidate.device || info.ino.toString() !== candidate.inode ||
-        botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
-      locations.push({ id: candidate.id, label: candidate.label, root: canonical, expectedIdentity: { device: candidate.device, inode: candidate.inode } });
+      // A remount can renumber the volume; the tool pin uses the live device.
+      const live = await verifyApprovedRootIdentity(candidate, agentDir);
+      if (!live || botCapabilityFactsFingerprint({ device: candidate.device, inode: candidate.inode, policyRevision: candidate.policyRevision }) !== grant.scopeFingerprint) throw new Error("The approved Bot folder changed.");
+      locations.push({ id: candidate.id, label: candidate.label, root: live.root, expectedIdentity: { device: live.device, inode: live.inode } });
     }
     const selected = locations.length ? buildBotFileTools({ defaultLocation: locations[0], additionalLocations: locations.slice(1) }) : [];
     if (authority.shell.enabled) selected.push(buildPinnedCodingTools(authority.workingDirectory).find((tool) => tool.name === "run_command")!);

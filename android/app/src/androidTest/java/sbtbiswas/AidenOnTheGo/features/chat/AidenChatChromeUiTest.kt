@@ -453,14 +453,23 @@ class AidenChatChromeUiTest {
     /**
      * A semantic scroll animates its deltas and each one restarts the input
      * settle, so let the animation finish before running that last settle.
+     * The animation is stepped on the test clock, so a slow emulator cannot
+     * run out of wall-clock time before it ends.
      */
     private fun settleSemanticScroll() {
-        compose.waitUntil(2_000) { !transcript.isScrollInProgress }
+        compose.mainClock.autoAdvance = false
+        var frames = 0
+        while (compose.runOnIdle { transcript.isScrollInProgress }) {
+            check(++frames <= MAX_SCROLL_FRAMES) { "the semantic scroll never settled" }
+            compose.mainClock.advanceTimeByFrame()
+        }
         compose.mainClock.advanceTimeBy(AidenChatScroll.DRAG_SETTLE_MILLIS)
+        compose.mainClock.autoAdvance = true
         compose.waitForIdle()
     }
 
     private companion object {
         const val HISTORY = 40
+        const val MAX_SCROLL_FRAMES = 600
     }
 }

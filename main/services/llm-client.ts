@@ -1951,8 +1951,19 @@ async function prepareGeneration(
     generationExtensions.push(generativeUiRuntime.extension);
   }
   if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
-    tools = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
+    const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
       () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
+    tools = outputs.tools;
+    // Servers that finish discovery after the turn starts get the same
+    // retained-output handling, and read_tool_output accepts their handles.
+    const late = lateMcpDiscovery;
+    if (late !== NO_LATE_MCP_DISCOVERY) {
+      lateMcpDiscovery = {
+        tools: () => outputs.adopt(late.tools()),
+        pending: () => late.pending(),
+        settled: (requestSignal) => late.settled(requestSignal),
+      };
+    }
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (

@@ -2723,6 +2723,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           displayedStreamingArtifacts.length,
         ]}
         showScrollToBottomButton
+        streaming={displayedStreamingText !== null}
         scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
         scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
         footer={

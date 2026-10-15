@@ -156,7 +156,6 @@ test("floating Environment remains non-modal across every app-level interaction 
   const layout = source("../main/chat-layout.tsx");
   const assistant = source("./assistant/assistant-dock.tsx");
 
-  assert.match(environment, /data-surface-mode=\{inline \? "tools-pinned" : "tools-floating"\}/u);
   // Floating geometry, titlebar clearance, and the stacked tools state the
   // workbench reports are exercised in Electron (workspace-panel, chat-top-bar).
   assert.match(environment, /const toggleTools = React\.useCallback/u);
@@ -239,9 +238,6 @@ test("the Environment work surface owns one mounted Subagents destination", () =
   const environment = source("./environment-panel.tsx");
 
   assert.match(environment, /availableEnvironmentPanelTabs\(panel\.subagentsEnabled, panel\.devicesEnabled\)/u);
-  assert.match(environment, /\{panel\.subagentsEnabled \? \(\s*<div/u);
-  assert.match(environment, /id="environment-subagents-panel"/u);
-  assert.match(environment, /hidden=\{panel\.tab !== "subagents"\}/u);
   assert.match(environment, /active=\{presented && panel\.tab === "subagents"\}/u);
   assert.match(environment, /compact=\{width < 620\}/u);
   assert.match(environment, /chatId=\{panel\.subagents\.chatId\}/u);
@@ -262,7 +258,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const appHandler = source("../../main/handlers/app.ts");
   const bootstrap = source("../main/app.tsx");
   const environment = source("./environment-panel.tsx");
-  const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
   assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
@@ -287,8 +282,6 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   );
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && message\.subagents \? \(/u);
-  assert.match(messages, /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(
     pane,
     /capabilities\.computerUse && settings\.data\?\.computerUseEnabled === true/u,

@@ -1,13 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
-import type { BotAvatar, BotDefinition } from "../../shared/bots";
+import { resolveBotChatActivity, type BotAvatar, type BotChatActivity, type BotDefinition } from "../../shared/bots";
 
 export type BotIdentityPatch = Partial<{
   name: string;
   description: string;
   instructions: string;
   avatar: BotAvatar;
+  /** Only the fields named here change; the rest keep the latest stored value. */
+  chatActivity: Partial<BotChatActivity>;
 }>;
 
 /**
@@ -30,6 +32,9 @@ export async function updateBotIdentity(
     ...(description ? { description } : {}),
     instructions: next.instructions,
     avatar: next.avatar,
+    ...(patch.chatActivity
+      ? { chatActivity: { ...resolveBotChatActivity(latest.chatActivity), ...patch.chatActivity } }
+      : {}),
   });
   qc.setQueryData(queryKeys.bot(saved.id), saved);
   await qc.invalidateQueries({ queryKey: queryKeys.bots });

@@ -14,6 +14,13 @@ import { McpSettings } from "./mcp-settings";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
 import { McpProviderAuthFields } from "./mcp-provider-auth-fields";
+import { buildMcpPresetStates } from "../../../main/handlers/mcp-preset-states";
+import {
+  MCP_PRESETS,
+  assertMcpPresetServer,
+  presetServerId,
+  serverFromPreset,
+} from "../../../main/services/mcp-presets";
 
 afterEach(cleanup);
 
@@ -167,18 +174,40 @@ test("a failed preset load shows Retry, and retrying restores the directory", as
   assert.equal(screen.queryByRole("button", { name: /Retry loading/u }), null);
 });
 
-test("a preset whose saved record is invalid stays usable and explains the repair", async () => {
-  mount({
-    "mcp:list": () => [],
+test("a tampered saved preset opens Needs repair and Authorize saves the official address", async () => {
+  const linear = MCP_PRESETS.find((preset) => preset.id === "linear")!;
+  const tampered: McpServer = { ...serverFromPreset(linear), url: "https://attacker.test/mcp" };
+  // Main's real state builder and validator, so the repair is judged by the same rules.
+  const validate = (server: unknown) => assertMcpPresetServer(server as McpServer);
+  const calls = mount({
+    "mcp:list": () => [tampered],
     "mcp:presets": () =>
-      catalogPresetStates({ linear: { configured: true, error: "Linear has an invalid identity." } }),
+      buildMcpPresetStates({
+        presets: MCP_PRESETS,
+        servers: [tampered],
+        serverIdFor: (preset) => presetServerId(preset.id),
+        validate: (server) => { validate(server); },
+        isReady: async () => false,
+      }),
+    "mcp:save": (server: unknown) => { validate(server); return server; },
+    "mcp:authorize": (server: unknown) => { validate(server); },
   });
-  assert.ok(await screen.findByText("Needs repair"));
-  const manage = screen.getByRole("button", { name: "Manage Linear" });
+  assert.ok((await screen.findAllByText("Needs repair")).length > 0);
+  // The saved-server row and the directory card both open the same preset dialog.
+  const [manage] = screen.getAllByRole("button", { name: "Manage Linear" });
   await waitFor(() => assert.equal((manage as HTMLButtonElement).disabled, false));
   fireEvent.click(manage);
   const dialog = await screen.findByRole("dialog");
-  assert.match(within(dialog).getByRole("alert").textContent ?? "", /invalid identity/u);
+  assert.match(within(dialog).getByRole("alert").textContent ?? "", /official secure server/u);
+  const addressField = within(dialog).getByRole("group", { name: "Server address", hidden: true });
+  const address = within(addressField).getByRole("textbox", { hidden: true }) as HTMLInputElement;
+  assert.equal(address.value, linear.url);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Authorize" }));
+  await waitFor(() =>
+    assert.equal(calls.filter((call) => call.channel === "mcp:authorize").length, 1),
+  );
+  assert.equal(savedServers(calls)[0]?.url, linear.url);
 });
 
 test("preset setup refreshes server and preset lists for callers outside Settings", async () => {

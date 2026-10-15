@@ -10,6 +10,11 @@ export interface McpPresetStateRecord<Preset> {
   ready: boolean;
   /** Why the saved record for this preset is unusable; the user can repair or remove it. */
   error?: string;
+  /**
+   * The saved record itself failed validation (as opposed to a credential lookup
+   * failing), so setup must rebuild it from the preset's official settings.
+   */
+  invalidRecord?: boolean;
 }
 
 export async function buildMcpPresetStates<
@@ -39,15 +44,21 @@ export async function buildMcpPresetStates<
         configured: Boolean(existing),
         enabled: existing?.enabled ?? true,
       };
+      const failed = (error: unknown, invalidRecord: boolean) => ({
+        ...base,
+        ready: false,
+        error: error instanceof Error ? error.message : String(error),
+        ...(invalidRecord ? { invalidRecord: true } : {}),
+      });
       try {
         if (existing) validate(existing);
+      } catch (error) {
+        return failed(error, true);
+      }
+      try {
         return { ...base, ready: await isReady(preset, serverId, existing) };
       } catch (error) {
-        return {
-          ...base,
-          ready: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
+        return failed(error, false);
       }
     }),
   );

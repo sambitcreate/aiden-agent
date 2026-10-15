@@ -59,6 +59,9 @@ export const queryKeys = {
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
   botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
+  /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
+  botLiveSummaries: ["bot-live-summary"] as const,
+  botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,

@@ -16,6 +16,60 @@ export interface AidenRemoteApprovedRootDependencies {
   homeDirectory(): string;
 }
 
+export interface AidenRemoteApprovedRootLiveIdentity {
+  root: string;
+  /** The live device, which can differ from the persisted one after a remount. */
+  device: string;
+  inode: string;
+}
+
+interface ApprovedRootFilesystem {
+  realpath(target: string): Promise<string>;
+  stat(target: string): Promise<{ dev: bigint; ino: bigint; isDirectory(): boolean }>;
+}
+
+const liveFilesystem: ApprovedRootFilesystem = {
+  realpath: (target) => fs.realpath(target),
+  stat: (target) => fs.stat(target, { bigint: true }),
+};
+
+/**
+ * Prove a persisted approved root still names the folder the user approved,
+ * returning its live identity, or `null` when it must be reviewed again.
+ *
+ * macOS assigns APFS `st_dev` numbers when a volume mounts, so a reboot can
+ * renumber the device under an unchanged folder. A device change is accepted
+ * only when the canonical path and inode still match and the root now lives
+ * on the same volume as `approvalStore`, the directory holding the persisted
+ * approval records. Substituting that volume already means controlling every
+ * record that approved the folder, the boundary `sameHomeByInode` in
+ * bot-managed-workspace.ts accepts for Bot homes. Any other volume (an
+ * external or network drive, a disk image) could be replaced by one that
+ * presents the same path and inode, so its roots keep the exact device check.
+ */
+export async function verifyApprovedRootIdentity(
+  root: Pick<AidenRemoteApprovedRoot, "folderPath" | "device" | "inode">,
+  approvalStore: string,
+  filesystem: ApprovedRootFilesystem = liveFilesystem,
+): Promise<AidenRemoteApprovedRootLiveIdentity | null> {
+  try {
+    const [canonical, metadata] = await Promise.all([
+      filesystem.realpath(root.folderPath),
+      filesystem.stat(root.folderPath),
+    ]);
+    if (canonical !== root.folderPath || !metadata.isDirectory() || metadata.ino.toString() !== root.inode) {
+      return null;
+    }
+    if (metadata.dev.toString() !== root.device) {
+      const store = await filesystem.stat(approvalStore);
+      if (store.dev !== metadata.dev) return null;
+    }
+    return { root: canonical, device: metadata.dev.toString(), inode: root.inode };
+  } catch {
+    return null;
+  }
+}
+
 function displayLabel(folderPath: string): string {
   return path.basename(folderPath) || folderPath;
 }
