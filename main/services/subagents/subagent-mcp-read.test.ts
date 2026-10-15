@@ -509,10 +509,41 @@ test("approved tools expose deterministic exact bindings and sanitize bounded re
   assert.deepEqual(h.calls[0]?.args, { query: "hello" });
 });
 
+test("servers whose ids share a readable prefix keep distinct child tool names that route to their own server", async () => {
+  const dashed = harness();
+  dashed.setServer(configuredServer({ id: "my-server", name: "My Server" }));
+  const underscored = harness();
+  underscored.setServer(configuredServer({ id: "my_server", name: "My Server" }));
+  const byId = new Map([["my-server", dashed], ["my_server", underscored]]);
+  const host: SubagentMcpReadHost = {
+    resolveServer: (serverId, signal) => byId.get(serverId)!.host.resolveServer(serverId, signal),
+    withClient: (server, signal, operation) => byId.get(server.id)!.host.withClient(server, signal, operation),
+  };
+  const scopes = [await approvedScope(dashed), await approvedScope(underscored)];
+
+  const bindings = subagentMcpApprovalBindings(scopes);
+  const names = bindings.map(({ childAgentToolName }) => childAgentToolName);
+  assert.equal(new Set(names).size, 2);
+  assert.deepEqual(bindings.map(({ serverId }) => serverId), ["my-server", "my_server"]);
+
+  const tools = await createReadOnlySubagentMcpTools({ scopes, host, consumeNetworkOperation: () => undefined });
+  assert.deepEqual(tools.map(({ name }) => name), names);
+  await tools[1]!.execute("call-underscored", { query: "which" });
+  assert.equal(underscored.calls.length, 1);
+  assert.equal(dashed.calls.length, 0);
+
+  // A lone server keeps its readable name; only colliding peers add the hash.
+  const [alone] = subagentMcpApprovalBindings([scopes[0]!]);
+  assert.equal(alone!.childAgentToolName, "my_server__lookup");
+});
+
 test("connection, schema, and effect drift fail closed before invocation", async () => {
   for (const mutate of [
     (h: Harness) => h.setServer({ ...h.getServer()!, url: "https://drift.example.test" }),
     (h: Harness) => h.setServer({ ...h.getServer()!, enabled: false }),
+    // Hiding the approved tool (or the whole server) after approval.
+    (h: Harness) => h.setServer({ ...h.getServer()!, hiddenTools: ["lookup"] }),
+    (h: Harness) => h.setServer({ ...h.getServer()!, exposure: "hidden" }),
     (h: Harness) =>
       h.setServer({
         ...h.getServer()!,
@@ -543,6 +574,20 @@ test("connection, schema, and effect drift fail closed before invocation", async
     );
     assert.equal(h.calls.length, 0);
   }
+});
+
+test("a hidden tool is refused before dispatch even when the connection fingerprint still matches", async () => {
+  const h = harness();
+  h.setServer({ ...h.getServer()!, hiddenTools: ["lookup"] });
+  // Approved against the very configuration that hides it.
+  const scope = await approvedScope(h);
+  const [tool] = await createReadOnlySubagentMcpTools({
+    scopes: [scope],
+    host: h.host,
+    consumeNetworkOperation: () => undefined,
+  });
+  assert.equal(await rejectionCode(tool!.execute("call-hidden", { query: "hello" })), "authority_drift");
+  assert.equal(h.calls.length, 0);
 });
 
 test("credential revision drift fails closed before a remote call", async () => {

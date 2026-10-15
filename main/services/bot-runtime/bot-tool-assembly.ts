@@ -93,14 +93,26 @@ function accessChangedReason(error: unknown): string {
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
   const offered = new Map<string, { connectionTools: readonly AgentTool[]; skillSnapshot?: SkillRegistrySnapshot }>();
 
-  /** Run `tool` behind a fresh admission, revalidated immediately before the effect. */
-  function fenced(botId: string, tool: AgentTool): AgentTool {
+  /**
+   * Run `tool` behind a fresh admission, revalidated immediately before the
+   * effect. A connection tool must also still be the exact granted tool in
+   * its server's live inventory: the policy check (and any approval it asked
+   * for) used that grant's effect, so a tool that changed since, such as one
+   * that turned from read-only to mutating, never runs under the old answer.
+   */
+  function fenced(botId: string, tool: AgentTool, mcp: boolean): AgentTool {
     return {
       ...tool,
       async execute(toolCallId, params, signal, onUpdate) {
         const admission = await ports.admit(botId);
         try {
           await admission.revalidateBeforeEffect();
+          if (mcp) {
+            const facts = await ports.sources.facts(botId, admission);
+            if (!(await facts.mcpTools()).has(tool.name)) {
+              throw new Error("This connection tool changed since it was offered. Try again.");
+            }
+          }
           if (admission.signal.aborted) throw admission.signal.reason;
           const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
           return await tool.execute(toolCallId, params, effectSignal, onUpdate);
@@ -122,7 +134,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         for (const candidate of set.tools) {
           if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
           const bind = candidate.bind;
-          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool));
+          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true));
           entries.push({
             tool: guard(candidate.tool),
             replay: replayOf(candidate),

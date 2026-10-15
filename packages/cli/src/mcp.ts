@@ -22,6 +22,7 @@ import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } fr
 import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
+import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
@@ -94,8 +95,12 @@ interface OAuthState { tokens?: OAuthTokens; client?: OAuthClientInformationMixe
 async function oauthProvider(agentDir: string, server: McpServer, interaction?: { redirectUrl: string; flow: McpOAuthAuthorizationFlow; notify(url: URL): void }): Promise<OAuthClientProvider> {
   const credentials = insightCredentials(agentDir);
   const id = mcpCredentialId(server);
-  const serialized = await credentials.read(id);
-  const stored: OAuthState = serialized ? JSON.parse(serialized) : {};
+  const load = async (): Promise<OAuthState> => { const serialized = await credentials.read(id); return serialized ? JSON.parse(serialized) : {}; };
+  let stored = await load();
+  // A retained connection outlives refreshes committed by other sessions: read the
+  // persisted state on every use, and mutate that rather than a construction-time copy.
+  // An interactive sign-in owns its in-memory state until it saves.
+  const current = async () => { if (!interaction) stored = await load(); return stored; };
   if (interaction) { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.client; delete stored.tokens; stored.redirectUrl = interaction.redirectUrl; stored.incarnation = randomUUID(); }
   const flow = interaction?.flow ?? new McpOAuthAuthorizationFlow();
   const metadataUrl = mcpOAuthMetadataUrlForServer(server);
@@ -110,14 +115,14 @@ async function oauthProvider(agentDir: string, server: McpServer, interaction?: 
       if (metadataUrl && !flow.discoveryState()) flow.saveDiscovery(await loadMcpOAuthMetadataOverride(metadataUrl, { serviceUrl: server.url!, serviceHeaders: server.headers }));
       return flow.discoveryState();
     },
-    clientInformation: () => stored.client,
-    saveClientInformation: async (client) => { stored.client = client; await save(); },
-    tokens: () => stored.tokens,
-    saveTokens: async (tokens) => { stored.grantedScope = tokens.scope || flow.requestedScope || stored.grantedScope; stored.tokens = tokens; await save(); },
+    clientInformation: async () => (await current()).client,
+    saveClientInformation: async (client) => { (await current()).client = client; await save(); },
+    tokens: async () => (await current()).tokens,
+    saveTokens: async (tokens) => { await current(); stored.grantedScope = tokens.scope || flow.requestedScope || stored.grantedScope; stored.tokens = tokens; await save(); },
     redirectToAuthorization(url) { if (!interaction) throw new Error(`Sign in with aiden mcp login ${server.id}.`); interaction.notify(flow.authorizationUrl(url, stored.tokens?.scope || stored.grantedScope)); },
     saveCodeVerifier(value) { verifier = value; },
     codeVerifier() { if (!verifier) throw new Error("No active MCP OAuth verifier."); return verifier; },
-    invalidateCredentials: async (scope) => { if (scope === "all" || scope === "discovery") flow.clearDiscovery(); if (scope === "all" || scope === "tokens") { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.tokens; } if (scope === "all" || scope === "client") delete stored.client; await save(); },
+    invalidateCredentials: async (scope) => { await current(); if (scope === "all" || scope === "discovery") flow.clearDiscovery(); if (scope === "all" || scope === "tokens") { stored.grantedScope = stored.tokens?.scope || stored.grantedScope; delete stored.tokens; } if (scope === "all" || scope === "client") delete stored.client; await save(); },
   };
 }
 
@@ -208,6 +213,8 @@ function createCredentialIncarnations(agentDir: string) {
   };
 }
 
+/** Cumulative serialized tool schemas retained per server inventory. */
+const CLI_MCP_INVENTORY_MAX_BYTES = 1_048_576;
 type McpListedTool = Awaited<ReturnType<typeof listMcpToolPage>>["tools"][number];
 interface McpInventory { tools: McpListedTool[]; guard: ReturnType<typeof createMcpToolCallGuard>; }
 /** `attempt` is the client being connected (closable mid-connect); `client` is set once it is live. */
@@ -254,6 +261,8 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     const cached = clients.get(server.id);
     if (cached?.key === key) return cached.pending;
     const entry: PoolEntry = { key, pending: undefined as unknown as Promise<Client> };
+    // Published before the attempt runs, so its synchronous prefix already sees itself as current.
+    clients.set(server.id, entry);
     entry.pending = (async () => {
       if (cached) {
         await (cached.attempt ?? await cached.pending.catch(() => undefined))?.close().catch(() => {});
@@ -264,6 +273,8 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
       inventories.watch(client);
       try {
         const options = server.transport === "stdio" ? undefined : { fetch: createBoundedSubagentMcpFetch(createMcpFetchPolicy({ serviceUrl: server.url!, serviceHeaders: server.headers }), maxResponseBytes), authProvider: server.oauth ? await oauthProvider(agentDir, server) : undefined };
+        // Shutdown or a newer attempt may have landed during the credential read; start nothing then.
+        if (closed || clients.get(server.id) !== entry) throw new Error("MCP connection was closed or superseded.");
         const transport = server.transport === "stdio" ? new StdioClientTransport({ command: server.command!, args: server.args, env: { ...getDefaultEnvironment(), ...server.env }, stderr: "pipe" })
           : server.transport === "http" ? new StreamableHTTPClientTransport(new URL(server.url!), options) : new SSEClientTransport(new URL(server.url!), options);
         if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
@@ -273,7 +284,6 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
         return client;
       } catch (error) { await client.close().catch(() => {}); throw error; }
     })();
-    clients.set(server.id, entry);
     try { return await entry.pending; }
     catch (error) { if (clients.get(server.id) === entry) clients.delete(server.id); throw error; }
   }
@@ -284,9 +294,16 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
     const shared = client.getServerCapabilities()?.tools?.listChanged === true;
     const read = async (): Promise<McpInventory> => {
+      // Each page is transport-bounded; this bounds what the whole inventory retains.
+      let retained = 0;
       const tools = client.getServerCapabilities()?.tools ? await listMcpToolInventory({
         signal: shared ? undefined : signal, assertCurrent,
-        listPage: (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal, timeout: 10_000 }),
+        listPage: async (cursor, pageSignal) => {
+          const page = await listMcpToolPage(client, cursor, { signal: pageSignal, timeout: 10_000 });
+          retained += Buffer.byteLength(JSON.stringify(page.tools ?? []));
+          if (retained > CLI_MCP_INVENTORY_MAX_BYTES) throw new Error("MCP tool inventory exceeds its schema byte budget.");
+          return page;
+        },
       }) : [];
       return { tools, guard: createMcpToolCallGuard(tools) };
     };
@@ -301,7 +318,8 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
     const { tools } = await inventory(server, signal);
     // Same names as the desktop: disambiguated against every configured server and the full inventory.
     const names = mcpAgentToolNames(server, await listServers(), tools.map(({ name }) => name));
-    return mcpToolsOfferedToModel(server, tools).map((tool) => markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    // Identity for grant joins, plus the exact tools/list entry for live schema/effect checks.
+    return mcpToolsOfferedToModel(server, tools).map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -314,12 +332,15 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
           return result;
         });
       },
-    }, { serverId: server.id, toolName: tool.name }));
+    }, { serverId: server.id, toolName: tool.name }), tool));
   }
   return { listServers, inventory, inspectTools, agentTools, connection, async close() {
     closed = true;
-    // Close in-flight attempts too, so shutdown never waits out a connect timeout.
-    await Promise.allSettled([...clients.values()].map(async ({ pending, attempt }) => (attempt ?? await pending).close()));
+    // Close in-flight attempts too, so shutdown never waits out a connect timeout, then
+    // wait for every attempt to settle: none may start or send after close returns.
+    const entries = [...clients.values()];
+    await Promise.allSettled(entries.map(async ({ attempt }) => attempt?.close()));
+    await Promise.allSettled(entries.map(async ({ pending }) => (await pending).close()));
     clients.clear();
   } };
 }

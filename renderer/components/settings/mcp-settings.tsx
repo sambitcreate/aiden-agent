@@ -423,7 +423,7 @@ export function McpSettings() {
                     {launchApprovals.get(s.id) ? (
                       <McpLaunchApproval server={s} approval={launchApprovals.get(s.id)!} onApproved={invalidate} />
                     ) : (
-                      <McpExposureControls server={s} toolCount={live.get(s.id)?.toolCount} onSave={saveExposure} />
+                      <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
                     )}
                   </div>
                   <Button
@@ -778,6 +778,10 @@ function McpEditor({
   const storedForSignIn = React.useRef(false);
   const savedByUser = React.useRef(false);
   const cancelledSignIn = React.useRef(false);
+  // Closing while the sign-in save is still in flight must not authorize, and
+  // the provisional record is removed once that save settles.
+  const closed = React.useRef(false);
+  const signInSavePending = React.useRef(false);
   const dependents = useMcpDependents(isNew ? undefined : server.id);
 
   React.useEffect(() => {
@@ -800,6 +804,7 @@ function McpEditor({
       setNeedsSignIn(false);
       storedForSignIn.current = false;
       savedByUser.current = false;
+      closed.current = false;
       if (server.authProvider) {
         void mcpApi.oauthStatus(server.id).then((status) => setApprovedProviderConnection(status.providerAuthorized ? JSON.stringify([server.authProvider ?? "", server.url?.trim() ?? "", server.transport]) : undefined)).catch(() => setApprovedProviderConnection(undefined));
       }
@@ -871,13 +876,19 @@ function McpEditor({
             };
       // Sign-in uses the stored record: its header values are markers once saved.
       let stored = record;
-      // Header edits change the configured connection too: sign-in is admitted
-      // only against the saved record, so they must be saved first.
-      const headersChanged = JSON.stringify(server.headers ?? {}) !== JSON.stringify(record.headers ?? {});
-      if (isNew || storedForSignIn.current || headersChanged || mcpConnectionChanged(server, record)) {
-        stored = await mcpApi.save(record, { fromEditor: true });
+      // Header and env edits change the configured connection too
+      // (mcpConnectionChanged covers them): sign-in is admitted only against the
+      // saved record, so they must be saved first.
+      if (isNew || storedForSignIn.current || mcpConnectionChanged(server, record)) {
+        signInSavePending.current = isNew;
+        try {
+          stored = await mcpApi.save(record, { fromEditor: true });
+        } finally {
+          signInSavePending.current = false;
+        }
         if (isNew) storedForSignIn.current = true;
       }
+      if (closed.current || cancelledSignIn.current) return;
       await mcpApi.authorize(stored);
       setOauth(true);
       setAuthorized(true);
@@ -885,10 +896,22 @@ function McpEditor({
       onSaved();
       toast.success("Authorized — you're signed in.");
     } catch (error) {
-      if (!cancelledSignIn.current) toast.error(error instanceof Error ? error.message : String(error));
+      if (!cancelledSignIn.current && !closed.current)
+        toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setAuthorizing(false);
+      if (closed.current) discardSignInRecord();
     }
+  };
+
+  /** Removes a new server that was stored only so it could sign in. */
+  const discardSignInRecord = () => {
+    if (!storedForSignIn.current || savedByUser.current || signInSavePending.current) return;
+    storedForSignIn.current = false;
+    void mcpApi
+      .remove(server.id)
+      .catch(() => undefined)
+      .then(() => onSaved());
   };
 
   const cancelSignIn = async () => {
@@ -913,15 +936,10 @@ function McpEditor({
 
   const closeEditor = (next: boolean) => {
     if (!next) {
+      closed.current = true;
       if (authorizing) void cancelSignIn();
       // Cancelling a new server that was stored only to sign in removes it again.
-      if (storedForSignIn.current && !savedByUser.current) {
-        storedForSignIn.current = false;
-        void mcpApi
-          .remove(server.id)
-          .catch(() => undefined)
-          .then(() => onSaved());
-      }
+      discardSignInRecord();
     }
     onOpenChange(next);
   };

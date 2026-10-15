@@ -16,6 +16,8 @@ const linear = { id: "custom-linear", name: "Linear", transport: "http", url: "h
 const noApprovals: McpStdioApprovalStore = {
   isApproved: async () => false,
   approve: async () => undefined,
+  approveAlongside: async () => undefined,
+  retainOnly: async () => undefined,
   approveShown: async () => false,
   forget: async () => undefined,
 };

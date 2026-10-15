@@ -60,6 +60,9 @@ export const queryKeys = {
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
   botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
+  /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
+  botLiveSummaries: ["bot-live-summary"] as const,
+  botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -87,7 +90,7 @@ export const queryKeys = {
   mcpLiveStatus: ["mcpLiveStatus"] as const,
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
   mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
-  mcpToolList: (serverId: string, toolCount: number | undefined) => ["mcpToolList", serverId, toolCount ?? null] as const,
+  mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
   telegram: ["telegram"] as const,
@@ -764,20 +767,26 @@ export function useMcpPresets() {
  */
 export function useMcpLiveStatus() {
   const queryClient = useQueryClient();
-  useEffect(
-    () =>
-      mcpApi.onStatusChanged((status) => {
-        let signInChanged = false;
-        queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
-          const previous = current.find((entry) => entry.serverId === status.serverId);
-          signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
-          const others = current.filter((entry) => entry.serverId !== status.serverId);
-          return status.removed ? others : [...others, status];
-        });
-        if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
-      }),
-    [queryClient],
-  );
+  useEffect(() => {
+    const unsubscribe = mcpApi.onStatusChanged((status) => {
+      let signInChanged = false;
+      queryClient.setQueryData<McpLiveStatus[]>(queryKeys.mcpLiveStatus, (current = []) => {
+        const previous = current.find((entry) => entry.serverId === status.serverId);
+        signInChanged = Boolean(previous?.needsSignIn) !== Boolean(status.needsSignIn);
+        const others = current.filter((entry) => entry.serverId !== status.serverId);
+        return status.removed ? others : [...others, status];
+      });
+      if (signInChanged) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets });
+    });
+    return () => {
+      unsubscribe();
+      // Pushes sent while nothing listens are lost, so the cached snapshot is
+      // only trusted while subscribed: the next mount reads main's current one.
+      // Main answers that read after any push it sent earlier, so the snapshot
+      // is never older than the pushes that arrive before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+    };
+  }, [queryClient]);
   const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
   return useMemo(
     () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
@@ -787,11 +796,12 @@ export function useMcpLiveStatus() {
 
 /**
  * A server's tools from its last discovery (never connects). Keyed by the live
- * tool count, so a rediscovery that changes the inventory refetches.
+ * inventory revision (a digest of names and titles), so any rediscovery that
+ * changes the list refetches, even when the tool count is unchanged.
  */
-export function useMcpToolList(serverId: string, toolCount: number | undefined) {
+export function useMcpToolList(serverId: string, toolsRevision: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.mcpToolList(serverId, toolCount),
+    queryKey: queryKeys.mcpToolList(serverId, toolsRevision),
     queryFn: () => mcpApi.toolList(serverId),
     staleTime: Infinity,
   });

@@ -96,12 +96,20 @@ export function mcpDependentsSummary(dependents: McpServerDependents | undefined
 
 /** Fields that decide where and how Aiden connects; changing them re-requires approval. */
 export function mcpConnectionChanged(saved: McpServer, draft: McpServer): boolean {
+  // Headers and environment are part of main's connection snapshot. Main drops
+  // empty maps, so an empty map and a missing one are the same connection.
+  const map = (record: Record<string, string> | undefined) => {
+    const entries = Object.entries(record ?? {}).sort(([left], [right]) => left.localeCompare(right));
+    return entries.length ? entries : null;
+  };
   const pick = (server: McpServer) =>
     JSON.stringify([
       server.transport,
       server.command ?? null,
       server.args ?? [],
       server.url ?? null,
+      map(server.env),
+      map(server.headers),
       server.oauth === true,
       server.authServerMetadataUrl ?? null,
       server.oauthClientName ?? null,

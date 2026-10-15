@@ -2,7 +2,6 @@ import {
   Bot,
   CalendarClock,
   Check,
-  ChevronLeft,
   ChevronRight,
   Cpu,
   Ellipsis,
@@ -17,6 +16,7 @@ import {
   Moon,
   MousePointer2,
   OctagonAlert,
+  PanelRightOpen,
   Play,
   Search,
   Send,
@@ -180,7 +180,6 @@ export function BotsArt() {
     <>
       <ArtWindow style={{ left: 12, top: 10, width: 172, height: 250 }}>
         <div className="oa-bots-head oa-separator-bottom">
-          <ArtIcon icon={ChevronLeft} />
           <span className="oa-bots-name">
             <span className="oa-bots-avatar">
               <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
@@ -188,6 +187,7 @@ export function BotsArt() {
             Meal Planner
           </span>
           <span className="oa-grow" />
+          <ArtIcon icon={PanelRightOpen} />
           <ArtIcon icon={Ellipsis} />
         </div>
         <div className="oa-bots-body">

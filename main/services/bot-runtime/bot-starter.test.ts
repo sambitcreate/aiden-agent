@@ -78,6 +78,7 @@ async function visibleTranscript(session: BotSessionRuntime, botId: string): Pro
   const projection = createBotLiveProjection({
     conversation: (id) => session.conversation(id),
     state: (id) => session.state(id),
+    quietInputs: (id, ids) => session.quietInputs(id, ids),
   });
   const { snapshot, unsubscribe } = await projection.subscribe(botId, { send: () => undefined });
   unsubscribe();

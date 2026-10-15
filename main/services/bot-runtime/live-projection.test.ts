@@ -4,23 +4,29 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
+  botLastReplyAt,
   botRetryableFailedTurn,
   type BotLiveEvent,
   type BotLiveSnapshot,
+  type BotPendingQuestion,
 } from "../../../renderer/shared/bot-live.js";
+import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  liveBotActivity,
+  liveQueuedInputIds,
+  liveQueuedMessages,
   projectBotTranscript,
   type BotLiveProjection,
   type BotLiveProjectionDeps,
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
-import { recordingDeps } from "./test-support/fixtures.js";
+import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
@@ -58,6 +64,7 @@ async function start(
   projection = createBotLiveProjection({
     conversation: (botId) => service.conversation(botId),
     state: (botId) => service.state(botId),
+    quietInputs: (botId, ids) => service.quietInputs(botId, ids),
     ...options.projection,
   });
   return {
@@ -113,6 +120,29 @@ async function waitForStreamedText(service: BotSessionRuntime, botId: string): P
   }
 }
 
+function observedPhases(events: readonly BotLiveEvent[]): Array<string | null> {
+  const phases: Array<string | null> = [];
+  for (const event of events) {
+    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : undefined;
+    if (activity === undefined) continue;
+    const phase = activity?.phase ?? null;
+    if (phases[phases.length - 1] !== phase) phases.push(phase);
+  }
+  return phases;
+}
+
+/** Every phase seen appears in `allowed`, in that order (frames may coalesce, so some can be skipped). */
+function inOrder(phases: ReadonlyArray<string | null>, allowed: readonly string[]): boolean {
+  let at = 0;
+  for (const phase of phases) {
+    if (phase === null) continue;
+    const found = allowed.indexOf(phase, at);
+    if (found === -1) return false;
+    at = found;
+  }
+  return true;
+}
+
 const visibleText =(snapshot: BotLiveSnapshot | null) =>
   (snapshot?.entries ?? []).map((entry) =>
     entry.type === "user" || entry.type === "assistant"
@@ -134,6 +164,7 @@ test("subscribing mid-stream returns a snapshot that already has the partial rep
     try {
       assert.equal(snapshot.state.kind, "running");
       assert.match(snapshot.partial ?? "", /^word word/u);
+      assert.equal(snapshot.activity?.phase, "writing");
       assert.deepEqual(visibleText(snapshot), ["user:tell me a story"]);
     } finally {
       unsubscribe();
@@ -341,6 +372,105 @@ test("files the Bot wrote in its folder and images it shared become chips; faile
   );
 });
 
+test("tool calls carry a kind, a past-tense label and a short safe detail; results say ok, failed or blocked", () => {
+  const result = (id: number, toolCallId: string, toolName: string, timestamp: number, code?: string) => ({
+    id,
+    kind: "pi.tool-result",
+    data: { diagnostics: code ? [{ severity: "error", code, message: code }] : [] },
+    model: [{ role: "toolResult", toolCallId, toolName, isError: code !== undefined, content: [], timestamp }],
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 900 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 1_000,
+        content: [
+          { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "/Users/sam/lists/grocery-list.md" } },
+          { type: "toolCall", id: "c2", name: "run_command", arguments: { command: "cat /Users/sam/.ssh/id_rsa" } },
+          { type: "toolCall", id: "c3", name: "web_search", arguments: { query: "lisbon trains" } },
+          { type: "toolCall", id: "c4", name: "web_search", arguments: { query: "slow thing" } },
+          { type: "toolCall", id: "c5", name: "read_file", arguments: { path: "restart.md" } },
+        ],
+      }],
+    },
+    result(3, "c1", "read_file", 1_400),
+    result(4, "c2", "run_command", 1_050, "blocked"),
+    result(5, "c3", "web_search", 2_000, "tool_error"),
+    result(6, "c4", "web_search", 2_500, "aborted"),
+    result(7, "c5", "read_file", 2_600, "interrupted"),
+  ] as never);
+  const assistant = entries.find((entry) => entry.type === "assistant");
+  assert.ok(assistant?.type === "assistant");
+  assert.deepEqual(assistant.toolCalls[0], { id: "c1", name: "read_file", kind: "reading", label: "Read 1 file", detail: "grocery-list.md" });
+  // A command with no description shows no detail: the command itself never reaches the chat.
+  assert.deepEqual(assistant.toolCalls[1], { id: "c2", name: "run_command", kind: "command", label: "Ran a command" });
+  assert.deepEqual(assistant.toolCalls[2], { id: "c3", name: "web_search", kind: "searching", label: "Searched the web", detail: "lisbon trains" });
+  const results = entries.flatMap((entry) =>
+    entry.type === "tool_result" ? [[entry.toolCallId, entry.status, entry.durationMs, entry.at]] : [],
+  );
+  assert.deepEqual(results, [
+    ["c1", "ok", 400, 1_400],
+    ["c2", "blocked", 50, 1_050],
+    ["c3", "failed", 1_000, 2_000],
+    ["c4", "stopped", 1_500, 2_500],
+    ["c5", "stopped", 1_600, 2_600],
+  ]);
+});
+
+test("a tool the Bot's access or the person refused is blocked, a tool that broke is failed, and neither looks like the other", async () => {
+  const shell = countingTool("run_command");
+  const gated = countingTool("send_email");
+  const search = countingTool("web_search", async () => {
+    throw new Error("The search service is down.");
+  });
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "ls" }), fauxToolCall("web_search", { text: "trains" }), fauxToolCall("send_email", { text: "hi" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("I couldn't do that one."),
+  ]);
+  const live = await start(fauxModels, {
+    service: {
+      extension: recordingDeps({
+        tools: [
+          { tool: shell, replay: "unsafe" },
+          { tool: search, replay: "unsafe" },
+          { tool: gated, replay: "unsafe" },
+        ],
+        policy: (name) =>
+          name === "run_command"
+            ? { allowed: false, reason: "The shell is off for this Bot." }
+            : name === "send_email"
+              ? { allowed: true, approval: { summary: "Send an email" } }
+              : { allowed: true },
+        approve: async () => "deny",
+      }),
+    },
+  });
+  try {
+    const sent = await live.service.send("bot:a", { text: "go", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const view = await (await live.service.conversation("bot:a")).context(ctx);
+    const statuses = new Map(
+      projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "tool_result" ? [[entry.toolName, entry] as const] : [])),
+    );
+    assert.equal(statuses.get("run_command")?.status, "blocked");
+    assert.equal(statuses.get("web_search")?.status, "failed");
+    assert.equal(statuses.get("send_email")?.status, "blocked", "a declined approval is blocked, not failed");
+    assert.deepEqual(shell.executions, [], "a refused tool never runs");
+    assert.deepEqual(gated.executions, [], "a declined tool never runs");
+    for (const entry of statuses.values()) {
+      assert.ok(typeof entry.durationMs === "number" && entry.durationMs >= 0);
+    }
+  } finally {
+    await live.close();
+  }
+});
+
 test("memory saves show one quiet line each: in-turn saves that changed something and reviews that added", () => {
   const result = (id: number, toolCallId: string, details: unknown, isError = false) => ({
     id,
@@ -429,9 +559,13 @@ test("Stop ends the running reply, keeps what was written, and the Bot is idle a
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "go", requestId: "desk-1" });
     await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "a partial reply" });
+    live.projection.notifyStopping("bot:a");
     const state = await live.service.stop("bot:a");
     assert.equal(state.kind, "idle");
     await waitFor(() => tape.view?.partial === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    const phases = observedPhases(tape.events);
+    assert.ok(phases.includes("stopping"), phases.join(" → "));
+    assert.equal(phases[phases.length - 1], null);
     const last = tape.view!.entries[tape.view!.entries.length - 1];
     assert.equal(last?.type, "assistant");
     assert.equal(last?.type === "assistant" ? last.stopReason : null, "aborted");
@@ -567,6 +701,625 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     first.unsubscribe();
   } finally {
     stopListening();
+    await live.close();
+  }
+});
+
+test("Stop pressed while a slow tool runs ends the chat with the person's stopped line", async () => {
+  const reader = countingTool(
+    "read_file",
+    (_params, signal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+  );
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(40)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "What's on my list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the tool to run" });
+    live.projection.notifyStopping("bot:a");
+    const state = await live.service.stop("bot:a");
+    assert.equal(state.kind, "idle");
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    const entries = tape.view!.entries;
+    const results = entries.filter((entry) => entry.type === "tool_result");
+    assert.deepEqual(
+      results.map((entry) => (entry.type === "tool_result" ? entry.status : null)),
+      ["stopped"],
+    );
+    for (const level of ["quiet", "summary"] as const) {
+      const rows = botTranscriptRows(entries, tape.view!.partial, { running: false, level });
+      assert.equal(rows[rows.length - 1]?.kind, "stopped", `${level}: ${rows.map((row) => row.kind).join(", ")}`);
+      const recap = rows.find((row) => row.kind === "recap");
+      if (recap?.kind === "recap") assert.deepEqual(recap.steps.map((step) => step.status), ["stopped"]);
+    }
+    assert.equal(fauxModels.calls(), 1, "the second reply never ran");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a reply's activity follows the work: getting ready, reading while a file tool runs, writing, then nothing", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
+  });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(60)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    assert.equal(snapshot.activity, null);
+    const sent = await live.service.send("bot:a", { text: "What's on my list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the reading phase" });
+    assert.deepEqual(tape.view?.activity?.step, { kind: "reading", label: "Reading" });
+    assert.ok((tape.view?.activity?.startedAt ?? 0) > 0);
+    release();
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the line to clear" });
+    const phases = observedPhases(tape.events);
+    assert.ok(inOrder(phases, ["preparing", "thinking", "reading", "thinking", "writing"]), phases.join(" → "));
+    assert.ok(phases.includes("writing"), phases.join(" → "));
+    assert.equal(phases[phases.length - 1], null);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("thinking text is never projected, in the transcript or the live activity", () => {
+  const entries = [
+    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 1 }] },
+    {
+      id: 2,
+      kind: "pi.assistant",
+      model: [{ role: "assistant", stopReason: "stop", timestamp: 2, content: [fauxThinking("SECRET-PLAN"), fauxText("Done.")] }],
+    },
+  ];
+  assert.doesNotMatch(JSON.stringify(projectBotTranscript(entries as never)), /SECRET-PLAN/u);
+  const activity = liveBotActivity({
+    entries: entries as never,
+    docs: { "pi.live": { run: { taskId: 1, inputs: [1] }, generation: { attempt: 1, message: { content: [fauxThinking("SECRET-PLAN")] } } } },
+    waiting: false,
+    stopping: false,
+    resuming: false,
+    startedAt: 5,
+  });
+  assert.deepEqual(activity, { phase: "thinking", startedAt: 5 });
+});
+
+test("the live phase reads stop, a waiting card, compaction, the newest running tool, and resume, in that order", () => {
+  const user = { id: 1, kind: "pi.user", model: [{ role: "user", content: "go", timestamp: 1 }] };
+  const calling = {
+    id: 2,
+    kind: "pi.assistant",
+    model: [{
+      role: "assistant",
+      stopReason: "toolUse",
+      timestamp: 2,
+      content: [
+        { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "lists/a.md" } },
+        { type: "toolCall", id: "c2", name: "web_search", arguments: { query: "tofu bowls" } },
+      ],
+    }],
+  };
+  const tools = [
+    { callId: "c1", name: "read_file", status: "running" },
+    { callId: "c2", name: "web_search", status: "running" },
+  ];
+  const base = { entries: [user, calling] as never, waiting: false, stopping: false, resuming: false, startedAt: 9 };
+  const docs = (live: Record<string, unknown>) => ({ "pi.live": { run: { taskId: 1, inputs: [1] }, ...live } });
+  assert.equal(liveBotActivity({ ...base, docs: {} }), null, "no run, no line");
+  assert.deepEqual(liveBotActivity({ ...base, docs: docs({ tools }) }), {
+    phase: "searching",
+    startedAt: 9,
+    step: { kind: "searching", label: "Searching the web", detail: "tofu bowls" },
+  });
+  assert.equal(liveBotActivity({ ...base, docs: docs({ compactions: [{ blocking: true }], tools }) })?.phase, "tidying");
+  assert.equal(liveBotActivity({ ...base, waiting: true, docs: docs({ tools }) })?.phase, "waiting");
+  assert.equal(liveBotActivity({ ...base, waiting: true, stopping: true, docs: docs({ tools }) })?.phase, "stopping");
+  assert.equal(liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase, "preparing");
+  assert.equal(liveBotActivity({ ...base, docs: docs({}) })?.phase, "thinking");
+  assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
+  assert.equal(
+    liveBotActivity({ ...base, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } } }) })?.phase,
+    "writing",
+  );
+});
+
+test("Stop pressed while nothing runs is ignored, so the next reply never starts at Stopping", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(40))], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    live.projection.notifyStopping("bot:a");
+    const sent = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    assert.equal(observedPhases(tape.events).includes("stopping"), false);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+/** Every distinct (turn start, phase) the line showed, in order. */
+function observedTurns(events: readonly BotLiveEvent[]): Array<{ startedAt: number; phase: string }> {
+  const seen: Array<{ startedAt: number; phase: string }> = [];
+  for (const event of events) {
+    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : null;
+    if (!activity) continue;
+    const last = seen[seen.length - 1];
+    if (last?.startedAt !== activity.startedAt || last.phase !== activity.phase) {
+      seen.push({ startedAt: activity.startedAt, phase: activity.phase });
+    }
+  }
+  return seen;
+}
+
+test("a Resume marks the run it started, and the turn after it reads normally", async () => {
+  const fauxModels = createFauxModels(
+    [fauxAssistantMessage("word ".repeat(30)), fauxAssistantMessage("word ".repeat(30))],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const reply = async (text: string, requestId: string) => {
+      const sent = await live.service.send("bot:a", { text, requestId });
+      await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+      await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    };
+    live.projection.notifyResuming("bot:a");
+    await reply("resumed turn", "desk-1");
+    assert.ok(observedPhases(tape.events).includes("resuming"));
+    const after = tape.events.length;
+    await reply("the next turn", "desk-2");
+    assert.equal(observedPhases(tape.events.slice(after)).includes("resuming"), false);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a tool round hands the run to a new generation but is still one turn: one start time, and Stop keeps reading Stopping", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
+  });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(40)),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  let tick = 1_000;
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+    projection: { now: () => (tick += 1_000) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    const sent = await live.service.send("bot:a", { text: "list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the reading phase" });
+    live.projection.notifyStopping("bot:a");
+    await waitFor(() => tape.view?.activity?.phase === "stopping", { what: "the stopping line" });
+    const stoppedAt = tape.events.length;
+    release();
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    const turns = observedTurns(tape.events);
+    assert.equal(new Set(turns.map((turn) => turn.startedAt)).size, 1, JSON.stringify(turns));
+    const after = observedPhases(tape.events.slice(stoppedAt)).filter((phase) => phase !== null);
+    // The line never left Stopping after the hand-over: no other phase appears before it clears.
+    assert.deepEqual(after, [], after.join(" → "));
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a follow-up turn queued behind a running one gets its own start time and a clean line", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("word ".repeat(20))], { tokensPerSecond: 40 });
+  let tick = 1_000;
+  const live = await start(fauxModels, { projection: { now: () => (tick += 1_000) } });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "writing", { what: "the first reply to stream" });
+    live.projection.notifyStopping("bot:a");
+    await waitFor(() => tape.view?.activity?.phase === "stopping", { what: "the stopping line" });
+    const queued = await live.service.send("bot:a", { text: "and another", requestId: "desk-2" });
+    await live.service.awaitReply("bot:a", queued.submissionId, new AbortController().signal);
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the replies to land" });
+    const turns = observedTurns(tape.events);
+    const starts = [...new Set(turns.map((turn) => turn.startedAt))];
+    assert.ok(starts.length >= 2, JSON.stringify(turns));
+    assert.ok(starts[1]! > starts[0]!, JSON.stringify(turns));
+    const second = turns.filter((turn) => turn.startedAt === starts[1]);
+    assert.notEqual(second[0]?.phase, "stopping", JSON.stringify(turns));
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a follow-up sent while the Bot works shows as queued, and Remove withdraws it before it runs", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    assert.deepEqual(snapshot.queued, []);
+    await live.service.send("bot:a", { text: "Plan dinners", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    const queued = await live.service.send("bot:a", { text: "Also add dessert", requestId: "desk-2", whenBusy: "followUp" });
+    await waitFor(() => tape.view?.queued.length === 1, { what: "the queued message" });
+    assert.deepEqual(tape.view?.queued, [
+      { submissionId: queued.submissionId, mode: "followUp", text: "Also add dessert", imageCount: 0 },
+    ]);
+    assert.equal(await live.service.withdraw("bot:a", queued.submissionId), "withdrawn");
+    await waitFor(() => tape.view?.queued.length === 0, { what: "the queued message to leave" });
+    await live.service.stop("bot:a");
+    await waitFor(() => tape.view?.state.kind === "idle", { what: "the stop" });
+    assert.equal(fauxModels.calls(), 1, "the withdrawn follow-up never reached the model");
+    assert.equal(visibleText(tape.view).includes("user:Also add dessert"), false);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("Remove on a queued message whose turn already started withdraws nothing", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(30)), slowAnswer()], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply" });
+    const second = await live.service.send("bot:a", { text: "two", requestId: "desk-2", whenBusy: "followUp" });
+    await waitFor(() => visibleText(tape.view).includes("user:two"), { what: "the follow-up to start" });
+    assert.equal(await live.service.withdraw("bot:a", second.submissionId), "started");
+    assert.equal(await live.service.withdraw("bot:a", "999999"), "gone");
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("queued inputs are listed by the person's ids only; passive writes never show", () => {
+  const notice = (data: unknown) => ({ id: 1, mode: "write", entry: { kind: "aiden.bot-notice", data } });
+  const docs = {
+    "pi.inbox": {
+      items: [
+        notice({ notice: "routine", label: "Morning check-in", requestId: "routine:r1:1" }),
+        { id: 2, mode: "followUp", content: "Check in on today" },
+        { id: 4, mode: "followUp", content: "Introduce yourself" },
+        { id: 5, mode: "steer", content: [{ type: "text", text: "Make it vegetarian" }, { type: "image", data: "AA", mimeType: "image/png" }] },
+      ],
+    },
+  };
+  assert.deepEqual(liveQueuedInputIds(docs), ["2", "4", "5"]);
+  assert.deepEqual(liveQueuedMessages(docs, new Set(["2", "4"])), [
+    { submissionId: "5", mode: "steer", text: "Make it vegetarian", imageCount: 1 },
+  ]);
+  assert.deepEqual(liveQueuedMessages({}), []);
+});
+
+/** Wait, outside the projection, until the conversation's `pi.inbox` satisfies `predicate`. */
+async function waitForInbox(
+  service: BotSessionRuntime,
+  botId: string,
+  predicate: (items: Array<{ mode?: string }>) => boolean,
+): Promise<void> {
+  const watch = await (await service.conversation(botId)).watch(ctx);
+  const items = () => ((watch.value.docs["pi.inbox"] as { items?: Array<{ mode?: string }> } | undefined)?.items ?? []);
+  watch.start(async () => undefined);
+  try {
+    await waitFor(() => predicate(items()), { what: "the inbox" });
+  } finally {
+    await watch.stop();
+  }
+}
+
+const queuedTexts = (events: readonly BotLiveEvent[]) =>
+  events.flatMap((event) => (event.type === "queued" ? event.queued.map((item) => item.text) : []));
+
+test("a routine queued behind a reply that calls a tool is never listed, even once its notice is placed", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const reader = countingTool("read_file", async () => {
+    await released;
+    return "eggs, milk";
+  });
+  const fauxModels = createFauxModels(
+    [
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("word ".repeat(10)),
+      fauxAssistantMessage("routine reply"),
+    ],
+    { tokensPerSecond: 40 },
+  );
+  const live = await start(fauxModels, {
+    service: { extension: recordingDeps({ tools: [{ tool: reader, replay: "safe" }] }) },
+  });
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "list?", requestId: "desk-1" });
+    await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the tool to run" });
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await waitForInbox(live.service, "bot:a", (items) => items.some((item) => item.mode === "followUp"));
+    release();
+    await waitFor(() => visibleText(tape.view).includes("assistant:routine reply"), { what: "the routine's reply" });
+    await waitFor(() => tape.view?.state.kind === "idle", { what: "the Bot to settle" });
+    assert.deepEqual(queuedTexts(tape.events), []);
+    assert.deepEqual(tape.view?.queued, []);
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("a notice left behind by Stop does not hide the person's next queued message", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await live.service.stop("bot:a");
+    await waitFor(() => tape.view?.state.kind === "idle", { what: "the stop" });
+    await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the next reply to stream" });
+    await live.service.send("bot:a", { text: "three", requestId: "desk-3", whenBusy: "followUp" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "three") === true, { what: "the queued message" });
+    assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("an intro prompt queued behind a running reply is not listed as the person's message", async () => {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("hello there")], { tokensPerSecond: 40 });
+  const live = await start(fauxModels);
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await live.service.send("bot:a", { text: "Introduce yourself", requestId: "intro:bot:a", hidden: true });
+    await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "two") === true, { what: "the person's message" });
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["two"]);
+    assert.equal(queuedTexts(tape.events).includes("Introduce yourself"), false);
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+/** A projection whose classification can be made to fail or come back empty, with every call and report counted. */
+async function startFlaky() {
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const control = { mode: "ok" as "ok" | "throw" | "empty", calls: 0, reports: 0 };
+  const live = await start(fauxModels, {
+    projection: {
+      classifyRetryMs: 150,
+      onError: () => {
+        control.reports += 1;
+      },
+      quietInputs: async (botId, ids) => {
+        control.calls += 1;
+        if (control.mode === "throw") throw new Error("inspect failed");
+        if (control.mode === "empty") return new Map();
+        return live.service.quietInputs(botId, ids);
+      },
+    },
+  });
+  return { live, control };
+}
+
+test("while classifying fails, a cached routine stays hidden and the person's classified message stays listed; the new one waits, then appears", async () => {
+  const { live, control } = await startFlaky();
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert, classified" });
+    control.mode = "throw";
+    control.calls = 0;
+    control.reports = 0;
+    await live.service.send("bot:a", { text: "drinks", requestId: "desk-3" });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert"], "drinks waits; the routine never shows");
+    assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
+    assert.equal(control.reports, 1, "one report per failure streak");
+    assert.ok(control.calls <= 6, `retries are throttled, saw ${control.calls}`);
+    control.mode = "ok";
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "drinks") === true, {
+      what: "drinks after the retry, with no new frame needed",
+    });
+    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert", "drinks"]);
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("an id the session cannot find stays hidden and is retried", async () => {
+  const { live, control } = await startFlaky();
+  try {
+    const tape = recorder();
+    const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(snapshot);
+    await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    control.mode = "empty";
+    await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.deepEqual(tape.view?.queued, []);
+    control.mode = "ok";
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert after the retry" });
+    await live.service.stop("bot:a");
+    unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
+test("the last reply time ignores the person's newer messages and replies with no text", () => {
+  assert.equal(botLastReplyAt([]), null);
+  assert.equal(
+    botLastReplyAt([
+      { id: "a1", type: "assistant", text: "Here you go.", toolCalls: [], stopReason: "stop", at: 10 },
+      { id: "a2", type: "assistant", text: "  ", toolCalls: [], stopReason: "toolUse", at: 20 },
+      { id: "u2", type: "user", text: "Thanks", imageCount: 0, at: 30 },
+    ]),
+    10,
+  );
+});
+
+test("the last reply time falls back past a reply that has no time", () => {
+  assert.equal(
+    botLastReplyAt([
+      { id: "a1", type: "assistant", text: "Older reply.", toolCalls: [], stopReason: "stop", at: 10 },
+      { id: "a2", type: "assistant", text: "Newer reply with no time.", toolCalls: [], stopReason: "stop" },
+    ]),
+    10,
+  );
+});
+
+test("a Bot held by another process is never reported as needing the person", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      state: async () => ({ kind: "unavailable", reason: "held_by_live_process" }),
+      approvalPending: () => true,
+    },
+  });
+  try {
+    const summary = await live.projection.summary("bot:a");
+    assert.equal(summary.needsYou, false);
+    assert.equal(summary.lastReplyAt, null);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a message the person sent after the last reply does not move the last reply time", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), slowAnswer()], { tokensPerSecond: 40 }));
+  try {
+    const first = await live.service.send("bot:a", { text: "One", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    const answered = await live.projection.summary("bot:a");
+    await live.service.send("bot:a", { text: "Two", requestId: "desk-2" });
+    const waiting = await live.projection.summary("bot:a");
+    assert.equal(waiting.preview, "Two", "the newest message is the person's");
+    assert.equal(waiting.lastReplyAt, answered.lastReplyAt);
+    assert.equal(typeof waiting.lastReplyAt, "number");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a list summary says when the last reply arrived and whether the Bot is waiting on the person", async () => {
+  let waiting = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Here is your meal plan.")]), {
+    projection: { approvalPending: () => waiting },
+  });
+  try {
+    const before = await live.projection.summary("bot:a");
+    assert.equal(before.lastReplyAt, null);
+    assert.equal(before.needsYou, false);
+    const sent = await live.service.send("bot:a", { text: "Plan dinners", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const after = await live.projection.summary("bot:a");
+    assert.equal(after.preview, "Here is your meal plan.");
+    assert.equal(typeof after.lastReplyAt, "number");
+    assert.equal(after.lastReplyAt, after.updatedAt, "the newest message is the reply");
+    waiting = true;
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a list summary reads a waiting question and approval whether or not a chat is open", async () => {
+  let question: BotPendingQuestion | null = null;
+  let approval = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: { question: () => question, approvalPending: () => approval },
+  });
+  try {
+    const closed = async () => (await live.projection.summary("bot:a")).needsYou;
+    assert.equal(await closed(), false);
+    question = { botId: "bot:a", waitId: "w1", toolCallId: "t1", questions: [] };
+    assert.equal(await closed(), true, "a question waits with no chat open");
+    question = null;
+    approval = true;
+    assert.equal(await closed(), true, "an approval waits with no chat open");
+    approval = false;
+    const { unsubscribe } = await live.projection.subscribe("bot:a", { send() {} });
+    try {
+      assert.equal(await closed(), false, "settled with a chat open");
+      approval = true;
+      assert.equal(await closed(), true, "an approval waits with a chat open");
+    } finally {
+      unsubscribe();
+    }
+  } finally {
     await live.close();
   }
 });

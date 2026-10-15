@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { mcpStdioLaunchFingerprint } from "./mcp-field-secrets-core.js";
-import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
+import { createMcpStdioApprovalStore, publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
 
 const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["server"], enabled: true };
@@ -51,5 +51,76 @@ test("removing a server forgets its approval, and an unreadable file approves no
   assert.equal(await approvals.isApproved(local), false);
   // A hand-written approval for another fingerprint does not count.
   await fs.writeFile(file, JSON.stringify({ version: 1, approved: { files: "0".repeat(64) } }));
+  assert.equal(await approvals.isApproved(local), false);
+});
+
+test("an editor save keeps the configured launch approved until its new command is published", async (t) => {
+  const { approvals } = await store(t);
+  const old: McpServer = { ...local, command: "node", args: ["old.js"] };
+  const edited: McpServer = { ...local, command: "node", args: ["new.js"] };
+  let configured: McpServer | undefined = old;
+  await approvals.approve(old);
+
+  // Publication fails after the approval was written: config.json still runs old.js.
+  await assert.rejects(
+    publishWithLaunchApproval(approvals, edited, true, async () => {
+      assert.equal(await approvals.isApproved(old), true, "the configured launch stays approved during the save");
+      throw new Error("disk full");
+    }),
+    /disk full/u,
+  );
+  assert.equal(await approvals.isApproved(old), true);
+  // Reconciling against config.json on disk then drops the unpublished launch.
+  await approvals.retainOnly(old.id, configured);
+  assert.equal(await approvals.isApproved(old), true);
+  assert.equal(await approvals.isApproved(edited), false);
+
+  // The write reached disk but publication still failed (the in-memory config
+  // may be stale): no approval is pruned, so the launch now on disk can run,
+  // and reconciling against disk keeps exactly that one.
+  await assert.rejects(
+    publishWithLaunchApproval(approvals, edited, true, async () => {
+      configured = edited;
+      throw new Error("directory sync failed");
+    }),
+    /directory sync failed/u,
+  );
+  assert.equal(await approvals.isApproved(edited), true);
+  await approvals.retainOnly(edited.id, configured);
+  assert.equal(await approvals.isApproved(edited), true);
+  assert.equal(await approvals.isApproved(old), false);
+  configured = old;
+  await approvals.approve(old);
+
+  // The save goes through: only the published command may run.
+  const saved = await publishWithLaunchApproval(approvals, edited, true, async () => {
+    configured = edited;
+    return edited;
+  });
+  assert.deepEqual(saved, edited);
+  assert.equal(await approvals.isApproved(edited), true);
+  assert.equal(await approvals.isApproved(old), false);
+});
+
+test("reconciling against config never approves a hand-edited command and forgets removed servers", async (t) => {
+  const { approvals } = await store(t);
+  const edited: McpServer = { ...local, args: ["server", "--evil"] };
+  await approvals.approve(local);
+  // A save that never reached publication left its launch approved alongside.
+  await approvals.approveAlongside(edited);
+  assert.equal(await approvals.isApproved(local), true);
+
+  // The authoritative config still holds the original: the unpublished launch goes.
+  await approvals.retainOnly(local.id, local);
+  assert.equal(await approvals.isApproved(local), true);
+  assert.equal(await approvals.isApproved(edited), false);
+
+  // config.json was hand-edited to another command: nothing stays approved.
+  await approvals.retainOnly(local.id, edited);
+  assert.equal(await approvals.isApproved(edited), false);
+  assert.equal(await approvals.isApproved(local), false);
+
+  await approvals.approve(local);
+  await approvals.retainOnly(local.id, undefined);
   assert.equal(await approvals.isApproved(local), false);
 });

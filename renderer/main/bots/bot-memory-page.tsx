@@ -101,6 +101,7 @@ function MemoryGroup({
   store,
   hidden,
   emptyText,
+  compact = false,
   onEdit,
   onDelete,
 }: {
@@ -109,6 +110,8 @@ function MemoryGroup({
   store: BotMemoryStoreView;
   hidden: ReadonlySet<string>;
   emptyText: string;
+  /** The side panel's narrower column: smaller headings and gaps. */
+  compact?: boolean;
   onEdit(entry: BotMemoryEntry): void;
   onDelete(entry: BotMemoryEntry): void;
 }) {
@@ -117,8 +120,15 @@ function MemoryGroup({
   const entries = store.entries.filter((entry) => !hidden.has(removalKey(target, entry.id)));
   const separator = "relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator";
   return (
-    <section aria-labelledby={titleId} className="settings-group mb-7">
-      <h2 id={titleId} className="settings-group-title mb-3 px-4 text-large-strong text-primary">
+    <section aria-labelledby={titleId} className={compact ? "settings-group mb-5" : "settings-group mb-7"}>
+      <h2
+        id={titleId}
+        className={
+          compact
+            ? "settings-group-title mb-2 px-4 text-strong text-primary"
+            : "settings-group-title mb-3 px-4 text-large-strong text-primary"
+        }
+      >
         {title}
       </h2>
       <div className="settings-group-card overflow-visible rounded-card bg-well">
@@ -339,12 +349,13 @@ function useDeferredRemovals(botId: string, onView: (view: BotMemoryView) => voi
   return { hidden, remove, forgetAll };
 }
 
-export function BotMemoryPage({
+/** What a Bot remembers, with edit, delete and erase: Profile → Memory and the side panel's Memory tab. */
+export function BotMemoryContent({
   bot,
-  onClose,
+  compact = false,
 }: {
   bot: Pick<BotDefinition, "id" | "name">;
-  onClose(): void;
+  compact?: boolean;
 }) {
   const qc = useQueryClient();
   const memory = useBotMemory(bot.id);
@@ -415,6 +426,7 @@ export function BotMemoryPage({
           store={view.user}
           hidden={removals.hidden}
           emptyText={`Nothing yet. Tell ${bot.name} something to remember, like “I’m vegetarian.”`}
+          compact={compact}
           onEdit={(entry) => setEditing({ target: "user", entry })}
           onDelete={(entry) => removals.remove("user", entry)}
         />
@@ -424,6 +436,7 @@ export function BotMemoryPage({
           store={view.memory}
           hidden={removals.hidden}
           emptyText={`Nothing yet. ${bot.name} keeps notes here as it helps you.`}
+          compact={compact}
           onEdit={(entry) => setEditing({ target: "memory", entry })}
           onDelete={(entry) => removals.remove("memory", entry)}
         />
@@ -439,14 +452,7 @@ export function BotMemoryPage({
   }
 
   return (
-    <BotPageShell
-      scrollId={`bot-memory:${bot.id}`}
-      title={bot.name}
-      backLabel="Back"
-      onBack={onClose}
-      heading="Memory"
-      description={`What ${bot.name} remembers about you and its work. It’s stored on this Mac, and ${bot.name} uses it in every chat.`}
-    >
+    <>
       {body}
       {editing ? (
         <EditMemoryDialog
@@ -472,7 +478,28 @@ export function BotMemoryPage({
         keepOpenOnConfirm
         onConfirm={erase}
       />
-    </BotPageShell>
+    </>
   );
 }
 
+/** Profile → Memory: the same content as the side panel's Memory tab, as a full page. */
+export function BotMemoryPage({
+  bot,
+  onClose,
+}: {
+  bot: Pick<BotDefinition, "id" | "name">;
+  onClose(): void;
+}) {
+  return (
+    <BotPageShell
+      scrollId={`bot-memory:${bot.id}`}
+      title={bot.name}
+      backLabel="Back"
+      onBack={onClose}
+      heading="Memory"
+      description={`What ${bot.name} remembers about you and its work. It’s stored on this Mac, and ${bot.name} uses it in every chat.`}
+    >
+      <BotMemoryContent bot={bot} />
+    </BotPageShell>
+  );
+}

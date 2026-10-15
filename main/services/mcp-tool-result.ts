@@ -181,17 +181,22 @@ export interface McpScriptResult {
 }
 
 interface ScriptCapture {
-  record?: { content?: readonly unknown[]; errorText?: string; result: McpScriptResult };
+  record?: { content?: readonly unknown[]; structured?: unknown; errorText?: string; result: McpScriptResult };
 }
 const scriptCapture = new AsyncLocalStorage<ScriptCapture>();
 
 /**
  * Run one nested (codemode) tool call and return the script-facing MCP result
  * it produced, if any. The large form is used only when the outcome still
- * carries the exact model-facing result the MCP tool returned: a hook that
- * replaced or blocked it (permissions, durable-effect faults) wins.
+ * carries the exact model-facing result the MCP tool returned (content,
+ * structured content, details, and error state): a hook that replaced,
+ * removed, or blocked any of it (permissions, redaction, durable-effect
+ * faults) wins.
  */
-export async function captureMcpScriptResult<T extends { result: { content: readonly unknown[] }; isError: boolean }>(
+export async function captureMcpScriptResult<T extends {
+  result: { content: readonly unknown[]; structuredContent?: unknown; details?: unknown };
+  isError: boolean;
+}>(
   run: () => Promise<T>,
 ): Promise<{ outcome: T; script?: McpScriptResult }> {
   const capture: ScriptCapture = {};
@@ -199,9 +204,12 @@ export async function captureMcpScriptResult<T extends { result: { content: read
   const captured = capture.record;
   if (!captured) return { outcome };
   const [first] = outcome.result.content;
+  const { result } = outcome;
   const unchanged = captured.content !== undefined
-    ? !outcome.isError && outcome.result.content === captured.content
-    : outcome.isError && outcome.result.content.length === 1 && record(first) && first.text === captured.errorText;
+    ? !outcome.isError && result.content === captured.content &&
+      result.structuredContent === captured.structured && result.details === null
+    : outcome.isError && result.content.length === 1 && record(first) && first.text === captured.errorText &&
+      result.structuredContent === undefined;
   return unchanged ? { outcome, script: captured.result } : { outcome };
 }
 
@@ -250,7 +258,7 @@ export async function executeMcpAgentTool(
   }
   const structured = record(result) ? structuredContent(result.structuredContent) : undefined;
   const content: AgentToolResult<null>["content"] = [{ type: "text", text }, ...images.values()];
-  if (capture) capture.record = { content, result: mcpScriptResult(result) };
+  if (capture) capture.record = { content, structured, result: mcpScriptResult(result) };
   return { content, details: null,
     ...(structured === undefined ? {} : { structuredContent: structured }) };
 }

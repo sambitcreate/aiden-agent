@@ -349,6 +349,31 @@ test("a hook that rewrites an MCP result wins over the script-facing full result
   assert.deepEqual(JSON.parse(scriptText(result)), { content: [{ type: "text", text: "redacted" }], structured: null });
 });
 
+test("a hook that replaces or drops only structured content wins over the script-facing full result", async (t) => {
+  const tools = await mcpFixture(t, {
+    filtered: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { restricted: "original" } }),
+    dropped: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { restricted: "original" } }),
+    kept: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { open: "value" } }),
+  });
+  const { tool } = codemodeOver(tools, async ({ toolCall, result }) => {
+    if (toolCall.name === "mcp_filtered") return { structuredContent: { filtered: true } };
+    // Returning the same content array without structured content removes it.
+    if (toolCall.name === "mcp_dropped") return { content: result.content };
+    return undefined;
+  });
+  const result = await tool.execute("parent", { code: `
+    for (const name of ["mcp_filtered", "mcp_dropped", "mcp_kept"]) {
+      const r = await tools[name]({});
+      text({ name, structured: r.structuredContent ?? null });
+    }` });
+  assert.equal(result.isError, false, scriptText(result));
+  assert.deepEqual(result.content.map((item) => JSON.parse((item as { text: string }).text)), [
+    { name: "mcp_filtered", structured: { filtered: true } },
+    { name: "mcp_dropped", structured: null },
+    { name: "mcp_kept", structured: { open: "value" } },
+  ]);
+});
+
 test("MCP call declarations type the resolved result with the tool's structured-content schema", async () => {
   const outputSchema = {
     type: "object", properties: { items: { type: "array", items: { $ref: "#/$defs/Item" } } }, required: ["items"],
