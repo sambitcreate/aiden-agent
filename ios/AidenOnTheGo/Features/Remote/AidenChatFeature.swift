@@ -5002,7 +5002,7 @@ struct AidenWorkspaceChatsView: View {
                             Button { beginRename(chat) } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
-                            .tint(.accentColor)
+                            .tint(palette.fillAccent)
                         }
                         .contextMenu {
                             Button { beginRename(chat) } label: { Label("Rename", systemImage: "pencil") }
@@ -6343,7 +6343,7 @@ private struct AidenMessageView: View, Equatable {
         return AidenMessageTextView(role: message.role, content: visibleText)
             .foregroundStyle(
                 usesBotBubble && message.role == .user
-                    ? Color.white
+                    ? palette.onFillAccent
                     : palette.foreground
             )
             .padding(usesWorkspaceBubble || usesBotBubble ? 12 : 0)
@@ -6352,7 +6352,7 @@ private struct AidenMessageView: View, Equatable {
                     AidenBotMessageBubbleShape()
                     .fill(
                         message.role == .user
-                            ? palette.accent
+                            ? palette.fillAccent
                             : Color(uiColor: .secondarySystemFill)
                     )
                 } else if usesWorkspaceBubble {
@@ -7843,10 +7843,10 @@ struct AidenApprovalCard: View {
                         Button { onAllow(.once) } label: {
                             Text(AidenApprovalPresentation.allowTitle(for: kind))
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.canvas)
+                                .foregroundStyle(palette.onFillAccent)
                                 .padding(.horizontal, 13)
                                 .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.accent)
+                                .aidenApprovalActionGlass(tint: palette.fillAccent)
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
@@ -8062,10 +8062,10 @@ struct AidenQuestionCard: View {
                         } label: {
                             Text(draft.activeIndex < prompt.questions.count - 1 ? "Next" : "Submit")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.canvas)
+                                .foregroundStyle(palette.onFillAccent)
                                 .padding(.horizontal, 13)
                                 .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.accent)
+                                .aidenApprovalActionGlass(tint: palette.fillAccent)
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 5)
@@ -8812,11 +8812,8 @@ private struct AidenComposerView: View {
                         Image(systemName: "arrow.up")
                             .font(.headline.bold())
                             .frame(width: 30, height: 30)
-                            .background(sendButtonBackground, in: Circle())
-                            .foregroundStyle(sendButtonForeground)
-                            .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AidenSolidFillButtonStyle(shape: Circle(), hitSize: 44))
                     .disabled(!model.canSend)
                     .accessibilityLabel("Send message")
                 }
@@ -8876,15 +8873,6 @@ private struct AidenComposerView: View {
     private var visiblePendingAttachments: [AidenAttachmentReference] {
         guard !attachmentPicker.committingAssets.isEmpty else { return model.pendingAttachments }
         return Array(model.pendingAttachments.prefix(attachmentPicker.committingPendingPrefixCount))
-    }
-
-    private var sendButtonBackground: Color {
-        if model.canSend { return palette.accent }
-        return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
-    }
-
-    private var sendButtonForeground: Color {
-        model.canSend ? palette.canvas : palette.secondary
     }
 
     /// One pill while a run streams, matching the desktop and Android control:
@@ -8952,12 +8940,12 @@ private struct AidenComposerView: View {
     }
 
     private var runInputButtonBackground: Color {
-        if model.canSubmitRunInput { return palette.accent }
+        if model.canSubmitRunInput { return palette.fillAccent }
         return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
     }
 
     private var runInputButtonForeground: Color {
-        model.canSubmitRunInput ? palette.canvas : palette.secondary
+        model.canSubmitRunInput ? palette.onFillAccent : palette.secondary
     }
 
     private var selectedModelAccessibilityValue: String {

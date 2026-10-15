@@ -236,9 +236,18 @@
   --color-status-warning: var(--status-warning);
   --color-status-warning-surface: var(--status-warning-surface);
   --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-hover: var(--accent-hover);
   --color-accent-active: var(--accent-active);
+  --color-fill-accent: var(--fill-accent);
+  --color-fill-accent-foreground: var(--fill-accent-foreground);
+  --color-fill-accent-hover: var(--fill-accent-hover);
+  --color-fill-accent-active: var(--fill-accent-active);
+  --color-fill-danger: var(--fill-danger);
+  --color-fill-danger-foreground: var(--fill-danger-foreground);
+  --color-fill-danger-hover: var(--fill-danger-hover);
+  --color-fill-danger-active: var(--fill-danger-active);
   --color-focus-ring: var(--focus-ring);
   --color-red: var(--support-red);
   --color-red-foreground: var(--support-red-foreground);
@@ -317,9 +326,9 @@
   --motion-press-distance: 1px;
   --text-primary: #3D3F41;
   --toolbar-icon: #77797a;
-  --text-secondary: #545963;
-  --text-tertiary: #595E69;
-  --text-quaternary: #5D6370;
+  --text-secondary: #535862;
+  --text-tertiary: #585D69;
+  --text-quaternary: #5C626F;
   --surface-background: rgb(246 247 249 / 0.94);
   --surface-sidebar: rgb(238 240 243 / 0.78);
   --surface-popover: #ffffff;
@@ -334,10 +343,19 @@
   --border-field: rgb(61 63 65 / 0.144);
   --border-separator: rgb(61 63 65 / 0.087);
   --accent: #006ad6;
+  --accent-text: #0060C3;
   --accent-foreground: #ffffff;
   --model-pad-knob-foreground: #000000;
   --accent-hover: #0063c7;
   --accent-active: #005bb8;
+  --fill-accent: #006AD6;
+  --fill-accent-foreground: #FFFFFF;
+  --fill-accent-hover: #0063C7;
+  --fill-accent-active: #005BB8;
+  --fill-danger: #B63129;
+  --fill-danger-foreground: #FFFFFF;
+  --fill-danger-hover: #A92E26;
+  --fill-danger-active: #9D2A23;
   --focus-ring: var(--text-primary);
   --status-accent: #155BA2;
   --status-accent-surface: rgb(0 106 214 / 0.080);
@@ -382,7 +400,7 @@
   --window-gradient-start: rgb(246 247 249 / 0.98);
   --window-gradient-end: rgb(242 243 246 / 0.94);
   --glass-fill: rgb(238 240 243 / 0.68);
-  --syntax-comment: #595E69;
+  --syntax-comment: #585D69;
   --syntax-keyword: #B62E42;
   --syntax-string: #146B67;
   --syntax-number: #235EB1;
@@ -405,9 +423,9 @@
   color-scheme: dark;
   --text-primary: #D1D4DA;
   --toolbar-icon: #d5d7dd;
-  --text-secondary: #A9B1BA;
-  --text-tertiary: #A2AAB4;
-  --text-quaternary: #9AA3AE;
+  --text-secondary: #B0B7C0;
+  --text-tertiary: #A9B2BB;
+  --text-quaternary: #A3ACB6;
   --surface-background: rgb(24 27 33 / 0.94);
   --surface-sidebar: rgb(32 36 44 / 0.78);
   --surface-popover: #292e37;
@@ -422,20 +440,29 @@
   --border-field: rgb(209 212 218 / 0.162);
   --border-separator: rgb(209 212 218 / 0.097);
   --accent: #3e97f6;
+  --accent-text: #6AAFF8;
   --accent-foreground: #000000;
   --model-pad-knob-foreground: #000000;
   --accent-hover: #59a6f7;
   --accent-active: #68aef8;
+  --fill-accent: #3177C2;
+  --fill-accent-foreground: #FFFFFF;
+  --fill-accent-hover: #2C6BAF;
+  --fill-accent-active: #28629F;
+  --fill-danger: #CC4B46;
+  --fill-danger-foreground: #FFFFFF;
+  --fill-danger-hover: #B8443F;
+  --fill-danger-active: #A73E39;
   --focus-ring: var(--text-primary);
   --status-accent: #71ACEC;
   --status-accent-surface: rgb(62 151 246 / 0.080);
-  --status-red: #EF9493;
-  --status-red-surface: rgb(255 114 108 / 0.080);
+  --status-red: #EFA3A1;
+  --status-red-surface: rgb(255 136 131 / 0.080);
   --status-green: #6AD29C;
   --status-green-surface: rgb(50 209 122 / 0.080);
   --status-warning: #EFBD61;
   --status-warning-surface: rgb(255 176 32 / 0.080);
-  --support-red: #FF726C;
+  --support-red: #FF8883;
   --support-red-foreground: #000000;
   --support-green: #32D17A;
   --support-green-foreground: #000000;
@@ -469,7 +496,7 @@
   --window-gradient-start: rgb(24 27 33 / 0.98);
   --window-gradient-end: rgb(28 32 39 / 0.94);
   --glass-fill: rgb(32 36 44 / 0.68);
-  --syntax-comment: #A2AAB4;
+  --syntax-comment: #A9B2BB;
   --syntax-keyword: #FF7F8D;
   --syntax-string: #83D7CC;
   --syntax-number: #7EB5FD;
@@ -1420,10 +1447,10 @@ textarea {
 }
 
 .model-pad-knob[data-confirmed="true"] {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--fill-accent);
+  color: var(--fill-accent-foreground);
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
+    0 0 0 2px color-mix(in srgb, var(--fill-accent), transparent 58%),
     var(--elevation-control-hover);
 }
 

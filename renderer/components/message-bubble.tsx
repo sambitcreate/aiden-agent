@@ -84,7 +84,7 @@ export function MessageBubble({
               className="flex max-w-full items-center gap-1.5 rounded-lg bg-status-accent-surface px-2 py-1 text-small text-secondary"
               aria-label={`${skill.name}, ${skill.source} skill`}
             >
-              <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+              <AidenIcon aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
               <span className="truncate font-medium text-primary">{skill.name}</span>
               <span className="text-mini capitalize text-tertiary">{skill.source}</span>
             </div>
@@ -175,7 +175,7 @@ function UserMessageContent({ content }: { content: string }) {
               key={key}
               href={segment.href}
               descriptor={descriptor}
-              className="text-accent underline underline-offset-2"
+              className="text-accent-text underline underline-offset-2"
             >
               {segment.text}
             </RichLink>
@@ -185,7 +185,7 @@ function UserMessageContent({ content }: { content: string }) {
           <a
             key={key}
             href={segment.href}
-            className="rounded-[2px] text-accent underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="rounded-[2px] text-accent-text underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             {segment.text}
           </a>

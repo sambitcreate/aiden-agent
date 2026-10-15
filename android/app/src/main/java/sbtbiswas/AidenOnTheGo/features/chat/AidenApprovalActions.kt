@@ -20,7 +20,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
 import sbtbiswas.AidenOnTheGo.models.AidenPendingApproval
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSplitButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
@@ -36,7 +35,6 @@ internal fun AidenApprovalActions(
     onRespond: (AidenApprovalDecision, AidenApprovalScope) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val palette = AidenTheme.palette
     val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
     val allowLabel = if (isAutomation) stringResource(R.string.chat_approval_approve_task) else stringResource(R.string.chat_approval_allow_once)
     val broaderScopes = approval.scopes.filter { it != AidenApprovalScope.ONCE }
@@ -66,8 +64,7 @@ internal fun AidenApprovalActions(
             menuExpanded = scopeMenuOpen && enabled,
             onMenuExpandedChange = { scopeMenuOpen = it },
             menuContentDescription = stringResource(R.string.chat_approval_more_options),
-            enabled = enabled,
-            containerColor = palette.accent
+            enabled = enabled
         ) {
             broaderScopes.forEach { scope ->
                 DropdownMenuItem(

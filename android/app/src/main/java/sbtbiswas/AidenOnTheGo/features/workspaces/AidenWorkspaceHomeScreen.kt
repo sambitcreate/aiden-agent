@@ -56,7 +56,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -142,6 +141,7 @@ import sbtbiswas.AidenOnTheGo.R
 import androidx.annotation.StringRes
 import androidx.compose.ui.res.pluralStringResource
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 
 private enum class AidenWorkspaceDestination { HOME, DIRECTORY }
 private const val AIDEN_WORKSPACE_SIDEBAR_PREVIEW_LIMIT = 20
@@ -371,8 +371,8 @@ private fun AidenWorkspaceHome(
                     onClick = {
                         if (connectionState == AidenConnectionState.CONNECTED) showNewChatChoices = true
                     },
-                    containerColor = palette.accent,
-                    contentColor = palette.onAccent,
+                    containerColor = palette.accentFill.fill,
+                    contentColor = palette.accentFill.content,
                     shape = CircleShape,
                     modifier = Modifier.semantics { contentDescription = newChatDescription }
                 ) {
@@ -844,7 +844,7 @@ internal fun AidenWorkspaceChatLoadErrorState(
         body = message,
         modifier = modifier.semantics { error(message) },
         action = {
-            Button(onClick = onRetry) { Text(stringResource(R.string.action_try_again)) }
+            AidenPrimaryButton(text = stringResource(R.string.action_try_again), onClick = onRetry)
         }
     )
 }

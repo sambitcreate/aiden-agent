@@ -37,6 +37,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenSwitchColors
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -259,6 +260,7 @@ fun AidenBotRoutinesSection(botId: String, client: AidenRemoteClient?, offersSug
                                     }
                                 }
                             },
+                            colors = aidenSwitchColors(),
                             modifier = Modifier.semantics { contentDescription = toggleLabel }
                         )
                     }

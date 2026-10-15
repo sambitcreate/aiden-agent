@@ -9961,6 +9961,105 @@ final class AidenAppearanceTests: XCTestCase {
         }
     }
 
+    func testSolidFillsCarryReadableContentInEveryStateForEveryPreset() {
+        for preset in AidenThemePresetID.allCases {
+            for scheme in [ColorScheme.light, .dark] {
+                let palette = AidenThemeCatalog.palette(preset: preset, scheme: scheme)
+                for (tone, fill) in [("accent", palette.accentSolidFill), ("danger", palette.dangerSolidFill)] {
+                    let context = "\(preset) \(scheme) \(tone)"
+                    XCTAssertTrue(["#FFFFFF", "#000000"].contains(fill.contentHex), context)
+                    XCTAssertGreaterThanOrEqual(Self.contrast(fill.fillHex, fill.contentHex), 4.5, context)
+                    XCTAssertGreaterThanOrEqual(Self.contrast(fill.pressedHex, fill.contentHex), 4.5, context)
+                    XCTAssertNotEqual(fill.pressedHex, fill.fillHex, "\(context): pressed state must be visible")
+                }
+            }
+        }
+    }
+
+    func testDarkChromaticFillsDeepenForWhiteContentAndKeepTheirHue() {
+        for preset in AidenThemePresetID.allCases {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
+            var fills = [("danger", palette.dangerHex, palette.dangerSolidFill)]
+            if preset != .monochrome {
+                fills.append(("accent", palette.accentHex, palette.accentSolidFill))
+            }
+            for (tone, rawHex, fill) in fills {
+                let context = "\(preset) dark \(tone)"
+                XCTAssertEqual(fill.contentHex, "#FFFFFF", context)
+                // The bright dark-theme hue cannot carry white on its own, so the fill must be deeper.
+                XCTAssertLessThan(Self.contrast(rawHex, "#FFFFFF"), 4.5, context)
+                XCTAssertLessThan(Self.luminance(fill.fillHex), Self.luminance(rawHex), context)
+                XCTAssertLessThan(Self.hueDistance(fill.fillHex, rawHex), 3, context)
+                XCTAssertLessThan(Self.luminance(fill.pressedHex), Self.luminance(fill.fillHex), context)
+            }
+        }
+    }
+
+    func testDarkFillsMatchTheDesktopResolver() {
+        // Values produced by the desktop `solidFill()` in renderer/shared/appearance.ts.
+        let expected: [(AidenThemePresetID, accent: String, danger: String)] = [
+            (.aiden, "#3177C2", "#CC4B46"),
+            (.berry, "#BE5082", "#B9575E"),
+            (.paper, "#897354", "#BC5656"),
+        ]
+        for (preset, accent, danger) in expected {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .dark)
+            XCTAssertEqual(palette.accentSolidFill.fillHex, accent, "\(preset)")
+            XCTAssertEqual(palette.dangerSolidFill.fillHex, danger, "\(preset)")
+        }
+        XCTAssertEqual(AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).dangerSolidFill.fillHex, "#D4404E")
+    }
+
+    func testMonochromeDarkAccentStaysWhiteWithBlackContent() {
+        let fill = AidenThemeCatalog.palette(preset: .monochrome, scheme: .dark).accentSolidFill
+        XCTAssertEqual(fill.fillHex, "#FFFFFF")
+        XCTAssertEqual(fill.contentHex, "#000000")
+    }
+
+    func testLightPresetsKeepTheirAccentWithWhiteContent() {
+        for preset in AidenThemePresetID.allCases {
+            let palette = AidenThemeCatalog.palette(preset: preset, scheme: .light)
+            XCTAssertEqual(palette.accentSolidFill.fillHex, palette.accentHex, "\(preset)")
+            XCTAssertEqual(palette.accentSolidFill.contentHex, "#FFFFFF", "\(preset)")
+            XCTAssertEqual(palette.dangerSolidFill.contentHex, "#FFFFFF", "\(preset)")
+            XCTAssertLessThan(Self.hueDistance(palette.dangerSolidFill.fillHex, palette.dangerHex), 3, "\(preset)")
+        }
+    }
+
+    private static func channels(_ hex: String) -> [Double] {
+        let value = Int(hex.dropFirst(), radix: 16) ?? 0
+        return [(value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF].map { Double($0) / 255 }
+    }
+
+    private static func luminance(_ hex: String) -> Double {
+        let linear = channels(hex).map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+
+    private static func contrast(_ first: String, _ second: String) -> Double {
+        let a = luminance(first)
+        let b = luminance(second)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    private static func hue(_ hex: String) -> Double {
+        let rgb = channels(hex)
+        let high = rgb.max()!
+        let delta = high - rgb.min()!
+        guard delta > 0 else { return 0 }
+        let sector: Double = switch high {
+        case rgb[0]: (rgb[1] - rgb[2]) / delta
+        case rgb[1]: (rgb[2] - rgb[0]) / delta + 2
+        default: (rgb[0] - rgb[1]) / delta + 4
+        }
+        return (sector * 60 + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private static func hueDistance(_ first: String, _ second: String) -> Double {
+        let distance = abs(hue(first) - hue(second))
+        return min(distance, 360 - distance)
+    }
+
     @MainActor
     func testAppearanceSelectionIsDeviceLocalAndPersistsAllChoices() throws {
         let suiteName = "AidenAppearanceTests.\(UUID().uuidString)"

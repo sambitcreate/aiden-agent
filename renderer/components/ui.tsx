@@ -108,11 +108,11 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         variant === "bar" &&
           "bg-transparent text-toolbar-icon hover:bg-list-hover hover:text-primary active:bg-list-selection aria-pressed:bg-list-selection aria-pressed:text-primary aria-expanded:bg-list-selection aria-expanded:text-primary focus-visible:bg-list-hover",
         variant === "glassAccent" &&
-          "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+          "bg-fill-accent text-fill-accent-foreground shadow-control hover:bg-fill-accent-hover hover:shadow-control-hover active:bg-fill-accent-active active:shadow-control-pressed focus-visible:bg-fill-accent-hover",
         variant === "accent" &&
-          "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+          "bg-fill-accent text-fill-accent-foreground shadow-control hover:bg-fill-accent-hover hover:shadow-control-hover active:bg-fill-accent-active active:shadow-control-pressed focus-visible:bg-fill-accent-hover",
         variant === "destructive" &&
-          "bg-red text-red-foreground shadow-control hover:bg-red hover:shadow-control-hover active:bg-red active:shadow-control-pressed focus-visible:bg-red",
+          "bg-fill-danger text-fill-danger-foreground shadow-control hover:bg-fill-danger-hover hover:shadow-control-hover active:bg-fill-danger-active active:shadow-control-pressed focus-visible:bg-fill-danger-hover",
         className,
       )}
       {...props}
@@ -1627,8 +1627,12 @@ export function AlertDialog({
 
 const menuContentClass =
   "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
+// Destructive rows keep their red when highlighted: a deep red fill with
+// white text in dark themes rather than the neutral accent highlight.
+const destructiveHighlightClass =
+  "data-[highlighted]:bg-fill-danger data-[highlighted]:text-fill-danger-foreground";
 const menuItemClass =
-  "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+  "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[highlighted]:bg-fill-accent data-[highlighted]:text-fill-accent-foreground data-[highlighted]:**:text-current data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -1678,7 +1682,8 @@ export const DropdownMenuItem = React.forwardRef<
     <DropdownMenuPrimitive.Item
       ref={ref}
       className={cn(menuItemClass, color === "red" && "text-red",
-        color === "status-red" && "text-status-red", className)}
+        color === "status-red" && "text-status-red",
+        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
       {...props}
     />
   );
@@ -1701,7 +1706,7 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
       <span className="flex min-w-0 flex-col">
         <span>{children}</span>
         {sublabel ? (
-          <span className="max-w-72 text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+          <span className="max-w-72 text-small text-tertiary">
             {sublabel}
           </span>
         ) : null}
@@ -1819,7 +1824,8 @@ export const ContextMenuItem = React.forwardRef<
     <ContextMenuPrimitive.Item
       ref={ref}
       className={cn(menuItemClass, color === "red" && "text-red",
-        color === "status-red" && "text-status-red", className)}
+        color === "status-red" && "text-status-red",
+        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
       {...props}
     />
   );
@@ -1905,12 +1911,12 @@ export const Switch = React.forwardRef<
     <SwitchPrimitive.Root
       ref={ref}
       className={cn(
-        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
+        "relative inline-flex h-6 w-10 shrink-0 items-center overflow-visible rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-fill-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-fill-accent-hover data-[state=checked]:focus-visible:bg-fill-accent-hover disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-(--motion-duration) ease-standard data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 shrink-0 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-(--motion-duration) ease-standard data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-fill-accent-foreground" />
     </SwitchPrimitive.Root>
   );
 });
@@ -1936,12 +1942,12 @@ export const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-accent disabled:pointer-events-none disabled:opacity-45",
+        "grid size-4 place-items-center rounded-full border-0 bg-tertiary outline-none transition-[background-color,box-shadow,opacity] duration-(--motion-duration) ease-standard hover:bg-secondary focus-visible:outline-none data-[state=checked]:bg-fill-accent disabled:pointer-events-none disabled:opacity-45",
         className,
       )}
       {...props}
     >
-      <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-accent-foreground" />
+      <RadioGroupPrimitive.Indicator className="size-1.5 rounded-full bg-fill-accent-foreground" />
     </RadioGroupPrimitive.Item>
   );
 });

@@ -276,12 +276,25 @@ struct AidenPalette: Equatable, Sendable {
     var raised: Color { Color(aidenHex: raisedHex) }
     var foreground: Color { Color(aidenHex: foregroundHex) }
     var secondary: Color { Color(aidenHex: secondaryHex) }
+    /// The bright accent for text and non-text marks (links, dots, progress,
+    /// toggles). Filled controls that carry a label or glyph use `fillAccent`.
     var accent: Color { Color(aidenHex: accentHex) }
-    /// Foreground for controls filled with the theme accent.
-    var onAccent: Color { canvas }
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }
+
+    /// Solid accent fill for labelled controls: send buttons, prominent
+    /// buttons, selected chips, accent bubbles, swipe actions.
+    var accentSolidFill: AidenSolidFill { AidenSolidFill(baseHex: accentHex) }
+    /// Solid danger fill for destructive labelled controls.
+    var dangerSolidFill: AidenSolidFill { AidenSolidFill(baseHex: dangerHex) }
+
+    var fillAccent: Color { Color(aidenHex: accentSolidFill.fillHex) }
+    var onFillAccent: Color { Color(aidenHex: accentSolidFill.contentHex) }
+    var fillAccentPressed: Color { Color(aidenHex: accentSolidFill.pressedHex) }
+    var fillDanger: Color { Color(aidenHex: dangerSolidFill.fillHex) }
+    var onFillDanger: Color { Color(aidenHex: dangerSolidFill.contentHex) }
+    var fillDangerPressed: Color { Color(aidenHex: dangerSolidFill.pressedHex) }
 
     func applyingContrast(_ contrast: Int, baseline: Int) -> AidenPalette {
         guard contrast != baseline else { return self }
@@ -299,6 +312,128 @@ struct AidenPalette: Equatable, Sendable {
             warningHex: warningHex,
             dangerHex: dangerHex
         )
+    }
+}
+
+/// A solid fill that carries a label or glyph, mirroring the desktop
+/// `solidFill()` resolver. The raw hue moves toward black only as far as WCAG
+/// AA (4.5:1) needs for white content, at most 45% so the hue does not turn
+/// muddy. Colors that already carry white (light-scheme accents) stay as they
+/// are. Hues that would turn muddy first (Monochrome's white accent) keep their
+/// own color and take whichever of black or white reads better.
+///
+/// The same rule serves both schemes: light accents already carry white at
+/// step 0, dark hues deepen, and light dangers that miss 4.5:1 with white
+/// deepen slightly, matching the desktop's contrast-corrected light danger.
+struct AidenSolidFill: Equatable, Sendable {
+    static let minimumContrast = 4.5
+    static let maximumDeepening = 45
+
+    let fillHex: String
+    let contentHex: String
+    let pressedHex: String
+
+    init(baseHex: String) {
+        let base = Color.mixHex(baseHex, baseHex, fraction: 0)
+        for step in 0...Self.maximumDeepening {
+            let fill = Color.mixHex(base, "#000000", fraction: Double(step) / 100)
+            if Color.contrastRatio(fill, "#FFFFFF") >= Self.minimumContrast {
+                fillHex = fill
+                contentHex = "#FFFFFF"
+                pressedHex = Self.pressed(fill)
+                return
+            }
+        }
+        let white = Color.contrastRatio(base, "#FFFFFF") >= Color.contrastRatio(base, "#000000")
+        fillHex = base
+        contentHex = white ? "#FFFFFF" : "#000000"
+        pressedHex = Self.pressed(base)
+    }
+
+    /// Pressed fills go 10% darker. A fill that is already black (Monochrome
+    /// light) lifts toward white instead so the press stays visible.
+    private static func pressed(_ fill: String) -> String {
+        let darker = Color.mixHex(fill, "#000000", fraction: 0.1)
+        return darker == fill ? Color.mixHex(fill, "#FFFFFF", fraction: 0.12) : darker
+    }
+}
+
+enum AidenSolidFillTone: Sendable {
+    case accent
+    case danger
+}
+
+extension AidenPalette {
+    func solidFill(_ tone: AidenSolidFillTone) -> AidenSolidFill {
+        switch tone {
+        case .accent: accentSolidFill
+        case .danger: dangerSolidFill
+        }
+    }
+}
+
+extension View {
+    /// Tints a prominent button (`.borderedProminent`, `.glassProminent`) or a
+    /// swipe action with the solid fill and gives its label the matching
+    /// content color, so labels never sit on the bright text-grade accent.
+    func aidenSolidFillTint(_ tone: AidenSolidFillTone = .accent) -> some View {
+        modifier(AidenSolidFillTintModifier(tone: tone))
+    }
+}
+
+private struct AidenSolidFillTintModifier: ViewModifier {
+    @Environment(\.aidenPalette) private var palette
+    let tone: AidenSolidFillTone
+
+    func body(content: Content) -> some View {
+        let fill = palette.solidFill(tone)
+        content
+            .tint(Color(aidenHex: fill.fillHex))
+            .foregroundStyle(Color(aidenHex: fill.contentHex))
+    }
+}
+
+/// A custom-shaped button painted with a solid fill that deepens while
+/// pressed. Disabled buttons fall back to the neutral control fill and
+/// secondary content. `hitSize` widens the touch target around a small glyph.
+struct AidenSolidFillButtonStyle<S: Shape>: ButtonStyle {
+    var tone: AidenSolidFillTone = .accent
+    let shape: S
+    var hitSize: CGFloat? = nil
+
+    func makeBody(configuration: Configuration) -> some View {
+        AidenSolidFillButtonBody(
+            label: configuration.label,
+            isPressed: configuration.isPressed,
+            tone: tone,
+            shape: shape,
+            hitSize: hitSize
+        )
+    }
+}
+
+private struct AidenSolidFillButtonBody<Label: View, S: Shape>: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+    let label: Label
+    let isPressed: Bool
+    let tone: AidenSolidFillTone
+    let shape: S
+    let hitSize: CGFloat?
+
+    var body: some View {
+        let fill = palette.solidFill(tone)
+        label
+            .foregroundStyle(isEnabled ? Color(aidenHex: fill.contentHex) : palette.secondary)
+            .background(
+                isEnabled
+                    ? Color(aidenHex: isPressed ? fill.pressedHex : fill.fillHex)
+                    : palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12),
+                in: shape
+            )
+            .frame(width: hitSize, height: hitSize)
+            .contentShape(Rectangle())
     }
 }
 
@@ -696,6 +831,22 @@ extension Color {
         let amount = min(max(fraction, 0), 1)
         let channels = zip(start, end).map { Int((Double($0.0) + (Double($0.1) - Double($0.0)) * amount).rounded()) }
         return String(format: "#%02X%02X%02X", channels[0], channels[1], channels[2])
+    }
+
+    /// WCAG 2.x relative luminance of an sRGB hex color.
+    static func relativeLuminance(_ hex: String) -> Double {
+        let channels = rgb(hex).map { value -> Double in
+            let channel = Double(value) / 255
+            return channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+    }
+
+    /// WCAG 2.x contrast ratio between two sRGB hex colors.
+    static func contrastRatio(_ first: String, _ second: String) -> Double {
+        let a = relativeLuminance(first)
+        let b = relativeLuminance(second)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
 
     private static func rgb(_ hex: String) -> [Int] {

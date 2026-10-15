@@ -55,6 +55,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenFilledIconButtonColors
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReadableWidth
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenTextFieldColors
 import java.time.Instant
@@ -532,7 +533,7 @@ private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
             message.label?.let { label ->
                 Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
             }
-            val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, faded = false)
+            val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, palette.accentFill, faded = false)
             Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
                 Text(
                     message.text,
@@ -836,7 +837,7 @@ private fun AidenBotSessionComposer(
                 onClick = onSend,
                 enabled = enabled && draft.isNotBlank(),
                 shape = AidenShape.Button,
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = palette.accent, contentColor = MaterialTheme.colorScheme.onPrimary),
+                colors = aidenFilledIconButtonColors(),
                 modifier = Modifier.size(AidenUi.MinimumTouchTarget)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.bot_session_send))

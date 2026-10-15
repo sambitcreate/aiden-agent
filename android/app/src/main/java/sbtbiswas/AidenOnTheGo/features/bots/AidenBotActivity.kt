@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import kotlinx.coroutines.delay
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import sbtbiswas.AidenOnTheGo.config.AidenSolidFill
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkProperty
@@ -255,13 +256,13 @@ fun aidenBotFollowsTranscriptEnd(lastVisibleIndex: Int, totalCount: Int, justSen
     justSent || totalCount == 0 || lastVisibleIndex >= totalCount - 1 - slack
 
 /**
- * The person's bubble: the accent fill once it's in the reply, the tonal accent container
- * while it waits. The container pair is opaque, so the words keep their contrast; the bubble
- * is never dimmed with alpha.
+ * The person's bubble: the labelled accent [fill] once it's in the reply, the tonal accent
+ * container while it waits. The container pair is opaque, so the words keep their contrast;
+ * the bubble is never dimmed with alpha.
  */
-fun aidenBotUserBubbleColors(scheme: ColorScheme, faded: Boolean): AidenBotBubbleColors =
+fun aidenBotUserBubbleColors(scheme: ColorScheme, fill: AidenSolidFill, faded: Boolean): AidenBotBubbleColors =
     if (faded) AidenBotBubbleColors(scheme.primaryContainer, scheme.onPrimaryContainer)
-    else AidenBotBubbleColors(scheme.primary, scheme.onPrimary)
+    else AidenBotBubbleColors(fill.fill, fill.content)
 
 /** The Steer/Queue choice: the person's pick while the Bot works, Queue again once the turn ends. */
 fun aidenBotBusyMode(current: AidenStreamInputMode, isRunning: Boolean): AidenStreamInputMode =
@@ -387,7 +388,7 @@ private fun AidenBotPendingBubbleView(
     modifier: Modifier = Modifier,
     caption: @Composable () -> Unit = {}
 ) {
-    val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, faded)
+    val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, AidenTheme.palette.accentFill, faded)
     Column(horizontalAlignment = Alignment.End, modifier = modifier.fillMaxWidth()) {
         Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
             Text(

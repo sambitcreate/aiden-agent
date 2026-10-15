@@ -2434,7 +2434,7 @@ private struct AidenWorkspaceInteractiveRow: View {
                 Label("Rename", systemImage: "pencil")
             }
             .disabled(serverMutationDisabled)
-            .tint(palette.accent)
+            .tint(palette.fillAccent)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if let onRemove {
@@ -2442,7 +2442,7 @@ private struct AidenWorkspaceInteractiveRow: View {
                     Label("Remove from Agent", systemImage: "minus.circle")
                 }
                 .disabled(serverMutationDisabled)
-                .tint(palette.danger)
+                .tint(palette.fillDanger)
             }
 
             Button(action: onToggleArchive) {

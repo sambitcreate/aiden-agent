@@ -1268,7 +1268,7 @@ private fun UserMessageRow(
                     forkActions = forkActions
                 ) {
                     Surface(
-                        color = palette.accent,
+                        color = palette.accentFill.fill,
                         shape = shape,
                         modifier = Modifier.widthIn(max = 320.dp)
                     ) {
@@ -1277,7 +1277,7 @@ private fun UserMessageRow(
                                 Text(
                                     text = message.text,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = palette.onAccent
+                                    color = palette.accentFill.content
                                 )
                             }
                             fallbackAttachments.forEach { att ->
@@ -1286,14 +1286,14 @@ private fun UserMessageRow(
                                     Icon(
                                         Icons.Default.Attachment,
                                         contentDescription = null,
-                                        tint = palette.onAccent,
+                                        tint = palette.accentFill.content,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = att.name,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = palette.onAccent,
+                                        color = palette.accentFill.content,
                                         maxLines = 1
                                     )
                                 }

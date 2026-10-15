@@ -378,7 +378,7 @@ export function OnboardingFeatureGallery({
                       aria-hidden="true"
                       className="relative flex min-h-full flex-col justify-end bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 motion-reduce:transition-none"
                     >
-                      <Icon aria-hidden="true" className="absolute right-3 top-3 size-4 text-accent" />
+                      <Icon aria-hidden="true" className="absolute right-3 top-3 size-4 text-accent-text" />
                       <div className="mt-5">
                         <Text variant="small-strong" className="block leading-4">
                           {feature.title}

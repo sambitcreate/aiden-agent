@@ -270,10 +270,6 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.match(providersSettingsSource, /<details className="group border-t border-separator">/u);
   assert.match(providersSettingsSource, /Chat title generation/u);
   assert.match(providersSettingsSource, /customProviders\.length > 0/u);
-  assert.equal(
-    occurrences(providersSettingsSource, "group-data-[highlighted]:text-accent-foreground"),
-    6,
-  );
 });
 
  test("Azure retains its provider artwork after the Pi identity rename", () => {

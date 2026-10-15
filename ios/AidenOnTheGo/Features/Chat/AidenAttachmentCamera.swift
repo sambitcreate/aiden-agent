@@ -402,7 +402,7 @@ struct AidenAttachmentCameraPanel: View {
                     .multilineTextAlignment(.center)
                 Button("Open Settings", action: openSettings)
                     .buttonStyle(.borderedProminent)
-                    .tint(palette.accent)
+                    .aidenSolidFillTint()
             }
             .foregroundStyle(.white)
             .padding(32)

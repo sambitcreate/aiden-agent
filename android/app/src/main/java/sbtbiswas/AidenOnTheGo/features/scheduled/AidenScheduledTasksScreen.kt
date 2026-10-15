@@ -62,6 +62,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenButtonDefaults
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenSwitchColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -693,7 +694,7 @@ private fun AidenScheduledTaskRow(
             checked = task.enabled,
             onCheckedChange = { onToggleEnabled() },
             enabled = enabled,
-            colors = SwitchDefaults.colors(checkedThumbColor = palette.onAccent, checkedTrackColor = palette.accent),
+            colors = aidenSwitchColors(),
             modifier = Modifier.semantics { contentDescription = toggleDescription }
         )
     }

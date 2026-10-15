@@ -41,8 +41,8 @@ const KIT_CSS = `
 .aiden-btn:active { transform: translateY(1px); }
 .aiden-btn:focus-visible { outline: 2px solid var(--focus-ring, #8a8a8a); outline-offset: 2px; }
 .aiden-btn:disabled { opacity: 0.5; cursor: default; }
-.aiden-btn[data-variant="accent"] { background: var(--aiden-accent); color: var(--accent-foreground, #ffffff); }
-.aiden-btn[data-variant="accent"]:hover { background: var(--accent-hover, var(--aiden-accent)); }
+.aiden-btn[data-variant="accent"] { background: var(--fill-accent, var(--aiden-accent)); color: var(--fill-accent-foreground, var(--accent-foreground, #ffffff)); }
+.aiden-btn[data-variant="accent"]:hover { background: var(--fill-accent-hover, var(--accent-hover, var(--aiden-accent))); }
 .aiden-btn[data-variant="muted"] { background: var(--surface-well, rgb(0 0 0 / 0.04)); }
 .aiden-btn[data-variant="transparent"] { background: transparent; }
 .aiden-btn[data-variant="transparent"]:hover { background: var(--surface-list-hover, rgb(0 0 0 / 0.05)); }

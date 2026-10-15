@@ -682,8 +682,8 @@ private fun AidenDiscardSavePair(
             onClick = onSave,
             enabled = saveEnabled,
             shape = aidenGroupItemShape(1, 2, outer, AidenShape.SplitInner, AidenGroupOrientation.HORIZONTAL),
-            color = if (saveEnabled || saving) palette.accent else palette.accent.copy(alpha = 0.4f),
-            contentColor = palette.onAccent,
+            color = if (saveEnabled || saving) palette.accentFill.fill else palette.accentFill.fill.copy(alpha = 0.4f),
+            contentColor = palette.accentFill.content,
             interactionSource = saveInteraction,
             modifier = Modifier
                 .fillMaxHeight()
@@ -695,7 +695,7 @@ private fun AidenDiscardSavePair(
                 Text(
                     if (saving) stringResource(R.string.action_saving) else stringResource(R.string.action_save),
                     style = MaterialTheme.typography.labelLarge,
-                    color = palette.onAccent,
+                    color = palette.accentFill.content,
                     fontWeight = FontWeight.Bold
                 )
             }

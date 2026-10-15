@@ -140,11 +140,11 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
           >
             {current ? (
               <LoaderCircle
-                className="size-4 shrink-0 animate-spin text-accent motion-reduce:animate-none"
+                className="size-4 shrink-0 animate-spin text-accent-text motion-reduce:animate-none"
                 aria-hidden="true"
               />
             ) : (
-              <ListChecks className="size-4 shrink-0 text-accent" aria-hidden="true" />
+              <ListChecks className="size-4 shrink-0 text-accent-text" aria-hidden="true" />
             )}
             <span className="shrink-0 font-medium tabular-nums text-primary">
               Step {currentIndex} / {tasks.length}

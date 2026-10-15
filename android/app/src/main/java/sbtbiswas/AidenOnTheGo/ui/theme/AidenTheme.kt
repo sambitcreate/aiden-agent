@@ -102,7 +102,7 @@ fun AidenTheme(
             shapes = AidenShapes
         ) {
             // Typography carries no colour, so Text inherits LocalContentColor: foreground
-            // here, onSurface in surfaces, and onPrimary (palette.onAccent) inside accent
+            // here, onSurface in surfaces, and the solid-fill content color inside filled
             // buttons; containers still supply their own content color.
             CompositionLocalProvider(LocalContentColor provides palette.foreground, content = content)
         }
@@ -144,7 +144,8 @@ fun aidenDynamicPalette(scheme: ColorScheme, isDark: Boolean): AidenPalette {
         accentHex = hex(scheme.primary),
         successHex = semantic.successHex,
         warningHex = semantic.warningHex,
-        dangerHex = hex(scheme.error)
+        dangerHex = hex(scheme.error),
+        isDark = isDark
     )
 }
 
@@ -153,6 +154,14 @@ fun aidenDynamicPalette(scheme: ColorScheme, isDark: Boolean): AidenPalette {
  * composited over the surface they sit on, so pairs such as `primaryContainer` /
  * `onPrimaryContainer` keep their contrast on any background, and `outline` /
  * `outlineVariant` give switches, dividers, and checkboxes a visible boundary.
+ *
+ * `primary` and `error` stay the bright accent and danger because Material also draws them
+ * as ink: text-button labels, the caret, radios, progress and error text. Labelled solid
+ * fills (filled buttons, FABs, checked switches and checkboxes, bubbles) take their colors
+ * from [AidenPalette.accentFill] / [AidenPalette.dangerFill] through the Expressive helpers
+ * (`aidenFilledButtonColors()`, `aidenSwitchColors()`, ...), which deepen the hue just
+ * enough for white labels to reach 4.5:1. `onPrimary` / `onError` remain the readable ink for
+ * any Material default that still fills with the bright role.
  */
 fun aidenColorScheme(palette: AidenPalette, isDark: Boolean): ColorScheme {
     val tones = aidenTonalSurfaces(palette, isDark)

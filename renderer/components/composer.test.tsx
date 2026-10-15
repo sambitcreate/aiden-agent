@@ -386,7 +386,7 @@ test("model picker details sit beside the menu without overlapping the pad", () 
   );
   assert.match(
     styles,
-    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--accent-foreground\)/u,
+    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--fill-accent-foreground\)/u,
   );
 });
 

@@ -1,6 +1,6 @@
 package sbtbiswas.AidenOnTheGo.ui.theme
 
-import sbtbiswas.AidenOnTheGo.config.AidenPalette
+import sbtbiswas.AidenOnTheGo.config.AidenSolidFill
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -27,16 +27,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CheckboxColors
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonColors
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwitchColors
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -298,8 +306,8 @@ fun AidenSplitButton(
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
     enabled: Boolean = true,
-    containerColor: Color = AidenTheme.palette.accent,
-    contentColor: Color = AidenTheme.palette.onAccent,
+    containerColor: Color = AidenTheme.palette.accentFill.fill,
+    contentColor: Color = AidenTheme.palette.accentFill.content,
     height: Dp = 40.dp,
     menuContent: @Composable ColumnScope.() -> Unit
 ) {
@@ -377,6 +385,50 @@ fun AidenSplitButton(
     }
 }
 
+/**
+ * Colors for every labelled solid fill (filled buttons, send/stop, FABs, checked
+ * switches and checkboxes). They come from [AidenSolidFill] rather than Material's
+ * `primary`/`onPrimary`: `primary` stays the bright accent because Material also uses it
+ * as ink (text buttons, the caret, radios, progress), while solid fills deepen the hue
+ * just enough for white labels to reach 4.5:1.
+ */
+@Composable
+@ReadOnlyComposable
+fun aidenSolidFill(destructive: Boolean = false): AidenSolidFill =
+    if (destructive) AidenTheme.palette.dangerFill else AidenTheme.palette.accentFill
+
+/** Filled [Button] colors on the accent (or, with [destructive], danger) solid fill. */
+@Composable
+fun aidenFilledButtonColors(destructive: Boolean = false): ButtonColors {
+    val fill = aidenSolidFill(destructive)
+    return ButtonDefaults.buttonColors(containerColor = fill.fill, contentColor = fill.content)
+}
+
+/** `FilledIconButton` colors on the accent solid fill. */
+@Composable
+fun aidenFilledIconButtonColors(): IconButtonColors {
+    val fill = aidenSolidFill()
+    return IconButtonDefaults.filledIconButtonColors(containerColor = fill.fill, contentColor = fill.content)
+}
+
+/** Switch colors: the checked track is the accent solid fill and the thumb its content color. */
+@Composable
+fun aidenSwitchColors(): SwitchColors {
+    val fill = aidenSolidFill()
+    return SwitchDefaults.colors(
+        checkedThumbColor = fill.content,
+        checkedTrackColor = fill.fill,
+        checkedIconColor = fill.fill
+    )
+}
+
+/** Checkbox colors: the checked box is the accent solid fill and the mark its content color. */
+@Composable
+fun aidenCheckboxColors(): CheckboxColors {
+    val fill = aidenSolidFill()
+    return CheckboxDefaults.colors(checkedColor = fill.fill, checkmarkColor = fill.content)
+}
+
 /** Filled squircle primary action. Use [destructive] for irreversible actions. */
 @Composable
 fun AidenPrimaryButton(
@@ -387,17 +439,13 @@ fun AidenPrimaryButton(
     destructive: Boolean = false,
     leadingIcon: ImageVector? = null
 ) {
-    val palette = AidenTheme.palette
     val interaction = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
         enabled = enabled,
         shape = AidenShape.Button,
         interactionSource = interaction,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (destructive) palette.danger else palette.accent,
-            contentColor = if (destructive) AidenPalette.readableOn(palette.danger) else palette.onAccent
-        ),
+        colors = aidenFilledButtonColors(destructive),
         modifier = modifier
             .heightIn(min = 40.dp)
             .tactilePress(interaction)
