@@ -18,15 +18,19 @@ test("abandoned drafts never persist; first send creates exactly one conversatio
   const { page, userDataDir } = aiden;
   await finishLmStudioOnboarding(page);
   expect(await regularChats(userDataDir)).toEqual([]);
-  await page.locator("textarea").fill("Unsent draft must disappear");
+  await page.locator("textarea").fill("Unsent draft stays off disk");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   expect(await regularChats(userDataDir)).toEqual([]);
+  // Leaving keeps the unsent text in this session only, never on disk.
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
-  await expect(page.locator("textarea")).toHaveValue("");
+  await expect(page.locator("textarea")).toHaveValue("Unsent draft stays off disk");
+  expect(await regularChats(userDataDir)).toEqual([]);
   for (let count = 0; count < 3; count++) {
     await page.getByRole("button", { name: "New Agent", exact: true }).click();
     await expect(page.locator("textarea")).toBeVisible();
   }
+  // The typed draft is kept; repeated New Agent reuses one empty draft.
+  await expect(page.locator("[data-sidebar] [data-draft-chat]")).toHaveCount(2);
   expect(await regularChats(userDataDir)).toEqual([]);
   await page.locator("textarea").fill("First persisted draft message");
   await page.locator("textarea").press("Enter");
@@ -240,21 +244,36 @@ test("the sidebar + starts a draft in its workspace and reuses only an empty dra
   expect(await draftId()).toBe(secondDraft);
   await expect(draftRows).toHaveCount(1);
 
-  // A draft with text is never reused.
+  // A draft with text is never reused, and it is kept for the user to return to.
   await composer.fill("Keep typing here");
   await header.hover();
   await plus.click();
-  await expect.poll(draftId).not.toBe(secondDraft);
+  await expect(draftRows).toHaveCount(2);
   await expect(composer).toHaveValue("");
   await expect(composer).toBeFocused();
-  await expect(draftRows).toHaveCount(1);
+  const typedRow = sidebar.locator(`[data-draft-chat="${secondDraft}"]`);
+  await expect(typedRow).toHaveText("New chat");
+  await expect(typedRow).not.toHaveAttribute("aria-current", "page");
+  const openRow = sidebar.locator('[data-draft-chat][aria-current="page"]');
+  expect(await openRow.getAttribute("data-draft-chat")).not.toBe(secondDraft);
 
+  // Its row reopens it with the text intact; the empty draft left behind goes.
+  await typedRow.click();
+  await expect(composer).toHaveValue("Keep typing here");
+  await expect(composer).toBeFocused();
+  await expect(typedRow).toHaveAttribute("aria-current", "page");
+  await expect(draftRows).toHaveCount(1);
+  expect(await regularChats(aiden.userDataDir)).toEqual([]);
+
+  // Sending from the revived draft saves it in its workspace and drops the row.
   await composer.fill("Started from the sidebar plus");
   await composer.press("Enter");
   await expect.poll(async () => (await regularChats(aiden.userDataDir)).length).toBe(1);
   const [chat] = await regularChats(aiden.userDataDir);
+  expect(chat.id).toBe(secondDraft);
   expect(chat.workspaceId).toBe(workspaceId);
-  // Once the first send lists the real chat, the draft row goes away.
+  expect(chat.messages.filter((message) => message.role === "user").map((message) => message.content))
+    .toEqual(["Started from the sidebar plus"]);
   await expect(draftRows).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: /Started from the sidebar plus/u })).toBeVisible();
 });
@@ -273,7 +292,9 @@ test("New chat in… opens a draft in the chosen workspace from the chevron, the
   await page.getByRole("button", { name: "New chat in…", exact: true }).click();
   await expect(search).toBeFocused();
   // Most recent first: the new workspace was added after the default one.
-  await expect(options).toHaveText([/^Palette target/u, /current$/u, /Open folder…/u]);
+  await expect(options.nth(0)).toHaveText(/^Palette target/u);
+  await expect(options.nth(1)).toHaveText(/current$/u);
+  await expect(page.getByRole("option", { name: /^Open folder…/u })).toBeVisible();
   await expect(options.nth(1)).toHaveAttribute("aria-current", "true");
   // Esc returns to the command list, then closes the palette.
   await page.keyboard.press("Escape");
@@ -308,7 +329,7 @@ test("New chat in… opens a draft in the chosen workspace from the chevron, the
   await page.keyboard.press("ControlOrMeta+Shift+N");
   await expect(search).toBeFocused();
   await search.fill("palette");
-  await expect(options).toHaveText([/^Palette target/u]);
+  await expect(options.first()).toHaveText(/^Palette target/u);
   await page.keyboard.press("Enter");
   await expect(palette).toHaveCount(0);
   await expect(composer).toBeFocused();

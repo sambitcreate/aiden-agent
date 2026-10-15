@@ -1,5 +1,5 @@
 import type { Chat } from "./types";
-import { discardComposerDraft } from "./composer-draft-store";
+import { discardComposerDraft, loadComposerDraft } from "./composer-draft-store";
 
 /** A new-agent surface is renderer-only until its first user message commits. */
 export interface ChatDraft {
@@ -14,7 +14,11 @@ export interface ChatDraft {
 const drafts = new Map<string, ChatDraft>();
 const owners = new Map<string, number>();
 const listeners = new Set<() => void>();
-const notify = () => { for (const listener of listeners) listener(); };
+let snapshot: readonly ChatDraft[] | null = null;
+const notify = () => {
+  snapshot = null;
+  for (const listener of listeners) listener();
+};
 
 export function subscribeChatDrafts(listener: () => void): () => void {
   listeners.add(listener);
@@ -25,6 +29,12 @@ export function getChatDraft(id: string): ChatDraft | undefined {
   return drafts.get(id);
 }
 
+/** Every live draft, oldest first; a stable snapshot between changes. */
+export function listChatDrafts(): readonly ChatDraft[] {
+  snapshot ??= [...drafts.values()];
+  return snapshot;
+}
+
 export function createChatDraft(
   workspaceId: string,
   id = crypto.randomUUID(),
@@ -32,9 +42,10 @@ export function createChatDraft(
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
   // Multiple New activations can supersede navigation before a pane mounts.
-  // Only keep drafts that acquired a view owner or have a send to settle.
+  // Only keep drafts that acquired a view owner, have a send to settle, or
+  // hold text the user can return to.
   for (const [previousId, previous] of drafts) {
-    if (!owners.has(previousId) && !previous.sending) {
+    if (!owners.has(previousId) && !previous.sending && !previous.hasContent) {
       drafts.delete(previousId);
       focusRequests.delete(previousId);
       discardComposerDraft(previousId);
@@ -127,7 +138,7 @@ export function beginChatDraftSend(id: string): ChatDraft {
 export function finishChatDraftSend(id: string, committed: boolean): void {
   const draft = drafts.get(id);
   if (!draft) return;
-  if (committed || !owners.get(id)) drafts.delete(id);
+  if (committed || (!owners.get(id) && !draft.hasContent)) drafts.delete(id);
   else drafts.set(id, { ...draft, sending: false });
   notify();
 }
@@ -153,7 +164,19 @@ export function retainChatDraft(id: string): () => void {
     if (count > 0) owners.set(id, count);
     else owners.delete(id);
     queueMicrotask(() => {
-      if (!owners.has(id)) discardChatDraft(id);
+      if (owners.has(id)) return;
+      const draft = drafts.get(id);
+      if (!draft?.hasContent) {
+        discardChatDraft(id);
+        return;
+      }
+      // A draft with content outlives its view; reopening it restores the
+      // composer's saved text rather than the original one-shot seed.
+      if (draft.initialText && loadComposerDraft(id).text) {
+        const { initialText: _seed, ...kept } = draft;
+        drafts.set(id, kept);
+        notify();
+      }
     });
   };
 }

@@ -1,7 +1,7 @@
 import {
   createChatDraft,
   discardChatDraft,
-  getChatDraft,
+  listChatDrafts,
   requestChatDraftComposerFocus,
   subscribeChatDrafts,
 } from "../lib/chat-draft";
@@ -490,9 +490,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const newChat = useNewChatActions();
   // The open, unsent draft shows as an italic "New chat" row under its
   // workspace, and follows the draft if its workspace changes.
-  const openDraft = React.useSyncExternalStore(subscribeChatDrafts, () =>
-    activeChatId ? getChatDraft(activeChatId) : undefined,
-  );
+  const chatDrafts = React.useSyncExternalStore(subscribeChatDrafts, listChatDrafts);
+  const openDraft = chatDrafts.find((draft) => draft.chat.id === activeChatId);
   const draftWorkspaceId = openDraft?.chat.workspaceId;
   const chatTitlesById = React.useMemo(
     () => new Map((chats.data ?? []).map((chat) => [chat.id, chat.title])),
@@ -1102,20 +1101,30 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
   }, []);
 
-  // Hidden while searching, and once the first send lists the real chat.
-  const draftRowShown =
-    Boolean(openDraft) &&
-    !searching &&
-    !(chats.data ?? []).some((chat) => chat.id === openDraft?.chat.id);
-  const renderDraftRow = (draftId: string) => (
+  // The open draft and any unsent draft with text, newest first, under their
+  // workspaces. Hidden while searching, and once the first send lists the chat.
+  const draftsByWorkspace = React.useMemo(() => {
+    const grouped = new Map<string, ChatMeta[]>();
+    if (searching) return grouped;
+    const listed = new Set((chats.data ?? []).map((chat) => chat.id));
+    for (const { chat } of [...chatDrafts].reverse()) {
+      if (!chat.workspaceId || listed.has(chat.id)) continue;
+      grouped.set(chat.workspaceId, [...(grouped.get(chat.workspaceId) ?? []), chat]);
+    }
+    return grouped;
+  }, [chatDrafts, chats.data, searching]);
+  const renderDraftRow = (draft: ChatMeta) => (
     <SidebarListItem
-      key={`draft:${draftId}`}
+      key={`draft:${draft.id}`}
       className="pl-8"
-      data-draft-chat={draftId}
+      data-draft-chat={draft.id}
       aria-description="Unsent draft"
       title={<span className="italic">New chat</span>}
-      selected={draftId === activeChatId}
-      onClick={() => requestChatDraftComposerFocus(draftId)}
+      selected={draft.id === activeChatId}
+      onClick={() => {
+        if (draft.id === activeChatId) requestChatDraftComposerFocus(draft.id);
+        else void openChat(draft).then(() => requestChatDraftComposerFocus(draft.id));
+      }}
     />
   );
 
@@ -1751,12 +1760,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
-                          {draftRowShown && draftWorkspaceId === workspace.id && openDraft
-                            ? renderDraftRow(openDraft.chat.id)
-                            : null}
+                          {draftsByWorkspace.get(workspace.id)?.map(renderDraftRow)}
                           {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 &&
-                          !(draftRowShown && draftWorkspaceId === workspace.id) ? (
+                          !draftsByWorkspace.has(workspace.id) ? (
                             <SidebarListItem
                               className="pl-9 text-secondary"
                               icon={<SquarePen />}
