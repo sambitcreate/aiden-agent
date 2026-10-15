@@ -338,10 +338,16 @@ struct AidenBotAdvancedView: View {
         // A model still saving keeps its own revision; reopening it must not fork a second writer.
         if chatActivityModel?.isSaving != true {
             let botID = bot.id
+            // The pairing this page opens under; every request and result stays with it.
+            let context = try? coordinator.requestContext()
+            let isCurrent: @MainActor () -> Bool = { [coordinator] in
+                context.map(coordinator.isCurrent) == true
+            }
             chatActivityModel = AidenBotChatActivityModel(
                 bot: bot,
                 save: { next, revision in
-                    let client = try coordinator.remoteClient(for: try coordinator.requestContext())
+                    guard let context else { throw AidenRemoteClientError.installationChanged }
+                    let client = try coordinator.remoteClient(for: context)
                     return try await client.updateBotIdentity(
                         id: botID,
                         revision: revision,
@@ -349,24 +355,28 @@ struct AidenBotAdvancedView: View {
                     )
                 },
                 refresh: {
-                    let client = try coordinator.remoteClient(for: try coordinator.requestContext())
+                    guard let context else { throw AidenRemoteClientError.installationChanged }
+                    let client = try coordinator.remoteClient(for: context)
                     return try await client.bot(id: botID)
                 },
                 onSaved: { [report = chatActivityReport, onSaved] saved in
+                    // Another pairing's Bot is never shown, cached or reported here.
+                    guard let context, isCurrent() else { return }
                     // Advanced's own Save, and its summary row, move to the newest revision.
                     // The screens behind hear about it once Advanced closes, or at once after.
                     baselineBot = saved
-                    cacheDetail(saved)
+                    cacheDetail(saved, for: context)
                     report.saved(saved, reportBehind: onSaved)
                 },
-                waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) }
+                waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
+                isCurrent: isCurrent
             )
         }
         isShowingChatActivity = true
     }
 
-    private func cacheDetail(_ detail: AidenBotDetail) {
-        guard let context = try? coordinator.requestContext() else { return }
+    private func cacheDetail(_ detail: AidenBotDetail, for context: AidenRemoteRequestContext) {
+        guard coordinator.isCurrent(context) else { return }
         Task {
             _ = await coordinator.withRetainedInstallationData(for: context) {
                 _ = try? await AidenBotCache.shared.upsertDetailAndStore(
@@ -1009,17 +1019,21 @@ final class AidenBotChatActivityModel {
     @ObservationIgnored private let refresh: @MainActor () async throws -> AidenBotDetail
     @ObservationIgnored private let onSaved: @MainActor (AidenBotDetail) -> Void
     @ObservationIgnored private let waitForConnection: (@MainActor (Duration) async -> Bool)?
+    /// False once the pairing this page opened under is no longer the active one.
+    @ObservationIgnored private let isCurrent: @MainActor () -> Bool
     @ObservationIgnored private let connectionHold: Duration
     @ObservationIgnored private let requestLimit: Duration
 
     /// `requestLimit` bounds each request: the phone's URLSession waits for connectivity
-    /// for minutes, which a settings pick must not.
+    /// for minutes, which a settings pick must not. `isCurrent` fences the pairing: once it
+    /// is false nothing more is sent, and a result that comes back is dropped unreported.
     init(
         bot: AidenBotDetail,
         save: @escaping @MainActor (AidenBotChatActivity, String) async throws -> AidenBotDetail,
         refresh: @escaping @MainActor () async throws -> AidenBotDetail,
         onSaved: @escaping @MainActor (AidenBotDetail) -> Void,
         waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        isCurrent: @escaping @MainActor () -> Bool = { true },
         connectionHold: Duration = .seconds(8),
         requestLimit: Duration = .seconds(12)
     ) {
@@ -1031,6 +1045,7 @@ final class AidenBotChatActivityModel {
         self.refresh = refresh
         self.onSaved = onSaved
         self.waitForConnection = waitForConnection
+        self.isCurrent = isCurrent
         self.connectionHold = connectionHold
         self.requestLimit = requestLimit
     }
@@ -1062,18 +1077,24 @@ final class AidenBotChatActivityModel {
     /// late shows as saved with no error, and anything else returns to what the Mac holds.
     private func send(_ target: AidenBotChatActivity) async -> Bool {
         do {
-            if let waitForConnection, await waitForConnection(connectionHold) == false {
-                throw AidenBotChatActivityUnreachable()
+            guard isCurrent() else { return giveUp() }
+            if let waitForConnection {
+                let connected = await waitForConnection(connectionHold)
+                // Another pairing came up during the hold: the pick was for the Mac that left.
+                guard isCurrent() else { return giveUp() }
+                if !connected { throw AidenBotChatActivityUnreachable() }
             }
             // The closures run on the main actor; the box only carries them across the race.
             let save = AidenBotMainActorCall(save)
             let sentRevision = revision
             let detail = try await aidenBotWithin(requestLimit) { try await save.call(target, sentRevision) }
+            guard isCurrent() else { return giveUp() }
             revision = detail.revision
             saved = detail.chatActivity ?? target
             onSaved(detail)
             return true
         } catch {
+            guard isCurrent() else { return giveUp() }
             pending = nil
             if error is CancellationError {
                 value = saved
@@ -1100,10 +1121,20 @@ final class AidenBotChatActivityModel {
         }
     }
 
+    /// The pairing changed under the pick: it goes back to what this page last saw, with no error,
+    /// since the person is no longer looking at that Mac's Bot.
+    private func giveUp() -> Bool {
+        pending = nil
+        value = saved
+        return false
+    }
+
     /// The Mac may hold something else now: take its revision and choice, so the next pick can save.
     private func adoptTheMacsChoice() async -> AidenBotDetail? {
+        guard isCurrent() else { return nil }
         let refresh = AidenBotMainActorCall(refresh)
-        guard let fresh = try? await aidenBotWithin(requestLimit, { try await refresh.call() }) else { return nil }
+        guard let fresh = try? await aidenBotWithin(requestLimit, { try await refresh.call() }),
+              isCurrent() else { return nil }
         revision = fresh.revision
         saved = fresh.chatActivity ?? .standard
         onSaved(fresh)

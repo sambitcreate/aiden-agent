@@ -3658,13 +3658,64 @@ final class AidenBotChatActivityTests: XCTestCase {
         refresh: @escaping @MainActor () async throws -> AidenBotDetail = { throw SaveFailure() },
         onSaved: @escaping @MainActor (AidenBotDetail) -> Void = { _ in },
         waitForConnection: (@MainActor (Duration) async -> Bool)? = nil,
+        isCurrent: @escaping @MainActor () -> Bool = { true },
         connectionHold: Duration = .seconds(8),
         requestLimit: Duration = .seconds(12)
     ) throws -> AidenBotChatActivityModel {
         AidenBotChatActivityModel(
             bot: try detail(revision: revision, activity), save: save, refresh: refresh, onSaved: onSaved,
-            waitForConnection: waitForConnection, connectionHold: connectionHold, requestLimit: requestLimit
+            waitForConnection: waitForConnection, isCurrent: isCurrent,
+            connectionHold: connectionHold, requestLimit: requestLimit
         )
+    }
+
+    func testAPickWaitingForTheMacIsNeverSentToAnotherPairingThatConnects() async throws {
+        var paired = true
+        var saves = 0
+        var saved: [AidenBotDetail] = []
+        let model = try model(save: { next, _ in
+            saves += 1
+            return try self.detail(revision: "rev_2", next)
+        }, onSaved: { saved.append($0) }, waitForConnection: { _ in
+            // The person switches Macs during the hold; the new pairing comes up connected.
+            paired = false
+            return true
+        }, isCurrent: { paired })
+
+        await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
+        XCTAssertEqual(saves, 0, "nothing reaches the Mac that replaced the one this pick was for")
+        XCTAssertEqual(saved.count, 0)
+        XCTAssertEqual(model.value, .standard, "the pick goes back")
+        XCTAssertNil(model.errorMessage, "silently: that Bot is no longer on screen")
+        XCTAssertFalse(model.isSaving)
+    }
+
+    func testASaveThatReturnsAfterThePairingChangedIsNeitherKeptNorReported() async throws {
+        var paired = true
+        var holding = false
+        var letGo = false
+        var saved: [AidenBotDetail] = []
+        var refreshes = 0
+        let model = try model(save: { next, _ in
+            holding = true
+            while !letGo { try await Task.sleep(for: .milliseconds(5)) }
+            return try self.detail(revision: "rev_2", next)
+        }, refresh: {
+            refreshes += 1
+            return try self.detail(revision: "rev_3", .standard)
+        }, onSaved: { saved.append($0) }, isCurrent: { paired })
+
+        let pick = Task { await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows)) }
+        try await untilSaving { holding }
+        paired = false
+        letGo = true
+        await pick.value
+
+        XCTAssertEqual(saved.count, 0, "the old Mac's Bot is never cached or reported under the new pairing")
+        XCTAssertEqual(refreshes, 0, "nothing more is asked of either Mac")
+        XCTAssertEqual(model.value, .standard)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isSaving)
     }
 
     func testAPickSavesAtOnceWithTheBotsRevisionAndTheNextPickUsesTheNewOne() async throws {
