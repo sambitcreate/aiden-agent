@@ -1,8 +1,8 @@
 import { type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
-import type { ChildProcess } from "node:child_process";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, type ChildProcess } from "node:child_process";
+import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { startFakeOpenRouter, type FakeOpenRouter } from "./fake-openrouter";
 
 export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -191,6 +192,12 @@ type AidenE2eOptions = {
    * key via env (the image registry never reads the chat OPENROUTER_API_KEY).
    */
   fakeOpenRouter: boolean;
+  /**
+   * macOS only: gives the isolated HOME its own unlocked default keychain, so the
+   * real Bot store can write its rollback authority without touching the
+   * developer's login keychain or changing production secure-storage policy.
+   */
+  isolatedKeychain: boolean;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -831,6 +838,47 @@ export async function assertNoPersistedProviderCredentials(aiden: AidenE2e): Pro
   }
 }
 
+const runSecurity = promisify(execFile);
+const SECURITY = "/usr/bin/security";
+const ISOLATED_KEYCHAIN_NAME = "aiden-e2e.keychain-db";
+
+/**
+ * `security` resolves the user keychain domain (search list and default) from
+ * `$HOME/Library/Preferences`, so every command here runs with HOME pinned to
+ * the fixture root. Before writing any domain setting, the search list must be
+ * empty: a non-empty list would mean HOME was not honoured and the developer's
+ * own keychain preferences are in reach.
+ */
+async function provisionIsolatedKeychain(homeDir: string): Promise<string> {
+  if (process.platform !== "darwin") throw new Error("The isolated E2E keychain is macOS-only.");
+  const env = { HOME: homeDir, PATH: "/usr/bin:/bin" };
+  const security = async (...args: string[]) => (await runSecurity(SECURITY, args, { env, timeout: 10_000 })).stdout.trim();
+  await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(homeDir, "Library", "Keychains"), { recursive: true, mode: 0o700 });
+  if (await security("list-keychains", "-d", "user")) {
+    throw new Error("The fixture HOME already resolves a keychain search list; refusing to change it.");
+  }
+  const keychain = path.join(await realpath(homeDir), "Library", "Keychains", ISOLATED_KEYCHAIN_NAME);
+  await security("create-keychain", "-p", "", keychain);
+  // No auto-lock timeout: a slow hosted run must not see the keychain lock mid-test.
+  await security("set-keychain-settings", keychain);
+  await security("unlock-keychain", "-p", "", keychain);
+  await security("list-keychains", "-d", "user", "-s", keychain);
+  await security("default-keychain", "-d", "user", "-s", keychain);
+  const resolved = await security("default-keychain", "-d", "user");
+  if (resolved !== JSON.stringify(keychain)) {
+    throw new Error(`The isolated keychain did not become the fixture default: ${resolved}`);
+  }
+  return keychain;
+}
+
+async function deleteIsolatedKeychain(homeDir: string, keychain: string): Promise<void> {
+  await runSecurity(SECURITY, ["delete-keychain", keychain], {
+    env: { HOME: homeDir, PATH: "/usr/bin:/bin" },
+    timeout: 10_000,
+  });
+}
+
 function formatFailure(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
@@ -840,8 +888,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   workspaceSeed: [false, { option: true }],
   appEnvironment: [{}, { option: true }],
   fakeOpenRouter: [false, { option: true }],
+  isolatedKeychain: [false, { option: true }],
   aiden: async (
-    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter },
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter, isolatedKeychain },
     use,
     testInfo,
   ) => {
@@ -849,6 +898,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
     let openRouter: FakeOpenRouter | undefined;
+    let keychain: string | undefined;
     let app: ElectronApplication | undefined;
     let state: AidenE2e | undefined;
     let primaryFailure: unknown;
@@ -872,6 +922,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         mkdir(testWorkspaceDir, { recursive: true, mode: 0o700 }),
       ]);
       if (workspaceSeed) await seedWorkspace(testUserDataDir, testWorkspaceDir);
+      if (isolatedKeychain) keychain = await provisionIsolatedKeychain(testRootDir);
 
       mock = LIVE_LM_STUDIO_ACCEPTANCE ? undefined : await startMockLmStudio();
       const lmStudio: LmStudioEndpoint = mock ?? {
@@ -1028,6 +1079,13 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
     if (mock) {
       try {
         await closeMockLmStudio(mock);
+      } catch (error) {
+        teardownFailures.push(error);
+      }
+    }
+    if (rootDir && keychain) {
+      try {
+        await deleteIsolatedKeychain(rootDir, keychain);
       } catch (error) {
         teardownFailures.push(error);
       }

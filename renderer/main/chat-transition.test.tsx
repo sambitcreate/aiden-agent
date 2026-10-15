@@ -3,12 +3,22 @@
 // and read as blank -> overlapping -> snap. These assertions keep the transition
 // state-driven instead of mount-driven.
 
+// Installs happy-dom and the fake IPC bridge; must stay the first import.
+import { installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { Outlet, RouterProvider } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
 import type { Chat } from "../lib/types.js";
+import { WorkspaceProvider } from "../lib/workspace-context";
+import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
+import { EnvironmentPanelProvider } from "../components/environment-panel";
+import { CommandSystemProvider } from "../lib/command-system";
+import { TooltipProvider } from "../components/ui";
+import { RoutedBotPanelProvider } from "./bots/bot-panel-context";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -22,16 +32,114 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("chat route renders ChatPane without remounting it per chatId", () => {
-  const router = source("./router.tsx");
-  const route = between(router, "const chatRoute = createRoute({", "});");
+function chatReadResponse(id: string) {
+  return {
+    chat: {
+      id,
+      title: `Chat ${id}`,
+      messages: [{ id: `message-${id}`, role: "user", content: `Hello from chat ${id}`, createdAt: 1 }],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    imageArtifactRecoveryPending: false,
+    imageArtifactRecoveryUnavailable: false,
+    reconciliation: null,
+  };
+}
 
-  assert.match(route, /<ChatPane chatId=\{chatId\} \/>/u);
-  assert.doesNotMatch(
-    route,
-    /<ChatPane[^>]*\bkey=/u,
-    "Keying ChatPane by chatId remounts the pane and blanks the transcript on every switch",
-  );
+test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
+  // The app router is a module singleton whose scroll restoration reads these
+  // window globals while it is created, so load it after exposing them.
+  const globals = globalThis as Record<string, unknown>;
+  const win = window as unknown as Record<string, unknown>;
+  globals.history = win.history;
+  globals.location = win.location;
+  for (const key of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+    globals[key] = (win[key] as (...args: unknown[]) => unknown).bind(window);
+  }
+  const { router, queryClient } = await import("./router");
+
+  installBotTestIpc({
+    "chats:get": (id) => chatReadResponse(String(id)),
+    "chats:list": () => [],
+    "chats:markRead": () => true,
+    "chats:activitySnapshot": () => null,
+    "chats:todoSnapshot": () => null,
+    "chats:contextPressure": () => null,
+    "workspaces:list": () => [],
+    "workspaces:externalEditors": () => [],
+    "providers:list": () => [],
+    "pullRequests:list": () => [],
+    "pullRequests:pending": () => [],
+    "pullRequests:current": () => null,
+    "remote:getPendingApproval": () => null,
+    "remote:getPendingQuestion": () => null,
+    "settings:get": () => null,
+    "shortcut:get": () => null,
+    "tts:status": () => null,
+    "app:renderer-ready": () => null,
+  });
+
+  // Keep the real chat route (the component that decides ChatPane's key) and
+  // swap only the app shell around it for the providers ChatPane reads.
+  const routes = router.routesById as unknown as Record<string, { options: { component?: unknown } }>;
+  routes.__root__.options.component = function ChatPaneProviders() {
+    return (
+      <WorkspaceProvider>
+        <WorkspaceTerminalProvider>
+          <EnvironmentPanelProvider>
+            <RoutedBotPanelProvider>
+              <CommandSystemProvider>
+                <Outlet />
+              </CommandSystemProvider>
+            </RoutedBotPanelProvider>
+          </EnvironmentPanelProvider>
+        </WorkspaceTerminalProvider>
+      </WorkspaceProvider>
+    );
+  };
+  routes["/chatLayout"].options.component = Outlet;
+
+  router.history.push("/chat/chat-a");
+  try {
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    screen.getByText("Hello from chat chat-a");
+    const title = screen.getByRole("heading", { level: 1 });
+    assert.equal(title.textContent, "Chat chat-a");
+
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    screen.getByText("Hello from chat chat-b");
+    // Boolean oracles: a failing assert on a happy-dom node inspects the whole DOM graph.
+    assert.ok(screen.queryByText("Hello from chat chat-a") === null);
+    // A remount (for example `key={chatId}`) replaces every DOM node the pane
+    // owns, which blanks the transcript chrome on each switch.
+    assert.ok(
+      screen.getByRole("heading", { level: 1 }) === title,
+      "Switching chats must update the mounted pane rather than remount it",
+    );
+    assert.ok(title.isConnected);
+    assert.equal(title.textContent, "Chat chat-b");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
 });
 
 test("chat pane hides the generic tool phase when a chronological row owns it", () => {

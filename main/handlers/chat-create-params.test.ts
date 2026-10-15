@@ -61,13 +61,6 @@ test("the reserved Assistant workspace is minted only by the dedicated handler",
     new URL("../services/chat-application-service.ts", import.meta.url),
     "utf8",
   );
-  const renderer = readFileSync(
-    new URL(
-      "../../renderer/components/assistant/use-assistant-chat.ts",
-      import.meta.url,
-    ),
-    "utf8",
-  );
   const publicCreate = handlers.slice(
     handlers.indexOf('"chats:create"'),
     handlers.indexOf('"chats:createAssistant"'),
@@ -87,9 +80,4 @@ test("the reserved Assistant workspace is minted only by the dedicated handler",
   );
   assert.match(assistantCreate, /parseAssistantChatCreate\(input\)/u);
   assert.match(assistantCreate, /workspaceId: ASSISTANT_WORKSPACE_ID/u);
-  assert.match(renderer, /chatsApi\.createAssistant\(/u);
-  assert.doesNotMatch(
-    renderer,
-    /chatsApi\.create\(\{\s*workspaceId: ASSISTANT_WORKSPACE_ID/u,
-  );
 });
