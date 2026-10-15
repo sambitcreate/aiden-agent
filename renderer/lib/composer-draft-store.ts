@@ -186,3 +186,49 @@ export function subscribeGuidanceRestore(
     }
   };
 }
+
+type RestoredMessageListener = (restored: { text: string; attachments: Attachment[] }) => void;
+const restoredMessageListeners = new Map<string, Set<RestoredMessageListener>>();
+
+/**
+ * Give an unsent message back to its draft: text and attachments. A mounted
+ * composer takes both now; otherwise the text is saved and the attachments
+ * are seeded for the composer that opens next.
+ */
+export function restoreUnsentMessage(
+  chatId: string,
+  text: string,
+  attachments: readonly Attachment[],
+): void {
+  const copy = attachments.map((attachment) => ({ ...attachment }));
+  const listeners = restoredMessageListeners.get(chatId);
+  if (listeners?.size) {
+    for (const listener of [...listeners]) listener({ text, attachments: copy });
+    return;
+  }
+  if (text.trim()) {
+    const record = read(chatId);
+    const current = record.text || record.unresolvedText || "";
+    write(chatId, { ...record, text: mergeRestoredGuidance(current, [text]) });
+  }
+  if (copy.length > 0) seedComposerAttachments(chatId, copy);
+}
+
+export function subscribeRestoredUnsentMessage(
+  chatId: string,
+  listener: RestoredMessageListener,
+): () => void {
+  let listeners = restoredMessageListeners.get(chatId);
+  if (!listeners) {
+    listeners = new Set();
+    restoredMessageListeners.set(chatId, listeners);
+  }
+  const current = listeners;
+  current.add(listener);
+  return () => {
+    current.delete(listener);
+    if (current.size === 0 && restoredMessageListeners.get(chatId) === current) {
+      restoredMessageListeners.delete(chatId);
+    }
+  };
+}
