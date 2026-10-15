@@ -269,7 +269,7 @@ test("workspace documents and app links open in the shared browser", async ({ ai
   expect((await command(page, { action: "evaluate", tabId, expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe("rgb(12, 34, 56)");
   const localSnapshot = await command(page, { action: "snapshot", tabId, includeImage: false });
   expect(JSON.stringify(localSnapshot)).not.toContain("__aiden_preview");
-  await command(page, { action: "defaults", defaults: { linkTarget: "browser" } });
+  await command(page, { action: "defaults", defaults: { linkOpening: "browser" } });
   const targetUrl = (await state(page)).tabs.find(tab => tab.id === tabId)!.url;
   await page.evaluate(url => { const a=document.createElement("a");a.href=url;a.textContent="Browser routing fixture";document.body.append(a); }, targetUrl);
   await page.getByRole("link", { name: "Browser routing fixture" }).click();
