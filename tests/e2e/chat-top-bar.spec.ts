@@ -167,6 +167,28 @@ test.describe("folder workspaces", () => {
       }).toBe("ok");
     }
   });
+  test("Quick View leads the workspace tools and Environment ends them", async ({ aiden }) => {
+    const { page } = aiden;
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await startPersistedChat(page);
+    const group = page.locator("[data-workspace-tool-buttons]");
+    const x = async (selector: string) => (await group.locator(selector).boundingBox())!.x;
+    const quickView = await x("[data-quick-view-toggle]");
+    const terminal = await x("[data-terminal-toggle]");
+    const environment = await x("[data-environment-toggle]");
+    const more = await x('button[aria-label="More workspace tools"]');
+    expect(quickView).toBeLessThan(terminal);
+    expect(environment).toBeGreaterThan(more);
+    // Narrow windows fold the individual tools into the menu but keep both toggles.
+    for (const width of [680, 760]) {
+      await aiden.app.evaluate(
+        ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800),
+        width,
+      );
+      await expect(group.locator("[data-quick-view-toggle]")).toBeVisible();
+      await expect(group.locator("[data-environment-toggle]")).toBeVisible();
+    }
+  });
   test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
     const { page } = aiden;
     await startPersistedChat(page);

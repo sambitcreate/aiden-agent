@@ -347,7 +347,8 @@ function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean
  * tab and shows as pressed while that tab is visible; pressing it again hides
  * the panel. Tools a workspace cannot use are left out rather than disabled:
  * Changes needs a Git repository, Files needs a folder, and a chat with no
- * workspace gets none.
+ * workspace gets none. `leading` sits before the tools and `end` after the
+ * overflow menu; both stay visible when the tools fold into that menu.
  */
 export function WorkspaceToolButtons({
   hasWorkspace,
@@ -355,14 +356,18 @@ export function WorkspaceToolButtons({
   hasFolderAccess,
   isRepo,
   terminalButton,
+  leading,
   trailing,
+  end,
 }: {
   hasWorkspace: boolean;
   hasFolder: boolean;
   hasFolderAccess: boolean;
   isRepo: boolean;
   terminalButton: React.ReactNode;
+  leading?: React.ReactNode;
   trailing?: React.ReactNode;
+  end?: React.ReactNode;
 }) {
   const panel = useEnvironmentPanel();
   const anchorRef = React.useRef<HTMLDivElement>(null);
@@ -389,6 +394,12 @@ export function WorkspaceToolButtons({
 
   return (
     <div ref={anchorRef} className="flex items-center gap-0.5" data-workspace-tool-buttons>
+      {leading ? (
+        <>
+          {leading}
+          <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator" />
+        </>
+      ) : null}
       {terminalButton}
       {compact
         ? null
@@ -458,6 +469,7 @@ export function WorkspaceToolButtons({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+      {end}
     </div>
   );
 }
