@@ -502,6 +502,7 @@ export function CodexProviderSettings({ layer = "default" }: { layer?: DialogLay
                       href={actionable.verificationUri}
                       target="_blank"
                       rel="noopener noreferrer"
+                      data-link-target="external"
                     >
                       Open verification page
                       <ExternalLink className="size-3.5" />

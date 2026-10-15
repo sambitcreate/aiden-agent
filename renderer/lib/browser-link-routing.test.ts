@@ -29,6 +29,19 @@ test("loopback hosts open in Aiden whatever the preference, and cmd sends them o
   assert.equal(isLoopbackHost("128.0.0.1"), false);
 });
 
+test("loopback look-alike hosts are not treated as loopback and still prompt under ask", () => {
+  for (const href of ["http://localhost.evil.com/", "http://127.0.0.1.nip.io/"]) {
+    assert.equal(isLoopbackHost(new URL(href).hostname), false, href);
+    assert.equal(route({ href, preference: "ask" })?.kind, "ask", href);
+  }
+  // Userinfo makes "localhost" the username, not the host (the real host is evil.com);
+  // such URLs are rejected outright rather than routed anywhere, loopback or not.
+  assert.equal(route({ href: "http://localhost@evil.com/", preference: "ask" }), null);
+  // The IPv4-mapped IPv6 form isn't in the enumerated loopback spec (localhost, *.localhost,
+  // 127.0.0.0/8, [::1], 0.0.0.0), and the current implementation does not special-case it.
+  assert.equal(isLoopbackHost("[::ffff:127.0.0.1]"), false);
+});
+
 test("without a visible browser panel every web link goes out with no prompt", () => {
   assert.equal(route({ browserAvailable: false, preference: "browser" })?.kind, "external");
   assert.equal(route({ browserAvailable: false, href: "http://localhost:3000/" })?.kind, "external");
