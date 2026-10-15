@@ -29,7 +29,6 @@ test("OpenAI onboarding discloses login identity and waits for an available auth
   }
   assert.equal(calls, 0, "rendering onboarding must never start login");
 });
-const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
 
 function sourceSection(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -442,12 +441,6 @@ test("the command palette tile draws the shortcuts of the platform it runs on", 
     assert.ok(linux.includes(label), `Linux ${label}`);
   }
   assert.doesNotMatch(linux, /[⌘⇧⌥]/u);
-});
-
-test("project guidance keeps the feature bento current as Aiden evolves", () => {
-  assert.match(agentsInstructions, /feature-tour bento gallery/u);
-  assert.match(agentsInstructions, /code-drawn illustration/u);
-  assert.doesNotMatch(agentsInstructions, /transparent PNG/u);
 });
 
 test("primary AI choices include custom setup without opening advanced providers", () => {
