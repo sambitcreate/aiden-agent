@@ -1,7 +1,39 @@
+import SwiftUI
+import UIKit
 import XCTest
 @testable import AidenOnTheGo
 
 final class AidenBotHomeProfileTests: XCTestCase {
+    // MARK: Files
+
+    /// Every view in `view`'s tree, depth first.
+    private func descendants(of view: UIView) -> [UIView] {
+        view.subviews + view.subviews.flatMap { descendants(of: $0) }
+    }
+
+    @MainActor
+    func testFilesShowSkeletonRowsNotASpinnerWhileTheFirstReadIsOnTheWay() throws {
+        for reduceMotion in [false, true] {
+            let host = UIHostingController(rootView: List {
+                Section("Files") { AidenBotFilesLoadingRows() }
+            }
+            .environment(\.aidenReduceMotion, reduceMotion))
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+            let views = descendants(of: host.view)
+            XCTAssertFalse(views.contains { $0 is UIActivityIndicatorView }, "no spinner (Reduce Motion \(reduceMotion))")
+            // The rows stand where the files will be: several list rows, not one centred control.
+            let rows = views.filter { String(describing: type(of: $0)).contains("ListCollectionViewCell") }
+            XCTAssertGreaterThanOrEqual(rows.count, 3, "skeleton rows (Reduce Motion \(reduceMotion))")
+            window.isHidden = true
+        }
+    }
+
     // MARK: Fixtures
 
     private func summary(
