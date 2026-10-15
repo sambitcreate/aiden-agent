@@ -327,3 +327,26 @@ test("prewarm runs one discovery per server at a time, never after shutdown, and
   await prewarmer.start("docs", async () => { discoveries += 1; }, () => undefined);
   assert.equal(discoveries, 2, "no connection starts after shutdown");
 });
+
+test("deferred admission waits past its window for servers that must be declared, and only for them", async () => {
+  let releaseDirect!: () => void;
+  const direct = new Promise<void>((resolve) => { releaseDirect = resolve; });
+  const discover = async ({ name }: { name: string }) => {
+    if (name === "direct") await direct;
+    if (name === "slow") await new Promise<void>(() => undefined);
+    return { tools: [agentTool(`${name}_tool`)] };
+  };
+  let admittedAt = 0;
+  const admission = admitMcpServerDiscovery(
+    [{ name: "direct" }, { name: "auto" }, { name: "slow" }],
+    discover,
+    { budgetMs: 10_000, windowMs: 20, awaitServer: ({ name }) => name === "direct" },
+  ).then((result) => { admittedAt = Date.now(); return result; });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(admittedAt, 0, "a direct server still discovering holds the turn past the window");
+  releaseDirect();
+  const { tools, late } = await admission;
+  assert.deepEqual(tools.map(({ name }) => name).sort(), ["auto_tool", "direct_tool"]);
+  // The deferred slow server never holds the turn; it stays late.
+  assert.equal(late.pending(), 1);
+});

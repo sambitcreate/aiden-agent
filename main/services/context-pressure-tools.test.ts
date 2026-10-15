@@ -39,3 +39,10 @@ test("peeking built MCP tools never returns tools whose lease is no longer curre
   current = false;
   assert.equal(memo.peek("server"), undefined);
 });
+
+test("codemode estimates also count MCP tools from servers set to Always visible", () => {
+  const deferred = mcp(1);
+  const pinned = Object.assign(mcp(2), { codemode: true, alwaysDeclared: true });
+  const names = ambientRuntimeToolEstimate({ codemode: true, mcpTools: [deferred, pinned] }).map((tool) => tool.name).sort();
+  assert.deepEqual(names, ["codemode", "mcp_tool_2", "tool_search"]);
+});

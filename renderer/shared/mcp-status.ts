@@ -21,12 +21,23 @@ export interface McpLiveStatus {
   error?: string;
   /** Tools listed by the last successful discovery. */
   toolCount?: number;
+  /**
+   * Opaque identity of that discovery's tool list (names and titles). Changes
+   * whenever the list does, even when the count stays the same.
+   */
+  toolsRevision?: string;
   /** The server advertises resources. */
   resources?: boolean;
   /** The last token refresh or background connect needed a new sign-in. */
   needsSignIn?: boolean;
   /** Set on the last event for a server that was removed. */
   removed?: boolean;
+}
+
+/** One remote tool as Settings lists it (raw name plus optional display title). */
+export interface McpToolSummary {
+  name: string;
+  title?: string;
 }
 
 export interface McpDependent {

@@ -574,6 +574,7 @@ export function registerPhase2Handlers(): void {
     }),
     dependents: mcpServerDependents,
     liveStatus: () => mcpLiveStatus.snapshot(),
+    toolList: (serverId) => mcpLiveStatus.tools(serverId),
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.

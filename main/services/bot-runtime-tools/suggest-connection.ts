@@ -17,6 +17,7 @@ import {
   type McpPreset,
 } from "../mcp-presets.js";
 import type { McpServer } from "../types.js";
+import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 
 export const SUGGEST_CONNECTION_TOOL_NAME = "suggest_connection";
 
@@ -49,7 +50,8 @@ export async function isBotConnectionReady(
   const server = (await deps.listServers()).find(
     (entry) => entry.id === serverId && entry.presetId === presetId,
   );
-  if (!server?.enabled) return false;
+  // Switched off for the model: the Bot cannot use it, so it is not "connected" for the Bot.
+  if (!server?.enabled || !mcpServerOffersTools(server)) return false;
   try {
     assertMcpPresetServer(server);
   } catch {

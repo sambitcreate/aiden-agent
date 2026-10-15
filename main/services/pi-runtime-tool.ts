@@ -8,6 +8,11 @@ export type PiRuntimeTool = AgentTool & {
   readonly replay?: PiRuntimeReplayPolicy;
   /** Explicit host admission for programmatic tool calls; never inferred from a remote tool name. */
   readonly codemode?: boolean;
+  /**
+   * Declared to the provider even when codemode would defer it (an MCP server
+   * the user set to "Always visible"). Scripts can still call it.
+   */
+  readonly alwaysDeclared?: boolean;
 };
 
 const CODEMODE_WORKSPACE_TOOLS = new Set([
@@ -26,7 +31,7 @@ export function partitionPiCodemodeTools(tools: readonly AgentTool[]): { declare
   const declared: AgentTool[] = [];
   const deferred: AgentTool[] = [];
   for (const tool of tools) {
-    (enabled && (tool as PiRuntimeTool).codemode === true && Boolean((tool as PiDiscoverableTool).discovery) && isPiCodemodeCallable(tool) ? deferred : declared).push(tool);
+    (enabled && (tool as PiRuntimeTool).codemode === true && (tool as PiRuntimeTool).alwaysDeclared !== true && Boolean((tool as PiDiscoverableTool).discovery) && isPiCodemodeCallable(tool) ? deferred : declared).push(tool);
   }
   return { declared, deferred };
 }
