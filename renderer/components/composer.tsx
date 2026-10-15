@@ -37,7 +37,8 @@ import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
-import { GitBranchPicker } from "./git-branch-picker";
+import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
+import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
 import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
@@ -169,6 +170,8 @@ interface ComposerProps {
   freezeWhileSending?: boolean;
   /** Survives navigating away and reopening a draft whose commit is pending. */
   firstMessageSaving?: boolean;
+  /** Replaces "Sending…" while the first message waits on something else (a worktree choice). */
+  firstSendStatus?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
@@ -188,6 +191,10 @@ interface ComposerProps {
   /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
   workspaceMenuRequest?: WorkspaceMenuRequest;
   onCreateGitWorktree?: (branchName: string) => Promise<void>;
+  /** Drafts: Work in and New worktree settings for the branch menu. */
+  draftGit?: GitBranchPickerDraft;
+  /** Drafts: `/worktree [name]` chooses New worktree instead of creating one now. */
+  onDraftNewWorktree?: (branchName?: string) => Promise<void>;
   onGitOperationBusyChange?: (busy: boolean) => void;
   gitOperationBusy?: boolean;
   workspaceChangeBlockedReason?: string;
@@ -348,6 +355,7 @@ export function Composer({
   configurationBusy = false,
   freezeWhileSending = false,
   firstMessageSaving = false,
+  firstSendStatus,
   inputRef,
   workspace,
   gitBranch,
@@ -363,6 +371,8 @@ export function Composer({
   onOpenFolderAsWorkspace,
   workspaceMenuRequest,
   onCreateGitWorktree,
+  draftGit,
+  onDraftNewWorktree,
   onGitOperationBusyChange,
   gitOperationBusy = false,
   workspaceChangeBlockedReason,
@@ -900,6 +910,11 @@ export function Composer({
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
+      if (onDraftNewWorktree) {
+        await onDraftNewWorktree(branchName);
+        requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+        return;
+      }
       if (!branchName) {
         setWorktreeRequest((request) => request + 1);
         return;
@@ -918,7 +933,7 @@ export function Composer({
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
-    [inputRef, onCreateGitWorktree, onGitOperationBusyChange, sessionCommandBusy],
+    [inputRef, onCreateGitWorktree, onDraftNewWorktree, onGitOperationBusyChange, sessionCommandBusy],
   );
 
   const forkFromTurn = React.useCallback(
@@ -1690,6 +1705,8 @@ export function Composer({
         afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
     } catch (error) {
+      // Cancelling a worktree send puts the text back without an error.
+      if (isWorktreeSendCancelled(error)) return;
       toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
     }
   };
@@ -1844,7 +1861,7 @@ export function Composer({
   return (
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">Sending…</Text> : null}
+        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
         <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
@@ -1958,6 +1975,8 @@ export function Composer({
                 openWorktreeOnMount={worktreeRequest > 0}
                 programmaticReturnFocusRef={inputRef}
                 uncommitted={contextChips.changesBadge}
+                managedWorktree={Boolean(workspace.managedWorktree)}
+                draft={draftGit}
               />
             ) : null}
             {contextChips.pullRequest ? (
