@@ -16,6 +16,7 @@ import type {
   DeferredContextServer,
 } from "../../renderer/shared/context-pressure.js";
 import { withoutAgentsInstructions } from "./agents-instructions.js";
+import { withoutMcpServersSection } from "./mcp-server-instructions.js";
 import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 
@@ -46,8 +47,9 @@ export interface GenerationContextOptions {
   retainsSystemUpdates?: boolean;
   /**
    * Text of the prompt parts recorded where they were built, for the context
-   * breakdown only. AGENTS.md guidance is measured from `systemPrompt` itself,
-   * since generation rebuilds the prompt from the transcript.
+   * breakdown only. AGENTS.md guidance and the `mcp_servers` section are
+   * measured from `systemPrompt` itself, since generation rebuilds the prompt
+   * from the transcript.
    */
   promptSections?: Partial<Record<ContextPromptSectionId, string>>;
   /** Tools held back behind tool search: reported in the breakdown, never priced. */
@@ -57,7 +59,7 @@ export interface GenerationContextOptions {
 /** Breakdown categories recorded as prompt text where the prompt is assembled. */
 export type ContextPromptSectionId = Exclude<
   ContextCategoryId,
-  "system-prompt" | "builtin-tools" | "mcp-tools" | "project-instructions"
+  "system-prompt" | "builtin-tools" | "mcp-tools" | "project-instructions" | "mcp-instructions"
 >;
 
 /** Whether Pi sends this model's later system messages in place. */
@@ -168,7 +170,6 @@ export function estimateStaticContextTokens(options: GenerationContextOptions): 
 const PROMPT_SECTION_IDS: readonly ContextPromptSectionId[] = [
   "skills",
   "memory",
-  "mcp-instructions",
   "bot-instructions",
 ];
 
@@ -215,12 +216,14 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
     else builtinChars += toolChars(tool);
   }
   const promptChars = options.systemPrompt.length;
-  const projectChars = promptChars - withoutAgentsInstructions(options.systemPrompt).length;
+  const withoutProject = withoutAgentsInstructions(options.systemPrompt);
+  const projectChars = promptChars - withoutProject.length;
+  const mcpInstructionChars = withoutProject.length - withoutMcpServersSection(withoutProject).length;
   const recorded = PROMPT_SECTION_IDS.map(
     (id) => [id, options.promptSections?.[id]?.length ?? 0] as const,
   );
   const recordedChars = recorded.reduce((sum, [, value]) => sum + value, 0);
-  const available = promptChars - projectChars;
+  const available = promptChars - projectChars - mcpInstructionChars;
   const scale = recordedChars > available ? available / recordedChars : 1;
   const sections = recorded.map(([id, value]) => [id, Math.floor(value * scale)] as const);
   const sectionChars = sections.reduce((sum, [, value]) => sum + value, 0);
@@ -229,6 +232,7 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
     ["builtin-tools", builtinChars],
     ["mcp-tools", mcpChars],
     ...sections,
+    ["mcp-instructions", mcpInstructionChars],
     ["project-instructions", projectChars],
   ]);
   const categories = [...tokens]

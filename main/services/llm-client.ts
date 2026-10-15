@@ -3012,8 +3012,6 @@ export const llmClient = {
         memory: resolvedContributions.extensions
           .find((extension) => extension.id === MEMORY_EXTENSION_ID)
           ?.volatileSystemPrompt?.trim() ?? "",
-        // The tool policy never edits the prompt; MCP guidance only appends to it.
-        "mcp-instructions": modelContributions.systemPrompt.slice(resolvedContributions.systemPrompt.length),
         "bot-instructions": botSystemPrompt.slice(baseSystemPrompt.length),
       };
       // Freeze only the already-admitted MCP inventory. The provider sees the

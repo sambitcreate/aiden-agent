@@ -6,7 +6,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, Type } from "@earendil-works/pi-ai";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
   chatContextPressureFromProjection,
@@ -19,7 +19,10 @@ import {
   projectChatContextPressure,
   projectNextContextUsage,
   projectMessagesForModel,
+  updateGenerationContextOptions,
 } from "./generation-context.js";
+import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
+import { markMcpAgentTool } from "./mcp-tool-identity.js";
 import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 import { parseChatContextPressure } from "../../renderer/shared/context-pressure.js";
 
@@ -1139,4 +1142,65 @@ test("a recorded section longer than the final prompt never drives the system pr
     (tokensOf(breakdown, "system-prompt") ?? 0);
   assert.ok(Math.abs(promptTokens - Math.ceil(options_.systemPrompt.length / 4)) <= 1);
   assert.ok((tokensOf(breakdown, "skills") ?? 0) > (tokensOf(breakdown, "memory") ?? 0));
+});
+
+function guidedMcpTool(guidance: string) {
+  const discovery = Object.freeze({
+    namespace: "mcp:linear000000000000000000",
+    label: "Linear",
+    alias: "linear",
+    description: "Issue tracking",
+    instructions: guidance,
+  });
+  return markMcpAgentTool(
+    fixtureTool("linear__list_issues", "List Linear issues.", { discovery }),
+    { serverId: "linear", toolName: "list_issues" },
+  ) as unknown as AgentTool;
+}
+
+test("admitted MCP service guidance is measured from the transcript's mcp_servers section as it changes", () => {
+  let available = [guidedMcpTool("Always filter issues by team. ".repeat(40))];
+  // A turn that declares the MCP tool directly carries the full guidance in the section.
+  const render = () => renderMcpServersSection(available as never, { declared: new Set(["linear__list_issues"]) });
+  const refresher = createMcpServersSectionRefresher(render, () => 1);
+  const head = createInitialSystemMessage(BASE_PROMPT + AGENTS_BLOCK, []) as AgentMessage;
+  const generation = {
+    ...options,
+    systemPrompt: BASE_PROMPT + AGENTS_BLOCK,
+    tools: available,
+    promptSections: { skills: "" },
+  } as unknown as BreakdownOptions;
+  const breakdownAfter = (messages: AgentMessage[]) => {
+    updateGenerationContextOptions(generation, { messages, tools: available });
+    const pressure = projectChatContextPressure(messages, generation);
+    const breakdown = pressure.breakdown;
+    assert.ok(breakdown);
+    assert.equal(sumOf(breakdown), pressure.staticTokens);
+    return breakdown;
+  };
+  const near = (actual: number | undefined, section: string) => {
+    const expected = Math.ceil(section.length / 4);
+    assert.ok(actual !== undefined && Math.abs(actual - expected) <= 1, `${actual} vs ${expected}`);
+  };
+
+  const initial = refresher.apply({ messages: [head, user("hello")] }).messages;
+  const section = render();
+  const applied = breakdownAfter(initial);
+  near(tokensOf(applied, "mcp-instructions"), section);
+  near(tokensOf(applied, "project-instructions"), AGENTS_BLOCK);
+  near(tokensOf(applied, "system-prompt"), BASE_PROMPT);
+
+  // A refreshed section (the service's guidance changed) replaces the measurement.
+  available = [guidedMcpTool("Short guidance.")];
+  const refreshed = refresher.apply({ messages: initial }).messages;
+  const smaller = render();
+  assert.ok(smaller.length < section.length);
+  near(tokensOf(breakdownAfter(refreshed), "mcp-instructions"), smaller);
+
+  // The last server goes away: the section is removed and so is the category.
+  available = [];
+  const removed = refresher.apply({ messages: refreshed }).messages;
+  const cleared = breakdownAfter(removed);
+  assert.equal(tokensOf(cleared, "mcp-instructions"), undefined);
+  near(tokensOf(cleared, "system-prompt"), BASE_PROMPT);
 });
