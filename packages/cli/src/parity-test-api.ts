@@ -19,7 +19,7 @@ export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
-export { mcpCommand, validateMcpServer, createMcpExtension, mcpCredentialId } from "./mcp.ts";
+export { mcpCommand, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature } from "./mcp.ts";
 
 export { importSession } from "./session-import.ts";
 export { createCurrentPiSessionRepository } from "../../../main/services/pi-session-repository-port.js";

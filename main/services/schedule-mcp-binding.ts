@@ -1,16 +1,32 @@
 import { createHash } from "node:crypto";
-import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import {
+  mcpAuthorityConnectionSnapshot,
+  mcpRuntimeConnectionSnapshot,
+} from "./mcp-credential-cleanup-core.js";
 import type { McpServer, ScheduledMcpServerBinding } from "./types.js";
 
 const MCP_BINDING_DIGEST = /^[a-f0-9]{64}$/u;
 
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/**
+ * Binds an approved schedule to the server's connection authority, not its
+ * display name, description, or enabled flag (runs check enablement
+ * themselves), so renaming a connection does not invalidate the approval.
+ */
 export function scheduledMcpServerBinding(server: McpServer): ScheduledMcpServerBinding {
-  return {
-    id: server.id,
-    fingerprint: createHash("sha256")
-      .update(JSON.stringify(mcpRuntimeConnectionSnapshot(server)))
-      .digest("hex"),
-  };
+  return { id: server.id, fingerprint: digest(mcpAuthorityConnectionSnapshot(server)) };
+}
+
+/**
+ * Schedules approved before display fields left the binding stored a digest
+ * of the runtime snapshot. Accept that value while the server is otherwise
+ * unchanged; the next save rewrites it in the current form.
+ */
+function legacyScheduledMcpServerFingerprint(server: McpServer): string {
+  return digest(mcpRuntimeConnectionSnapshot(server));
 }
 
 export function validateScheduledMcpServerBindings(
@@ -50,7 +66,11 @@ export function assertScheduledMcpServerBindings(
     servers.some((server, index) => {
       const expected = bindings[index];
       const actual = scheduledMcpServerBinding(server);
-      return expected?.id !== actual.id || expected.fingerprint !== actual.fingerprint;
+      return (
+        expected?.id !== actual.id ||
+        (expected.fingerprint !== actual.fingerprint &&
+          expected.fingerprint !== legacyScheduledMcpServerFingerprint(server))
+      );
     })
   ) {
     throw new Error(

@@ -2,6 +2,7 @@ import { createMcpFetchPolicy } from "../../../main/services/mcp-fetch-policy.js
 import { mcpOAuthMetadataUrlForServer } from "../../../renderer/shared/mcp-oauth-config.js";
 import { loadMcpOAuthMetadataOverride, withMcpOAuthMetadataObservation } from "../../../main/services/mcp-oauth-metadata.js";
 import { McpOAuthAuthorizationFlow } from "../../../main/services/mcp-oauth-session.js";
+import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
 import { createBoundedSubagentMcpFetch } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -20,6 +21,7 @@ import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } fr
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
+import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
@@ -67,8 +69,23 @@ export function mcpCredentialId(server: McpServer): string {
     ? `\0${JSON.stringify([server.authServerMetadataUrl ?? null, server.oauthClientName?.trim() ?? null])}` : "";
   return `mcp-${createHash("sha256").update(`${server.id}\0${server.url}${override}`).digest("hex")}`;
 }
+/**
+ * Bot capability credential input: the connection's authority (no display
+ * name or description; env and headers only as hashes) plus the OAuth sign-in
+ * incarnation. Token values never enter it, so a refresh keeps Bot grants;
+ * sign-in, sign-out, and client re-registration change it.
+ */
 export async function mcpCredentialSignature(agentDir: string, server: McpServer) {
-  return createHash("sha256").update(JSON.stringify({ server, oauth: await insightCredentials(agentDir).read(mcpCredentialId(server)) })).digest("hex");
+  let oauth: unknown = null;
+  if (server.oauth) {
+    const serialized = await insightCredentials(agentDir).read(mcpCredentialId(server));
+    const state: OAuthState | undefined = serialized ? JSON.parse(serialized) : undefined;
+    oauth = !state ? "absent" : {
+      signedIn: Boolean(state.tokens),
+      incarnation: state.incarnation ?? createHash("sha256").update(JSON.stringify(state.client ?? null)).digest("hex"),
+    };
+  }
+  return createHash("sha256").update(JSON.stringify({ connection: mcpAuthorityConnectionSnapshot(server), oauth })).digest("hex");
 }
 
 /** `incarnation` is minted per interactive sign-in and survives token refreshes. */
@@ -295,7 +312,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   async function inspectTools(server: McpServer, signal?: AbortSignal) { return (await inventory(server, signal)).tools; }
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     const { tools } = await inventory(server, signal);
-    return tools.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    return tools.map((tool) => tagMcpAgentTool({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -308,7 +325,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
           return result;
         });
       },
-    }));
+    }, tool));
   }
   return { listServers, inventory, inspectTools, agentTools, connection, async close() {
     closed = true;
