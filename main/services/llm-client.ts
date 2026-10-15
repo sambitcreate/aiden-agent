@@ -103,7 +103,9 @@ import {
   resolveBotRuntimeMcpConnectionIdentities,
   resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
+import { mcpAgentToolDescriptor } from "./mcp-agent-tool-descriptor.js";
 import {
+  botMcpLiveToolMatchesGrant,
   exactBotMcpToolNames,
   exactBotSkillToolNames,
   filterExactBotSubagentMcpInventory,
@@ -1694,7 +1696,8 @@ async function prepareGeneration(
         : tool.name === INSPECT_IMAGE_TOOL_NAME
           ? !supportsImages && Boolean(authority.visionProvider)
           : mcpToolNames.has(tool.name)
-            ? true
+            ? // The built tool itself must carry the grant's exact schema and effect.
+              botMcpLiveToolMatchesGrant(mcpToolNames.get(tool.name)!, mcpAgentToolDescriptor(tool))
             : tool.name === "web_search"
               ? webAllowed
               : isComputerUseCapabilityTool(tool.name)

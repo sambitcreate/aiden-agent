@@ -43,6 +43,9 @@ import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
 import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
+import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
+import { collectMcpAgentTools } from "../mcp.js";
+import { mcpAgentToolDescriptor } from "../mcp-agent-tool-descriptor.js";
 import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
@@ -262,6 +265,19 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         fileLocations: (await botFileLocations(admission)).length,
         catalog: async () => (await catalog()).resources,
         mcpServers: () => configStore.listMcpServers(),
+        liveMcpTools: async () => {
+          const servers = (await configStore.listMcpServers()).filter((server) =>
+            authority.connections.some(({ sourceId }) => sourceId === server.id),
+          );
+          // The same live inventory (and reused tool objects) the turn's tools are built from.
+          const tools = await collectMcpAgentTools(servers, { strict: true });
+          return new Map(
+            tools.flatMap((tool) => {
+              const descriptor = mcpAgentToolDescriptor(tool);
+              return descriptor ? [[tool.name, descriptor] as const] : [];
+            }),
+          );
+        },
         skills: async () => ({
           snapshot: await skillRegistry.snapshotResolved({
             id: authority.managedHome.workspaceId,
@@ -320,9 +336,13 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         includeCodingTools: false,
       });
       const mcpNames = await facts.mcpTools();
-      const tools: BotToolCandidate[] = built.map((tool) =>
-        tool.name === SUBAGENT_TOOL ? subagentCandidate(botId, admission, tool) : { tool, ...(mcpNames.has(tool.name) ? { mcp: true } : {}) },
-      );
+      const tools: BotToolCandidate[] = built.flatMap((tool): BotToolCandidate[] => {
+        if (tool.name === SUBAGENT_TOOL) return [subagentCandidate(botId, admission, tool)];
+        const grant = mcpNames.get(tool.name);
+        if (!grant) return [{ tool }];
+        // The built tool itself must be the granted tool, not only a same-named one.
+        return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
+      });
 
       const locations = await botFileLocations(admission);
       if (locations.length > 0) {

@@ -21,6 +21,7 @@ import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } fr
 import { mcpAgentToolName } from "../../../main/services/mcp-tool-identity.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
+import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, splitArgs } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
@@ -295,7 +296,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
   async function inspectTools(server: McpServer, signal?: AbortSignal) { return (await inventory(server, signal)).tools; }
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     const { tools } = await inventory(server, signal);
-    return tools.map((tool) => ({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    return tools.map((tool) => tagMcpAgentTool({ name: mcpAgentToolName(server, tool.name), label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -308,7 +309,7 @@ export function createCliMcpPool(agentDir: string, maxResponseBytes = 8 * 1024 *
           return result;
         });
       },
-    }));
+    }, tool));
   }
   return { listServers, inventory, inspectTools, agentTools, connection, async close() {
     closed = true;
