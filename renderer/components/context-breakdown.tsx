@@ -37,6 +37,9 @@ const CATEGORY_COLORS: Record<ContextCategoryId, string> = {
 };
 
 const MESSAGES_COLOR = "var(--chart-1)";
+// Provider-counted excess: the Messages hue, faded, so it reads as "more of the
+// conversation" and stays distinct from the hatched Reserved segment.
+const UNITEMIZED_COLOR = "color-mix(in srgb, var(--chart-1) 40%, transparent)";
 const FALLBACK_STATIC_COLOR = "var(--chart-2)";
 const FREE_COLOR = "var(--surface-control)";
 const RESERVED_FILL =
@@ -62,7 +65,19 @@ function usedSegments(pressure: ChatContextPressureV1): Segment[] {
         fill: CATEGORY_COLORS[category.id],
       }))
     : [{ key: "static", label: "System prompt & tools", tokens: pressure.staticTokens, fill: FALLBACK_STATIC_COLOR }];
-  return [{ key: "messages", label: "Messages", tokens: pressure.messageTokens, fill: MESSAGES_COLOR }, ...statics]
+  // contextTokens can exceed the local itemization when the provider's reported
+  // usage anchors the projection; show that excess instead of hiding it in Free.
+  const unitemized: Segment = {
+    key: "unitemized",
+    label: "Provider-counted, not itemized",
+    tokens: Math.max(0, pressure.contextTokens - pressure.messageTokens - pressure.staticTokens),
+    fill: UNITEMIZED_COLOR,
+  };
+  return [
+    { key: "messages", label: "Messages", tokens: pressure.messageTokens, fill: MESSAGES_COLOR },
+    ...statics,
+    unitemized,
+  ]
     .filter((segment) => segment.tokens > 0)
     .sort((left, right) => right.tokens - left.tokens);
 }

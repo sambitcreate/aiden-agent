@@ -2,7 +2,9 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ChatContextPressureV1 } from "../shared/context-pressure";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import { projectChatContextPressure } from "../../main/services/generation-context.js";
+import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 import { ContextBreakdown } from "./context-breakdown";
 
 afterEach(cleanup);
@@ -154,4 +156,73 @@ test("a running compaction leads the note, even when the runtime rule has trippe
 test("the note reports how many earlier messages compaction could remove", () => {
   render(<ContextBreakdown pressure={pressure()} />);
   assert.match(screen.getByRole("note").textContent ?? "", /43 earlier messages could be compacted later\./u);
+});
+
+// A real provider-anchored projection: the provider reported far more input than
+// the tiny transcript estimates, so contextTokens exceeds messages + static.
+function anchoredPressure(): ChatContextPressureV1 {
+  const options = {
+    contextWindow: 128_000,
+    systemPrompt: "You are a coding agent.",
+    tools: [],
+    providerId: "openai-codex",
+    modelId: "gpt-5.3-codex-spark",
+  };
+  const user = (content: string): UserMessage => ({ role: "user", content, timestamp: 1 });
+  const reply: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "ok" }],
+    api: "openai-codex-responses",
+    provider: options.providerId,
+    model: options.modelId,
+    usage: {
+      input: 50_000,
+      output: 1_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 51_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 2,
+  };
+  return projectChatContextPressure([user("hi"), reply, user("next")], options, 1_000);
+}
+
+function barWeights(): number[] {
+  return Array.from(screen.getByRole("img").children)
+    .map((segment) => Number((segment as HTMLElement).style.flexGrow))
+    .filter((weight) => Number.isFinite(weight) && weight > 0);
+}
+
+test("provider-counted tokens beyond the local itemization get their own segment on the whole-window scale", () => {
+  const anchored = anchoredPressure();
+  const excess = anchored.contextTokens - anchored.messageTokens - anchored.staticTokens;
+  assert.equal(anchored.source, "provider-anchored");
+  assert.ok(excess > 40_000, `expected a large unitemized excess, got ${excess}`);
+
+  for (const variant of [anchored, { ...anchored, breakdown: undefined }]) {
+    render(<ContextBreakdown pressure={variant} />);
+    const legend = screen.getByRole("list", { name: "Context by category" });
+    const row = within(legend)
+      .getAllByRole("listitem")
+      .find((item) => item.querySelector("[data-legend-label]")?.textContent === "Provider-counted, not itemized");
+    assert.ok(row, "missing the provider-counted row");
+    assert.ok(within(row).getByText(formatContextTokenCount(excess)));
+    assert.equal(legendLabels()[0], "Provider-counted, not itemized");
+    assert.ok(within(legend).getByText("Messages"));
+    const label = screen.getByRole("img").getAttribute("aria-label") ?? "";
+    assert.ok(label.includes(`Provider-counted, not itemized ${formatContextTokenCount(excess)}`), label);
+    assert.equal(
+      barWeights().reduce((sum, weight) => sum + weight, 0),
+      anchored.contextWindow,
+    );
+    cleanup();
+  }
+});
+
+test("no provider-counted row when the itemization covers the whole projection", () => {
+  render(<ContextBreakdown pressure={pressure()} />);
+  assert.ok(!legendLabels().includes("Provider-counted, not itemized"));
+  assert.equal(barWeights().reduce((sum, weight) => sum + weight, 0), 1_000_000);
 });
