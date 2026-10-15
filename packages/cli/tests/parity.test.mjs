@@ -82,6 +82,7 @@ test("a failed same-process reacquire keeps the cross-process guard held", async
   const child = spawn(process.execPath, [join(pkg, "tests", "fixtures", "lease-child.mjs"), "plain", file, "", "", result], { stdio: "ignore" });
   try {
     assert.throws(() => api.acquireLease(file), /Another Aiden process owns/);
+    readFileSync(api.leaseGuardPath(file));
     const deadline = Date.now() + 20_000;
     let outcome = "";
     while (!outcome) {
@@ -98,6 +99,16 @@ test("a failed same-process reacquire keeps the cross-process guard held", async
       await exited;
     }
   }
+});
+
+test("CLI new-protocol metadata with a recycled live pid is reclaimable", (t) => {
+  const dir = temporary(t), file = join(dir, "writer.json"), lock = `${file}.lock`;
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { pid: process.pid, startedAt: 1 });
+  assert.throws(() => api.acquireLease(file), /Another Aiden process owns/);
+  api.atomicJson(join(lock, "owner.json"), { protocol: "flock-v1", pid: process.pid, startedAt: 1 });
+  const release = api.acquireLease(file);
+  release();
 });
 
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
@@ -259,7 +270,7 @@ test("serve lifecycle recovers stale leases and never signals a recycled PID", a
   await new Promise((resolve) => foreign.once("spawn", resolve));
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
   api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: foreign.pid, startedAt: Date.now() });
-  await assert.rejects(api.stopDaemon(dir), /stale lock/);
+  await assert.rejects(api.stopDaemon(dir), /not running/);
   assert.equal(existsSync(join(dir, "serve.lock")), false);
   assert.equal(api.pidAlive(foreign.pid), true);
 
@@ -308,6 +319,16 @@ test("serve cleanup cannot remove a replacement owner or socket", async (t) => {
     assert.equal(readFileSync(api.daemonSocket(dir), "utf8"), "replacement socket");
     assert.equal(JSON.parse(readFileSync(join(`${resource}.lock`, "owner.json"), "utf8")).pid, process.pid);
   } finally { release(); }
+});
+
+test("serve status clears retired new-protocol metadata despite a recycled live pid", (t) => {
+  const dir = temporary(t), lock = join(dir, "serve.lock");
+  mkdirSync(lock);
+  api.atomicJson(join(lock, "owner.json"), { protocol: "flock-v1", pid: process.pid, startedAt: 1, token: "retired" });
+  writeFileSync(api.daemonSocket(dir), "retired socket");
+  assert.equal(api.daemonStatus(dir).running, false);
+  assert.equal(existsSync(lock), false);
+  assert.equal(existsSync(api.daemonSocket(dir)), false);
 });
 
 test("serve lifecycle identifies a live daemon by its recorded argv", async (t) => {

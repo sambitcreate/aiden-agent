@@ -1,58 +1,66 @@
-import { closeSync, lstatSync, mkdirSync, openSync, realpathSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { spawnSync } from "node:child_process";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 const heldPaths = new Set<string>();
 
+export function desktopLeaseHelperPath(runtime: {
+  defaultApp: boolean;
+  resourcesPath?: string;
+  cwd: string;
+} = {
+  defaultApp: process.defaultApp === true,
+  resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+  cwd: process.cwd(),
+}): string {
+  return runtime.defaultApp !== true && runtime.resourcesPath
+    ? resolve(runtime.resourcesPath, "..", "Helpers", "aiden-lease-flock")
+    : resolve(runtime.cwd, "build", "native", "aiden-lease-flock");
+}
+
 /**
- * A permanent SQLite pathname is the synchronization object. Never remove or
- * replace it: doing so would let a second inode admit a second owner. SQLite
- * releases the transaction when the process dies, including after SIGKILL.
+ * `flock` belongs to an open file description on macOS and Linux. The short
+ * helper locks a duplicate of our fd 3, then exits; this process retains the
+ * same description until release or death. An unrelated read/open/close of the
+ * guard cannot cancel this lock, unlike a POSIX SQLite transaction lock.
  */
-export function tryAcquireProcessLifetimeLock(file: string): (() => void) | null {
+export function tryAcquireProcessLifetimeLock(file: string, helper: string): (() => void) | null {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const canonical = join(realpathSync(dirname(file)), basename(file));
   if (heldPaths.has(canonical)) return null;
   heldPaths.add(canonical);
-  let db: DatabaseSync | undefined;
+  let fd: number | undefined;
   try {
-    const fd = openSync(canonical, "wx", 0o600);
-    closeSync(fd);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      heldPaths.delete(canonical);
-      throw error;
-    }
-  }
-  try {
-    const stat = lstatSync(canonical);
+    fd = openSync(canonical, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    const stat = fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 ||
         (process.getuid !== undefined && stat.uid !== process.getuid())) {
       throw new Error(`Unsafe lease guard at ${canonical}`);
     }
-    db = new DatabaseSync(canonical);
-    db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
-    const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
-    if (mode?.journal_mode !== "delete") throw new Error(`Unsupported lease guard journal mode at ${canonical}`);
-    // A malformed guard is never discarded as stale debris.
-    const check = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
-    if (check?.quick_check !== "ok") throw new Error(`Corrupt lease guard at ${canonical}`);
+    const result = spawnSync(helper, [], {
+      stdio: ["ignore", "pipe", "pipe", fd],
+      timeout: 5_000,
+      encoding: "utf8",
+    });
+    if (result.error || result.signal || (result.status !== 0 && result.status !== 10)) {
+      throw new Error(`Cannot lock ${canonical}: ${result.error?.message ?? result.signal ?? result.stderr?.trim() ?? `helper exit ${result.status}`}`);
+    }
+    if (result.status === 10) {
+      closeSync(fd);
+      heldPaths.delete(canonical);
+      return null;
+    }
   } catch (error) {
-    db?.close();
+    if (fd !== undefined) closeSync(fd);
     heldPaths.delete(canonical);
-    if ((error as { code?: string }).code === "ERR_SQLITE_ERROR" &&
-        /database is locked|database table is locked/iu.test(String(error))) return null;
     throw error;
   }
-  const heldDatabase = db;
+  const heldFd = fd;
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    try { heldDatabase.exec("ROLLBACK"); }
-    finally {
-      heldDatabase.close();
-      heldPaths.delete(canonical);
-    }
+    closeSync(heldFd);
+    heldPaths.delete(canonical);
   };
 }

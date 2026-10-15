@@ -1,4 +1,4 @@
-/* global process, setInterval */
+/* global process, setInterval, setTimeout */
 
 // Child process for the Bot runtime crash tests. The parent spawns it with
 // `node --import tsx kill-harness.mjs <mode> ...`, waits for a marker line on

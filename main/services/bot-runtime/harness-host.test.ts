@@ -162,7 +162,7 @@ test("(d) sweepOrphans removes directories with no known Bot", async () => {
     writeFileSync(path.join(profile, "bots", "bot-orphan", BOT_SESSION_FILE), "");
     const removed = await host.sweepOrphans(new Set(["bot:known"]));
     assert.deepEqual(removed, ["bot-orphan"]);
-    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lease.sqlite", "runtime.lease.sqlite-journal", "runtime.lock"]);
+    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lease.lock", "runtime.lock"]);
   } finally {
     await host.shutdown();
   }
@@ -193,6 +193,54 @@ test("(e2) the profile is available again after shutdown", async () => {
   } finally {
     await child.kill();
   }
+});
+
+test("a shut down host cannot delete a replacement host's Bot", async () => {
+  const profile = tempProfile();
+  const oldHost = await hostFor(profile, createFauxModels());
+  await oldHost.shutdown();
+  const replacement = await hostFor(profile, createFauxModels());
+  try {
+    await replacement.open("bot-replacement");
+    const session = path.join(profile, "bots", "bot-replacement", BOT_SESSION_FILE);
+    assert.equal(existsSync(session), true);
+    await assert.rejects(oldHost.destroy("bot-replacement"), /shut down/);
+    await assert.rejects(oldHost.sweepOrphans(new Set()), /shut down/);
+    await assert.rejects(oldHost.close("bot-replacement"), /shut down/);
+    assert.throws(() => oldHost.touch("bot-replacement"), /shut down/);
+    assert.equal(existsSync(session), true);
+    assert.equal(replacement.isOpen("bot-replacement"), true);
+  } finally { await replacement.shutdown(); }
+});
+
+test("shutdown holds the profile guard until an admitted inspection finishes", async () => {
+  const profile = tempProfile();
+  const host = await hostFor(profile, createFauxModels());
+  const entry = await host.open("bot-inspected");
+  const inspect = entry.harness.inspect.bind(entry.harness);
+  let started!: () => void;
+  let resume!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  entry.harness.inspect = async (context) => {
+    started();
+    await gate;
+    return inspect(context);
+  };
+  const pending = host.inspect("bot-inspected");
+  await entered;
+  const shutdown = host.shutdown();
+  const contender = spawnHarnessChild("lock", [path.join(profile, "bots")]);
+  try {
+    assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false);
+  } finally {
+    resume();
+    await contender.kill();
+  }
+  await pending;
+  await shutdown;
+  const replacement = await hostFor(profile, createFauxModels());
+  await replacement.shutdown();
 });
 
 test("(f) a corrupt session file is moved aside and a fresh conversation opens", async () => {

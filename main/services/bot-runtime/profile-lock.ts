@@ -1,13 +1,13 @@
 // One process must own every Bot session database in a profile. The permanent
-// SQLite guard is authoritative; runtime.lock is diagnostic legacy metadata.
+// OS flock guard is authoritative; runtime.lock is diagnostic legacy metadata.
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { tryAcquireProcessLifetimeLock } from "../process-lifetime-lock.js";
+import { desktopLeaseHelperPath, tryAcquireProcessLifetimeLock } from "../process-lifetime-lock.js";
 import { syncDirectory, writeFileAtomic } from "../durable-fs.js";
 
 export const BOT_PROFILE_LOCK_FILE = "runtime.lock";
-export const BOT_PROFILE_GUARD_FILE = "runtime.lease.sqlite";
+export const BOT_PROFILE_GUARD_FILE = "runtime.lease.lock";
 
 export type ProfileLockResult =
   | { ok: true; release(): Promise<void> }
@@ -17,6 +17,7 @@ interface LockRecord {
   pid: number;
   startedAt: number;
   token: string;
+  protocol?: "flock-v1";
 }
 
 const reservedProfiles = new Set<string>();
@@ -26,7 +27,8 @@ function parseLockRecord(raw: string): LockRecord | null {
     const value = JSON.parse(raw) as Partial<LockRecord>;
     if (typeof value.pid === "number" && Number.isSafeInteger(value.pid) && value.pid > 0 &&
         typeof value.startedAt === "number" && typeof value.token === "string") {
-      return { pid: value.pid, startedAt: value.startedAt, token: value.token };
+      return { pid: value.pid, startedAt: value.startedAt, token: value.token,
+        ...(value.protocol === "flock-v1" ? { protocol: "flock-v1" as const } : {}) };
     }
   } catch { /* malformed legacy metadata */ }
   return null;
@@ -56,7 +58,7 @@ export async function acquireBotProfileLock(dir: string): Promise<ProfileLockRes
   let published = false;
   let replacedLegacy = false;
   try {
-    releaseGuard = tryAcquireProcessLifetimeLock(path.join(canonical, BOT_PROFILE_GUARD_FILE));
+    releaseGuard = tryAcquireProcessLifetimeLock(path.join(canonical, BOT_PROFILE_GUARD_FILE), desktopLeaseHelperPath());
     if (!releaseGuard) {
       const owner = await readRecord(file);
       return { ok: false, reason: "held_by_live_process", pid: owner?.pid ?? 0 };
@@ -64,12 +66,12 @@ export async function acquireBotProfileLock(dir: string): Promise<ProfileLockRes
     const legacy = await readRecord(file);
     // An old binary does not honor the guard. A live legacy record must not
     // be displaced during an upgrade, even though mixed-version use is unsafe.
-    if (legacy && processIsAlive(legacy.pid)) {
+    if (legacy && legacy.protocol !== "flock-v1" && processIsAlive(legacy.pid)) {
       return { ok: false, reason: "held_by_live_process", pid: legacy.pid };
     }
     await fs.rm(file, { force: true });
     replacedLegacy = true;
-    const record: LockRecord = { pid: process.pid, startedAt: Date.now(), token: randomUUID() };
+    const record: LockRecord = { protocol: "flock-v1", pid: process.pid, startedAt: Date.now(), token: randomUUID() };
     await writeFileAtomic(file, `${JSON.stringify(record)}\n`, { exclusive: true, mode: 0o600 });
     published = true;
     let released: Promise<void> | null = null;

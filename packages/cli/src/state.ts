@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 
 export function readJson<T>(file: string, fallback: T): T {
@@ -26,9 +27,11 @@ export function atomicJson(file: string, value: unknown): void {
 
 /** Legacy owner metadata is consulted only after the permanent guard is held. */
 function lockOwnerIsLive(lock: string): boolean {
-  let pid: unknown;
-  try { pid = (JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { pid?: unknown }).pid; }
+  let owner: { pid?: unknown; protocol?: unknown };
+  try { owner = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { pid?: unknown; protocol?: unknown }; }
   catch { return false; }
+  if (owner.protocol === "flock-v1") return false;
+  const pid = owner.pid;
   if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) {
     try { process.kill(pid, 0); return true; }
     catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
@@ -40,7 +43,7 @@ function lockOwnerIsLive(lock: string): boolean {
 export function acquireLease(file: string): () => void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
-  const releaseGuard = tryAcquireProcessLifetimeLock(leaseGuardPath(file));
+  const releaseGuard = tryAcquireProcessLifetimeLock(leaseGuardPath(file), cliLeaseHelperPath());
   if (!releaseGuard) throw new Error(`Another Aiden process owns ${file}.`);
   let mayHavePublished = false;
   // argv is recorded so lifecycle checks can verify the OWNER's exact
@@ -52,7 +55,7 @@ export function acquireLease(file: string): () => void {
     }
     mkdirSync(lock, { mode: 0o700 });
     mayHavePublished = true;
-    atomicJson(`${lock}/owner.json`, { pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now(), token: randomUUID() });
+    atomicJson(`${lock}/owner.json`, { protocol: "flock-v1", pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now(), token: randomUUID() });
   } catch (error) {
     try { if (mayHavePublished) rmSync(lock, { recursive: true, force: true }); }
     finally { releaseGuard(); }
@@ -67,7 +70,20 @@ export function acquireLease(file: string): () => void {
   };
 }
 
-export function leaseGuardPath(file: string): string { return `${file}.lease.sqlite`; }
+export function leaseGuardPath(file: string): string { return `${file}.lease.lock`; }
+
+export function cliLeaseHelperPath(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const entry = process.env.AIDEN_CLI_ENTRY;
+  const candidates = [
+    ...(entry ? [join(dirname(entry), "native/aiden-lease-flock")] : []),
+    join(here, "native/aiden-lease-flock"),
+    resolve(here, "../native/aiden-lease-flock"),
+    join(here, "app/native/aiden-lease-flock"),
+    resolve(here, "../../../build/native/aiden-lease-flock"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
 
 export class JsonStore<T> {
   readonly file: string;

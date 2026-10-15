@@ -189,8 +189,17 @@ export async function createBotHarnessHost(
   const deleted = new Set<string>();
   /** Per-Bot serialization of open/close/destroy. */
   const lifecycle = new Map<string, Promise<unknown>>();
+  const admittedOperations = new Set<Promise<unknown>>();
   let shutDown = false;
   let shutdownPromise: Promise<void> | null = null;
+
+  function admit<T>(action: () => Promise<T>): Promise<T> {
+    if (shutDown) return Promise.reject(new BotHarnessHostClosedError());
+    const operation = action();
+    admittedOperations.add(operation);
+    void operation.finally(() => admittedOperations.delete(operation)).catch(() => undefined);
+    return operation;
+  }
 
   const botDir = (botId: string) => path.join(botsDir, botDirectoryName(botId));
   const sessionFile = (botId: string) => path.join(botDir(botId), BOT_SESSION_FILE);
@@ -249,12 +258,13 @@ export async function createBotHarnessHost(
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
-      void closeIfIdle(botId, entry);
+      void admit(() => closeIfIdle(botId, entry)).catch(() => undefined);
     }, idleCloseMs);
     entry.idleTimer.unref?.();
   }
 
   async function closeIfIdle(botId: string, entry: OpenEntry): Promise<void> {
+    if (shutDown) return;
     if (open.get(botId) !== entry) return;
     try {
       const inspection = await entry.harness.inspect(ctx);
@@ -265,7 +275,7 @@ export async function createBotHarnessHost(
     } catch {
       // A harness that cannot be inspected is closed below.
     }
-    await host.close(botId).catch(() => undefined);
+    if (!shutDown) await serialize(botId, () => closeEntry(botId)).catch(() => undefined);
   }
 
   async function ensureOpen(botId: string): Promise<OpenEntry> {
@@ -341,7 +351,7 @@ export async function createBotHarnessHost(
   }
 
   const host: BotHarnessHost = {
-    async open(botId) {
+    open(botId) { return admit(async () => {
       const entry = await ensureOpen(botId);
       const notice = entry.pendingNotice;
       delete entry.pendingNotice;
@@ -350,19 +360,20 @@ export async function createBotHarnessHost(
         conversation: entry.conversation,
         ...(notice === undefined ? {} : { recoveredCorruptFile: notice }),
       };
-    },
+    }); },
 
     touch(botId) {
+      if (shutDown) throw new BotHarnessHostClosedError();
       const entry = open.get(botId);
       if (entry !== undefined) scheduleIdle(botId, entry);
     },
 
-    async inspect(botId) {
+    inspect(botId) { return admit(async () => {
       const entry = await ensureOpen(botId);
       return entry.harness.inspect(ctx);
-    },
+    }); },
 
-    async interruptedBots() {
+    interruptedBots() { return admit(async () => {
       const result: BotInterruption[] = [];
       for (const name of await listBotDirectories()) {
         const botId = botIdFromDirectoryName(name);
@@ -379,17 +390,17 @@ export async function createBotHarnessHost(
           result.push({ botId, submissionId: String(unfinished.id) });
         } else if (inspection.tasks.length === 0 && inspection.submissions.length === 0) {
           // Nothing to recover: do not keep this Bot's database open.
-          await host.close(botId);
+          await serialize(botId, () => closeEntry(botId));
         }
       }
       return result;
-    },
+    }); },
 
     close(botId) {
-      return serialize(botId, () => closeEntry(botId));
+      return admit(() => serialize(botId, () => closeEntry(botId)));
     },
 
-    async destroy(botId) {
+    destroy(botId) { return admit(async () => {
       assertBotId(botId);
       deleted.add(botId);
       const pending = opening.get(botId);
@@ -412,9 +423,9 @@ export async function createBotHarnessHost(
         }
         await fs.rm(botDir(botId), { recursive: true, force: true });
       });
-    },
+    }); },
 
-    async sweepOrphans(knownBotIds) {
+    sweepOrphans(knownBotIds) { return admit(async () => {
       const removed: string[] = [];
       for (const name of await listBotDirectories()) {
         const botId = botIdFromDirectoryName(name);
@@ -426,22 +437,25 @@ export async function createBotHarnessHost(
         removed.push(name);
       }
       return removed;
-    },
+    }); },
 
     isOpen(botId) {
       return open.has(botId);
     },
 
     async shutdown() {
-      shutdownPromise ??= (async () => {
+      if (shutdownPromise === null) {
         shutDown = true;
-        await Promise.allSettled([...opening.values()]);
-        const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
-        const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");
-        if (failed) throw failed.reason;
-        await Promise.all([...lifecycle.values()]);
-        await lock.release();
-      })();
+        shutdownPromise = (async () => {
+          await Promise.allSettled([...opening.values()]);
+          await Promise.allSettled([...admittedOperations]);
+          const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
+          const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (failed) throw failed.reason;
+          await Promise.all([...lifecycle.values()]);
+          await lock.release();
+        })();
+      }
       return shutdownPromise;
     },
   };

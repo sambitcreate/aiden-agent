@@ -333,6 +333,7 @@
         "vcc-build",
         "worktree-remover-build",
         "bot-inbox-writer-build",
+        "lease-flock-build",
         "bot-inbox-writer-test-build",
         "subagent-run-store-build",
         "subagent-run-store-test-build",
@@ -1069,6 +1070,18 @@
         "--test"
       ],
       "reason": "Native worktree remover test binary."
+    },
+    {
+      "id": "lease-flock-build",
+      "for": [
+        "runtime-subagents"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build:lease-flock"
+      ],
+      "reason": "Bot profile lock tests need the native flock helper."
     },
     {
       "id": "bot-inbox-writer-build",

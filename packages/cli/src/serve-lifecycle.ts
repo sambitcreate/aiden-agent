@@ -5,8 +5,9 @@
  *
  * The same `serve.lock` is also taken briefly by one-shot `schedule`/`workspace`
  * commands when the daemon is down, so PID verification distinguishes three
- * cases — our daemon (`<entry> serve`), another live Aiden process holding the
- * lock legitimately, and a recycled foreign PID — and only the last is cleared.
+ * cases for legacy metadata — our daemon (`<entry> serve`), another live Aiden
+ * process holding the lock legitimately, and a recycled foreign PID. Newer
+ * metadata is stale whenever its OS guard is free, even if the PID was reused.
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -14,7 +15,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync,
 import { createConnection } from "node:net";
 import { join, relative, resolve } from "node:path";
 import { daemonSocket } from "./daemon-control.ts";
-import { acquireLease, leaseGuardPath, readJson } from "./state.ts";
+import { acquireLease, cliLeaseHelperPath, leaseGuardPath, readJson } from "./state.ts";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 
 const SERVE_LOCK = "serve.lock";
@@ -22,6 +23,7 @@ const SERVE_LOG = "serve.log";
 const START_LOCK = "serve-start";
 
 interface ServeOwner {
+  protocol?: string;
   pid?: number;
   /** Recorded by acquireLease — the owner's own argv, verbatim. */
   argv?: unknown;
@@ -140,18 +142,18 @@ function classifyPid(pid: number, owner?: ServeOwner): PidClass {
 
 function sameOwner(current: ServeOwner | undefined, expected: ServeOwner): boolean {
   return current?.pid === expected.pid && current?.startedAt === expected.startedAt &&
-    current?.token === expected.token;
+    current?.token === expected.token && current?.protocol === expected.protocol;
 }
 
 /** Cleanup owns the same permanent guard as the daemon. Re-evaluate after taking it. */
 function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
   const lock = join(agentDir, SERVE_LOCK);
-  const release = tryAcquireProcessLifetimeLock(leaseGuardPath(join(agentDir, "serve")));
+  const release = tryAcquireProcessLifetimeLock(leaseGuardPath(join(agentDir, "serve")), cliLeaseHelperPath());
   if (!release) return false;
   try {
     const current = serveOwner(agentDir);
     if (expected && !sameOwner(current, expected)) return false;
-    if (current && validPid(current.pid) && pidAlive(current.pid) && classifyPid(current.pid, current) !== "foreign") return false;
+    if (current && current.protocol !== "flock-v1" && validPid(current.pid) && pidAlive(current.pid) && classifyPid(current.pid, current) !== "foreign") return false;
     if (!existsSync(lock)) return false;
     rmSync(lock, { recursive: true, force: true });
     rmSync(daemonSocket(agentDir), { force: true });
@@ -161,9 +163,8 @@ function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
 
 /**
  * Drop a serve lock left behind by a killed daemon or a crashed one-shot
- * command. Only reclaims when the recorded owner is dead or verifiably a
- * recycled foreign PID — a live Aiden process (daemon or command) and an
- * uninspectable owner are never disturbed.
+ * command. The guard decides for new metadata; legacy metadata also requires
+ * a dead owner or a verifiably recycled foreign PID.
  */
 export function recoverStaleServeLease(agentDir: string): boolean {
   const lock = join(agentDir, SERVE_LOCK);
@@ -172,6 +173,7 @@ export function recoverStaleServeLease(agentDir: string): boolean {
 }
 
 export function daemonStatus(agentDir: string): { running: boolean; pid?: number; startedAt?: number; socket: string; log: string } {
+  recoverStaleServeLease(agentDir);
   const owner = serveOwner(agentDir);
   const socket = daemonSocket(agentDir);
   const klass = owner && validPid(owner.pid) && pidAlive(owner.pid)
@@ -234,8 +236,8 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const releaseStart = acquireStartLease(agentDir);
   try {
-    if (daemonStatus(agentDir).running) throw new Error("The Aiden daemon is already running.");
     recoverStaleServeLease(agentDir);
+    if (daemonStatus(agentDir).running) throw new Error("The Aiden daemon is already running.");
     // The child removes a leftover socket after it acquires the serve lease.
     const entry = process.argv[1];
     if (!entry) throw new Error("Cannot determine the Aiden CLI entry point for a background daemon.");
@@ -290,6 +292,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
 
 /** SIGTERM the daemon recorded in the serve lease and wait for it to release. */
 export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number }> {
+  recoverStaleServeLease(agentDir);
   const owner = serveOwner(agentDir);
   if (!owner || !validPid(owner.pid)) {
     recoverStaleServeLease(agentDir);
