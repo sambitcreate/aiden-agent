@@ -124,26 +124,23 @@ test("connection activity reports idleness only after the threshold and never mi
   assert.deepEqual(activity.idle(["a", "b"], 10 * 60_000), ["a", "b"]);
 });
 
-test("merged discovery keeps server order and accepts instructions only with that server's tools", () => {
+test("merged discovery keeps server order and drops unavailable or colliding servers whole", () => {
   const servers = [{ name: "alpha" }, { name: "hung" }, { name: "duplicate" }, { name: "beta" }];
-  const instructions: string[] = [];
   const unavailable: Array<[string, string]> = [];
   const tools = mergeMcpServerDiscovery(
     servers,
     [
-      fulfilled({ tools: [agentTool("alpha_read")], instructions: "alpha guidance" }),
+      fulfilled({ tools: [agentTool("alpha_read")] }),
       { status: "rejected", reason: new McpDeadlineError('MCP server "hung"', 10) },
-      fulfilled({ tools: [agentTool("alpha_read")], instructions: "duplicate guidance" }),
-      fulfilled({ tools: [agentTool("beta_read"), agentTool("beta_write")], instructions: "beta guidance" }),
+      fulfilled({ tools: [agentTool("alpha_read")] }),
+      fulfilled({ tools: [agentTool("beta_read"), agentTool("beta_write")] }),
     ],
     {
-      onServerInstructions: (snapshot) => instructions.push(snapshot),
       onUnavailable: (server, error) =>
         unavailable.push([server.name, projectDiagnosticError(error).code]),
     },
   );
   assert.deepEqual(tools.map(({ name }) => name), ["alpha_read", "beta_read", "beta_write"]);
-  assert.deepEqual(instructions, ["alpha guidance", "beta guidance"]);
   assert.deepEqual(unavailable.map(([name]) => name), ["hung", "duplicate"]);
   assert.equal(unavailable[0][1], "timed-out");
 });
@@ -174,19 +171,18 @@ async function discoverFrom(t: { after(fn: () => Promise<void>): void }, prefix:
   const client = await connectClient(server);
   t.after(async () => { await client.close(); await server.close(); });
   const { tools } = await client.listTools(undefined, mcpRequestDeadline(5_000));
-  return { tools: tools.map(({ name }) => agentTool(`${prefix}_${name}`)), instructions: `${prefix} guidance` };
+  return { tools: tools.map(({ name }) => agentTool(`${prefix}_${name}`)) };
 }
 
 test("deferred admission starts the turn with ready servers and lets a slow server join late", async (t) => {
   const slowList = gate();
   const fast = toolServer(["read"]);
   const slow = toolServer(["search"], { beforeList: () => slowList.opened });
-  const instructions: string[] = [];
   const started = Date.now();
   const { tools, late } = await admitMcpServerDiscovery(
     [{ name: "fast" }, { name: "slow" }],
     ({ name }) => discoverFrom(t, name, name === "fast" ? fast.server : slow.server),
-    { budgetMs: 10_000, windowMs: 100, onServerInstructions: (value) => instructions.push(value) },
+    { budgetMs: 10_000, windowMs: 100 },
   );
   assert.ok(Date.now() - started < 2_000, "the turn must not wait for the slow server's tools/list");
   assert.deepEqual(tools.map(({ name }) => name), ["fast_read"]);
@@ -204,8 +200,6 @@ test("deferred admission starts the turn with ready servers and lets a slow serv
   await waiting;
   assert.equal(late.pending(), 0);
   assert.deepEqual(late.tools().map(({ name }) => name), ["slow_search"]);
-  // Late servers never change the turn's prompt.
-  assert.deepEqual(instructions, ["fast guidance"]);
 });
 
 test("deferred admission does not wait out its window once every server is ready", async (t) => {

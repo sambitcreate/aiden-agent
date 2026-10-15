@@ -1,4 +1,6 @@
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type { McpServer } from "../types.js";
+import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import { createMcpToolCallGuard, listMcpToolInventory } from "../mcp-tool-inventory.js";
 import type { SubagentMcpClientPort, SubagentMcpRemoteTool } from "./subagent-mcp-read.js";
 import type {
@@ -65,19 +67,50 @@ function assertRawRequestCurrent(lease: SubagentMcpConfigurationLease, signal: A
   if (signal.aborted) throw abortReason(signal);
 }
 
+/** Child results never carry more structured data than this, before redaction. */
+export const MAX_CHILD_STRUCTURED_BYTES = 256 * 1024;
+
+/**
+ * Bounded copy of structured content with every string value and key passed
+ * through the credential redactor, or undefined when it cannot be copied
+ * within bounds (unredactable data never reaches a child).
+ */
+export function redactStructuredContent(value: unknown, redact: (text: string) => string): JsonValue | undefined {
+  const copy = copyBoundedJson(value, { maxNodes: 4096, maxDepth: 32, maxSize: MAX_CHILD_STRUCTURED_BYTES, measure: utf8Size, ordinaryObjects: true });
+  if (copy === undefined) return undefined;
+  const walk = (entry: JsonValue): JsonValue => {
+    if (typeof entry === "string") return redact(entry);
+    if (Array.isArray(entry)) return entry.map(walk);
+    if (entry && typeof entry === "object") {
+      const output: Record<string, JsonValue> = {};
+      for (const [key, item] of Object.entries(entry)) {
+        Object.defineProperty(output, redact(key), { value: walk(item), enumerable: true, writable: true, configurable: true });
+      }
+      return output;
+    }
+    return entry;
+  };
+  return walk(copy);
+}
+
 function redactTextResult(result: unknown, boundary: SubagentMcpCredentialBoundary): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) return result;
   const record = result as Record<string, unknown>;
-  if (!Array.isArray(record.content)) return result;
+  const structured = record.structuredContent === undefined
+    ? undefined : redactStructuredContent(record.structuredContent, (text) => boundary.redactText(text));
+  const { structuredContent: _raw, ...rest } = record;
   return {
-    ...record,
-    content: record.content.map((part) => {
-      if (!part || typeof part !== "object" || Array.isArray(part)) return part;
-      const content = part as Record<string, unknown>;
-      return content.type === "text" && typeof content.text === "string"
-        ? { ...content, text: boundary.redactText(content.text) }
-        : part;
-    }),
+    ...rest,
+    ...(structured === undefined ? {} : { structuredContent: structured }),
+    ...(Array.isArray(record.content) ? {
+      content: record.content.map((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+        const content = part as Record<string, unknown>;
+        return content.type === "text" && typeof content.text === "string"
+          ? { ...content, text: boundary.redactText(content.text) }
+          : part;
+      }),
+    } : {}),
   };
 }
 

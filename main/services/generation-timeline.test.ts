@@ -6,6 +6,8 @@ import {
   safeToolIssueDetails,
 } from "./generation-timeline.js";
 import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
+import { markMcpAgentTool, mcpToolActivityLabel } from "./mcp-tool-identity.js";
+import { mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -29,6 +31,37 @@ test("codemode and nested raw call IDs project to distinct renderer-safe activit
   ]);
   assert.ok(parseGenerationTimeline(timeline));
   assert.doesNotMatch(JSON.stringify(timeline), /private-script|private script source/u);
+});
+
+test("MCP tool steps carry the server/tool label while toolName and the wire shape stay unchanged", () => {
+  const mcpTool = (serverName: string, tool: { name: string; title?: string }, name: string) =>
+    markMcpAgentTool({ name, ...mcpAgentToolPresentation(serverName, tool) }, { serverId: serverName, toolName: tool.name });
+  const tools = [
+    mcpTool("GitHub", { name: "create_issue", title: "Create issue" }, "github__create_issue"),
+    mcpTool("S".repeat(64), { name: "t".repeat(64) }, "long__tool"),
+    // A host tool that happens to carry a label is not relabelled.
+    { name: "read_file", label: "Raw host label" },
+  ];
+  const projector = new GenerationTimelineProjector("generation-mcp", () => {});
+  projector.setToolLabels((toolName) => mcpToolActivityLabel(tools, toolName));
+  // Early pending step (toolcall_start) and its later adoption both keep the label.
+  projector.toolStarted("a", "github__create_issue", {});
+  projector.toolStarted("a", "github__create_issue", { title: "bug" });
+  projector.toolStarted("b", "long__tool", {});
+  projector.toolStarted("c", "read_file", { path: "README.md" });
+  projector.toolStarted("d", "other__unknown", {});
+  for (const id of ["a", "b", "c", "d"]) projector.toolFinished(id, "completed");
+  const timeline = projector.finish("completed");
+  const steps = toolSteps(timeline);
+  assert.deepEqual(steps.map((step) => [step.toolName, step.label]), [
+    ["github__create_issue", "GitHub/Create issue"],
+    ["long__tool", steps[1]!.label],
+    ["read_file", "Read file"],
+    ["other__unknown", "Other Unknown"],
+  ]);
+  assert.ok(steps[1]!.label.startsWith(`${"S".repeat(64)}/t`), steps[1]!.label);
+  assert.ok(steps[1]!.label.length <= 120, "labels stay within the native clients' 120-unit limit");
+  assert.ok(parseGenerationTimeline(timeline), "the relabelled timeline still parses on the shared contract");
 });
 
 test("keeps tool order stable when parallel calls finish out of order", () => {

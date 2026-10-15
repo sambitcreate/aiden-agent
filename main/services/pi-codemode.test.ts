@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { Type, type JsonObject } from "@earendil-works/pi-ai";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { runToolCall, type AgentTool, type AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { partitionPiCodemodeTools } from "./pi-runtime-tool.js";
-import { createPiCodemodeTool } from "./pi-codemode.js";
+import { codemodeResultSchema, createPiCodemodeTool, MAX_CODEMODE_TOOLS } from "./pi-codemode.js";
+import { executeMcpAgentTool, MAX_MCP_RESULT_TEXT_CHARS, MAX_MCP_SCRIPT_STRUCTURED_BYTES } from "./mcp-tool-result.js";
 
 function fixture() {
   const calls: Array<{ parent: string; name: string; args: unknown }> = [];
@@ -245,4 +250,166 @@ test("waiting for pending servers stops when the script is cancelled", async () 
   const running = tool.execute("parent", { code: 'text(ALL_TOOLS.length);' }, controller.signal);
   controller.abort(new Error("turn stopped"));
   await assert.rejects(running, /turn stopped/u);
+});
+
+async function mcpFixture(t: TestContext, results: Record<string, () => Record<string, unknown>>, outputSchema?: Record<string, unknown>) {
+  const server = new Server({ name: "fixture", version: "1" }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: Object.keys(results).map((name) => ({ name, inputSchema: { type: "object" as const }, ...(outputSchema ? { outputSchema } : {}) })),
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => results[params.name]!() as never);
+  const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  t.after(async () => { await client.close(); await server.close(); });
+  await client.listTools();
+  const tools: AgentTool[] = Object.keys(results).map((name) => Object.assign({
+    name: `mcp_${name}`, label: name, description: name, parameters: Type.Object({}),
+    ...(outputSchema ? { outputSchema: Type.Unsafe(outputSchema) } : {}),
+    execute: () => executeMcpAgentTool(() => client.callTool({ name, arguments: {} })),
+  }, { codemode: true }));
+  return tools;
+}
+
+/** Runs nested calls through Pi's own tool-call path, hooks included, as the harness does. */
+function codemodeOver(tools: AgentTool[], afterToolCall?: Parameters<typeof runToolCall>[1]["afterToolCall"]) {
+  const assistantMessage = { role: "assistant", content: [], api: "faux", provider: "faux", model: "faux", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 0 } as const;
+  const nested: AgentToolCallOutcome[] = [];
+  const tool = createPiCodemodeTool({
+    tools: () => tools,
+    async executeTool(_parent, name, args, signal) {
+      const outcome = await runToolCall({ type: "toolCall", id: `nested-${nested.length}`, name, arguments: args as JsonObject }, {
+        tools, assistantMessage: assistantMessage as never, context: { messages: [], tools } as never, signal, afterToolCall,
+      });
+      nested.push(outcome);
+      return outcome;
+    },
+  });
+  return { tool, nested };
+}
+
+const scriptText = (result: Awaited<ReturnType<AgentTool["execute"]>>) =>
+  result.content.filter((item) => item.type === "text").map((item) => (item as { text: string }).text).join("\n");
+
+test("codemode scripts read whole MCP results from a real server while the model-facing result stays bounded", async (t) => {
+  const text = `HEAD${"x".repeat(200_000)}TAIL`;
+  const rows = Array.from({ length: 3_000 }, (_, index) => ({ id: index, name: `row-${index}` }));
+  const tools = await mcpFixture(t, {
+    big: () => ({ content: [{ type: "text", text }], structuredContent: { rows } }),
+    failing: () => ({ content: [{ type: "text", text: `failure detail ${"y".repeat(50_000)} at the end` }], isError: true }),
+  });
+  const { tool, nested } = codemodeOver(tools);
+  const result = await tool.execute("parent", { code: `
+    const r = await tools.mcp_big({});
+    text({ length: r.content[0].text.length, tail: r.content[0].text.slice(-4), rows: r.structuredContent.rows.length, last: r.structuredContent.rows[2999].name, isError: r.isError });
+    const f = await tools.mcp_failing({});
+    text({ isError: f.isError, end: f.content[0].text.slice(-10) });` });
+  assert.equal(result.isError, false, scriptText(result));
+  const [big, failing] = result.content.map((item) => JSON.parse((item as { text: string }).text));
+  assert.deepEqual(big, { length: text.length, tail: "TAIL", rows: 3_000, last: "row-2999", isError: false });
+  assert.deepEqual(failing, { isError: true, end: "at the end" });
+  // The model-facing results of the same calls kept their 32K bound.
+  for (const outcome of nested) {
+    assert.ok(JSON.stringify(outcome.result.content).length < MAX_MCP_RESULT_TEXT_CHARS + 1_000);
+  }
+});
+
+test("script-facing MCP results mark structured content that is too large instead of dropping it silently", async (t) => {
+  const tools = await mcpFixture(t, {
+    huge: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { blob: "z".repeat(MAX_MCP_SCRIPT_STRUCTURED_BYTES + 10) } }),
+  });
+  const { tool } = codemodeOver(tools);
+  const result = await tool.execute("parent", { code: 'const r = await tools.mcp_huge({}); text({ has: r.structuredContent !== undefined, notes: r.content.map((c) => c.text) });' });
+  const value = JSON.parse(scriptText(result));
+  assert.equal(value.has, false);
+  assert.deepEqual(value.notes, ["summary", "[structuredContent omitted: too large]"]);
+});
+
+test("a hook that rewrites an MCP result wins over the script-facing full result", async (t) => {
+  const tools = await mcpFixture(t, { secret: () => ({ content: [{ type: "text", text: "secret value" }], structuredContent: { secret: "value" } }) });
+  const { tool } = codemodeOver(tools, async ({ toolCall }) => toolCall.name === "mcp_secret" ? { content: [{ type: "text", text: "redacted" }] } : undefined);
+  const result = await tool.execute("parent", { code: 'const r = await tools.mcp_secret({}); text({ content: r.content, structured: r.structuredContent ?? null });' });
+  assert.deepEqual(JSON.parse(scriptText(result)), { content: [{ type: "text", text: "redacted" }], structured: null });
+});
+
+test("a hook that replaces or drops only structured content wins over the script-facing full result", async (t) => {
+  const tools = await mcpFixture(t, {
+    filtered: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { restricted: "original" } }),
+    dropped: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { restricted: "original" } }),
+    kept: () => ({ content: [{ type: "text", text: "summary" }], structuredContent: { open: "value" } }),
+  });
+  const { tool } = codemodeOver(tools, async ({ toolCall, result }) => {
+    if (toolCall.name === "mcp_filtered") return { structuredContent: { filtered: true } };
+    // Returning the same content array without structured content removes it.
+    if (toolCall.name === "mcp_dropped") return { content: result.content };
+    return undefined;
+  });
+  const result = await tool.execute("parent", { code: `
+    for (const name of ["mcp_filtered", "mcp_dropped", "mcp_kept"]) {
+      const r = await tools[name]({});
+      text({ name, structured: r.structuredContent ?? null });
+    }` });
+  assert.equal(result.isError, false, scriptText(result));
+  assert.deepEqual(result.content.map((item) => JSON.parse((item as { text: string }).text)), [
+    { name: "mcp_filtered", structured: { filtered: true } },
+    { name: "mcp_dropped", structured: null },
+    { name: "mcp_kept", structured: { open: "value" } },
+  ]);
+});
+
+test("MCP call declarations type the resolved result with the tool's structured-content schema", async () => {
+  const outputSchema = {
+    type: "object", properties: { items: { type: "array", items: { $ref: "#/$defs/Item" } } }, required: ["items"],
+    $defs: { Item: { type: "object", properties: { title: { type: "string" } }, required: ["title"] } },
+  };
+  const remote = (name: string, extra: Partial<AgentTool> = {}): AgentTool => Object.assign({
+    name, label: name, description: name, parameters: Type.Object({ query: Type.String() }),
+    execute: async () => ({ content: [], details: null }), ...extra,
+  }, { codemode: true });
+  const tool = createPiCodemodeTool({
+    tools: () => [remote("search-docs", { outputSchema: Type.Unsafe(outputSchema) }), remote("plain_tool")],
+    executeTool: async () => { throw new Error("not called"); },
+  });
+  const result = await tool.execute("p", { code: 'text(await describeTool("search_docs")); text(await describeTool("plain-tool"));' });
+  assert.equal(result.isError, false, scriptText(result));
+  const [typed, untyped] = result.content.map((item) => (item as { text: string }).text);
+  assert.match(typed!, /search_docs\(args: \{ query: string; \}\): Promise<\{/u);
+  assert.match(typed!, /content: Array<\{/u);
+  assert.match(typed!, /isError: boolean/u);
+  // The relocated $ref resolves to the item type instead of collapsing to unknown.
+  assert.match(typed!, /structuredContent\?: \{ items: Array<\{ title: string; [^}]*\}>; [^}]*\}/u);
+  assert.match(untyped!, /plain_tool\(args: \{ query: string; \}\): Promise<\{/u);
+  const ambiguous = createPiCodemodeTool({ tools: () => [remote("a-b"), remote("a_b")], executeTool: async () => { throw new Error("not called"); } });
+  const failed = await ambiguous.execute("p", { code: 'text(await describeTool("a.b"));' });
+  assert.equal(failed.isError, true);
+  assert.match(scriptText(failed), /Ambiguous/u);
+  assert.equal((await ambiguous.execute("p", { code: 'text(await describeTool("a-b"));' })).isError, false);
+});
+
+test("output schemas too large to render fall back to unknown structured content", () => {
+  const huge = { type: "object", properties: Object.fromEntries(Array.from({ length: 4_000 }, (_, index) => [`field_${index}`, { type: "string" }])) };
+  assert.deepEqual((codemodeResultSchema(huge).properties as Record<string, unknown>).structuredContent, {});
+  assert.notDeepEqual((codemodeResultSchema({ type: "object", properties: { a: { type: "string" } } }).properties as Record<string, unknown>).structuredContent, {});
+});
+
+test("an inventory above the tool limit keeps codemode working with a capped, reported set", async () => {
+  const make = (name: string, discovered: boolean): AgentTool => Object.assign({
+    name, label: name, description: name, parameters: Type.Object({}),
+    execute: async () => ({ content: [], details: null }),
+  }, { codemode: true }, discovered ? { discovery: { namespace: "mcp:x", label: "X" } } : {});
+  const inventory = [...Array.from({ length: MAX_CODEMODE_TOOLS + 5 }, (_, index) => make(`remote_${index}`, true)), make("read_file", false)];
+  const calls: string[] = [];
+  const tool = createPiCodemodeTool({
+    tools: () => inventory,
+    async executeTool(_parent, name) {
+      calls.push(name);
+      return { toolCall: { type: "toolCall", id: "n", name, arguments: {} }, result: { content: [{ type: "text", text: "ok" }], details: null }, isError: false };
+    },
+  });
+  const result = await tool.execute("p", { code: 'await tools.read_file({}); text(ALL_TOOLS.length);' });
+  assert.equal(result.isError, false, scriptText(result));
+  assert.deepEqual(calls, ["read_file"]);
+  assert.equal((result.content[0] as { text: string }).text, String(MAX_CODEMODE_TOOLS));
+  assert.match(scriptText(result), /6 tools omitted above the 512-tool limit/u);
+  assert.equal((result.details as { omittedTools?: number }).omittedTools, 6);
 });
