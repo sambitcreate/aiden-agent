@@ -10,22 +10,23 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { createConnection } from "node:net";
 import { join, relative, resolve } from "node:path";
 import { daemonSocket } from "./daemon-control.ts";
-import { acquireLease, readJson } from "./state.ts";
+import { acquireLease, leaseGuardPath, readJson } from "./state.ts";
+import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 
 const SERVE_LOCK = "serve.lock";
 const SERVE_LOG = "serve.log";
 const START_LOCK = "serve-start";
-/** A lock with no owner.json younger than this may still be mid-acquireLease. */
-const FRESH_LOCK_MS = 2_000;
 
 interface ServeOwner {
   pid?: number;
   /** Recorded by acquireLease — the owner's own argv, verbatim. */
   argv?: unknown;
   startedAt?: number;
+  token?: string;
 }
 
 function serveOwner(agentDir: string): ServeOwner | undefined {
@@ -137,9 +138,25 @@ function classifyPid(pid: number, owner?: ServeOwner): PidClass {
   return matches("(?:\\s|$)") ? "aiden" : "foreign";
 }
 
-function clearServeArtifacts(agentDir: string): void {
-  rmSync(join(agentDir, SERVE_LOCK), { recursive: true, force: true });
-  rmSync(daemonSocket(agentDir), { force: true });
+function sameOwner(current: ServeOwner | undefined, expected: ServeOwner): boolean {
+  return current?.pid === expected.pid && current?.startedAt === expected.startedAt &&
+    current?.token === expected.token;
+}
+
+/** Cleanup owns the same permanent guard as the daemon. Re-evaluate after taking it. */
+function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
+  const lock = join(agentDir, SERVE_LOCK);
+  const release = tryAcquireProcessLifetimeLock(leaseGuardPath(join(agentDir, "serve")));
+  if (!release) return false;
+  try {
+    const current = serveOwner(agentDir);
+    if (expected && !sameOwner(current, expected)) return false;
+    if (current && validPid(current.pid) && pidAlive(current.pid) && classifyPid(current.pid, current) !== "foreign") return false;
+    if (!existsSync(lock)) return false;
+    rmSync(lock, { recursive: true, force: true });
+    rmSync(daemonSocket(agentDir), { force: true });
+    return true;
+  } finally { release(); }
 }
 
 /**
@@ -151,25 +168,7 @@ function clearServeArtifacts(agentDir: string): void {
 export function recoverStaleServeLease(agentDir: string): boolean {
   const lock = join(agentDir, SERVE_LOCK);
   if (!existsSync(lock)) return false;
-  const owner = serveOwner(agentDir);
-  if (!owner || !validPid(owner.pid)) {
-    // Missing/corrupt owner.json: acquireLease creates the lock dir before
-    // writing owner.json, so a very fresh lock may belong to a live acquirer.
-    try {
-      if (Date.now() - statSync(lock).mtimeMs < FRESH_LOCK_MS) return false;
-    } catch { /* fall through */ }
-    clearServeArtifacts(agentDir);
-    return true;
-  }
-  if (!pidAlive(owner.pid) || classifyPid(owner.pid, owner) === "foreign") {
-    // Recheck right before removing: an acquirer that won the lock between
-    // our read and now must not have its fresh lease deleted (check-then-act).
-    const current = serveOwner(agentDir);
-    if (current && validPid(current.pid) && current.pid !== owner.pid) return false;
-    clearServeArtifacts(agentDir);
-    return true;
-  }
-  return false;
+  return clearServeArtifacts(agentDir);
 }
 
 export function daemonStatus(agentDir: string): { running: boolean; pid?: number; startedAt?: number; socket: string; log: string } {
@@ -199,7 +198,12 @@ async function waitForSocket(agentDir: string, child: Pick<ChildProcess, "pid" |
     if (exited || child.exitCode !== null) {
       throw new Error(`The daemon exited during startup (code ${child.exitCode ?? "unknown"}). See ${join(agentDir, SERVE_LOG)}.`);
     }
-    if (existsSync(socket)) return;
+    if (existsSync(socket) && serveOwner(agentDir)?.pid === child.pid && await new Promise<boolean>((resolveReady) => {
+      const connection = createConnection(socket);
+      const timer = setTimeout(() => { connection.destroy(); resolveReady(false); }, 250);
+      connection.once("connect", () => { clearTimeout(timer); connection.destroy(); resolveReady(true); });
+      connection.once("error", () => { clearTimeout(timer); resolveReady(false); });
+    })) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
   }
   throw new Error(`The daemon did not open its control socket within ${Math.round(timeoutMs / 1000)}s. See ${join(agentDir, SERVE_LOG)}.`);
@@ -232,8 +236,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
   try {
     if (daemonStatus(agentDir).running) throw new Error("The Aiden daemon is already running.");
     recoverStaleServeLease(agentDir);
-    // A leftover socket would satisfy the readiness check before the child boots.
-    rmSync(daemonSocket(agentDir), { force: true });
+    // The child removes a leftover socket after it acquires the serve lease.
     const entry = process.argv[1];
     if (!entry) throw new Error("Cannot determine the Aiden CLI entry point for a background daemon.");
     const log = join(agentDir, SERVE_LOG);
@@ -294,13 +297,13 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   }
   const pid = owner.pid;
   if (!pidAlive(pid)) {
-    clearServeArtifacts(agentDir);
+    clearServeArtifacts(agentDir, owner);
     throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
   }
   const klass = classifyPid(pid, owner);
   if (klass === "foreign") {
     // The PID was recycled by an unrelated process — never signal it.
-    clearServeArtifacts(agentDir);
+    clearServeArtifacts(agentDir, owner);
     throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
   }
   if (klass === "aiden") {
@@ -317,7 +320,7 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   } catch (error) {
     // The daemon died between classification and the signal.
     if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-      clearServeArtifacts(agentDir);
+      clearServeArtifacts(agentDir, owner);
       return { stopped: true, pid };
     }
     throw error;
@@ -326,11 +329,9 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   let polls = 0;
   while (Date.now() < deadline) {
     if (!existsSync(join(agentDir, SERVE_LOCK)) && !existsSync(daemonSocket(agentDir))) return { stopped: true, pid };
+    if (!sameOwner(serveOwner(agentDir), owner)) return { stopped: true, pid };
     if (!pidAlive(pid) || (polls % 10 === 9 && classifyPid(pid, owner) === "foreign")) {
-      // Our daemon is gone; if the lease changed hands meanwhile, the new
-      // owner is not ours to clear.
-      const current = serveOwner(agentDir);
-      if (!current || !validPid(current.pid) || current.pid === pid) clearServeArtifacts(agentDir);
+      clearServeArtifacts(agentDir, owner);
       return { stopped: true, pid };
     }
     polls += 1;

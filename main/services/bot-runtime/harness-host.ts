@@ -24,7 +24,7 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js";
+import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
 
 export const BOT_SESSION_FILE = "session.sqlite";
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
@@ -190,6 +190,7 @@ export async function createBotHarnessHost(
   /** Per-Bot serialization of open/close/destroy. */
   const lifecycle = new Map<string, Promise<unknown>>();
   let shutDown = false;
+  let shutdownPromise: Promise<void> | null = null;
 
   const botDir = (botId: string) => path.join(botsDir, botDirectoryName(botId));
   const sessionFile = (botId: string) => path.join(botDir(botId), BOT_SESSION_FILE);
@@ -317,9 +318,9 @@ export async function createBotHarnessHost(
   async function closeEntry(botId: string): Promise<void> {
     const entry = open.get(botId);
     if (entry === undefined) return;
-    open.delete(botId);
     if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
     await entry.harness.close(ctx);
+    if (open.get(botId) === entry) open.delete(botId);
   }
 
   async function listBotDirectories(): Promise<string[]> {
@@ -332,7 +333,7 @@ export async function createBotHarnessHost(
     }
     const result: string[] = [];
     for (const name of names) {
-      if (name === BOT_PROFILE_LOCK_FILE || name.startsWith(".")) continue;
+      if (name === BOT_PROFILE_LOCK_FILE || name === BOT_PROFILE_GUARD_FILE || name.startsWith(".")) continue;
       const stat = await fs.lstat(path.join(botsDir, name)).catch(() => null);
       if (stat?.isDirectory()) result.push(name);
     }
@@ -432,11 +433,16 @@ export async function createBotHarnessHost(
     },
 
     async shutdown() {
-      if (shutDown) return;
-      shutDown = true;
-      await Promise.allSettled([...opening.values()]);
-      await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
-      await lock.release();
+      shutdownPromise ??= (async () => {
+        shutDown = true;
+        await Promise.allSettled([...opening.values()]);
+        const closes = await Promise.allSettled([...open.keys()].map((botId) => serialize(botId, () => closeEntry(botId))));
+        const failed = closes.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (failed) throw failed.reason;
+        await Promise.all([...lifecycle.values()]);
+        await lock.release();
+      })();
+      return shutdownPromise;
     },
   };
   return host;

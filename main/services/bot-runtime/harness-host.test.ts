@@ -162,7 +162,7 @@ test("(d) sweepOrphans removes directories with no known Bot", async () => {
     writeFileSync(path.join(profile, "bots", "bot-orphan", BOT_SESSION_FILE), "");
     const removed = await host.sweepOrphans(new Set(["bot:known"]));
     assert.deepEqual(removed, ["bot-orphan"]);
-    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lock"]);
+    assert.deepEqual(readdirSync(path.join(profile, "bots")).sort(), ["bot~3aknown", "runtime.lease.sqlite", "runtime.lease.sqlite-journal", "runtime.lock"]);
   } finally {
     await host.shutdown();
   }

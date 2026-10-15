@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 
 export function readJson<T>(file: string, fallback: T): T {
   try { return JSON.parse(readFileSync(file, "utf8")) as T; }
@@ -23,21 +24,11 @@ export function atomicJson(file: string, value: unknown): void {
   } finally { rmSync(temporary, { force: true }); }
 }
 
-/** A lock without owner.json younger than this may still be mid-acquire. */
-const FRESH_LOCK_MS = 2_000;
-
-/**
- * Whether the recorded lock owner is a live process. Returns "fresh" for a
- * missing/corrupt owner.json inside the mid-acquire window — that lock may
- * belong to a live acquirer between mkdir and the owner write.
- */
-function lockOwnerIsLive(lock: string): boolean | "fresh" {
+/** Legacy owner metadata is consulted only after the permanent guard is held. */
+function lockOwnerIsLive(lock: string): boolean {
   let pid: unknown;
   try { pid = (JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { pid?: unknown }).pid; }
-  catch {
-    try { if (Date.now() - statSync(lock).mtimeMs < FRESH_LOCK_MS) return "fresh"; } catch { /* gone */ }
-    return false;
-  }
+  catch { return false; }
   if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) {
     try { process.kill(pid, 0); return true; }
     catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
@@ -49,45 +40,34 @@ function lockOwnerIsLive(lock: string): boolean | "fresh" {
 export function acquireLease(file: string): () => void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { mkdirSync(lock, { mode: 0o700 }); break; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // A crashed holder (kill -9, power loss) leaves its lock behind; reclaim
-      // it when the recorded owner is provably dead or stale debris. A live
-      // owner — or one inside the mid-acquire window — keeps the lock.
-      if (attempt === 0 && lockOwnerIsLive(lock) === false) {
-        rmSync(lock, { recursive: true, force: true });
-        continue;
-      }
-      throw new Error(`Another Aiden process owns ${file}. If it crashed, remove ${lock} after checking the owner.json PID.`);
-    }
-  }
+  const releaseGuard = tryAcquireProcessLifetimeLock(leaseGuardPath(file));
+  if (!releaseGuard) throw new Error(`Another Aiden process owns ${file}.`);
+  let mayHavePublished = false;
   // argv is recorded so lifecycle checks can verify the OWNER's exact
   // invocation rather than guessing from the checking process's argv/cwd.
-  try { atomicJson(`${lock}/owner.json`, { pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now() }); }
-  catch (error) { rmSync(lock, { recursive: true, force: true }); throw error; }
+  try {
+    if (existsSync(lock)) {
+      if (lockOwnerIsLive(lock)) throw new Error(`Another Aiden process owns ${file}.`);
+      rmSync(lock, { recursive: true, force: true });
+    }
+    mkdirSync(lock, { mode: 0o700 });
+    mayHavePublished = true;
+    atomicJson(`${lock}/owner.json`, { pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now(), token: randomUUID() });
+  } catch (error) {
+    try { if (mayHavePublished) rmSync(lock, { recursive: true, force: true }); }
+    finally { releaseGuard(); }
+    throw error;
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    // Only remove the lock while owner.json still names this process. If the
-    // lock was reclaimed and re-acquired meanwhile (or a fresh acquirer sits
-    // between mkdir and owner write), removing it would orphan a live owner.
-    // Missing/corrupt owner.json past the mid-acquire window is stale debris —
-    // reclaim it rather than letting the lease wedge permanently.
-    let ownerPid: number | undefined;
-    try { ownerPid = (JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")) as { pid?: number }).pid; }
-    catch { /* missing/corrupt — debris rule below */ }
-    if (ownerPid !== undefined) {
-      if (ownerPid !== process.pid) return;
-      rmSync(lock, { recursive: true, force: true });
-      return;
-    }
-    try { if (Date.now() - statSync(lock).mtimeMs < FRESH_LOCK_MS) return; } catch { return; }
-    rmSync(lock, { recursive: true, force: true });
+    try { rmSync(lock, { recursive: true, force: true }); }
+    finally { releaseGuard(); }
   };
 }
+
+export function leaseGuardPath(file: string): string { return `${file}.lease.sqlite`; }
 
 export class JsonStore<T> {
   readonly file: string;

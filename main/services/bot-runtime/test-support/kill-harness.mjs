@@ -12,6 +12,7 @@
 //   scenario <file> <json>             run `run(args, emit)` from a test-owned scenario module
 
 import { pathToFileURL } from "node:url";
+import { existsSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry } from "@earendil-works/pi-durable";
 import { acquireBotProfileLock } from "../profile-lock.ts";
@@ -30,6 +31,12 @@ function holdForever() {
 }
 
 if (mode === "lock") {
+  const result = await acquireBotProfileLock(args[0]);
+  emit("LOCK", result.ok ? { ok: true } : { ok: false, reason: result.reason, pid: result.pid });
+  holdForever();
+} else if (mode === "lock-gated") {
+  emit("READY", "ready");
+  while (!existsSync(args[1])) await new Promise((resolve) => setTimeout(resolve, 10));
   const result = await acquireBotProfileLock(args[0]);
   emit("LOCK", result.ok ? { ok: true } : { ok: false, reason: result.reason, pid: result.pid });
   holdForever();

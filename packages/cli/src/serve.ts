@@ -9,11 +9,9 @@ import { workspaceCommand } from "./workspaces.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
-import { recoverStaleServeLease } from "./serve-lifecycle.ts";
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean } = {}) {
-  recoverStaleServeLease(agentDir);
   const release = acquireLease(join(agentDir, "serve"));
   try { await serveOwned(agentDir, signal, options); } finally { release(); }
 }

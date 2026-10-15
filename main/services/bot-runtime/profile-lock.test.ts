@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
-import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js";
+import { acquireBotProfileLock, BOT_PROFILE_GUARD_FILE, BOT_PROFILE_LOCK_FILE } from "./profile-lock.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 
 const roots: string[] = [];
@@ -61,6 +61,66 @@ test("a lock left by a dead process is reclaimed", async () => {
   const lock = await acquireBotProfileLock(dir);
   assert.equal(lock.ok, true);
   if (lock.ok) await lock.release();
+});
+
+test("three ready processes competing after SIGKILL never overlap", async () => {
+  const dir = tempBotsDir();
+  const stale = spawnHarnessChild("lock", [dir]);
+  assert.deepEqual(JSON.parse(await stale.waitFor("LOCK")), { ok: true });
+  await stale.kill();
+  const gate = path.join(path.dirname(dir), "go");
+  const contenders = Array.from({ length: 3 }, () => spawnHarnessChild("lock-gated", [dir, gate]));
+  try {
+    await Promise.all(contenders.map((child) => child.waitFor("READY")));
+    writeFileSync(gate, "go");
+    const results = await Promise.all(contenders.map(async (child) => JSON.parse(await child.waitFor("LOCK")) as { ok: boolean }));
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    const winner = contenders[results.findIndex((result) => result.ok)]!;
+    assert.equal((await acquireBotProfileLock(dir)).ok, false);
+    await winner.kill();
+    const recovered = await acquireBotProfileLock(dir);
+    assert.equal(recovered.ok, true);
+    if (recovered.ok) await recovered.release();
+  } finally { await Promise.all(contenders.map((child) => child.kill())); }
+});
+
+test("a stopped live owner survives missing diagnostic metadata", async (t) => {
+  if (process.platform === "win32") return t.skip("SIGSTOP is unavailable");
+  const dir = tempBotsDir();
+  const owner = spawnHarnessChild("lock", [dir]);
+  try {
+    assert.deepEqual(JSON.parse(await owner.waitFor("LOCK")), { ok: true });
+    owner.child.kill("SIGSTOP");
+    rmSync(path.join(dir, BOT_PROFILE_LOCK_FILE));
+    const contender = spawnHarnessChild("lock", [dir]);
+    try { assert.equal(JSON.parse(await contender.waitFor("LOCK")).ok, false); }
+    finally { await contender.kill(); }
+  } finally {
+    owner.child.kill("SIGCONT");
+    await owner.kill();
+  }
+  const recovered = await acquireBotProfileLock(dir);
+  assert.equal(recovered.ok, true);
+  if (recovered.ok) await recovered.release();
+});
+
+test("a damaged guard fails closed and remains on disk", async () => {
+  const dir = tempBotsDir();
+  const first = await acquireBotProfileLock(dir);
+  assert.equal(first.ok, true);
+  if (first.ok) await first.release();
+  writeFileSync(path.join(dir, BOT_PROFILE_GUARD_FILE), "not sqlite");
+  await assert.rejects(acquireBotProfileLock(dir));
+  assert.equal(existsSync(path.join(dir, BOT_PROFILE_GUARD_FILE)), true);
+});
+
+test("a guard made readable by other users fails closed", async () => {
+  const dir = tempBotsDir();
+  const first = await acquireBotProfileLock(dir);
+  assert.equal(first.ok, true);
+  if (first.ok) await first.release();
+  chmodSync(path.join(dir, BOT_PROFILE_GUARD_FILE), 0o644);
+  await assert.rejects(acquireBotProfileLock(dir), /Unsafe lease guard/);
 });
 
 test("a lock naming a pid that does not exist is reclaimed", async () => {

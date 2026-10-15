@@ -6,6 +6,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { once } from "node:events";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { request as httpsRequest } from "node:https";
 import * as api from "../dist/parity-test-api.js";
@@ -31,6 +32,72 @@ test("atomic stores serialize mutations, protect credentials, and reject cross-p
   assert.equal(readFileSync(file, "utf8"), "broken");
   assert.deepEqual(api.splitArgs('save "two words.json" \'a b\''), ["save", "two words.json", "a b"]);
   assert.throws(() => api.splitArgs('"unfinished'), /Unfinished/);
+});
+
+test("a stale CLI lease cannot be reclaimed by two processes", async (t) => {
+  const dir = temporary(t), file = join(dir, "shared.json");
+  const fixture = join(pkg, "tests", "fixtures", "lease-child.mjs");
+  const gate = join(dir, "resume"), marker = join(dir, "paused");
+  const staleResult = join(dir, "stale-result"), firstResult = join(dir, "first-result"), secondResult = join(dir, "second-result");
+  const children = [];
+  const launch = (mode, result) => {
+    const child = spawn(process.execPath, [fixture, mode, file, gate, marker, result], { stdio: "ignore" });
+    children.push(child);
+    return child;
+  };
+  const waitForFile = async (name) => {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const value = existsSync(name) ? readFileSync(name, "utf8") : "";
+      if (value) return value;
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${name}`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+  };
+  const kill = async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, "exit");
+    child.kill("SIGKILL");
+    await exited;
+  };
+  try {
+    const stale = launch("plain", staleResult);
+    assert.match(await waitForFile(staleResult), /^owned:/);
+    await kill(stale);
+    launch("pause-reclaim", firstResult);
+    await waitForFile(marker);
+    launch("plain", secondResult);
+    assert.match(await waitForFile(secondResult), /^contended:/);
+    writeFileSync(gate, "resume");
+    assert.match(await waitForFile(firstResult), /^owned:/);
+  } finally {
+    writeFileSync(gate, "resume");
+    await Promise.all(children.map(kill));
+  }
+});
+
+test("a failed same-process reacquire keeps the cross-process guard held", async (t) => {
+  const dir = temporary(t), file = join(dir, "held.json"), result = join(dir, "result");
+  const release = api.acquireLease(file);
+  const child = spawn(process.execPath, [join(pkg, "tests", "fixtures", "lease-child.mjs"), "plain", file, "", "", result], { stdio: "ignore" });
+  try {
+    assert.throws(() => api.acquireLease(file), /Another Aiden process owns/);
+    const deadline = Date.now() + 20_000;
+    let outcome = "";
+    while (!outcome) {
+      if (existsSync(result)) outcome = readFileSync(result, "utf8");
+      if (Date.now() > deadline) throw new Error("The competing process did not finish acquisition");
+      if (!outcome) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    assert.match(outcome, /^contended:/);
+  } finally {
+    release();
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
 });
 
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
@@ -209,6 +276,38 @@ test("serve lifecycle recovers stale leases and never signals a recycled PID", a
   utimesSync(join(dir, "serve.lock"), past, past);
   assert.equal(api.recoverStaleServeLease(dir), true);
   assert.equal(api.pidAlive(process.pid), true);
+});
+
+test("serve cleanup cannot remove a replacement owner or socket", async (t) => {
+  const dir = temporary(t), resource = join(dir, "serve");
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  mkdirSync(`${resource}.lock`, { recursive: true });
+  api.atomicJson(join(`${resource}.lock`, "owner.json"), { pid: dead, startedAt: 1 });
+  writeFileSync(api.daemonSocket(dir), "stale socket");
+  const nodeFs = createRequire(import.meta.url)("node:fs");
+  const originalRemove = nodeFs.rmSync;
+  let attempted = false;
+  nodeFs.rmSync = (target, ...args) => {
+    if (target === `${resource}.lock`) {
+      attempted = true;
+      assert.throws(() => api.acquireLease(resource), /Another Aiden process owns/);
+    }
+    return originalRemove(target, ...args);
+  };
+  syncBuiltinESMExports();
+  try { assert.equal(api.recoverStaleServeLease(dir), true); }
+  finally {
+    nodeFs.rmSync = originalRemove;
+    syncBuiltinESMExports();
+  }
+  assert.equal(attempted, true);
+  const release = api.acquireLease(resource);
+  writeFileSync(api.daemonSocket(dir), "replacement socket");
+  try {
+    assert.equal(api.recoverStaleServeLease(dir), false);
+    assert.equal(readFileSync(api.daemonSocket(dir), "utf8"), "replacement socket");
+    assert.equal(JSON.parse(readFileSync(join(`${resource}.lock`, "owner.json"), "utf8")).pid, process.pid);
+  } finally { release(); }
 });
 
 test("serve lifecycle identifies a live daemon by its recorded argv", async (t) => {
