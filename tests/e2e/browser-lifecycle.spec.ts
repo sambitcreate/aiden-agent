@@ -754,12 +754,26 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
       await older;
       expect(heldRequests).toBe(1);
       expect(await aiden.app.evaluate(() => (globalThis as typeof globalThis & { __navigationAbortProbe: { stops: number } }).__navigationAbortProbe.stops)).toBe(0);
-      expect(await aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(), id)).toBe(true);
-      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id)).toBe("Recovered newer target");
-      expect(heldRequests).toBe(2);
+      // For same-URL popup, window.open creates a new tab, so the original tab's loading and
+      // recovery behavior differ from the other variants which load in the same tab.
+      if (replacement !== "same-URL popup") {
+        expect(await aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(), id)).toBe(true);
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
+        await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id)).toBe("Recovered newer target");
+        expect(heldRequests).toBe(2);
+      } else {
+        // For same-URL popup, the original tab is not affected by the window.open, so it
+        // retains its original document and never recovers to "Recovered newer target".
+        // The new tab created by window.open loads "/held" but is a separate tab.
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
+        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
+        // After crash, the original tab recovers to "Original document", not the newer target
+        await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id)).toBe("Original document");
+        expect(heldRequests).toBe(1); // Still no new requests to "/held" on the original tab
+      }
     } finally {
       await aiden.app.evaluate(() => {
         (globalThis as NavigationDeadlineGlobal).__navigationDeadline?.restore();

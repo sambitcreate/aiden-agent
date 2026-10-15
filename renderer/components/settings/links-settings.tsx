@@ -40,7 +40,7 @@ export function LinksSettings() {
   };
 
   return (
-    <FieldSet title="Links">
+    <FieldSet>
       <Field
         label="Open links in"
         description={`Local dev servers always open in Aiden. ${MOD}-click a link to open it in the other browser.`}
