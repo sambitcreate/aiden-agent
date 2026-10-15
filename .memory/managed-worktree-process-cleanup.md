@@ -24,9 +24,16 @@ shell and lose their controlling PTY while retaining its session ID; they block
 deletion until gone. Missing or invalid inventory fails closed. The Remote idempotency
 ledger forgets this pre-Git refusal, allowing a same-key retry after the job
 exits. The scoped unit test covers a surviving background member and replay.
+On Linux, procfs may hide other users' PIDs with `hidepid`; the native audit
+checks the proc mount policy and its PID-namespace view before and after
+enumeration. Filtered or malformed inventory returns unavailable rather than
+`empty`. The Linux fixture test and a private-mount-namespace probe cover this.
+Parsing numeric PID directory names with the existing digit parser avoids
+the `strtol` C23 symbol that raised the Linux package's glibc floor.
 The existing iOS and Android clients surface the Remote error message without
 a protocol revision. Focused iOS simulator XCTest (12 tests) and Android JVM
-tests (934 tests) passed for this PR head locally.
+tests (934 tests) passed on the prior head; the Linux-only inventory follow-up
+did not change either client or the Remote contract.
 
 This is one bounded phase. No automatic retention sweep or new owner metadata is
 enabled. Future eligibility must default old worktrees to manual, keep manual

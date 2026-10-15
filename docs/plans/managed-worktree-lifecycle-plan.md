@@ -58,6 +58,8 @@ controlling PTY. A terminal that does not
 exit within five seconds, a surviving job, or an unavailable inventory blocks
 removal with an actionable retry message. Session identities and pending
 exits remain tracked across attempts; an immediate retry cannot bypass the wait.
+On Linux, the audit rejects a filtered or malformed `/proc` inventory (including
+`hidepid` mounts) rather than treating invisible processes as absent.
 The existing cancellation of workspace
 operations, generations, and schedules and the Git ownership/quarantine checks
 remain in place. Remote callers receive the same reason via the existing
