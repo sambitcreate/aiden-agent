@@ -51,6 +51,50 @@ export function subagentOverviewSummary(runs: readonly SubagentRunView[]): Subag
   };
 }
 
+export type SubagentRunStatusGroupId = "running" | "needs_attention" | "failed" | "stopped" | "completed";
+
+export interface SubagentRunStatusGroup {
+  id: SubagentRunStatusGroupId;
+  title: string;
+  runs: SubagentRunView[];
+}
+
+const STATUS_GROUP_BY_STATE: Record<SubagentRunView["state"], SubagentRunStatusGroupId> = {
+  queued: "running",
+  starting: "running",
+  running: "running",
+  needs_attention: "needs_attention",
+  failed: "failed",
+  timed_out: "failed",
+  unknown: "failed",
+  stopped: "stopped",
+  interrupted: "stopped",
+  completed: "completed",
+};
+
+const STATUS_GROUPS: ReadonlyArray<{ id: SubagentRunStatusGroupId; title: string }> = [
+  { id: "running", title: "Running" },
+  { id: "needs_attention", title: "Needs attention" },
+  { id: "failed", title: "Failed" },
+  { id: "stopped", title: "Stopped" },
+  { id: "completed", title: "Completed" },
+];
+
+/** Every run in the chat by outcome, in display order; empty groups are omitted and run order is kept. */
+export function groupSubagentRuns(runs: readonly SubagentRunView[]): SubagentRunStatusGroup[] {
+  const byGroup = new Map<SubagentRunStatusGroupId, SubagentRunView[]>();
+  for (const run of runs) {
+    const id = STATUS_GROUP_BY_STATE[run.state];
+    const list = byGroup.get(id);
+    if (list) list.push(run);
+    else byGroup.set(id, [run]);
+  }
+  return STATUS_GROUPS.flatMap(({ id, title }) => {
+    const groupRuns = byGroup.get(id);
+    return groupRuns ? [{ id, title, runs: groupRuns }] : [];
+  });
+}
+
 const EFFORT_LABELS: Record<GenerationThinkingLevel, string> = {
   off: "Off",
   low: "Low",
