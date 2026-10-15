@@ -21,6 +21,22 @@ async function startPersistedChat(page: Page, beforeSend?: () => Promise<void>):
   await waitForToastsToClear(page);
 }
 
+/** Whether the first reply of the one chat saved in `workspaceId` has arrived. */
+async function firstReplyState(userDataDir: string, workspaceId: string): Promise<string> {
+  const index = JSON.parse(await readFile(path.join(userDataDir, "chats", "index.json"), "utf8")) as {
+    id: string;
+    workspaceId?: string;
+    botId?: string;
+  }[];
+  const meta = index.find((entry) => !entry.botId && entry.workspaceId === workspaceId);
+  if (!meta) return "no chat";
+  const saved = JSON.parse(await readFile(path.join(userDataDir, "chats", `${meta.id}.json`), "utf8")) as {
+    messages: { role: string; providerFailure?: unknown }[];
+  };
+  const reply = saved.messages.find((message) => message.role === "assistant");
+  return reply ? (reply.providerFailure ? "failed" : "answered") : "waiting";
+}
+
 async function openChipMenu(page: Page) {
   await page.locator("[data-workspace-chip]").click();
   const menu = page.getByRole("menu");
@@ -277,9 +293,12 @@ test.describe("folder workspaces", () => {
     await expect(composer).toHaveValue("Fix the login bug");
     await expect(page.locator("[data-new-chat-headline]")).toBeVisible();
 
-    // Run in this checkout instead sends it in the repository itself.
+    // Run in this checkout instead, chosen after leaving and coming back,
+    // sends it in the repository itself and the reply still starts.
     await composer.press("Enter");
     await expect(failure).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
     await failure.getByRole("button", { name: "Run in this checkout instead" }).click();
     await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
     await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
@@ -299,6 +318,54 @@ test.describe("folder workspaces", () => {
     expect(workspace?.managedWorktree).toBeUndefined();
     expect(execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" }).trim().split("\n"))
       .toHaveLength(1);
+    await expect
+      .poll(() => firstReplyState(aiden.userDataDir, saved[0].workspaceId!), { timeout: 20_000 })
+      .toBe("answered");
+    await expect(page.getByText("Deterministic E2E response received.").first()).toBeVisible();
+  });
+
+  test("Retry chosen after leaving a failed worktree send creates the worktree and starts the reply", async ({ aiden }) => {
+    const { page } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    execFileSync("git", [
+      "-C", aiden.workspaceDir,
+      "-c", "user.email=e2e@example.com",
+      "-c", "user.name=Aiden E2E",
+      "commit", "--allow-empty", "-m", "init",
+    ]);
+    // An explicit name that already exists fails until that branch is gone.
+    execFileSync("git", ["-C", aiden.workspaceDir, "branch", "aiden/taken"]);
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await finishLmStudioOnboarding(page);
+    await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Work in" }).getByRole("radio", { name: /^New worktree/u }).click();
+    await page.locator("[data-branch-name-row]").click();
+    await page.getByRole("textbox", { name: /Branch name/u }).fill("aiden/taken");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+
+    await page.locator("textarea").fill("Retry after leaving");
+    await page.locator("textarea").press("Enter");
+    const failure = page.locator("[data-worktree-send-failure]");
+    await expect(failure).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    execFileSync("git", ["-C", aiden.workspaceDir, "branch", "-D", "aiden/taken"]);
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await failure.getByRole("button", { name: "Retry" }).click();
+
+    await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
+    await expect(contextBar(page).getByRole("button", { name: /^aiden\/taken, worktree/u })).toBeVisible();
+    const worktreeId = await page.evaluate(async () => {
+      const bridge = (window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }).aidenAPI.ipc;
+      const workspaces = await bridge.invoke<{ id: string; managedWorktree?: { branch: string } }[]>("workspaces:list");
+      return workspaces.find((workspace) => workspace.managedWorktree?.branch === "aiden/taken")?.id;
+    });
+    expect(worktreeId).toBeDefined();
+    await expect
+      .poll(() => firstReplyState(aiden.userDataDir, worktreeId!), { timeout: 20_000 })
+      .toBe("answered");
   });
 
   test("⌥↵ in New chat in… opens the draft with New worktree selected", async ({ aiden }) => {
