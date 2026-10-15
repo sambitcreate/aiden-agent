@@ -5,24 +5,31 @@ import {
   Binary,
   Check,
   ChevronRight,
+  Folder,
   GitCompareArrows,
   GitBranch,
   GitCommitHorizontal,
   Monitor,
+  SquareArrowOutUpRight,
   UploadCloud,
 } from "lucide-react";
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
   EmptyState,
   Text,
+  toast,
 } from "./ui";
 import { GitBranchPicker } from "./git-branch-picker";
 import { GitCommitDialog } from "./git-commit-dialog";
 import { GitPushDialog } from "./git-push-dialog";
+import { usePreferredEditor } from "./open-in-editor-picker";
+import { workspacesApi } from "../lib/ipc";
 import { useGitInfo, useGitPushCapability, useGitReview } from "../lib/queries";
+import { truncatePathMiddle } from "../lib/truncate-path";
 import { cn } from "../lib/ui-utils";
 import type { GitPushCapability, GitReview, GitReviewSummary, Workspace } from "../lib/types";
 
@@ -58,6 +65,72 @@ function ChangesMeta({ summary }: { summary: GitReviewSummary }) {
   );
 }
 
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
+
+/** Character budget for the Folder row's parent path; the row truncates visually as well. */
+const PARENT_PATH_LENGTH = 32;
+
+/** Display only: the folder's parent with a macOS or Linux home folder shortened to `~`. */
+function parentFolderLabel(folderPath: string): string {
+  const trimmed = folderPath.replace(/[\\/]+$/u, "");
+  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  const parent = cut > 0 ? trimmed.slice(0, cut) : cut === 0 ? "/" : trimmed;
+  const home = parent.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/u, "~");
+  return truncatePathMiddle(home, PARENT_PATH_LENGTH);
+}
+
+/**
+ * Reveals the workspace folder in the system file manager (Finder on macOS, Files elsewhere).
+ * Failures surface as a toast; `show` never throws.
+ */
+export function useShowWorkspaceFolder(workspace: Workspace): { label: string; show: () => void } {
+  const workspaceId = workspace.id;
+  const show = React.useCallback(() => {
+    void workspacesApi.openFolder(workspaceId).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Couldn't open this folder.");
+    });
+  }, [workspaceId]);
+  return { label: `Show ${workspace.name} in ${IS_MAC ? "Finder" : "Files"}`, show };
+}
+
+function FolderRow({ workspace, onBrowseFiles }: { workspace: Workspace; onBrowseFiles: () => void }) {
+  const { preferredEditor, openPreferredEditor } = usePreferredEditor(workspace.id, workspace.folderPath);
+  if (!workspace.folderPath) return null;
+  const disabled = workspace.permission === "none";
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={onBrowseFiles}
+        disabled={disabled}
+        aria-label={`Browse files in ${workspace.name}`}
+        title={workspace.folderPath}
+        className={cn(ROW, "min-w-0 flex-1")}
+      >
+        <Folder className="size-4.5 text-secondary" aria-hidden="true" />
+        <span className="min-w-0 truncate">
+          {workspace.name}
+          <span className="text-tertiary"> · {parentFolderLabel(workspace.folderPath)}</span>
+        </span>
+      </button>
+      {preferredEditor ? (
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          disabled={disabled}
+          onClick={() => void openPreferredEditor()}
+          aria-label={`Open in ${preferredEditor.label}`}
+          title={`Open in ${preferredEditor.label}`}
+          className="shrink-0 [&_svg]:size-3.5"
+        >
+          <SquareArrowOutUpRight aria-hidden="true" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 function workspaceAvailable(workspace: Workspace | undefined): workspace is Workspace {
   return Boolean(workspace?.folderPath) && workspace?.permission !== "none";
@@ -152,6 +225,7 @@ export function EnvironmentRows({
   mutationBlockedReason,
   onGitOperationBusyChange,
   onCreateWorktree,
+  onBrowseFiles,
 }: {
   workspace: Workspace;
   /** Accepted for parity with ChangesRows; Git info polls on its own schedule. */
@@ -159,7 +233,7 @@ export function EnvironmentRows({
   mutationBlockedReason: string | null;
   onGitOperationBusyChange: (busy: boolean) => void;
   onCreateWorktree?: (branchName: string) => Promise<void>;
-  /** Wired to the Folder row in Task 4. */
+  /** Opens the Files tool on this workspace (Folder row). */
   onBrowseFiles: () => void;
 }) {
   const git = useGitInfo(workspace.id);
@@ -169,6 +243,8 @@ export function EnvironmentRows({
 
   return (
     <div className="flex flex-col">
+      {workspace.folderPath ? <FolderRow workspace={workspace} onBrowseFiles={onBrowseFiles} /> : null}
+
       <div
         className="grid min-h-9 grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 px-2.5"
         title={`${workspace.name} · ${localDetail} · ${accessLabel}`}

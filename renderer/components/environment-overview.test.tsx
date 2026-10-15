@@ -1,8 +1,8 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import * as React from "react";
-import { afterEach, test } from "node:test";
-import { cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { afterEach, mock, test } from "node:test";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
@@ -12,7 +12,9 @@ import {
   QuickViewUnavailable,
   useChangesSummary,
   useEnvironmentSummary,
+  useShowWorkspaceFolder,
 } from "./environment-overview";
+import { toast } from "./ui";
 import type { GitInfo, GitPushCapability, GitReview, Workspace } from "../lib/types";
 
 afterEach(cleanup);
@@ -33,6 +35,13 @@ const GIT_CHANNELS = {
   review: "git:review",
   info: "workspaces:gitInfo",
   pushCapability: "git:pushCapability",
+} as const;
+
+/** IPC channels behind usePreferredEditor and useShowWorkspaceFolder (renderer/lib/ipc.ts). */
+const EDITOR_CHANNELS = {
+  list: "workspaces:externalEditors",
+  open: "workspaces:openInEditor",
+  openFolder: "workspaces:openFolder",
 } as const;
 
 function reviewFixture(
@@ -86,6 +95,8 @@ function installRepoIpc(
     [GIT_CHANNELS.review]: () => repo.review ?? reviewFixture(),
     [GIT_CHANNELS.info]: () => repo.info ?? gitInfoFixture(),
     [GIT_CHANNELS.pushCapability]: () => repo.push ?? pushFixture(),
+    // The Folder row discovers installed editors; none by default.
+    [EDITOR_CHANNELS.list]: () => [],
     ...extra,
   });
 }
@@ -241,4 +252,90 @@ test("Quick View explains a missing folder or disabled file access, and nothing 
 
   const { container } = render(<QuickViewUnavailable workspace={WORKSPACE} />);
   assert.equal(container.textContent, "");
+});
+
+test("the folder row browses files and offers the preferred editor", async () => {
+  const calls = installRepoIpc({}, {
+    [EDITOR_CHANNELS.openFolder]: () => undefined,
+    [EDITOR_CHANNELS.list]: () => [{ id: "vscode", label: "VS Code" }],
+    [EDITOR_CHANNELS.open]: () => undefined,
+  });
+  const browsed: string[] = [];
+  renderEnvironmentRows({ onBrowseFiles: () => browsed.push("files") });
+  const browse = await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` });
+  assert.equal(browse.getAttribute("title"), WORKSPACE.folderPath);
+  // The parent folder follows the name, with the home folder shortened to ~.
+  assert.equal(browse.textContent, "aiden · ~");
+  fireEvent.click(browse);
+  assert.deepEqual(browsed, ["files"]);
+  // Show in Finder lives in the Environment card header, not on the row.
+  assert.equal(screen.queryAllByRole("button", { name: /^Show .* in (Finder|Files)$/ }).length, 0);
+  fireEvent.click(await screen.findByRole("button", { name: "Open in VS Code" }));
+  await waitFor(() => {
+    const opened = calls.filter((call) => call.channel === EDITOR_CHANNELS.open);
+    assert.deepEqual(opened.map((call) => call.args), [[WORKSPACE.id, "vscode"]]);
+  });
+});
+
+test("the folder row shows a nested parent folder relative to home", async () => {
+  installRepoIpc({});
+  renderEnvironmentRows({ workspace: { ...WORKSPACE, folderPath: "/home/test/code/aiden" } });
+  const browse = await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` });
+  assert.equal(browse.textContent, "aiden · ~/code");
+});
+
+test("the folder row hides the editor action when no editor is installed", async () => {
+  const calls = installRepoIpc({});
+  renderEnvironmentRows();
+  assert.ok(await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` }));
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.list)));
+  assert.equal(screen.queryAllByRole("button", { name: /^Open in / }).length, 0);
+});
+
+test("the folder row is absent for a workspace without a folder and disabled without access", async () => {
+  installRepoIpc({}, { [EDITOR_CHANNELS.list]: () => [{ id: "vscode", label: "VS Code" }] });
+  const { unmount } = renderEnvironmentRows({ workspace: { ...WORKSPACE, folderPath: undefined } });
+  assert.equal(screen.queryAllByRole("button", { name: /^Browse files in / }).length, 0);
+  unmount();
+
+  renderEnvironmentRows({ workspace: { ...WORKSPACE, permission: "none" } });
+  const browse = await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` });
+  assert.equal((browse as HTMLButtonElement).disabled, true);
+  const editor = await screen.findByRole("button", { name: "Open in VS Code" });
+  assert.equal((editor as HTMLButtonElement).disabled, true);
+});
+
+test("useShowWorkspaceFolder names the workspace and opens its folder", async () => {
+  const calls = installBotTestIpc({ [EDITOR_CHANNELS.openFolder]: () => undefined });
+  const { result } = renderHook(() => useShowWorkspaceFolder(WORKSPACE));
+  assert.match(result.current.label, /^Show aiden in (Finder|Files)$/);
+  act(() => result.current.show());
+  await waitFor(() => {
+    const opened = calls.filter((call) => call.channel === EDITOR_CHANNELS.openFolder);
+    assert.deepEqual(opened.map((call) => call.args), [[WORKSPACE.id]]);
+  });
+});
+
+test("useShowWorkspaceFolder reports an open failure in a toast instead of throwing", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const toastError = mock.method(toast, "error", () => "toast-id");
+  try {
+    const calls = installBotTestIpc({
+      [EDITOR_CHANNELS.openFolder]: () => {
+        throw new Error("Folder is gone");
+      },
+    });
+    const { result } = renderHook(() => useShowWorkspaceFolder(WORKSPACE));
+    assert.doesNotThrow(() => result.current.show());
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.openFolder)));
+    await waitFor(() =>
+      assert.deepEqual(toastError.mock.calls.map((call) => call.arguments[0]), ["Folder is gone"]),
+    );
+    assert.equal(unhandled.length, 0);
+  } finally {
+    toastError.mock.restore();
+    process.off("unhandledRejection", onUnhandled);
+  }
 });
