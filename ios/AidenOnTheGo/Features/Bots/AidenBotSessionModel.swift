@@ -1,7 +1,6 @@
 import CryptoKit
 import Foundation
 import Observation
-import os
 
 /// Host feature tokens added in contract revision 25.
 enum AidenBotHostFeature {
@@ -461,7 +460,6 @@ actor AidenBotOutboxStore {
     private var revokedDevices: Set<String> = []
     /// Chats whose unreadable file couldn't be moved aside: it is never written over.
     private var stuckFiles: Set<AidenBotSessionKey> = []
-    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "sbtbiswas.AidenOnTheGo", category: "BotOutbox")
 
     private struct Record: Codable {
         let key: UUID
@@ -535,20 +533,20 @@ actor AidenBotOutboxStore {
             return ([], false)
         } catch {
             // There, but it can't be opened: it is set aside unread, never written over.
-            Self.log.error("event=outbox_unopenable outcome=set_aside")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             setAside(url, for: key, keepingOriginal: false)
             return ([], true)
         }
         guard data.count <= 2 * Self.maxBytes else {
             // Never written this large.
-            Self.log.error("event=outbox_oversized outcome=set_aside")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             setAside(url, for: key, keepingOriginal: false)
             return ([], true)
         }
         guard let envelope = try? JSONDecoder().decode(ReadEnvelope.self, from: data),
               envelope.version == 1, envelope.instanceId == key.instanceId,
               envelope.deviceId == key.deviceId, envelope.botID == key.botID else {
-            Self.log.error("event=outbox_unreadable outcome=set_aside")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             setAside(url, for: key, keepingOriginal: false)
             return ([], true)
         }
@@ -556,7 +554,7 @@ actor AidenBotOutboxStore {
         let lostSome = readable.count != envelope.messages.count
         if lostSome {
             // The readable ones are written back; the file as it was is kept beside them.
-            Self.log.error("event=outbox_record_unreadable outcome=set_aside count=\(envelope.messages.count - readable.count, privacy: .public)")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .degraded, code: .corruptData)
             setAside(url, for: key, keepingOriginal: true)
         }
         let cutoff = now().addingTimeInterval(-Self.lifetime)
@@ -603,7 +601,7 @@ actor AidenBotOutboxStore {
                 try fileManager.moveItem(at: url, to: aside)
             }
         } catch {
-            Self.log.error("event=outbox_set_aside outcome=failed")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
             if !keepingOriginal { stuckFiles.insert(key) }
         }
     }
@@ -651,7 +649,7 @@ actor AidenBotOutboxStore {
             )
         }
         guard !stuckFiles.contains(key) else {
-            Self.log.error("event=outbox_write outcome=skipped_unread_file")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
             return
         }
         if records.isEmpty {
@@ -661,7 +659,7 @@ actor AidenBotOutboxStore {
         do {
             try write(records, for: key)
         } catch {
-            Self.log.error("event=outbox_write outcome=failed")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
         }
     }
 
@@ -687,7 +685,7 @@ actor AidenBotOutboxStore {
         ))
         guard data.count <= Self.maxBytes else {
             // The chat refuses messages past this budget, so this keeps the last good file.
-            Self.log.error("event=outbox_write outcome=over_budget")
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
             return
         }
         let url = fileURL(key)
