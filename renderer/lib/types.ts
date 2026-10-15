@@ -823,6 +823,10 @@ export interface McpPresetState {
   enabled: boolean;
   /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
   ready: boolean;
+  /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
+  error?: string;
+  /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
+  invalidRecord?: boolean;
 }
 
 export interface Skill {

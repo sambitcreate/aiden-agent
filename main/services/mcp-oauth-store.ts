@@ -24,6 +24,9 @@ import { readRegularUtf8File } from "./regular-file-read.js";
 import { commitOwnedMutation } from "./mcp-oauth-store-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 import { syncDirectory } from "./durable-fs.js";
+import { createMcpOAuthSessionCache } from "./mcp-oauth-session-cache.js";
+
+export { McpOAuthCredentialStorageError } from "./mcp-oauth-session-cache.js";
 
 const FILE = "mcp-oauth.json";
 
@@ -119,8 +122,24 @@ async function writeMap(
   }
 }
 
+// Decrypted sessions, held in memory between writes. Every mutation
+// invalidates it whether it publishes, rolls back or fails part-way, so a read
+// after a mutation always reflects the file as that mutation left it.
+const sessions = createMcpOAuthSessionCache({
+  readMap,
+  decrypt: (b64) => parseMcpOAuthSession(JSON.parse(secureStorage.decryptString(Buffer.from(b64, "base64")))),
+});
+
 function mutate(operation: () => Promise<void>): Promise<void> {
-  const pending = mutationQueue.then(operation, operation);
+  const invalidating = async () => {
+    sessions.invalidate();
+    try {
+      await operation();
+    } finally {
+      sessions.invalidate();
+    }
+  };
+  const pending = mutationQueue.then(invalidating, invalidating);
   mutationQueue = pending.catch(() => {});
   return pending;
 }
@@ -137,25 +156,15 @@ export const mcpOAuthStore = {
     // them, then prove their generation is still current after I/O/decryption.
     await mutationQueue;
     assertMutationCurrent(isCurrent);
-    let map: SessionMap;
-    try {
-      map = await readMap();
-    } catch (error) {
-      logger.error("mcp-oauth", "Could not read the encrypted OAuth session store.", error);
-      assertMutationCurrent(isCurrent);
-      return {};
-    }
-    assertMutationCurrent(isCurrent);
-    const b64 = secretKeyEntry(map, serverId);
-    if (!b64) return {};
     let session: McpOAuthSession;
     try {
-      const json = secureStorage.decryptString(Buffer.from(b64, "base64"));
-      session = parseMcpOAuthSession(JSON.parse(json));
+      session = await sessions.get(serverId);
     } catch (error) {
-      logger.error("mcp-oauth", `Failed to decrypt OAuth session for ${serverId}`, error);
+      // A saved sign-in that cannot be read is not "never authorized": the
+      // McpOAuthCredentialStorageError tells callers which one happened.
+      logger.error("mcp-oauth", `Could not read the encrypted OAuth session for ${serverId}`, error);
       assertMutationCurrent(isCurrent);
-      return {};
+      throw error;
     }
     assertMutationCurrent(isCurrent);
     return session;

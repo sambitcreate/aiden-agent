@@ -20,6 +20,7 @@ export function mcpPresetConnectionBadge(
   state: McpPresetState,
 ): { label: string; color: "green" | "red" | "gray" } | null {
   if (!state.configured) return null;
+  if (state.error) return { label: "Needs repair", color: "red" };
   if (!state.ready) {
     return {
       label: state.preset.auth.kind === "oauth" ? "Needs sign-in" : "Needs key",

@@ -211,7 +211,9 @@ test("an unattended MCP automation must use approved tools and report only verif
     availableTools: ["Gmail__search_messages", "Gmail__send_message"],
     unattended: true,
   });
-  assert.match(prompt, /exact MCP tools the user approved/u);
+  // Approval binds servers, not individual tools: the prompt must not promise more.
+  assert.match(prompt, /MCP servers the user approved/u);
+  assert.doesNotMatch(prompt, /exact MCP tools/u);
   assert.match(prompt, /corresponding MCP tool call succeeded/u);
 });
 

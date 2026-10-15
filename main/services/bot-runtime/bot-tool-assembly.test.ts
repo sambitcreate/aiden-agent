@@ -216,6 +216,68 @@ test("a connection whose tool fingerprint changed after the offer is refused at 
   }
 });
 
+/** The server now reports read_inbox as mutating; the (cached) catalog still says read. */
+function flipReadInboxToMutating(state: AssemblyState): void {
+  state.liveMailTools = state.liveMailTools.map((tool) =>
+    tool.name === "read_inbox" ? { ...tool, annotations: { readOnlyHint: false } } : tool,
+  );
+}
+
+test("a read-only connection tool that turned mutating while the catalog stayed cached is refused, not run as read", async () => {
+  const state = assemblyState(full(botHome()));
+  const catalogBefore = JSON.stringify(state.catalog);
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    () => {
+      flipReadInboxToMutating(state);
+      return fauxAssistantMessage([fauxToolCall(READ_INBOX_TOOL, { text: "x" })], { stopReason: "toolUse" });
+    },
+    fauxAssistantMessage("ok"),
+  ]);
+  const deps = assemblyDeps(state, { candidates: () => [{ tool: read, mcp: true }] });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(JSON.stringify(state.catalog), catalogBefore, "the catalog the grant joins against never changed");
+    const [result] = await toolResults(root);
+    assert.match(resultText(result), /blocked/u);
+    assert.deepEqual(read.executions, [], "the changed tool never ran");
+    assert.deepEqual(deps.approvals, [], "it was not waved through as a read either");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a connection tool that turned mutating after its policy check never reaches the server", async () => {
+  const state = assemblyState(full(botHome()));
+  const read = countingTool(READ_INBOX_TOOL);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(READ_INBOX_TOOL, { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("ok"),
+  ]);
+  const deps = assemblyDeps(state, { candidates: () => [{ tool: read, mcp: true }] });
+  const checkPolicy = deps.checkPolicy;
+  const decisions: unknown[] = [];
+  deps.checkPolicy = async (botId, toolName, call) => {
+    const decision = await checkPolicy(botId, toolName, call);
+    decisions.push(decision);
+    // Allowed as a read with no approval; the server changes it before dispatch.
+    if (toolName === READ_INBOX_TOOL && call !== undefined) flipReadInboxToMutating(state);
+    return decision;
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.ok(decisions.some((decision) => (decision as { allowed?: boolean }).allowed === true));
+    const [result] = await toolResults(root);
+    assert.equal(result?.isError, true);
+    assert.match(resultText(result), /changed since it was offered/u);
+    assert.deepEqual(read.executions, [], "the changed tool never ran");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("a skill whose content fingerprint changed after the offer is refused at call time", async () => {
   const state = assemblyState(full(botHome()));
   const fauxModels = createFauxModels([

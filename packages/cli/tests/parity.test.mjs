@@ -742,6 +742,24 @@ test("MCP connections survive token refreshes, rebuild on sign-out, and connect 
   assert.equal(initializes, 2, "concurrent callers share one reconnect");
 });
 
+test("MCP Bot credential signatures ignore token refreshes and display fields but follow sign-in", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
+  const credentials = api.insightCredentials(dir), id = api.mcpCredentialId(server);
+  const store = (token, incarnation) => credentials.write(id, JSON.stringify({ client: { client_id: "registered" }, incarnation, tokens: { access_token: token, refresh_token: `${token}-refresh`, token_type: "Bearer" } }));
+  await store("first", "sign-in-1");
+  const signed = await api.mcpCredentialSignature(dir, server);
+  await store("refreshed", "sign-in-1");
+  assert.equal(await api.mcpCredentialSignature(dir, server), signed, "a token refresh keeps Bot grants");
+  assert.equal(await api.mcpCredentialSignature(dir, { ...server, name: "Renamed", description: "Work tools" }), signed, "renaming keeps Bot grants");
+  await store("other-account", "sign-in-2");
+  assert.notEqual(await api.mcpCredentialSignature(dir, server), signed, "a new sign-in is a new credential");
+  await credentials.delete(id);
+  const signedOut = await api.mcpCredentialSignature(dir, server);
+  assert.notEqual(signedOut, signed);
+  assert.notEqual(await api.mcpCredentialSignature(dir, { ...server, headers: { authorization: "Bearer x" } }), signedOut, "header values stay part of the connection");
+});
+
 test("MCP shutdown during credential resolution starts no connection and sends nothing", async (t) => {
   const dir = temporary(t); let requests = 0;
   const http = createServer((request, response) => { requests++; request.resume(); response.writeHead(500).end(); });

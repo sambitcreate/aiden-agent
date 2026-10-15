@@ -103,7 +103,9 @@ import {
   resolveBotRuntimeMcpConnectionIdentities,
   resolveBotRuntimeSkills,
 } from "./bot-capability-services-main.js";
+import { mcpAgentToolDescriptor } from "./mcp-agent-tool-descriptor.js";
 import {
+  botMcpLiveToolMatchesGrant,
   exactBotMcpToolNames,
   exactBotSkillToolNames,
   filterExactBotSubagentMcpInventory,
@@ -355,6 +357,7 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
+import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
 import {
   PiAgentRuntimeHarness,
@@ -842,6 +845,24 @@ function readyPreviewSrc(title: string, html: string): { src?: string } {
   }
 }
 
+/**
+ * The workspace codemode lane: MCP tools are deferred behind codemode and
+ * tool_search instead of declared to the provider. Decided once before tool
+ * discovery (to defer slow MCP servers) and again when composing extensions,
+ * so both must agree.
+ */
+function workspaceCodemodeEnabled(input: {
+  workspaceId: string | undefined;
+  folderPath: string | undefined;
+  bot: boolean;
+  mode: unknown;
+  permission: GenerationPermission;
+  excludeToolNames: ReadonlySet<string> | undefined;
+}): boolean {
+  return Boolean(input.workspaceId && input.folderPath) && !input.bot && input.mode === undefined &&
+    input.permission !== "none" && !input.excludeToolNames?.has("codemode");
+}
+
 async function prepareGeneration(
   streamId: string,
   params: ChatStartParams & { workspaceId: string },
@@ -923,6 +944,7 @@ async function prepareGeneration(
       generationExtensions,
       modelImageReferences,
       mcpServerInstructions: createMcpInstructionCollector().snapshot(),
+      lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
@@ -1516,9 +1538,23 @@ async function prepareGeneration(
   const deviceShimDir =
     deviceTools.length && deviceService ? () => deviceService.agentShimDir() : undefined;
   const mcpInstructionCollector = createMcpInstructionCollector();
+  // In the codemode lane a slow MCP server joins the turn late instead of
+  // holding its start; elsewhere tools are declared and discovery blocks.
+  let lateMcpDiscovery: McpLateDiscovery = NO_LATE_MCP_DISCOVERY;
+  const mcpDeferral = workspaceCodemodeEnabled({
+    workspaceId: workspace?.id,
+    folderPath,
+    bot: Boolean(botContext),
+    mode: params.mode,
+    permission,
+    excludeToolNames: options.excludeToolNames,
+  })
+    ? { onLate: (late: McpLateDiscovery) => { lateMcpDiscovery = late; } }
+    : undefined;
   let tools = (
     await buildAgentTools({
       onMcpServerInstructions: mcpInstructionCollector.capture,
+      mcpDeferral,
       mcpProviderScope: {
         signal,
         onInvalidated: (listener) => browserOwner.onInvalidated(listener),
@@ -1662,7 +1698,8 @@ async function prepareGeneration(
         : tool.name === INSPECT_IMAGE_TOOL_NAME
           ? !supportsImages && Boolean(authority.visionProvider)
           : mcpToolNames.has(tool.name)
-            ? true
+            ? // The built tool itself must carry the grant's exact schema and effect.
+              botMcpLiveToolMatchesGrant(mcpToolNames.get(tool.name)!, mcpAgentToolDescriptor(tool))
             : tool.name === "web_search"
               ? webAllowed
               : isComputerUseCapabilityTool(tool.name)
@@ -1916,8 +1953,19 @@ async function prepareGeneration(
     generationExtensions.push(generativeUiRuntime.extension);
   }
   if (!botContext && !assistantMode && workspace && permission !== "none" && !options.excludeToolNames?.has("read_tool_output")) {
-    tools = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
+    const outputs = await attachWorkspaceToolOutputs(tools, params.chatId, workspace.id,
       () => !signal.aborted && (active.has(streamId) || initializing.has(streamId)), workspace);
+    tools = outputs.tools;
+    // Servers that finish discovery after the turn starts get the same
+    // retained-output handling, and read_tool_output accepts their handles.
+    const late = lateMcpDiscovery;
+    if (late !== NO_LATE_MCP_DISCOVERY) {
+      lateMcpDiscovery = {
+        tools: () => outputs.adopt(late.tools()),
+        pending: () => late.pending(),
+        settled: (requestSignal) => late.settled(requestSignal),
+      };
+    }
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (
@@ -1956,6 +2004,7 @@ async function prepareGeneration(
     generationExtensions,
     modelImageReferences,
     mcpServerInstructions: mcpInstructionCollector.snapshot(),
+    lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
     htmlArtifactPlacements,
@@ -2319,6 +2368,7 @@ export const llmClient = {
       generationExtensions,
       modelImageReferences,
       mcpServerInstructions,
+      lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
       htmlArtifactPlacements,
@@ -2850,8 +2900,14 @@ export const llmClient = {
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
         generationProfile.kind === "design"
           ? undefined
-          : workspaceId && folderPath && !preparedBotContext && authoritativeMode === undefined &&
-        permission !== "none" && !options.excludeToolNames?.has("codemode")
+          : workspaceCodemodeEnabled({
+            workspaceId,
+            folderPath,
+            bot: Boolean(preparedBotContext),
+            mode: authoritativeMode,
+            permission,
+            excludeToolNames: options.excludeToolNames,
+          })
           ? {
               id: "aiden.workspace-codemode",
               tools: [createPiCodemodeTool({
@@ -2860,9 +2916,11 @@ export const llmClient = {
                   if (!candidate) throw new Error("The workspace runtime is not ready.");
                   return candidate.executeNestedToolCall(parentId, name, args, requestSignal);
                 },
+                settled: (requestSignal) => lateMcpDiscovery.settled(requestSignal),
               }), ...(!options.excludeToolNames?.has("tool_search") ? [createPiToolDiscovery({
                 tools: () => candidate?.getCallableTools() ?? [],
                 isCallable: isPiCodemodeCallable,
+                settled: (requestSignal) => lateMcpDiscovery.settled(requestSignal),
               }).toolSearch] : [])],
             }
           : undefined;
@@ -3191,6 +3249,11 @@ export const llmClient = {
         contributions: runtimeContributions,
         deferredTools,
         contextPromptSections,
+        // Servers that finished discovery after the turn started stay behind
+        // codemode / tool_search too, under the same exclusions.
+        ...(runtimeTools.some((tool) => tool.name === "codemode")
+          ? { lateDeferredTools: () => lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)) }
+          : {}),
         models: runtime.models,
         identity: {
           runId: streamId,

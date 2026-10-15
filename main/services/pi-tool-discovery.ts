@@ -15,6 +15,12 @@ export interface PiToolDiscoveryHost {
   /** The current, final inventory after workspace, Bot, schedule and model policy. */
   tools(): readonly AgentTool[];
   isCallable(tool: AgentTool): boolean;
+  /**
+   * Resolve once tools still being discovered (MCP servers that missed the
+   * turn's start) have arrived or given up. Bounded by the host; rejects when
+   * `signal` aborts. Omitted when the inventory is complete from the start.
+   */
+  settled?(signal?: AbortSignal): Promise<void>;
 }
 
 const MAX_INVENTORY = 512;
@@ -139,6 +145,9 @@ export function createPiToolDiscovery(host: PiToolDiscoveryHost) {
     parameters: Type.Object({ query: Type.String({ maxLength: 256 }), namespace: Type.Optional(Type.String({ maxLength: 128 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }),
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
+      // Answer from the complete inventory, not just the servers that were
+      // ready when the turn started.
+      await host.settled?.(signal);
       const { query, namespace, limit } = args as { query: unknown; namespace?: unknown; limit?: unknown };
       const result = searchTools(query, { namespace, limit });
       return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, details: null };

@@ -183,3 +183,66 @@ test("runaway sandbox output fails even when the script catches the output limit
   const next = await tool.execute("next", { code: 'text(load("overflowed") === undefined);' });
   assert.equal(next.content[0]?.type === "text" && next.content[0].text, "true", "failed executions must not commit store writes");
 });
+
+/** A host whose MCP server finishes discovery only when `arrive` is called. */
+function lateServerFixture() {
+  const read: AgentTool = {
+    name: "read_file", label: "Read", description: "Read a file.", parameters: Type.Object({ path: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "contents" }], details: null }),
+  };
+  const remote = Object.assign<AgentTool, object>({
+    name: "docs__search", label: "search", description: "Search the documentation.", parameters: Type.Object({ query: Type.String() }),
+    execute: async () => ({ content: [{ type: "text", text: "found" }], details: null }),
+  }, { codemode: true, discovery: Object.freeze({ namespace: "mcp:docs", label: "Docs" }) });
+  const available: AgentTool[] = [read];
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = () => { available.push(remote); resolve(); }; });
+  let waits = 0;
+  const calls: string[] = [];
+  const tool = createPiCodemodeTool({
+    tools: () => available,
+    settled: async (signal) => {
+      waits += 1;
+      await new Promise<void>((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        void arrived.then(resolve);
+      });
+    },
+    async executeTool(_parent, name, args) {
+      calls.push(name);
+      return {
+        toolCall: { type: "toolCall", id: "nested", name, arguments: args as JsonObject },
+        result: { content: [{ type: "text", text: `${name} result` }], details: null },
+        isError: false,
+      };
+    },
+  });
+  return { tool, arrive, waits: () => waits, calls };
+}
+
+test("a script that searches waits for servers still discovering, then can call their tools", async () => {
+  const { tool, arrive, calls } = lateServerFixture();
+  const running = tool.execute("parent", { code: 'const found = await searchTools("documentation"); text(found.tools.map((t) => t.name)); const r = await tools.docs__search({query:"x"}); text(r.content[0].text);' });
+  setTimeout(arrive, 20);
+  const result = await running;
+  assert.equal(result.isError, false);
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), ["docs__search"]);
+  assert.equal((result.content[1] as { text: string }).text, "docs__search result");
+  assert.deepEqual(calls, ["docs__search"]);
+});
+
+test("a script that only calls tools already available starts without waiting", async () => {
+  const { tool, waits, calls } = lateServerFixture();
+  const result = await tool.execute("parent", { code: 'const r = await tools.read_file({path:"a"}); text(r.content[0].text);' });
+  assert.equal(result.isError, false);
+  assert.equal(waits(), 0);
+  assert.deepEqual(calls, ["read_file"]);
+});
+
+test("waiting for pending servers stops when the script is cancelled", async () => {
+  const { tool } = lateServerFixture();
+  const controller = new AbortController();
+  const running = tool.execute("parent", { code: 'text(ALL_TOOLS.length);' }, controller.signal);
+  controller.abort(new Error("turn stopped"));
+  await assert.rejects(running, /turn stopped/u);
+});
