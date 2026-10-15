@@ -11,6 +11,10 @@ import {
   updateChatDraft,
 } from "../lib/chat-draft";
 import { QueuedMessages } from "../components/queued-messages";
+import { NewChatHeadline } from "../components/new-chat-headline";
+import type { WorkspaceMenuRequest } from "../components/workspace-picker";
+import { registerDraftWorkspaceMenu, type DraftWorkspaceMenuView } from "../lib/draft-workspace-menu";
+import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import {
   saveComposerDraftText,
   seedComposerAttachments,
@@ -2429,6 +2433,46 @@ export function ChatPane({ chatId }: { chatId: string }) {
     qc,
   ]);
 
+  // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
+  // picker registers the folder, then this draft (text, attachments and model
+  // included) moves there.
+  const openFolderForDraft = React.useCallback(async () => {
+    if (documentAppendReconciliationRequired) {
+      throw new Error("Reload Aiden before changing this chat's workspace.");
+    }
+    if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+    const workspace = await workspacesApi.createFromFolder();
+    if (!workspace) return;
+    await adoptWorkspace(qc, workspace);
+    await moveNewChatToWorkspace(workspace.id);
+  }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc]);
+
+  // The headline name and app-level entry points open the composer's menu.
+  const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
+  const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
+    setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
+  }, []);
+  const workspaceMenuAvailable = isNewChat && !documentAppendReconciliationRequired;
+  React.useEffect(() => {
+    if (!workspaceMenuAvailable) return;
+    let frame = 0;
+    const unregister = registerDraftWorkspaceMenu(chatId, {
+      openFolder: openFolderForDraft,
+      // Let a pending composer focus request settle first, so it cannot pull
+      // focus out of (and dismiss) the menu that is opening.
+      openMenu: (view) => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          frame = requestAnimationFrame(() => openWorkspaceMenu(view));
+        });
+      },
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      unregister();
+    };
+  }, [chatId, openFolderForDraft, openWorkspaceMenu, workspaceMenuAvailable]);
+
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
       const sourceChatId = chatId;
@@ -2666,6 +2710,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       onRename={renameChat}
       onDuplicate={() => copyChat()}
       duplicateDisabledReason={forkDisabledReason}
+    />
+  );
+
+  const newChatHeadline = (
+    <NewChatHeadline
+      workspace={effectiveWorkspace}
+      workspaces={workspaces}
+      onChooseWorkspace={
+        workspaceMenuAvailable && !settingsBlockedReason ? () => openWorkspaceMenu("list") : undefined
+      }
     />
   );
 
@@ -2915,6 +2969,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onOpenFolderAsWorkspace={openFolderForDraft}
+                workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}
                 onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
                 gitOperationBusy={environmentPanel.gitOperationBusy}
@@ -3114,10 +3170,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             {(providers.data ?? []).some(
               (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
             ) ? (
-              <EmptyState title="What would you like to work on?" />
+              <EmptyState title={newChatHeadline} />
             ) : (
               <EmptyState
-                title="What would you like to work on?"
+                title={newChatHeadline}
                 description={`${CONNECT_PROVIDER_ACTION} in ${PROVIDER_SETTINGS_LABEL} to start.`}
                 action={
                   <Button

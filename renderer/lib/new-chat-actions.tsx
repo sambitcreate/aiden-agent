@@ -10,6 +10,8 @@ export interface NewChatActions {
   openNewChatIn: (workspaceId: string) => Promise<void>;
   /** Register a folder as a workspace with the native picker, then open a draft there. */
   openFolderForNewChat: () => Promise<void>;
+  /** Open the workspace menu's Clone view on the draft being viewed, or on a new draft. */
+  cloneRepositoryForNewChat: () => Promise<void>;
 }
 
 const NewChatActionsContext = React.createContext<NewChatActions | null>(null);

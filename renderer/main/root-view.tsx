@@ -25,6 +25,7 @@ import {
 } from "../lib/lifecycle-guard";
 import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
+import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
@@ -200,14 +201,14 @@ function RootContent() {
   // Every new-chat entry point lands here: an empty draft already open in the
   // workspace is reused and focused; otherwise a fresh draft opens there.
   const openNewChatIn = React.useCallback(
-    async (workspaceId: string, initialText?: string) => {
+    async (workspaceId: string, initialText?: string): Promise<string | undefined> => {
       if (appendReconciliationRequired) {
         toast.error("Reload Aiden before creating another chat.");
-        return;
+        return undefined;
       }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
-        return;
+        return undefined;
       }
       const reusable = initialText ? undefined : findReusableChatDraft(workspaceId);
       if (workspaceId !== activeId && environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
@@ -224,6 +225,7 @@ function RootContent() {
         throw error;
       }
       requestChatDraftComposerFocus(chat.id);
+      return chat.id;
     },
     [
       activeId,
@@ -260,9 +262,41 @@ function RootContent() {
     await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
     await openNewChatIn(workspace.id);
   }, [appendReconciliationRequired, navigationBlockedReason, openNewChatIn, queryClient]);
+  // Clone repository… from New chat in…: the draft being viewed (or a new one
+  // in the active workspace) opens its workspace menu in the Clone view.
+  const cloneRepositoryForNewChat = React.useCallback(async () => {
+    const viewedChatId = chatIdFromPath(pathname);
+    if (viewedChatId && draftWorkspaceMenu(viewedChatId)) {
+      requestDraftWorkspaceMenu(viewedChatId, "clone");
+      return;
+    }
+    if (!activeId) {
+      toast.info("Choose a workspace before starting a chat.");
+      return;
+    }
+    const chatId = await openNewChatIn(activeId);
+    if (chatId) requestDraftWorkspaceMenu(chatId, "clone");
+  }, [activeId, openNewChatIn, pathname]);
   const newChatActions = React.useMemo<NewChatActions>(
-    () => ({ openNewChatIn: (workspaceId) => openNewChatIn(workspaceId), openFolderForNewChat }),
-    [openFolderForNewChat, openNewChatIn],
+    () => ({
+      openNewChatIn: async (workspaceId) => {
+        await openNewChatIn(workspaceId);
+      },
+      openFolderForNewChat,
+      cloneRepositoryForNewChat,
+    }),
+    [cloneRepositoryForNewChat, openFolderForNewChat, openNewChatIn],
+  );
+  // ⌘⇧O: a draft on screen moves to the chosen folder; anywhere else a new
+  // draft opens there.
+  useCommandHandler(
+    "workspace.openFolder",
+    async () => {
+      const draftMenu = draftWorkspaceMenu(chatIdFromPath(pathname));
+      if (draftMenu) await draftMenu.openFolder();
+      else await openFolderForNewChat();
+    },
+    !appendReconciliationRequired,
   );
   const newChatAvailable = Boolean(activeId) && !appendReconciliationRequired;
   useCommandHandler("chat.new", () => openNewChat(), newChatAvailable);

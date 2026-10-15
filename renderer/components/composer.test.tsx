@@ -315,17 +315,12 @@ test("visualize preserves the slash draft when validation rejects the send", () 
   );
 });
 
+// The picker's own blocked behaviour is rendered in workspace-picker.test.tsx.
 test("workspace picker closes and exposes a persistent reason when workspace changes are blocked", () => {
   const composer = source("./composer.tsx");
-  const picker = source("./workspace-picker.tsx");
   assert.match(composer, /blockedReason=\{workspaceChangeBlockedReason\}/u);
   assert.match(composer, /key=\{workspaceChangeBlockedReason \? "blocked" : "available"\}/u);
   assert.match(composer, /Workspace unavailable: \$\{workspaceChangeBlockedReason\}/u);
-  assert.match(picker, /open=\{blockedReason \? false : open\}/u);
-  assert.match(picker, /aria-describedby/u);
-  assert.match(picker, /className="sr-only" role="status"/u);
-  assert.match(picker, /disabled=\{pending !== null \|\| Boolean\(blockedReason\)\}/u);
-  assert.match(picker, /!pending && !blockedReason && setOpen\(nextOpen\)/u);
 });
 
 test("workspace access keyboard navigation moves focus without changing permission", () => {

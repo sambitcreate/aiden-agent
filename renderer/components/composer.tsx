@@ -38,7 +38,7 @@ import { ComposerContextBar, useAutoHideComposerContext } from "./composer-conte
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
-import { WorkspacePicker } from "./workspace-picker";
+import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
@@ -182,6 +182,10 @@ interface ComposerProps {
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  /** Workspace menu's Open folder…: native picker, then move the draft there. */
+  onOpenFolderAsWorkspace?: () => Promise<void>;
+  /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
+  workspaceMenuRequest?: WorkspaceMenuRequest;
   onCreateGitWorktree?: (branchName: string) => Promise<void>;
   onGitOperationBusyChange?: (busy: boolean) => void;
   gitOperationBusy?: boolean;
@@ -355,6 +359,8 @@ export function Composer({
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onOpenFolderAsWorkspace,
+  workspaceMenuRequest,
   onCreateGitWorktree,
   onGitOperationBusyChange,
   gitOperationBusy = false,
@@ -1884,6 +1890,9 @@ export function Composer({
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                onOpenFolder={onOpenFolderAsWorkspace}
+                openRequest={workspaceMenuRequest}
+                returnFocusRef={inputRef}
                 blockedReason={workspaceChangeBlockedReason}
                 trigger={
                   <Button

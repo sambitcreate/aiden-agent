@@ -1036,7 +1036,9 @@
         "renderer/shared/claim-check.test.ts",
         "renderer/shared/codex-thinking.test.ts",
         "renderer/shared/google-thinking.test.ts",
-        "renderer/shared/keybindings.test.ts"
+        "renderer/shared/keybindings.test.ts",
+        "renderer/components/workspace-picker.test.tsx",
+        "renderer/lib/workspace-menu.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
