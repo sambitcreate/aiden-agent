@@ -260,7 +260,7 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.doesNotMatch(palette, />Skills</u);
   assert.match(palette, /mode === "command" \? "Slash commands" : "Skills"/u);
   assert.match(composer, /mode=\{slashSession\.kind\}/u);
-  assert.match(composer, /result\.kind !== slashSession\.kind/u);
+  assert.match(composer, /result\.kind !== session\.kind/u);
   assert.match(composer, /slashSession\?\.kind === "skill" && skillCatalog\.isError/u);
   assert.match(
     composer,
