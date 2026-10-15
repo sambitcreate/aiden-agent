@@ -30,6 +30,11 @@ enumeration. Filtered or malformed inventory returns unavailable rather than
 `empty`. The Linux fixture test and a private-mount-namespace probe cover this.
 Parsing numeric PID directory names with the existing digit parser avoids
 the `strtol` C23 symbol that raised the Linux package's glibc floor.
+An invalid node-pty PID must never reach either the process-group signal or
+node-pty's own `kill()` (which also signals its reported PID on Unix). Since
+there is no session ID to audit, Aiden retains a hard removal hold for that
+workspace for the service lifetime; blindly clearing it on retry would allow
+deletion without a liveness proof. The error directs manual inspection.
 The existing iOS and Android clients surface the Remote error message without
 a protocol revision. Focused iOS simulator XCTest (12 tests) and Android JVM
 tests (934 tests) passed on the prior head; the Linux-only inventory follow-up

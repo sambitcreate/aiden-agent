@@ -1,4 +1,4 @@
-/** A retryable refusal before any managed checkout or Git metadata is removed. */
+/** A process-safety refusal before any managed checkout or Git metadata is removed. */
 export class ManagedWorktreeProcessActiveError extends Error {
   readonly reason = "terminal_process_active";
 

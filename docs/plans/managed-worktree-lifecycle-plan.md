@@ -60,6 +60,10 @@ removal with an actionable retry message. Session identities and pending
 exits remain tracked across attempts; an immediate retry cannot bypass the wait.
 On Linux, the audit rejects a filtered or malformed `/proc` inventory (including
 `hidepid` mounts) rather than treating invisible processes as absent.
+If node-pty reports no valid positive PID, Aiden sends no signal through that
+handle and retains a hard deletion hold in the running service: it has no
+session identity with which to prove that shell jobs stopped. This case needs
+manual process inspection rather than an unverified automatic retry.
 The existing cancellation of workspace
 operations, generations, and schedules and the Git ownership/quarantine checks
 remain in place. Remote callers receive the same reason via the existing

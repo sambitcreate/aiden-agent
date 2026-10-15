@@ -84,6 +84,8 @@ export interface TerminalServiceOptions {
   historyStore?: TerminalHistoryStoreLike;
   /** POSIX session liveness seam for deletion tests. */
   sessionHasMembers?: (sessionId: number) => Promise<boolean>;
+  /** Test seam for process-group signaling. */
+  signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 /**
@@ -330,6 +332,9 @@ export class TerminalService {
       },
     );
     if (!Number.isSafeInteger(pty.pid) || pty.pid <= 0) {
+      // There is no session identity to audit, and node-pty's kill() also
+      // signals its reported PID. With 0, either signal would hit our own
+      // process group. Keep a hard removal hold; a retry has no new proof.
       this.unverifiableWorkspaces.add(workspaceId);
       this.terminatePty(pty);
       throw new Error("The terminal process identity could not be verified.");
@@ -477,7 +482,7 @@ export class TerminalService {
     const pending = [...(this.pendingWorkspaceExits.get(workspaceId) ?? [])];
     if (this.unverifiableWorkspaces.has(workspaceId)) {
       throw new ManagedWorktreeProcessActiveError(
-        "Aiden could not verify a terminal process. Keep this worktree and inspect its jobs before retrying.",
+        "A terminal started without a verifiable process identity. Keep this worktree for manual inspection; Aiden cannot safely remove it in this session.",
       );
     }
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -585,12 +590,14 @@ export class TerminalService {
   }
 
   private terminatePty(pty: IPty): void {
+    const pid = pty.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
     // A PTY shell is normally its own process group. Signalling the group
     // cleans up ordinary foreground/background descendants as well as the
     // shell; deliberately detached processes retain normal Unix semantics.
     if (process.platform !== "win32") {
       try {
-        process.kill(-pty.pid, "SIGHUP");
+        (this.options.signalProcess ?? process.kill)(-pid, "SIGHUP");
       } catch {
         // The process may have exited between lookup and termination.
       }

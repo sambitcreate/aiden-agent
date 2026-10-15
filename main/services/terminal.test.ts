@@ -46,14 +46,14 @@ function ownerState(documentId = "document-1", id = 42) {
   };
 }
 
-function fakePty() {
+function fakePty(pid = 999_999) {
   let killed = false;
   let dataListener: ((data: string) => void) | undefined;
   let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
   const writes: string[] = [];
   const resizes: Array<{ cols: number; rows: number }> = [];
   const pty = {
-    pid: 999_999,
+    pid,
     kill: () => {
       killed = true;
     },
@@ -81,6 +81,31 @@ function fakePty() {
     emitExit: (exitCode = 0, signal?: number) => exitListener?.({ exitCode, signal }),
   };
 }
+
+test("invalid PTY identities never signal a process group or bypass the removal hold", async () => {
+  for (const pid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const owner = ownerState();
+    const child = fakePty(pid);
+    const signaled: number[] = [];
+    const service = new TerminalService({
+      prepareSpawnHelper: async () => undefined,
+      spawnPty: (() => child.pty) as typeof spawn,
+      signalProcess: (target) => { signaled.push(target); },
+    });
+    await assert.rejects(
+      service.create("managed-workspace", "/tmp", owner.owner),
+      /terminal process identity could not be verified/u,
+    );
+    assert.deepEqual(signaled, []);
+    assert.equal(child.killed(), false, "node-pty kill also signals its reported PID");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        service.closeForWorkspaceAndWait("managed-workspace", 10),
+        /cannot safely remove it in this session/u,
+      );
+    }
+  }
+});
 
 test("renderer destruction during terminal revalidation prevents spawn", async () => {
   const owner = ownerState();
