@@ -74,6 +74,9 @@ object AidenRemoteProtocol {
     /** Contract revision 28: assistant messages may carry inline `visuals`,
      * each shown through a snapshot image attachment the Mac stores. */
     const val CHAT_VISUALS_FEATURE = "chat-visuals-v1"
+    /** Contract revision 32: assistant messages may carry native `appPanels`, read and
+     * answered behind the `app-controls:read` and `app-controls:respond` grants. */
+    const val CHAT_UI_PANELS_FEATURE = "chat-ui-panels-enabled-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5
@@ -510,6 +513,8 @@ data class AidenRemoteCapability(val rawValue: String) {
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
+        val APP_CONTROLS_READ = AidenRemoteCapability("app-controls:read")
+        val APP_CONTROLS_RESPOND = AidenRemoteCapability("app-controls:respond")
         val SKILLS_INVOKE = AidenRemoteCapability("skills:invoke")
         /** Contract revision 24: phone-scoped observation of foreign runs. */
         val RUNS_OBSERVE = AidenRemoteCapability("runs:observe")
@@ -533,10 +538,10 @@ data class AidenRemoteCapability(val rawValue: String) {
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
             FILES_READ, FILES_WRITE, GIT_READ, GIT_WRITE,
             SCHEDULE_READ, SCHEDULE_WRITE, BOT_READ, BOT_WRITE, TASKS_READ, AGENTS_READ,
-            QUESTIONS_RESPOND, SKILLS_INVOKE
+            QUESTIONS_RESPOND, SKILLS_INVOKE, APP_CONTROLS_READ, APP_CONTROLS_RESPOND
         )
 
-        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE)
+        val PROGRESS = listOf(TASKS_READ, AGENTS_READ, QUESTIONS_RESPOND, SKILLS_INVOKE, APP_CONTROLS_READ, APP_CONTROLS_RESPOND)
 
         /** The phone-scoped run subset. It is never granted at pairing; a
          * phone can only negotiate it behind `phone-run-control-v1`. */
@@ -669,6 +674,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val APPROVAL_REQUIRED = AidenRemoteEventType("approval_required")
         val TASK_UPDATE = AidenRemoteEventType("task_update")
         val AGENTS_UPDATE = AidenRemoteEventType("agents_update")
+        val APP_CONTROLS_CHANGED = AidenRemoteEventType("app_controls_changed")
         val QUESTION_REQUIRED = AidenRemoteEventType("question_required")
         val DONE = AidenRemoteEventType("done")
         val ERROR = AidenRemoteEventType("error")
@@ -678,7 +684,7 @@ data class AidenRemoteEventType(val rawValue: String) {
         val V1_KNOWN = listOf(
             SNAPSHOT, STATUS, TEXT_DELTA, REASONING_DELTA,
             TOOL_STARTED, TOOL_FINISHED, TIMELINE, APPROVAL_REQUIRED,
-            TASK_UPDATE, AGENTS_UPDATE, QUESTION_REQUIRED,
+            TASK_UPDATE, AGENTS_UPDATE, APP_CONTROLS_CHANGED, QUESTION_REQUIRED,
             DONE, ERROR, CANCELLED, HEARTBEAT
         )
     }

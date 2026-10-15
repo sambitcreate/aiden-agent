@@ -1,4 +1,3 @@
-import { stopAllPiCacheWarmers } from "../services/pi-cache-warming.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -8,7 +7,6 @@ import { ipcMain } from "../platform.js";
 import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
 import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
-import { skillRegistry } from "../services/skill-registry-main.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, testConnection } from "../services/models.js";
@@ -28,7 +26,7 @@ import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
 } from "../services/provider-list-core.js";
-import { AppearancePreviewState } from "../services/appearance-preview-core.js";
+import { appearancePreview, applySettingsEffects } from "../services/settings-application-effects.js";
 import {
   removeProviderWithCredentialCleanup,
   saveProviderWithCredentialRotation,
@@ -62,7 +60,6 @@ import { parseDictationDictionary } from "../../renderer/shared/dictation-dictio
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
 import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
 
-const appearancePreview = new AppearancePreviewState();
 
 const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
 
@@ -372,6 +369,14 @@ export function registerProviderHandlers(): void {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
     const next: Partial<import("../services/types.js").AppSettings> = {};
+    if (p.remoteAppControlsEnabled !== undefined) {
+      if (typeof p.remoteAppControlsEnabled !== "boolean") throw new Error("Invalid paired controls setting.");
+      next.remoteAppControlsEnabled = p.remoteAppControlsEnabled;
+    }
+    if (p.appControlPolicy !== undefined) {
+      if (!["disabled", "ask", "safe"].includes(p.appControlPolicy as string)) throw new Error("Invalid app controls policy.");
+      next.appControlPolicy = p.appControlPolicy as import("../../renderer/shared/app-controls.js").AppControlPolicy;
+    }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
     if (typeof p.exaEnabled === "boolean") next.exaEnabled = p.exaEnabled;
@@ -428,38 +433,7 @@ export function registerProviderHandlers(): void {
     const saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
-    if (next.cacheWarmingEnabled === false) stopAllPiCacheWarmers();
-    if (next.computerUseAlwaysAllow === false) {
-      // Live streams drop a cached grant on their next Computer Use call.
-      const { revokeComputerUseGrants } = await import("../services/computer-use/access-gate.js");
-      revokeComputerUseGrants();
-    }
-    if (next.aidenLiveEnabled === false) {
-      // A disabled feature must not keep an attended session running in any window.
-      const { geminiLiveService } = await import("../services/gemini-live/service-main.js");
-      geminiLiveService.stopAllSessions();
-    }
-    if (next.localVoiceIdleUnloadMinutes !== undefined) {
-      const { reconfigureLocalSpeechIdleUnload } = await import("../services/local-speech.js");
-      void reconfigureLocalSpeechIdleUnload();
-    }
-    if (next.skillsEnabled !== undefined) {
-      skillRegistry.invalidate();
-      invalidateBotRuntimeInventoryAuthority("skill_configuration");
-      if (!next.skillsEnabled) {
-        const { llmClient } = await import("../services/llm-client.js");
-        llmClient.cancelForSkillsDisabled();
-        const { contextLifecycleService } =
-          await import("../services/context-lifecycle-service-main.js");
-        contextLifecycleService.cancelForSkillsDisabled();
-      }
-      const { telegramService } = await import("../services/telegram/telegram-service.js");
-      void telegramService.refreshCommands();
-    }
-    if (next.appearance) {
-      const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
-      ipcMain.broadcast("settings:appearance-changed", appearance);
-    }
+    await applySettingsEffects(saved, next);
     return saved;
   });
 }

@@ -66,6 +66,7 @@ test("clone and fork copy visible linear history with fresh identities", async (
   const firstTurn = await store.appendMessage(chat.id, {
     role: "assistant",
     content: "First response",
+    appPanels: [{ version: 1, id: "source-controls", topic: "memory", fallback: "Memory controls on the original desktop." }],
     reasoning: "PRIVATE REASONING",
     providerFailure: {
       version: 1,
@@ -93,13 +94,13 @@ test("clone and fork copy visible linear history with fresh identities", async (
   });
   assert.deepEqual(clone.messages.map(({ role, content }) => [role, content]), [
     ["user", "First request"],
-    ["assistant", "First response"],
+    ["assistant", "First response\n\nMemory controls on the original desktop."],
     ["user", "Second request"],
     ["assistant", "Second response"],
   ]);
   assert.deepEqual(fork.messages.map(({ role, content }) => [role, content]), [
     ["user", "First request"],
-    ["assistant", "First response"],
+    ["assistant", "First response\n\nMemory controls on the original desktop."],
   ]);
   assert.equal(clone.workspaceId, "workspace-copy");
   assert.equal(clone.providerId, "provider-copy");
@@ -110,6 +111,8 @@ test("clone and fork copy visible linear history with fresh identities", async (
   );
   assert.ok(clone.messages.every((message) => message.reasoning === undefined));
   assert.ok(clone.messages.every((message) => message.timeline === undefined));
+  assert.ok(clone.messages.every((message) => message.appPanels === undefined));
+  assert.ok(fork.messages.every((message) => message.appPanels === undefined));
   assert.ok(clone.messages.every((message) => message.subagents === undefined));
   assert.deepEqual(clone.messages[1]?.providerFailure, {
     version: 1,

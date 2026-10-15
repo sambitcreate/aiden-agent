@@ -831,6 +831,7 @@ final class AidenRemoteCoordinator {
         if server.supportsMobileSimulators { requested.append(.simulatorsMobile) }
         if server.supportsBotCards { requested.append(.botCards) }
         if server.offersBotActivity { requested.append(.botActivity) }
+        if server.features.contains("chat-ui-panels-enabled-v1") { requested.append(contentsOf: [.appControlsRead, .appControlsRespond]) }
         guard !requested.isEmpty,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return

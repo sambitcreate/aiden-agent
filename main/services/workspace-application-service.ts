@@ -24,6 +24,7 @@ function defaultWorkspaceId(): string {
 }
 
 export interface WorkspaceApplicationDependencies {
+  onChanged?(): void;
   configStore: Pick<
     typeof configStore,
     "listWorkspaces" | "getWorkspace" | "saveWorkspace" | "removeWorkspace"
@@ -52,6 +53,7 @@ export interface WorkspaceApplicationDependencies {
 
 export interface WorkspaceApplicationMutationOptions {
   assertCurrent?: (workspace: Workspace) => void;
+  beforeSave?: (workspace: Workspace | undefined) => void | Promise<void>;
 }
 
 export interface WorkspaceFolderCreationOptions {
@@ -203,7 +205,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
-          return await deps.configStore.saveWorkspace(next);
+          const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+          deps.onChanged?.();
+          return saved;
         }
         return await withWorkspaceScheduleRestoration(
           {
@@ -222,7 +226,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             deps.browserService?.closeForWorkspace(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
-            const saved = await deps.configStore.saveWorkspace(next);
+            options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
+            const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+            deps.onChanged?.();
             if (saved.permission !== "none") {
               ensureResumedOnExit();
               await deps.scheduleService.resumeWorkspace(saved.id);
@@ -265,6 +271,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             await deps.llmClient.cancelWorkspaceAndSettle(id);
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
+            deps.onChanged?.();
             keepPaused();
           },
         );

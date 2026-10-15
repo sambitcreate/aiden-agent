@@ -10,6 +10,20 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
   const [command, ...rest] = args;
   let result: unknown;
   switch (command) {
+    case "app": {
+      const [action = "help", subject = "overview", rawValue, revision, operationId] = rest;
+      if (action === "help") { result = (await import("../../../main/services/aiden-app-knowledge.js")).readAidenHelp(rest.slice(1).join(" ") || "overview"); break; }
+      const { isAppControlId, isAppControlTopic } = await import("../../../renderer/shared/app-controls.js");
+      const controls = (await import("./app-controls.ts")).createCliAppControls(agentDir, () => undefined);
+      if (action === "status") { result = await Promise.all(["appearance", "memory", "web-search", "skills"].map((topic) => controls.snapshot(topic as "appearance", false))); break; }
+      if (action === "get" && isAppControlTopic(subject)) { result = await controls.snapshot(subject, false); break; }
+      if (action === "set" && isAppControlId(subject) && rawValue !== undefined && revision && rest.length <= 5) {
+        const value = rawValue === "true" ? true : rawValue === "false" ? false : rawValue;
+        const { randomUUID } = await import("node:crypto");
+        result = await controls.apply({ control: subject, value, expectedRevision: revision, operationId: operationId ?? randomUUID() }, false, true, true); break;
+      }
+      throw new Error("Usage: aiden app help [query] | status | get <topic> | set <control> <value> <revision> [operation-id]");
+    }
     case "workspace": result = await (await import("./workspaces.ts")).workspaceCommand(agentDir, rest); break;
     case "search": result = await (await import("./sessions.ts")).searchSessions(agentDir, rest.join(" ")); break;
     case "import": if (!rest[0]) throw new Error("Provide an Aiden export or session journal."); result = await (await import("./session-import.ts")).importSession(agentDir, cwd, rest[0]); break;

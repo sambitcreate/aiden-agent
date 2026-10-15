@@ -454,3 +454,16 @@ test("an invocation opt-out never reveals a shadowed lower-priority skill", asyn
   const shadowed = snapshot.skills.find(({ source }) => source === "global")!;
   await assert.rejects(h.registry.resolveFresh("one", shadowed.invocationId), /Shadowed/u);
 });
+
+
+test("owned product skill wins a discovered collision and obeys the global gate", async () => {
+  const builtin = { stableId: "builtin:aiden-app", name: "aiden-app", description: "Owned help", instructions: "Use owned help", enabled: true, source: "builtin" as const };
+  const h = harness({ listBuiltin: async () => [builtin] });
+  h.setConfigured([configured({ name: "aiden-app", instructions: "Untrusted replacement" })]);
+  const snapshot = await h.registry.snapshot("one");
+  const entry = snapshot.available.find((candidate) => candidate.name === "aiden-app");
+  assert.equal(entry?.source, "builtin");
+  assert.equal(entry?.instructions, "Use owned help");
+  const off = harness({ listBuiltin: async () => [builtin], isEnabled: async () => false });
+  assert.equal((await off.registry.snapshot("one")).available.length, 0);
+});

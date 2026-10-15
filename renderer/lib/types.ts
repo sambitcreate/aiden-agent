@@ -629,6 +629,7 @@ export interface ChatMessage {
   reasoning?: string;
   providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
+  appPanels?: import("../shared/app-controls").AppControlPanel[];
   htmlArtifacts?: import("../shared/chat-artifacts").ChatHtmlArtifactV1[];
   htmlArtifactPlacements?: import("../shared/chat-artifacts").HtmlArtifactPlacementV1[];
   imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
@@ -911,6 +912,8 @@ export interface AssistantConfigSnapshot {
 }
 
 export interface AppSettings {
+  appControlPolicy?: import("../shared/app-controls").AppControlPolicy;
+  remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */

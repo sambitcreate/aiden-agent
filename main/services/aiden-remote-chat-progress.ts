@@ -31,8 +31,9 @@ interface ProgressPorts {
   authorize(
     deviceId: string,
     chatId: string,
-    capability: "tasks:read" | "agents:read",
+    capability: "tasks:read" | "agents:read" | "app-controls:read",
   ): Promise<ProgressChat>;
+  appControlsEnabled?(): Promise<boolean>;
   readTodo(chatId: string): Promise<TodoSnapshotViewV1>;
   readAgents(chatId: string): Promise<SubagentRunSnapshot[]>;
   /**
@@ -406,7 +407,20 @@ export class AidenRemoteChatProgressService {
     response: ServerResponse,
     epoch?: string,
   ): Promise<void> {
-    if (!grants.has("tasks:read") && !grants.has("agents:read")) {
+    let observesControls = Boolean(grants.has("app-controls:read") && this.ports.appControlsEnabled);
+    if (observesControls) {
+      try {
+        await this.ports.authorize(deviceId, chatId, "app-controls:read");
+      } catch (error) {
+        if (!(error instanceof AidenRemoteServiceError) ||
+            !["not_found", "capability_denied"].includes(error.code) ||
+            (!grants.has("tasks:read") && !grants.has("agents:read"))) throw error;
+        // An inapplicable projection (e.g. Bot controls) cannot tear down
+        // separately authorized task/agent progress.
+        observesControls = false;
+      }
+    }
+    if (!grants.has("tasks:read") && !grants.has("agents:read") && !observesControls) {
       throw new AidenRemoteServiceError(
         "capability_denied",
         "Progress access is unavailable.",
@@ -433,9 +447,12 @@ export class AidenRemoteChatProgressService {
     let scheduled: ReturnType<typeof setTimeout> | undefined;
     const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
     const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
+    // Native clients drop live control snapshots when a stream disconnects, so
+    // every successful subscription re-announces the controls revision even
+    // when a warm resume suppresses unchanged task/agent snapshots.
     const sent = new Map<string, number>(
       isResumed
-        ? resumed.sent
+        ? [...resumed.sent].filter(([type]) => type !== "app_controls_changed")
         : [],
     );
     const close = () => {
@@ -448,8 +465,8 @@ export class AidenRemoteChatProgressService {
       response.end();
     };
     const write = (
-      type: "task_update" | "agents_update",
-      snapshot: AidenRemoteChatTaskProgress | AidenRemoteChatAgentRoster,
+      type: "task_update" | "agents_update" | "app_controls_changed",
+      snapshot: AidenRemoteChatTaskProgress | AidenRemoteChatAgentRoster | { revision: number },
     ) => {
       if (closed || sent.get(type) === snapshot.revision) return;
       sent.set(type, snapshot.revision);
@@ -483,6 +500,11 @@ export class AidenRemoteChatProgressService {
             write("task_update", await this.taskSnapshot(deviceId, chatId));
           if (grants.has("agents:read"))
             write("agents_update", await this.agentRoster(deviceId, chatId));
+          if (observesControls && this.ports.appControlsEnabled) {
+            await this.ports.authorize(deviceId, chatId, "app-controls:read");
+            if (!(await this.ports.appControlsEnabled())) throw new Error("App controls were revoked.");
+            write("app_controls_changed", { revision: this.ports.events.appControlsRevision() });
+          }
         }
       } catch {
         close();

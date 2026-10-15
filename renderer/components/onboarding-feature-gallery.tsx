@@ -20,6 +20,7 @@ import {
   Palette,
   Plug,
   Send,
+  Settings2,
   ShieldCheck,
   Smartphone,
   SquareTerminal,
@@ -252,6 +253,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     title: "Command Palette",
     description: "Use Command-K or / for app commands, and $ to attach a reusable skill.",
     icon: Command,
+    size: "standard",
+  },
+  {
+    id: "chatControls",
+    group: "control",
+    title: "Settings in chat",
+    description:
+      "Ask how Aiden works or request settings in a conversation. Change theme, memory, Web Search, and skills with real controls. Enabling features needs confirmation; paired host controls start off until you allow them in Appearance.",
+    icon: Settings2,
     size: "standard",
   },
   {

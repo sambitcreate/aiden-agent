@@ -51,6 +51,8 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await composer.fill("$");
   const skills = page.getByRole("listbox", { name: "Skills" });
   await expect(skills).toBeVisible();
+  await expect(skills.getByRole("option", { name: /aiden-app/u })).toBeVisible();
+  await composer.fill("$no-such-installed-skill");
   await expect(skills.getByText("No skills match this query.", { exact: true })).toBeVisible();
   await composer.press("Escape");
   await expect(skills).toBeHidden();

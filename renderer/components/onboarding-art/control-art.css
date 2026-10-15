@@ -367,3 +367,11 @@
   box-shadow: 0 0 0 1px var(--border-separator), var(--elevation-control);
 }
 .oa-themes-check .oa-icon { width: 7px; height: 7px; stroke-width: 3; }
+
+/* Settings in chat */
+.oa-ctl-ask { position: absolute; padding: 6px 8px; border-radius: 10px; background: var(--oa-fill); }
+.oa-ctl-ask .oa-bar { height: 4px; }
+.oa-ctl-card { padding-bottom: 3px; }
+.oa-ctl-head { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; color: var(--text-secondary); }
+.oa-ctl-head .oa-chip { height: 14px; font-size: 7px; }
+.oa-ctl-row { display: flex; align-items: center; gap: 6px; height: 19px; padding: 0 8px; color: var(--text-primary); font-size: 8px; white-space: nowrap; }

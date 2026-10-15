@@ -1,3 +1,4 @@
+import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import * as fs from "node:fs/promises";
 import { logger } from "../platform.js";
 import { configStore } from "./config-store.js";
@@ -15,6 +16,7 @@ import {
 
 export const workspaceApplicationService = createWorkspaceApplicationService({
   configStore,
+  onChanged: publishAppControlsChanged,
   llmClient,
   scheduleService,
   terminalService,

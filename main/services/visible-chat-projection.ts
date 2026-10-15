@@ -1,3 +1,4 @@
+import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import type { Attachment, Chat } from "./types.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
@@ -31,6 +32,7 @@ export interface VisibleChatMessage {
   createdAt: number;
   model?: string;
   attachments?: Attachment[];
+  appPanels?: import("../../renderer/shared/app-controls.js").AppControlPanel[];
   htmlArtifacts?: import("../../renderer/shared/chat-artifacts.js").ChatHtmlArtifactV1[];
   htmlArtifactPlacements?: import("../../renderer/shared/chat-artifacts.js").HtmlArtifactPlacementV1[];
   imagePlacements?: import("../../renderer/shared/chat-artifacts.js").ChatImagePlacementV1[];
@@ -164,6 +166,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     createdAt: message.createdAt as number,
     model,
     attachments: safeStoredAttachments(message.attachments),
+    appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
     htmlArtifacts:
       message.role === "assistant"
         ? parseChatHtmlArtifacts(message.htmlArtifacts)

@@ -56,6 +56,8 @@ data class AidenConnectionIssue(val title: String, val message: String, val canR
  * phone-scoped subsets requested.
  */
 private val AIDEN_PROGRESS_GRANTS: List<Pair<(AidenServer) -> Boolean, List<AidenRemoteCapability>>> = listOf(
+    // Contract revision 32: native conversation app control panels.
+    AidenServer::supportsChatUiPanels to listOf(AidenRemoteCapability.APP_CONTROLS_READ, AidenRemoteCapability.APP_CONTROLS_RESPOND),
     AidenServer::supportsChatTasks to listOf(AidenRemoteCapability.TASKS_READ),
     AidenServer::supportsChatAgents to listOf(AidenRemoteCapability.AGENTS_READ),
     AidenServer::supportsQuestionPrompts to listOf(AidenRemoteCapability.QUESTIONS_RESPOND),

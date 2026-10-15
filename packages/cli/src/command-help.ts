@@ -1,6 +1,7 @@
 // Kept free of imports: the entry prints this for `aiden help` before any of
 // the runtime is loaded.
 export const CLI_COMMAND_HELP = `Aiden commands:
+  app help|status|get <topic>|set <control> <value> <revision> [operation-id]
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers
   search <query>                            Search all session titles/previews
   import <desktop-journal|aiden-chat.json>   Copy a conversation into a new CLI session

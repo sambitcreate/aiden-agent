@@ -423,7 +423,8 @@ class AidenBotActivityContractTest {
             AidenRemoteProtocol.CHAT_SKILLS_FEATURE to listOf(AidenRemoteCapability.SKILLS_INVOKE),
             AidenRemoteProtocol.MOBILE_SIMULATORS_FEATURE to listOf(AidenRemoteCapability.SIMULATORS_MOBILE),
             AidenRemoteProtocol.PHONE_RUN_CONTROL_FEATURE to listOf(AidenRemoteCapability.RUNS_OBSERVE, AidenRemoteCapability.RUNS_CONTROL),
-            AidenRemoteProtocol.CHAT_TASKS_FEATURE to listOf(AidenRemoteCapability.TASKS_READ)
+            AidenRemoteProtocol.CHAT_TASKS_FEATURE to listOf(AidenRemoteCapability.TASKS_READ),
+            AidenRemoteProtocol.CHAT_UI_PANELS_FEATURE to listOf(AidenRemoteCapability.APP_CONTROLS_READ, AidenRemoteCapability.APP_CONTROLS_RESPOND)
         )
         for ((feature, grants) in rows) {
             val base = listOf(AidenRemoteCapability.CHAT_READ)

@@ -1,3 +1,7 @@
+import { aidenAppNavigation } from "./aiden-app-navigation.js";
+import { createAidenAppTools } from "./aiden-app-tools.js";
+import { appControlsService } from "./app-controls-main.js";
+import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
@@ -881,6 +885,7 @@ async function prepareGeneration(
   const sharedImages: Attachment[] = [];
   const displayedImages: Attachment[] = [];
   const displayedImageIds = new Set<string>();
+  const appPanels: AppControlPanel[] = [];
   const displayedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
   const displayedHtmlIds = new Set<string>();
   /** mediaId → the render_artifact call it renders after. */
@@ -948,6 +953,7 @@ async function prepareGeneration(
       lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
+      appPanels,
       htmlArtifactPlacements,
       imagePlacements,
       displayedUiVisuals,
@@ -1957,6 +1963,19 @@ async function prepareGeneration(
       };
     }
   }
+  if (!botContext && (!assistantMode || attendedAssistant) && options.interactionSurface !== "telegram" && schedulingAllowed && (rendererOwner || browserOwner?.kind === "remote")) {
+    tools.push(...createAidenAppTools({
+      service: appControlsService, liveState: browserOwner?.kind !== "remote",
+      runtime: { interaction: "attended-workspace", workspacePermission: permission, providerId: params.providerId, modelId: params.model, availableTools: tools.map((tool) => tool.name) },
+      open: browserOwner?.kind !== "remote" ? (destination, toolSignal) => aidenAppNavigation.open(destination, browserOwner, toolSignal) : undefined,
+      context: { actor: `agent:${params.chatId}`, target: browserOwner?.kind === "remote" ? "Paired host" : "This desktop", workspaceId: workspace?.id,
+        humanGesture: false, isCurrent: () => !signal.aborted && !browserOwner?.isDestroyed() },
+      present: (panel) => {
+        if (appPanels.length >= 4) throw new Error("This response already has four settings panels.");
+        appPanels.push(panel);
+      },
+    }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
+  }
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -1996,6 +2015,7 @@ async function prepareGeneration(
     lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
+    appPanels,
     htmlArtifactPlacements,
     imagePlacements,
     displayedUiVisuals,
@@ -2359,6 +2379,7 @@ export const llmClient = {
       lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
+      appPanels,
       htmlArtifactPlacements,
       imagePlacements,
       displayedUiVisuals,
@@ -2560,7 +2581,8 @@ export const llmClient = {
         !providerFailure &&
         assistantAttachments.length === 0 &&
         displayedHtmlArtifacts.length === 0 &&
-        displayedUiVisuals.length === 0
+        displayedUiVisuals.length === 0 &&
+        appPanels.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -2595,6 +2617,7 @@ export const llmClient = {
             },
             subagents,
             attachments: assistantAttachments.length > 0 ? assistantAttachments : undefined,
+            appPanels: appPanels.length ? appPanels : undefined,
             htmlArtifacts: displayedHtmlArtifacts.length > 0 ? displayedHtmlArtifacts : undefined,
             htmlArtifactPlacements: htmlArtifactPlacements.placementsFor(displayedHtmlArtifacts),
             imagePlacements: imageAttachmentPlacements(imagePlacements, assistantAttachments),

@@ -327,6 +327,7 @@ export interface ChatMessage {
   /** Files presented with this user or assistant message. */
   attachments?: Attachment[];
   /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
+  appPanels?: import("../../renderer/shared/app-controls").AppControlPanel[];
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
@@ -716,6 +717,10 @@ export interface AssistantConfigSnapshot {
 
 /** Persisted lightweight app settings. */
 export interface AppSettings {
+  /** App effects are separately authorized from workspace file access. */
+  appControlPolicy?: import("../../renderer/shared/app-controls.js").AppControlPolicy;
+  /** Explicit host-owner consent; older pairings cannot enable this. */
+  remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */

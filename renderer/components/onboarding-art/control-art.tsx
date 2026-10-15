@@ -584,3 +584,40 @@ export function ThemesArt() {
     </>
   );
 }
+
+const CHAT_CONTROL_ROWS = [
+  { label: "Memory", on: true },
+  { label: "Web Search", on: false },
+  { label: "Skills", on: true },
+] as const;
+
+/** A reply that answers a settings request with a live settings card in the chat. */
+export function ChatControlsArt() {
+  return (
+    <>
+      <div className="oa-ctl-ask" style={{ right: 12, top: 10, width: 96 }}>
+        <Bar width="100%" />
+      </div>
+      <div className="oa-stack" style={{ position: "absolute", left: 12, top: 30, width: 150, gap: 4 }}>
+        <Bar width="92%" tone="soft" />
+        <Bar width="58%" tone="soft" />
+      </div>
+      <ArtWindow raised className="oa-ctl-card" style={{ left: 12, top: 52, width: 176 }}>
+        <div className="oa-ctl-head oa-separator-bottom">
+          <ArtIcon icon={Settings} />
+          <span className="oa-strong">Settings</span>
+          <span className="oa-grow" />
+          <ArtChip icon={Monitor}>This desktop</ArtChip>
+        </div>
+        {CHAT_CONTROL_ROWS.map(({ label, on }, index) => (
+          <div key={label} className="oa-ctl-row">
+            <span className="oa-grow">{label}</span>
+            <span className={index === 1 ? "oa-anim-press" : undefined} style={{ display: "inline-flex" }}>
+              <Toggle on={on} />
+            </span>
+          </div>
+        ))}
+      </ArtWindow>
+    </>
+  );
+}
