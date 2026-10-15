@@ -3679,6 +3679,28 @@ final class AidenBotChatActivityTests: XCTestCase {
         }
     }
 
+    /// Where a scripted save waits until the test lets it go, at most 5 seconds,
+    /// so a test that fails before letting it go never leaves a save hanging.
+    @MainActor
+    private final class Hold {
+        private(set) var isHeld = false
+        private var isReleased = false
+
+        func wait() async throws {
+            isHeld = true
+            let deadline = Date().addingTimeInterval(5)
+            while !isReleased {
+                guard Date() < deadline else {
+                    XCTFail("Timed out waiting for the test to let the save go")
+                    throw SaveFailure()
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+
+        func release() { isReleased = true }
+    }
+
     /// A model whose Mac accepts every save, with the calls it saw.
     private func model(
         revision: String = "rev_1",
@@ -3721,13 +3743,11 @@ final class AidenBotChatActivityTests: XCTestCase {
 
     func testASaveThatReturnsAfterThePairingChangedIsNeitherKeptNorReported() async throws {
         var paired = true
-        var holding = false
-        var letGo = false
+        let hold = Hold()
         var saved: [AidenBotDetail] = []
         var refreshes = 0
         let model = try model(save: { next, _ in
-            holding = true
-            while !letGo { try await Task.sleep(for: .milliseconds(5)) }
+            try await hold.wait()
             return try self.detail(revision: "rev_2", next)
         }, refresh: {
             refreshes += 1
@@ -3735,9 +3755,9 @@ final class AidenBotChatActivityTests: XCTestCase {
         }, onSaved: { saved.append($0) }, isCurrent: { paired })
 
         let pick = Task { await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows)) }
-        try await untilSaving { holding }
+        try await untilSaving { hold.isHeld }
         paired = false
-        letGo = true
+        hold.release()
         await pick.value
 
         XCTAssertEqual(saved.count, 0, "the old Mac's Bot is never cached or reported under the new pairing")
@@ -3817,15 +3837,15 @@ final class AidenBotChatActivityTests: XCTestCase {
 
     func testAPickShowsAtOnceAndASecondTapWhileSavingIsNeitherLostNorSentOnAStaleRevision() async throws {
         var calls: [(AidenBotChatActivity, String)] = []
-        var release: CheckedContinuation<Void, Never>?
+        let hold = Hold()
         let model = try model(save: { next, revision in
             calls.append((next, revision))
-            if calls.count == 1 { await withCheckedContinuation { release = $0 } }
+            if calls.count == 1 { try await hold.wait() }
             return try self.detail(revision: "rev_\(calls.count + 1)", next)
         })
 
         let first = Task { await model.pick(AidenBotChatActivity(level: .summary, wording: .follows)) }
-        try await untilSaving { release != nil }
+        try await untilSaving { hold.isHeld }
         XCTAssertEqual(model.value.level, .summary, "the choice shows before the Mac answers")
         XCTAssertTrue(model.isSaving)
 
@@ -3833,7 +3853,7 @@ final class AidenBotChatActivityTests: XCTestCase {
         XCTAssertEqual(model.value.level, .detailed, "a tap during a save shows at once too")
         XCTAssertEqual(calls.count, 1, "it waits for the save in flight")
 
-        release?.resume()
+        hold.release()
         await first.value
         XCTAssertEqual(calls.map(\.1), ["rev_1", "rev_2"], "the follow-up carries the revision the first save returned")
         XCTAssertEqual(model.value.level, .detailed)
@@ -3843,18 +3863,18 @@ final class AidenBotChatActivityTests: XCTestCase {
 
     func testThreeTapsDuringOneSaveSendTheFirstAndTheLastOnly() async throws {
         var calls: [AidenBotChatActivity] = []
-        var release: CheckedContinuation<Void, Never>?
+        let hold = Hold()
         let model = try model(save: { next, _ in
             calls.append(next)
-            if calls.count == 1 { await withCheckedContinuation { release = $0 } }
+            if calls.count == 1 { try await hold.wait() }
             return try self.detail(revision: "rev_\(calls.count + 1)", next)
         })
         let first = Task { await model.pick(AidenBotChatActivity(level: .summary, wording: .follows)) }
-        try await untilSaving { release != nil }
+        try await untilSaving { hold.isHeld }
         await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows))
         await model.pick(AidenBotChatActivity(level: .detailed, wording: .thinking))
         await model.pick(AidenBotChatActivity(level: .quiet, wording: .thinking))
-        release?.resume()
+        hold.release()
         await first.value
         XCTAssertEqual(calls, [
             AidenBotChatActivity(level: .summary, wording: .follows),
@@ -3865,18 +3885,18 @@ final class AidenBotChatActivityTests: XCTestCase {
 
     func testPickingBackToTheSavedChoiceMidFlightEndsOnThatChoiceOnTheMacToo() async throws {
         var calls: [AidenBotChatActivity] = []
-        var release: CheckedContinuation<Void, Never>?
+        let hold = Hold()
         let original = AidenBotChatActivity(level: .quiet, wording: .follows)
         let model = try model(original, save: { next, _ in
             calls.append(next)
-            if calls.count == 1 { await withCheckedContinuation { release = $0 } }
+            if calls.count == 1 { try await hold.wait() }
             return try self.detail(revision: "rev_\(calls.count + 1)", next)
         })
         let first = Task { await model.pick(AidenBotChatActivity(level: .detailed, wording: .follows)) }
-        try await untilSaving { release != nil }
+        try await untilSaving { hold.isHeld }
         await model.pick(original)
         XCTAssertEqual(model.value, original, "the page already shows the choice they went back to")
-        release?.resume()
+        hold.release()
         await first.value
         XCTAssertEqual(calls.last, original, "the Mac ends on it too, not on the abandoned pick")
         XCTAssertEqual(model.value, original)
