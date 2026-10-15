@@ -22,6 +22,10 @@ import {
   gitResumeManagedWorktreeCheckout,
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
+  gitFetchWorktreeBase,
+  gitLocalBranchNames,
+  gitResolveWorktreeBase,
+  gitRollbackOwnedWorktree,
 } from "./git.js";
 import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
@@ -39,6 +43,10 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   ensureWorktreeRoot: () => ensureUserDataDir("worktrees"),
   ensureSnapshotRoot: () => ensureUserDataDir("worktree-snapshots"),
   createWorktree: gitCreateWorktree,
+  resolveWorktreeBase: gitResolveWorktreeBase,
+  fetchWorktreeBase: gitFetchWorktreeBase,
+  localBranchNames: gitLocalBranchNames,
+  rollbackOwnedWorktree: gitRollbackOwnedWorktree,
   rollbackWorktree: gitRollbackWorktree,
   deleteManagedWorktree: (managed, signal, lifecycle) => gitDeleteManagedWorktree(
     managed.repositoryPath,
