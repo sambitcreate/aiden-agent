@@ -468,6 +468,9 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   await page.getByRole("menuitemradio", { name: /^Steer/u }).click();
   await expect(page.getByText(/maximum pending guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
+  // The closing menu hands focus back to its trigger a task later; typing
+  // before then can land on the trigger and reopen the menu instead.
+  await expect(page.getByRole("button", { name: "Choose message action" })).toBeFocused();
   await composer.press("Enter");
   await expect(page.getByText(/couldn't confirm the guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
@@ -498,6 +501,15 @@ test("a response finishing while the queue editor is open waits for the saved ed
   await expect(
     page.getByRole("button", { name: "Stop generating", includeHidden: true }),
   ).toBeHidden();
+  // The response finished and saved its reply; a failed one would pause the
+  // queue instead, which is a different scenario from waiting for the edit.
+  await expect(
+    page.getByRole("button", { name: "Fork from here", includeHidden: true }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("region", { name: "Queued messages", includeHidden: true })
+      .getByRole("status", { includeHidden: true }),
+  ).toHaveText("1 queued");
   expect(
     lmStudio.requests.filter((request) => lastUserText(request) === "Original queued text"),
   ).toHaveLength(0);

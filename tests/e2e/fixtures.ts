@@ -835,6 +835,26 @@ function formatFailure(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+const MAX_PRINTED_DEV_LOG_PROBLEMS = 40;
+
+/** The dev log's warn and error records, one short line each (the log is already redacted). */
+function devLogProblems(devLog: string): string[] {
+  const problems: string[] = [];
+  for (const line of devLog.split("\n")) {
+    let record: { at?: unknown; level?: unknown; area?: unknown; event?: unknown; fields?: Record<string, unknown> };
+    try {
+      record = JSON.parse(line) as typeof record;
+    } catch {
+      continue;
+    }
+    if (record.level !== "warn" && record.level !== "error") continue;
+    const message = typeof record.fields?.message === "string" ? record.fields.message.slice(0, 240) : "";
+    const errorType = typeof record.fields?.errorType === "string" ? ` [${record.fields.errorType}]` : "";
+    problems.push(`  ${String(record.at)} ${String(record.level)} ${String(record.area)}/${String(record.event)}${errorType} ${message}`.trimEnd());
+  }
+  return problems.slice(-MAX_PRINTED_DEV_LOG_PROBLEMS);
+}
+
 export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
@@ -1001,10 +1021,40 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         process.stderr.write(`Could not attach Electron process state: ${formatFailure(error)}\n`);
       }
       try {
+        // Errors the app surfaced to the user (a failed response, a paused
+        // queue) are often the missing half of an intermittent failure.
+        const window = app?.windows()[0];
+        const notices = window
+          ? await withTimeout(
+              window.evaluate(() =>
+                [...document.querySelectorAll("[role=alert], [role=status], [data-sonner-toast]")]
+                  .map((element) => element.textContent?.replace(/\s+/gu, " ").trim().slice(0, 200) ?? "")
+                  .filter(Boolean)
+                  .slice(0, 20),
+              ),
+              "Reading on-screen notices",
+              2_000,
+            )
+          : [];
+        if (notices.length > 0) {
+          process.stderr.write(`On-screen notices (${testInfo.title}):\n${notices.map((notice) => `  ${notice}`).join("\n")}\n`);
+        }
+      } catch {
+        // A closed or crashed window has nothing more to report.
+      }
+      try {
+        const devLog = await readFile(path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log"));
         await testInfo.attach("aiden-dev-log", {
-          body: await readFile(path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log")),
+          body: devLog,
           contentType: "text/plain",
         });
+        // Hosted runs keep only a sanitized receipt and the job log, where the
+        // reporter truncates this attachment; print the main-process warnings
+        // and errors so an intermittent failure still names what went wrong.
+        const problems = devLogProblems(devLog.toString("utf8"));
+        if (problems.length > 0) {
+          process.stderr.write(`Aiden dev-log warnings and errors (${testInfo.title}):\n${problems.join("\n")}\n`);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           process.stderr.write(`Could not attach Aiden dev log: ${formatFailure(error)}\n`);
