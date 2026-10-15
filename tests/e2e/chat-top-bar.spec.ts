@@ -124,6 +124,122 @@ test.describe("folder workspaces", () => {
     await expect(changes).toHaveAttribute("aria-pressed", "true");
   });
 
+  test("a draft in New worktree mode creates its worktree on send and runs there", async ({ aiden }) => {
+    const { page } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    execFileSync("git", [
+      "-C", aiden.workspaceDir,
+      "-c", "user.email=e2e@example.com",
+      "-c", "user.name=Aiden E2E",
+      "commit", "--allow-empty", "-m", "init",
+    ]);
+    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await finishLmStudioOnboarding(page);
+
+    // Nothing is created yet: the chip and the headline describe the plan.
+    await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
+    const workIn = page.getByRole("radiogroup", { name: "Work in" });
+    await expect(workIn.getByRole("radio", { name: /^This checkout/u })).toHaveAttribute("aria-checked", "true");
+    await workIn.getByRole("radio", { name: /^New worktree/u }).click();
+    await expect(page.getByRole("radiogroup", { name: "Start from" }).getByRole("radio", { name: /^main/u }))
+      .toHaveAttribute("aria-checked", "true");
+    // No remote, so there is no origin to start from.
+    await expect(page.getByRole("menu").getByRole("switch")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(
+      contextBar(page).getByRole("button", { name: "Branch: new worktree from main" }),
+    ).toHaveText("New worktree · from main");
+    await expect(page.locator("[data-draft-worktree-hint]")).toHaveText(
+      "A new worktree from main will be created when you send",
+    );
+    expect(execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" }).trim().split("\n"))
+      .toHaveLength(1);
+
+    // Record the progress row, which may only be on screen briefly.
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __worktreeProgress: string[] }).__worktreeProgress = seen;
+      new MutationObserver(() => {
+        for (const row of document.querySelectorAll("[data-worktree-send-progress]")) {
+          const text = row.textContent ?? "";
+          if (text && seen[seen.length - 1] !== text) seen.push(text);
+        }
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.locator("textarea").fill("Fix the login bug");
+    await page.locator("textarea").press("Enter");
+    await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
+
+    // The message showed straight away with the worktree's progress.
+    const progress = await page.evaluate(
+      () => (window as unknown as { __worktreeProgress: string[] }).__worktreeProgress,
+    );
+    expect(progress.some((text) => /^Creating worktree/u.test(text))).toBe(true);
+
+    // The chat now runs in the new worktree: the summary chip names its branch.
+    await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
+    await expect(
+      contextBar(page).getByRole("button", { name: /^aiden\/fix-the-login-bug, worktree/u }),
+    ).toBeVisible();
+    const worktrees = execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" });
+    expect(worktrees).toContain("[aiden/fix-the-login-bug]");
+
+    // The worktree is registered as a workspace, listed in the sidebar.
+    const worktreeWorkspace = await page.evaluate(async () => {
+      const bridge = (window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }).aidenAPI.ipc;
+      const workspaces = await bridge.invoke<{ id: string; name: string; managedWorktree?: { branch: string } }[]>(
+        "workspaces:list",
+      );
+      return workspaces.find((workspace) => workspace.managedWorktree?.branch === "aiden/fix-the-login-bug");
+    });
+    expect(worktreeWorkspace).toBeDefined();
+    await expect(
+      page.getByRole("button", { name: `New chat in ${worktreeWorkspace!.name}`, exact: true }),
+    ).toHaveCount(1);
+
+    // The chat was saved in the worktree and its first response ran there.
+    await expect
+      .poll(async () => {
+        const index = JSON.parse(
+          await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8"),
+        ) as { id: string; workspaceId?: string; botId?: string }[];
+        const meta = index.find((entry) => !entry.botId && entry.workspaceId === worktreeWorkspace!.id);
+        if (!meta) return "no chat in the worktree";
+        const saved = JSON.parse(
+          await readFile(path.join(aiden.userDataDir, "chats", `${meta.id}.json`), "utf8"),
+        ) as { messages: { role: string; providerFailure?: unknown }[] };
+        const reply = saved.messages.find((message) => message.role === "assistant");
+        return reply ? (reply.providerFailure ? "failed" : "answered") : "waiting";
+      }, { timeout: 20_000 })
+      .toBe("answered");
+    await expect(page.getByText("Generation failed")).toHaveCount(0);
+  });
+
+  test("⌥↵ in New chat in… opens the draft with New worktree selected", async ({ aiden }) => {
+    const { page } = aiden;
+    execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
+    execFileSync("git", [
+      "-C", aiden.workspaceDir,
+      "-c", "user.email=e2e@example.com",
+      "-c", "user.name=Aiden E2E",
+      "commit", "--allow-empty", "-m", "init",
+    ]);
+    await finishLmStudioOnboarding(page);
+    await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "New Agent", exact: true }).focus();
+    await page.keyboard.press("ControlOrMeta+Shift+N");
+    await expect(page.getByRole("combobox", { name: "Search workspaces" })).toBeFocused();
+    await expect(page.locator("[data-new-chat-in-footer]")).toHaveText("⌥↵ in a new worktree");
+    await page.keyboard.press("Alt+Enter");
+    await expect(page.locator("[data-command-palette-content]")).toHaveCount(0);
+    await expect(
+      contextBar(page).getByRole("button", { name: "Branch: new worktree from main" }),
+    ).toBeVisible();
+    await expect(page.locator("textarea")).toBeFocused();
+  });
+
   test("the headline name opens the workspace menu, and a typed path moves the draft there", async ({ aiden }) => {
     const { page } = aiden;
     // HOME is the test root, so ~/typed-project resolves inside it.
