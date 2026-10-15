@@ -10,6 +10,7 @@ import {
 } from "../../../renderer/shared/generation-thinking.js";
 import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
+import { canDispatchSubagentModel } from "./eligibility.js";
 
 /** The tool schema lists at most this many models, parent first. */
 export const MAX_SUBAGENT_MODEL_CHOICES = 6;
@@ -172,7 +173,9 @@ export function preferredSubagentModelKeys(settings?: SubagentModelSettings): st
 export function requestableSubagentModels(policy: SubagentModelPolicy): SubagentModelCandidate[] {
   const parentKey = subagentModelKey(policy.parent);
   if (!policy.overridesAllowed) return [policy.parent];
-  const byKey = new Map(policy.candidates.map((candidate) => [subagentModelKey(candidate), candidate]));
+  const byKey = new Map(policy.candidates
+    .filter((candidate) => canDispatchSubagentModel(candidate.providerId))
+    .map((candidate) => [subagentModelKey(candidate), candidate]));
   const ordered: SubagentModelCandidate[] = [policy.parent];
   const seen = new Set([parentKey]);
   const add = (candidate: SubagentModelCandidate | undefined) => {
@@ -191,6 +194,7 @@ export function requestableSubagentModels(policy: SubagentModelPolicy): Subagent
   // provider first), in discovery order, which lists each provider default first.
   const queues = new Map<string, SubagentModelCandidate[]>([[policy.parent.providerId, []]]);
   for (const candidate of policy.candidates) {
+    if (!canDispatchSubagentModel(candidate.providerId)) continue;
     const queue = queues.get(candidate.providerId) ?? [];
     queue.push(candidate);
     queues.set(candidate.providerId, queue);
@@ -234,7 +238,9 @@ export function planSubagentModel(
   const connected = new Map<string, SubagentModelCandidate>([
     [subagentModelKey(policy.parent), policy.parent],
     [parentKey, inheritFrom],
-    ...policy.candidates.map((candidate) => [subagentModelKey(candidate), candidate] as const),
+    ...policy.candidates
+      .filter((candidate) => canDispatchSubagentModel(candidate.providerId))
+      .map((candidate) => [subagentModelKey(candidate), candidate] as const),
   ]);
   const role = policy.overridesAllowed ? policy.settings?.roles?.[request.role] : undefined;
   const locked = role?.locked === true;
@@ -270,7 +276,12 @@ export function planSubagentModel(
   const configured = (key: string | undefined, label: string): SubagentModelCandidate | undefined => {
     if (key === undefined) return undefined;
     const candidate = connected.get(key);
-    if (!candidate) warnings.push(`${label} model ${key} is not connected; using the current model.`);
+    if (!candidate) {
+      const reason = canDispatchSubagentModel(key.split("/", 1)[0] ?? "")
+        ? "is not connected"
+        : "cannot run as a subagent";
+      warnings.push(`${label} model ${key} ${reason}; using the current model.`);
+    }
     return candidate;
   };
 
