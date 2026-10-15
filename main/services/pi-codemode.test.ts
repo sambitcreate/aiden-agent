@@ -367,7 +367,7 @@ test("a hook that replaces or drops only structured content wins over the script
       text({ name, structured: r.structuredContent ?? null });
     }` });
   assert.equal(result.isError, false, scriptText(result));
-  assert.deepEqual(result.content.map((item) => JSON.parse((item as { text: string }).text)), [
+  assert.deepEqual(result.content.map((item) => JSON.parse(itemText(item))), [
     { name: "mcp_filtered", structured: { filtered: true } },
     { name: "mcp_dropped", structured: null },
     { name: "mcp_kept", structured: { open: "value" } },
