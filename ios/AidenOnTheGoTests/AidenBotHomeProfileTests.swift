@@ -272,4 +272,200 @@ final class AidenBotHomeProfileTests: XCTestCase {
             "Couldn’t be read"
         )
     }
+
+    // MARK: Model choice (New Bot and Advanced)
+
+    private func fixtureCatalog() throws -> AidenBotCapabilityCatalog {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: try XCTUnwrap(object["botCapabilityCatalog"]))
+        )
+    }
+
+    /// The fixture has a text-only `model_fixture` and an image-reading
+    /// `vision_model_fixture` under `provider_fixture`.
+    func testChoosingAModelPairsAPhotoModelOnlyWhenItReadsTextOnly() throws {
+        let catalog = try fixtureCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertNil(draft.visionModelID)
+
+        XCTAssertFalse(draft.selectModel(providerID: "provider_fixture", modelID: "missing", catalog: catalog))
+        XCTAssertEqual(draft.customAccess.modelID, "vision_model_fixture", "an unknown model changes nothing")
+        XCTAssertFalse(draft.selectVisionModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog),
+                       "a text-only model can't read photos")
+
+        draft.name = "Seer"
+        let request = try draft.createRequest(catalog: catalog)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        let access = try XCTUnwrap(body["access"] as? [String: Any])
+        XCTAssertEqual(access["modelId"] as? String, "vision_model_fixture", "Create sends the chosen model")
+    }
+
+    /// Re-confirming the checked primary or photo row must leave the draft equal to before, so
+    /// the create view keeps a committed Bot's recovery state instead of posting a duplicate.
+    func testReSelectingTheCurrentModelsLeavesTheDraftEqual() throws {
+        let catalog = try fixtureCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+
+        let beforePrimary = draft
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft, beforePrimary, "the checked primary model is a no-op")
+
+        let beforePhotos = draft
+        XCTAssertTrue(draft.selectVisionModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertEqual(draft, beforePhotos, "the checked photo model is a no-op")
+    }
+
+    func testModelListOffersOnlyImageModelsForPhotosAndFiltersBySearch() throws {
+        let catalog = try fixtureCatalog()
+        XCTAssertEqual(
+            aidenBotModelListSections(catalog: catalog, imagesOnly: true, query: "").flatMap { $0.models.map(\.id) },
+            ["vision_model_fixture"]
+        )
+        XCTAssertEqual(
+            aidenBotModelListSections(catalog: catalog, imagesOnly: false, query: "VISION").flatMap { $0.models.map(\.id) },
+            ["vision_model_fixture"]
+        )
+        XCTAssertTrue(aidenBotModelListSections(catalog: catalog, imagesOnly: false, query: "zzz").isEmpty)
+    }
+
+    /// The fixture catalog with extra models: `second_vision` (an image reader
+    /// that is available), `offline_vision` (an image reader that is not), and
+    /// a whole `offline_provider` that is not set up.
+    private func extendedCatalog(secondVisionAvailable: Bool = true) throws -> AidenBotCapabilityCatalog {
+        try editedCatalog { providers in
+            var first = providers[0]
+            var models = try XCTUnwrap(first["models"] as? [[String: Any]])
+            models.append([
+                "id": "second_vision", "label": "Second Vision",
+                "available": secondVisionAvailable, "supportsImages": true,
+            ])
+            models.append(["id": "offline_vision", "label": "Offline Vision", "available": false, "supportsImages": true])
+            first["models"] = models
+            providers[0] = first
+            providers.append([
+                "id": "offline_provider", "label": "Offline Provider", "available": false,
+                "models": [["id": "offline_model", "label": "Offline Model", "available": true, "supportsImages": true]],
+            ])
+        }
+    }
+
+    /// The fixture catalog with its providers changed by `edit`.
+    private func editedCatalog(_ edit: (inout [[String: Any]]) throws -> Void) throws -> AidenBotCapabilityCatalog {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var raw = try XCTUnwrap(object["botCapabilityCatalog"] as? [String: Any])
+        var providers = try XCTUnwrap(raw["providers"] as? [[String: Any]])
+        try edit(&providers)
+        raw["providers"] = providers
+        return try AidenRemoteJSONDecoder.decode(
+            AidenBotCapabilityCatalog.self,
+            from: JSONSerialization.data(withJSONObject: raw)
+        )
+    }
+
+    /// The fixture catalog where the only image reader is not set up, so
+    /// nothing on the Mac can read photos.
+    private func textOnlyCatalog() throws -> AidenBotCapabilityCatalog {
+        try editedCatalog { providers in
+            var first = providers[0]
+            var models = try XCTUnwrap(first["models"] as? [[String: Any]])
+            for index in models.indices where models[index]["id"] as? String == "vision_model_fixture" {
+                models[index]["available"] = false
+            }
+            first["models"] = models
+            providers[0] = first
+        }
+    }
+
+    func testUnavailableModelsAndProvidersAreNeverSelected() throws {
+        let catalog = try extendedCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        let before = draft
+
+        XCTAssertFalse(draft.selectModel(providerID: "provider_fixture", modelID: "offline_vision", catalog: catalog),
+                       "an unavailable model")
+        XCTAssertFalse(draft.selectModel(providerID: "offline_provider", modelID: "offline_model", catalog: catalog),
+                       "an available model of an unavailable provider")
+        XCTAssertFalse(draft.selectVisionModel(providerID: "provider_fixture", modelID: "offline_vision", catalog: catalog))
+        XCTAssertFalse(draft.selectVisionModel(providerID: "offline_provider", modelID: "offline_model", catalog: catalog))
+        XCTAssertEqual(draft, before, "refused picks change nothing")
+    }
+
+    func testTextOnlyChoiceKeepsAStillUsablePhotoModel() throws {
+        let catalog = try extendedCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertTrue(draft.selectVisionModel(providerID: "provider_fixture", modelID: "second_vision", catalog: catalog))
+
+        // Picking the text-only model again keeps the manually chosen photo model.
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "second_vision")
+
+        // An image-reading primary model clears it; going back to text-only re-suggests the first.
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertNil(draft.visionModelID)
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+    }
+
+    func testAPhotoModelThatIsNoLongerUsableIsReplacedWithTheFirstUsableOne() throws {
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: try extendedCatalog(), defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: try extendedCatalog()))
+        XCTAssertTrue(draft.selectVisionModel(providerID: "provider_fixture", modelID: "second_vision",
+                                              catalog: try extendedCatalog()))
+
+        // Second Vision's service signs it out before the Bot's model is picked again.
+        let catalog = try extendedCatalog(secondVisionAvailable: false)
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.visionProviderID, "provider_fixture")
+        XCTAssertEqual(draft.visionModelID, "vision_model_fixture")
+        XCTAssertNoThrow(try draft.accessUpdate(catalog: catalog))
+    }
+
+    func testATextOnlyModelWithNoImageReaderOnTheMacStillSavesAndSaysWhy() throws {
+        let catalog = try textOnlyCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertEqual(draft.customAccess.modelID, "model_fixture")
+        XCTAssertNil(draft.visionModelID)
+        XCTAssertEqual(draft.photoModelNeed(catalog: catalog), .unavailable, "New Bot and Advanced explain it")
+        XCTAssertEqual(
+            draft.noImageModelNote(catalog: catalog),
+            "Fixture Model reads text only, and no model that reads images is set up on your Mac."
+        )
+
+        // New Bot creates it reading text only, and Advanced saves it the same way.
+        draft.name = "Writer"
+        let request = try draft.createRequest(catalog: catalog)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        let access = try XCTUnwrap(body["access"] as? [String: Any])
+        XCTAssertEqual(access["modelId"] as? String, "model_fixture")
+        XCTAssertTrue(access["visionModel"] == nil || access["visionModel"] is NSNull, "no photo model is sent")
+        XCTAssertNoThrow(try draft.accessUpdate(catalog: catalog))
+    }
+
+    func testPhotosRowShowsOnlyForATextOnlyModelWhenAnImageReaderIsSetUp() throws {
+        let catalog = try fixtureCatalog()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(catalog: catalog, defaultAccess: .recommended))
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.photoModelNeed(catalog: catalog), .choose)
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "vision_model_fixture", catalog: catalog))
+        XCTAssertEqual(draft.photoModelNeed(catalog: catalog), .none)
+
+        // With an image reader set up, a text-only Bot still can't be saved without a photo model.
+        XCTAssertTrue(draft.selectModel(providerID: "provider_fixture", modelID: "model_fixture", catalog: catalog))
+        draft.visionProviderID = nil
+        draft.visionModelID = nil
+        XCTAssertThrowsError(try draft.accessUpdate(catalog: catalog))
+    }
 }

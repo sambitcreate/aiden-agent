@@ -1,55 +1,69 @@
 import * as React from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
-import { useQueries } from "@tanstack/react-query";
-import { Button, EmptyState, ScrollArea } from "../components/ui";
-import { botsApi } from "../lib/ipc";
-import { useBot, useBots } from "../lib/queries";
+import { Plus, RotateCcw } from "lucide-react";
+import { Button, Callout, EmptyState, ScrollArea, Text } from "../components/ui";
+import { botChatPath } from "../lib/bot-routes";
+import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
+import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
+import { BotChatActivityPage } from "./bots/bot-chat-activity-page";
 import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
-import { BotList, type BotListRow } from "./bots/bot-list";
+import { useBotRows } from "./bots/bot-sidebar-rows";
 import { BotMemoryPage } from "./bots/bot-memory-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
 import { BotStarterCarousel } from "./bots/bot-starter-carousel";
-import { RemoteBots } from "./remote-bots";
+import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
-/** The Bot's one conversation, addressed by Bot id only. */
-export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: { botId: string } } {
-  return { to: "/bots/$botId/chat", params: { botId } };
-}
+/** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
+const SUMMARIES_GRACE_MS = 800;
 
-function BotsHome() {
+/**
+ * `/bots` with no Bot selected (spec §9): the Bot list lives in the sidebar, so
+ * this opens the chat of the Bot last viewed on this Mac, else the one with the
+ * newest activity. With no Bots it is "Meet your first Bot".
+ */
+function BotsIndex() {
   const navigate = useNavigate();
-  const bots = useBots();
-  const active = bots.data ?? [];
-  // Preview, time and state come from the same live projection the chat reads.
-  const summaries = useQueries({
-    queries: active.map((bot) => ({
-      queryKey: ["bot-live-summary", bot.id] as const,
-      queryFn: () => botsApi.liveSummary(bot.id),
-      retry: false,
-    })),
-  });
-  const rows: BotListRow[] = active
-    .map((bot, index): BotListRow => {
-      const summary = summaries[index]?.data;
-      return {
-        bot,
-        ...(summary ? { state: summary.state } : {}),
-        ...(summary?.preview ? { preview: summary.preview } : {}),
-        ...(summary?.updatedAt ? { updatedAt: summary.updatedAt } : {}),
-      };
-    })
-    .sort((left, right) => (right.updatedAt ?? right.bot.updatedAt) - (left.updatedAt ?? left.bot.updatedAt));
+  const { bots, rows, summariesSettled } = useBotRows();
+  const { preferences } = useBotSidebarPreferences();
   const [creating, setCreating] = React.useState(false);
-  const [deleting, setDeleting] = React.useState<BotDefinition | null>(null);
+  const [summariesGraceOver, setSummariesGraceOver] = React.useState(false);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
+  // Only a settled, successful load names a Bot to open: never a stale or failed list.
+  const settled = bots.isSuccess && !bots.isFetching;
+  const hasBots = bots.isSuccess && bots.data.length > 0;
+  const target = React.useMemo(() => {
+    if (!settled || bots.data === undefined || bots.data.length === 0) return null;
+    const viewed = lastViewedBotId(preferences, new Set(bots.data.map((bot) => bot.id)));
+    if (viewed) return viewed;
+    // Rows are ordered by chat activity once the summaries are in, else by the Bot's own
+    // updatedAt; a summary that never answers must not keep /bots blank.
+    return summariesSettled || summariesGraceOver ? (rows[0]?.bot.id ?? null) : null;
+  }, [bots.data, preferences, rows, settled, summariesGraceOver, summariesSettled]);
 
+  React.useEffect(() => {
+    if (!settled || summariesSettled) return;
+    const timer = setTimeout(() => setSummariesGraceOver(true), SUMMARIES_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [settled, summariesSettled]);
+
+  React.useEffect(() => {
+    // While the create flow is open it finishes first and opens the new Bot itself.
+    if (target && !creating) void navigate({ ...botChatPath(target), replace: true });
+  }, [creating, navigate, target]);
+
+  if (hasBots && !creating) {
+    return (
+      <main className="mx-auto h-full w-full max-w-3xl px-5 pt-4">
+        <BotPageSkeleton label="Opening your Bot" groups={[3]} />
+      </main>
+    );
+  }
   return (
     <ScrollArea
       scrollRestorationId="bots-home"
@@ -61,30 +75,27 @@ function BotsHome() {
       }
     >
       <main className="mx-auto w-full max-w-3xl px-5 pb-10 pt-4">
-        <BotList
-          rows={rows}
-          loading={bots.isLoading}
-          error={bots.isError}
-          onRetry={() => void bots.refetch()}
-          onOpen={openChat}
-          onOpenProfile={(bot) => void navigate({ to: "/bots/$botId", params: { botId: bot.id } })}
-          onDelete={setDeleting}
-          onCreate={() => setCreating(true)}
-          emptyState={<BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />}
-        >
-          <RemoteBots />
-        </BotList>
+        {bots.isError ? (
+          <Callout color="red" role="alert" className="flex-row items-center justify-between gap-4">
+            <div>
+              <Text variant="small-strong" color="red">
+                Your Bots couldn’t be loaded
+              </Text>
+              <Text as="p" variant="small" color="secondary" className="mt-0.5">
+                Check that Aiden finished starting, then try again.
+              </Text>
+            </div>
+            <Button size="small" variant="filled" onClick={() => void bots.refetch()}>
+              <RotateCcw /> Try again
+            </Button>
+          </Callout>
+        ) : bots.isLoading ? (
+          <BotPageSkeleton label="Loading Bots" groups={[3]} />
+        ) : (
+          <BotStarterCarousel onCreateOwn={() => setCreating(true)} onOpenChat={openChat} />
+        )}
       </main>
       <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => openChat(bot)} />
-      {deleting ? (
-        <BotDeleteDialog
-          bot={deleting}
-          open
-          onOpenChange={(open) => {
-            if (!open) setDeleting(null);
-          }}
-        />
-      ) : null}
     </ScrollArea>
   );
 }
@@ -130,13 +141,20 @@ function BotPage({ botId }: { botId: string }) {
       {page === "instructions" ? (
         <BotInstructionsEditor key={`${current.id}:instructions`} bot={current} onClose={back} />
       ) : page === "advanced" ? (
-        <BotAdvanced key={`${current.id}:advanced`} bot={current} onClose={back} />
+        <BotAdvanced
+          key={`${current.id}:advanced`}
+          bot={current}
+          onClose={back}
+          onOpenChatActivity={() => openPage("chat-activity")}
+        />
+      ) : page === "chat-activity" ? (
+        <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "memory" ? (
         <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
       ) : (
         <BotProfile
           bot={current}
-          onBack={allBots}
+          onBack={() => void navigate(botChatPath(current.id))}
           onOpenChat={() => void navigate(botChatPath(current.id))}
           onOpenInstructions={() => openPage("instructions")}
           onOpenAdvanced={() => openPage("advanced")}
@@ -149,9 +167,9 @@ function BotPage({ botId }: { botId: string }) {
   );
 }
 
-/** Routes `/bots` to the Bots list, `/bots/$botId` to a Bot's Profile and `/bots/$botId/chat` to its chat. */
+/** Routes `/bots` to the most recent Bot's chat (or the starter Bots), `/bots/$botId` to a Bot's Profile and `/bots/$botId/chat` to its chat. */
 export function BotsView() {
   const params = useParams({ strict: false }) as { botId?: string };
   if (params.botId) return <BotPage botId={params.botId} />;
-  return <BotsHome />;
+  return <BotsIndex />;
 }

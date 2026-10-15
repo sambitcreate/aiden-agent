@@ -1,7 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.shared
 
 import androidx.compose.runtime.Immutable
-import sbtbiswas.AidenOnTheGo.models.AidenBotProviderOption
 import sbtbiswas.AidenOnTheGo.models.AidenModel
 import sbtbiswas.AidenOnTheGo.models.AidenProvider
 import sbtbiswas.AidenOnTheGo.models.AidenProviderArtwork
@@ -211,15 +210,6 @@ fun AidenProvider.toModelPickerProvider(): AidenModelPickerProvider = AidenModel
     artwork = artwork,
     models = models.map { model ->
         AidenModelPickerModel(id = model.id, label = model.label, capabilities = aidenModelCapabilities(model))
-    }
-)
-
-/** Bot capability catalogs carry no artwork or capability detail; unavailable models stay listed but disabled. */
-fun AidenBotProviderOption.toModelPickerProvider(): AidenModelPickerProvider = AidenModelPickerProvider(
-    id = id,
-    label = label,
-    models = models.map { model ->
-        AidenModelPickerModel(id = model.id, label = model.label, available = available && model.available)
     }
 )
 

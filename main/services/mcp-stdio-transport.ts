@@ -59,6 +59,8 @@ class ProcessGroupStdioTransport implements Transport {
   onmessage?: (message: JSONRPCMessage) => void;
   private child?: ChildProcess;
   private started = false;
+  /** Set once the process group's teardown has begun; it runs exactly once. */
+  private groupReaped = false;
   private readonly readBuffer: ReadBuffer;
 
   constructor(private readonly options: McpStdioTransportOptions) {
@@ -94,6 +96,9 @@ class ProcessGroupStdioTransport implements Transport {
       child.on("spawn", () => resolve());
       child.on("close", () => {
         if (this.child === child) this.child = undefined;
+        // Every pipe is closed, so nothing left in the group can reach Aiden.
+        // A wrapper that exited on its own may still have left its server there.
+        if (pid !== undefined) this.reapGroup(pid);
         this.onclose?.();
       });
       child.stdin?.on("error", (error) => this.onerror?.(error));
@@ -151,12 +156,18 @@ class ProcessGroupStdioTransport implements Transport {
       signalGroup(pid, "SIGTERM");
       if (!await settlesWithin(exited, grace)) signalGroup(pid, "SIGKILL");
     }
-    // A wrapper that exited on its own can leave its server running in the group.
+    this.reapGroup(pid);
+  }
+
+  /** Terminate whatever remains of the group, then forget it: SIGTERM, then SIGKILL after the grace. */
+  private reapGroup(pid: number): void {
+    if (this.groupReaped) return;
+    this.groupReaped = true;
     signalGroup(pid, "SIGTERM");
     const straggler = setTimeout(() => {
       signalGroup(pid, "SIGKILL");
       liveGroups.delete(pid);
-    }, grace);
+    }, this.options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS);
     straggler.unref?.();
   }
 }
@@ -172,7 +183,9 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): Tran
     return new StdioClientTransport({
       command: options.command,
       args: [...(options.args ?? [])],
-      env: options.env,
+      // The pinned SDK already layers env over its defaults; spell it out so
+      // this contract does not depend on SDK internals.
+      env: { ...getDefaultEnvironment(), ...options.env },
       cwd: options.cwd,
       maxBufferSize: options.maxBufferSize,
     });

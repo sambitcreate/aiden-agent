@@ -148,9 +148,10 @@ test("Advanced shows the model, image model, access and Telegram controls, and n
   await openMenu("More for Planner");
   fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced" }));
 
-  assert.ok(await screen.findByRole("combobox", { name: "AI model" }));
-  assert.ok(screen.getByRole("combobox", { name: "AI service" }));
-  assert.ok(screen.getByRole("combobox", { name: "Image model" }));
+  const model = await screen.findByRole("button", { name: "AI model" });
+  assert.match(model.textContent ?? "", /Writer/u);
+  assert.ok(screen.getByRole("button", { name: "Model for photos" }));
+  assert.equal(screen.queryByRole("combobox", { name: "AI service" }), null);
   assert.ok(screen.getByRole("button", { name: /Use recommended/u }));
   const access = screen.getByRole("radiogroup", { name: "What it can use" });
   assert.equal(within(access).getByRole("radio", { name: "Everything" }).getAttribute("aria-checked"), "true");
@@ -162,6 +163,23 @@ test("Advanced shows the model, image model, access and Telegram controls, and n
   fireEvent.click(within(access).getByRole("radio", { name: "Only what I choose" }));
   assert.ok(await screen.findByRole("switch", { name: "Allow Mail" }));
   assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, false);
+});
+
+test("Advanced names only the model in its control, says what it reads under the label, and saves a new choice", async () => {
+  const { accessUpdates } = advancedIpc();
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1?page=advanced" });
+  const model = await screen.findByRole("button", { name: "AI model" });
+  assert.doesNotMatch(model.textContent ?? "", /Text only|Reads images/u);
+  assert.ok(screen.getByText("Text only"), "the capability is the row's description");
+
+  fireEvent.click(model);
+  fireEvent.click(await screen.findByRole("option", { name: /^Seer/u }));
+  assert.equal(screen.queryByRole("button", { name: "Model for photos" }), null, "Seer reads images");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(accessUpdates.length, 1));
+  const sent = (accessUpdates[0] as { access: { modelId?: string; visionModel?: unknown } }).access;
+  assert.equal(sent.modelId, "model-vision");
+  assert.equal(sent.visionModel, null, "a model that reads images clears the stale photo model");
 });
 
 function advancedIpc() {

@@ -500,6 +500,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const workspaceBrowser = new AidenRemoteWorkspaceBrowserService({
             instanceId,
             state,
+            approvalStore: userData,
           });
           const models = new AidenRemoteModelService({
             listProviders: listConfiguredProviders,

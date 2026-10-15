@@ -1,9 +1,10 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Callout, Dialog, FieldLabel, Input, Text, Textarea } from "../../components/ui";
+import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { Button, Callout, Dialog, FieldLabel, Input, Text, Textarea } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
-import { queryKeys } from "../../lib/queries";
+import { queryKeys, useBotCapabilityCatalog } from "../../lib/queries";
 import {
   BOT_AVATAR_COLORS,
   BOT_AVATAR_SHAPES,
@@ -14,10 +15,19 @@ import {
 } from "../../shared/bots";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
-  type BotAccessUpdate,
   type BotCapabilityCatalog,
 } from "../../shared/bot-capabilities";
-import { firstAvailableModel, firstAvailableVisionModel } from "./bot-access-draft";
+import { firstAvailableModel } from "./bot-access-draft";
+import {
+  botFullAccess,
+  botModelUsable,
+  chooseBotModel,
+  chooseBotVisionModel,
+  findBotModel,
+  recommendedBotModelChoice,
+  type BotModelChoice,
+} from "./bot-model-choice";
+import { BotModelPicker } from "./bot-model-picker";
 import { ConnectionChips } from "../../components/bots/connection-chips";
 import { rankConnections } from "../../shared/bot-connections";
 import { useConnectionSetup } from "./use-connection-setup";
@@ -48,34 +58,109 @@ function truncate(value: string, maximum: number): string {
   return characters.length > maximum ? characters.slice(0, maximum).join("") : characters.join("");
 }
 
-/**
- * Full access with the recommended model: the first available model, plus an
- * image model when that one reads text only. With no model at all the Bot is
- * still created and asks for one when opened.
- */
-export function recommendedFullAccess(catalog: BotCapabilityCatalog): {
-  access: BotAccessUpdate;
-  hasModel: boolean;
-} {
-  const model = firstAvailableModel(catalog);
-  const supportsImages = model
-    ? catalog.providers
-        .find((provider) => provider.id === model.providerId)
-        ?.models.find((candidate) => candidate.id === model.modelId)?.supportsImages === true
-    : false;
-  const vision = model && !supportsImages
-    ? firstAvailableVisionModel(catalog, model.providerId)
-    : undefined;
-  return {
-    hasModel: Boolean(model),
-    access: {
-      accessMode: "full",
-      catalogRevision: catalog.revision,
-      confirmedForeground: true,
-      ...(model ? { providerId: model.providerId, modelId: model.modelId } : {}),
-      ...(vision ? { visionModel: vision } : {}),
-    },
-  };
+export const BOT_MODEL_GONE_MESSAGE = "That model isn’t available any more. Choose another one.";
+
+/** Step 1's AI model: the recommended model by default, changeable before Create. */
+function CreateModelField({
+  catalog,
+  choice,
+  disabled,
+  onChange,
+  onSetUp,
+}: {
+  catalog: UseQueryResult<BotCapabilityCatalog>;
+  choice: BotModelChoice;
+  disabled: boolean;
+  onChange(next: BotModelChoice): void;
+  onSetUp(): void;
+}) {
+  const title = (
+    <Text as="span" variant="small-strong">
+      AI model
+    </Text>
+  );
+  if (catalog.isLoading) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {title}
+        <span role="status" aria-label="Loading models" className="block h-8 rounded-control bg-control motion-safe:animate-pulse" />
+      </div>
+    );
+  }
+  // A failed refetch keeps the last catalog, so the field stays usable.
+  if (!catalog.data) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {title}
+        <div className="flex items-center gap-2">
+          <Text as="p" variant="small" color="secondary" className="flex-1">
+            Aiden couldn’t load your models.
+          </Text>
+          <Button size="small" variant="filled" onClick={() => void catalog.refetch()}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  const data = catalog.data;
+  const recommended = firstAvailableModel(data);
+  if (!recommended) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {title}
+        <div className="flex items-center gap-2">
+          <Text as="p" variant="small" color="secondary" className="flex-1">
+            No AI model set up yet. You can still create it; it asks for one when you open it.
+          </Text>
+          <Button size="small" variant="filled" onClick={onSetUp}>
+            Set up…
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  const primary = findBotModel(data, choice.providerId, choice.modelId);
+  const needsPhotoModel = primary !== undefined && primary.model.supportsImages !== true;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {title}
+      <BotModelPicker
+        catalog={data}
+        label="AI model"
+        providerId={choice.providerId}
+        modelId={choice.modelId}
+        recommended={recommended}
+        disabled={disabled}
+        onSelect={(providerId, modelId) => onChange(chooseBotModel(data, choice, providerId, modelId))}
+      />
+      {needsPhotoModel ? (
+        choice.visionProviderId && choice.visionModelId ? (
+          <>
+            <Text as="span" variant="small-strong" className="mt-2">
+              For photos
+            </Text>
+            <BotModelPicker
+              catalog={data}
+              label="Model for photos"
+              imagesOnly
+              providerId={choice.visionProviderId}
+              modelId={choice.visionModelId}
+              disabled={disabled}
+              onSelect={(providerId, modelId) => onChange(chooseBotVisionModel(data, choice, providerId, modelId))}
+            />
+            <Text as="p" variant="small" color="secondary">
+              {primary.model.label} reads text only, so photos and screenshots go here.
+            </Text>
+          </>
+        ) : (
+          <Text as="p" variant="small" color="secondary">
+            {primary.model.label} reads text only, and no model that reads images is set up.
+          </Text>
+        )
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -94,6 +179,16 @@ export function BotCreateFlow({
   onCreated(bot: BotDefinition, options: { needsModel: boolean }): void | Promise<void>;
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const catalogQuery = useBotCapabilityCatalog(open);
+  // null = the recommended model, worked out from the latest catalog.
+  const [choice, setChoice] = React.useState<BotModelChoice | null>(null);
+  const shownChoice: BotModelChoice =
+    choice ?? (catalogQuery.data ? recommendedBotModelChoice(catalogQuery.data) : {});
+  const openProviders = () => {
+    onOpenChange(false);
+    void navigate({ to: "/settings", search: { section: "providers" } });
+  };
   const nameId = React.useId();
   const helpId = React.useId();
   const [step, setStep] = React.useState<1 | 2>(1);
@@ -126,6 +221,7 @@ export function BotCreateFlow({
     setStep(1);
     setName("");
     setHelp("");
+    setChoice(null);
     setJustConnected(new Set());
     setError(null);
   }, [open]);
@@ -145,7 +241,21 @@ export function BotCreateFlow({
         });
         catalog = await botsApi.getCapabilityCatalog();
       }
-      const { access, hasModel } = recommendedFullAccess(catalog);
+      let picked: BotModelChoice;
+      if (choice) {
+        const found = findBotModel(catalog, choice.providerId, choice.modelId);
+        if (!found || !botModelUsable(found)) {
+          setError(BOT_MODEL_GONE_MESSAGE);
+          setStep(1);
+          void qc.invalidateQueries({ queryKey: queryKeys.botCapabilityCatalog });
+          return;
+        }
+        // Re-checks the photo model against the fresh catalog too.
+        picked = chooseBotModel(catalog, choice, found.provider.id, found.model.id);
+      } else {
+        picked = recommendedBotModelChoice(catalog);
+      }
+      const { access, hasModel } = botFullAccess(catalog, picked);
       const subtitle = truncate(help, BOT_LIMITS.descriptionChars);
       const bot = await botsApi.create({
         bot: {
@@ -202,7 +312,14 @@ export function BotCreateFlow({
           ? { cancelLabel: "Back", cancelKeepsOpen: true, onCancel: () => setStep(1) }
           : {})}
         allowCancelWhileBusy={false}
-        onConfirm={step === 1 ? () => setStep(2) : create}
+        onConfirm={
+          step === 1
+            ? () => {
+                setError(null);
+                setStep(2);
+              }
+            : create
+        }
         submitOnEnter
       >
         {step === 1 ? (
@@ -236,6 +353,17 @@ export function BotCreateFlow({
                 onChange={(event) => setHelp(event.target.value)}
               />
             </div>
+            <CreateModelField
+              catalog={catalogQuery}
+              choice={shownChoice}
+              disabled={busy}
+              onChange={(next) => {
+                // A new choice answers "that model isn't available any more".
+                setError(null);
+                setChoice(next);
+              }}
+              onSetUp={openProviders}
+            />
             <Text as="p" variant="small" color="secondary">
               It can use everything Aiden can on this Mac. You can change this later in Advanced.
             </Text>

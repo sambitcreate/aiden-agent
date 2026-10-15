@@ -41,6 +41,7 @@ import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
 import { botApprovals } from "./bot-approvals-main.js";
+import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
@@ -326,12 +327,29 @@ botQuestions.onChange((botId) => {
   );
 });
 
+// An approval appearing or settling changes the line to and from "Waiting for you".
+botApprovals.onChange((botId) => {
+  void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} activity view report.`, error),
+  );
+});
+
+// "Needs you" in the Bots sidebar follows questions and approvals as they
+// appear and settle; the renderer re-reads that Bot's summary.
+wireBotAttention({
+  questions: botQuestions,
+  approvals: botApprovals,
+  broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
+});
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
     conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     state: async (botId) => (await botSessionRuntime()).state(botId),
+    quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
+    approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     connectCardStatus,
     onRunSettled: broadcastState,
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
@@ -374,6 +392,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       unbindTelegram,
       eraseBotData,
     ],
+    onResumed: (botId) => botLiveProjection().notifyResuming(botId),
     onStateChange: (botId, state) => {
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);

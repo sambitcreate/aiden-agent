@@ -12,7 +12,8 @@ import {
   type BotRuntimeEffectiveAuthority,
 } from "./bot-runtime-authority.js";
 import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js";
-import * as fs from "node:fs/promises";
+import { app } from "../platform.js";
+import { verifyApprovedRootIdentity } from "./aiden-remote-approved-roots.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 import { configStore } from "./config-store.js";
 
@@ -122,15 +123,11 @@ export async function resolveBotRuntimeApprovedRoots(
   for (const grant of authority.files.approvedLocations) {
     const candidate = roots.find(({ id }) => id === grant.sourceId);
     if (!candidate) throw new Error("A selected Bot file location is no longer available.");
-    const [canonical, metadata] = await Promise.all([
-      fs.realpath(candidate.folderPath),
-      fs.stat(candidate.folderPath, { bigint: true }),
-    ]);
+    // The grant fingerprints the persisted identity; the tool pin below uses
+    // the live one, which differs from it after a remount renumbers the volume.
+    const live = await verifyApprovedRootIdentity(candidate, app.getPath("userData"));
     if (
-      canonical !== candidate.folderPath ||
-      !metadata.isDirectory() ||
-      metadata.dev.toString() !== candidate.device ||
-      metadata.ino.toString() !== candidate.inode ||
+      !live ||
       botCapabilityFactsFingerprint({
         device: candidate.device,
         inode: candidate.inode,
@@ -139,13 +136,7 @@ export async function resolveBotRuntimeApprovedRoots(
     ) {
       throw new Error("A selected Bot file location changed and must be reviewed.");
     }
-    resolved.push({
-      id: grant.sourceId,
-      label: candidate.label,
-      root: canonical,
-      device: candidate.device,
-      inode: candidate.inode,
-    });
+    resolved.push({ id: grant.sourceId, label: candidate.label, ...live });
   }
   return resolved;
 }

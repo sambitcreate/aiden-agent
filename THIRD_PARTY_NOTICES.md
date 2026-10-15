@@ -541,12 +541,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 
-## Hermex (iOS transcript follow)
+## Hermex (iOS transcript follow and streaming reveal)
 
-The iOS transcript's follow latch, UIKit scroll observer and streaming follow
-trigger are adapted from Hermex
-(`ios/AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift` and
-`ios/AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift`).
+The iOS transcript's follow latch, UIKit scroll observer, streaming follow
+trigger and word-boundary streaming reveal gate are adapted from Hermex
+(`ios/AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift`,
+`ios/AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift` and
+`ios/AidenOnTheGo/Features/Chat/AidenStreamingRevealGate.swift`).
 
 Copyright (c) 2026 Uzair Ansar
 
