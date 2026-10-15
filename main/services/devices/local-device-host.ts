@@ -292,6 +292,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
 
   let hub: HubProcess | null = null;
+  let pendingHub: { child: HostChildProcess; controller: AbortController } | null = null;
+  const terminatedHubChildren = new WeakSet<HostChildProcess>();
+  const terminateHubChild = (child: HostChildProcess) => {
+    if (terminatedHubChildren.has(child)) return;
+    terminatedHubChildren.add(child);
+    child.kill("SIGTERM");
+  };
   let agentDevice: AgentDeviceEndpoint | null = null;
   let stopped = false;
   let generation = 0;
@@ -351,16 +358,18 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     await rm(hubStatePath, { force: true });
   }
 
-  async function waitForHub(child: HostChildProcess, origin: string): Promise<void> {
+  async function waitForHub(child: HostChildProcess, origin: string, signal: AbortSignal): Promise<void> {
     const deadline = deps.now() + HUB_READY_TIMEOUT_MS;
     while (deps.now() < deadline) {
+      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (child.startupError) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", { cause: child.startupError });
       }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub");
       }
-      const response = await deps.fetch(`${origin}/readyz`).catch(() => null);
+      const response = await deps.fetch(`${origin}/readyz`, { signal }).catch(() => null);
+      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (response?.ok) return;
       await deps.sleep(READY_POLL_MS);
     }
@@ -384,8 +393,10 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
       nodeEnv(),
     );
+    const controller = new AbortController();
+    pendingHub = { child, controller };
     try {
-      await waitForHub(child, origin);
+      await waitForHub(child, origin, controller.signal);
       assertCurrent(startedIn);
       if (child.pid !== undefined) {
         await mkdir(deps.baseDir, { recursive: true });
@@ -399,7 +410,8 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       child.once("exit", () => void supervise(spawned));
       return spawned;
     } catch (error) {
-      child.kill("SIGTERM");
+      if (pendingHub?.child === child) pendingHub = null;
+      terminateHubChild(child);
       // A late readiness or file write must not recreate an endpoint after stop.
       // The start lock keeps a newer spawn from publishing its state until this cleanup finishes.
       await rm(hubStatePath, { force: true }).catch(() => undefined);
@@ -421,11 +433,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
         if (!isCurrent(startedIn) || hub) return;
         const replacement = await spawnHub(exited.entryPath, startedIn);
         if (!isCurrent(startedIn) || hub) {
-          replacement.child.kill("SIGTERM");
+          if (pendingHub?.child === replacement.child) pendingHub = null;
+          terminateHubChild(replacement.child);
           await rm(hubStatePath, { force: true }).catch(() => undefined);
           return;
         }
         hub = replacement;
+        if (pendingHub?.child === replacement.child) pendingHub = null;
       });
       if (isCurrent(startedIn) && hub) emitHealth("ready");
     } catch (error) {
@@ -507,11 +521,13 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       restartDelayMs = 0;
       const started = await spawnHub(entryPath, startedIn);
       if (!isCurrent(startedIn)) {
-        started.child.kill("SIGTERM");
+        if (pendingHub?.child === started.child) pendingHub = null;
+        terminateHubChild(started.child);
         await rm(hubStatePath, { force: true }).catch(() => undefined);
         assertCurrent(startedIn);
       }
       hub = started;
+      if (pendingHub?.child === started.child) pendingHub = null;
       return ready()!;
     });
   }
@@ -613,7 +629,11 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       stopped = true;
       const running = hub;
       hub = null;
-      running?.child.kill("SIGTERM");
+      const starting = pendingHub;
+      pendingHub = null;
+      starting?.controller.abort();
+      if (starting) terminateHubChild(starting.child);
+      if (running) terminateHubChild(running.child);
       const priorStop = stopPromise;
       stopPromise = (async () => {
         await priorStop;

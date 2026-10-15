@@ -433,6 +433,7 @@ test("a replacement that becomes ready after stop is killed without republishing
     await waitFor(() => harness.children.length === 2);
     await host.stop();
     await host.stop();
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "stop signals the in-flight child before readiness returns");
     readyGate.resolve();
     await waitFor(() => harness.children[1]!.killed.length > 0);
     await waitFor(async () => {
@@ -447,6 +448,29 @@ test("a replacement that becomes ready after stop is killed without republishing
     assert.equal(fresh.hub.origin, "http://127.0.0.1:52002");
     assert.equal(harness.children.length, 3);
     assert.deepEqual(harness.children[2]!.killed, []);
+    await host.stop();
+  });
+});
+
+test("stop aborts in-flight readiness so a later explicit start can proceed", async () => {
+  await withHost(async (harness) => {
+    const originalFetch = harness.deps.fetch;
+    harness.deps.fetch = async (url, init) => {
+      if (url.startsWith("http://127.0.0.1:52001/")) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("readiness aborted");
+      }
+      return originalFetch(url, init);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    await host.ensureReady();
+    harness.children[0]!.exit(1);
+    await waitFor(() => harness.children.length === 2);
+    await host.stop();
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"]);
+    const fresh = await host.ensureReady();
+    assert.equal(fresh.hub.origin, "http://127.0.0.1:52002");
+    assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], "cleanup does not signal the old child twice");
     await host.stop();
   });
 });
@@ -542,6 +566,7 @@ test("streaming revocation and service shutdown fence a late local-host restart"
           await service.stop();
           assert.equal(service.state().consent.streaming, true, "shutdown does not revoke saved consent");
         }
+        assert.deepEqual(harness.children[1]!.killed, ["SIGTERM"], `${action} signals the in-flight child immediately`);
         const statusCount = statuses.length;
         readyGate.resolve();
         await waitFor(() => harness.children[1]!.killed.length > 0);
