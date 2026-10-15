@@ -536,9 +536,13 @@ private fun AidenBotsHomeContent(
             text = { Text(stringResource(failure.message)) },
             confirmButton = {
                 TextButton(onClick = {
-                    // An earlier launch's create goes out again as it was; otherwise New Bot reopens.
+                    // An earlier launch's create goes out again as it was; otherwise New Bot reopens
+                    // with the answers. A flow whose pairing is no longer in use does neither.
                     val again = createFlow.retry()
-                    if (again != null) createHost.launch { createFlow.send(again) } else onNavigateToCreateBot()
+                    when {
+                        again != null -> createHost.launch { createFlow.send(again) }
+                        createFlow.reopening() != null -> onNavigateToCreateBot()
+                    }
                 }) { Text(stringResource(R.string.action_try_again), color = palette.accent) }
             },
             dismissButton = {

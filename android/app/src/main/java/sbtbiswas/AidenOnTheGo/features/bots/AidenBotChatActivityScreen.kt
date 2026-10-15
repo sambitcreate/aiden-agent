@@ -41,6 +41,7 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
@@ -146,8 +147,8 @@ fun AidenRemoteCoordinator.botChatActivityHost(): AidenBotChatActivityHost = pai
     val pairing = activePairing
     fun samePairing() = holdsPairing(pairing)
     AidenBotChatActivityHost(
-        client = { if (samePairing()) client.value else null },
-        waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client) && samePairing() },
+        client = { pairedClient(pairing) },
+        waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client.map { pairedClient(pairing) }) && samePairing() },
         launch = { block -> launchDetached(block) },
         cache = pinnedBotCache()
     )

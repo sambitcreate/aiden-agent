@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import sbtbiswas.AidenOnTheGo.features.remote.AidenPairingIdentity
 import sbtbiswas.AidenOnTheGo.models.AidenBotCreateRequest
 import sbtbiswas.AidenOnTheGo.models.AidenBotSessionEntry
 import sbtbiswas.AidenOnTheGo.models.AidenBotWireJson
@@ -168,10 +169,10 @@ class AidenBotSessionStore(
     private val owners = HashMap<AidenBotSessionKey, Any>()
     /** Chats whose unreadable file couldn't be moved aside: it is never written over. */
     private val stuck = HashSet<AidenBotSessionKey>()
-    /** Pairings (instance, device) whose New Bot on its way this run of the app has touched. */
-    private val createPairings = HashSet<Pair<String, String>>()
-    /** Pairings an unpair purged: no New Bot is kept for them again. */
-    private val revokedCreates = HashSet<Pair<String, String>>()
+    /** Pairings whose New Bot on its way this run of the app has touched. */
+    private val createPairings = HashSet<AidenPairingIdentity>()
+    /** Pairings an unpair purged: no New Bot is kept for them again (pairing that Mac again is another pairing). */
+    private val revokedCreates = HashSet<AidenPairingIdentity>()
 
     @Synchronized
     fun transcript(key: AidenBotSessionKey): List<AidenBotSessionEntry>? = transcripts[key]
@@ -275,7 +276,7 @@ class AidenBotSessionStore(
         outboxes.keys.removeAll { it.instanceId == instanceId }
         owners.keys.removeAll { it.instanceId == instanceId }
         stuck.removeAll { it.instanceId == instanceId }
-        revokedCreates += createPairings.filter { it.first == instanceId }
+        revokedCreates += createPairings.filter { it.instanceId == instanceId }
         val dir = root?.let { File(it, digest(instanceId)) }
         io.execute { dir?.deleteRecursively() }
     }
@@ -283,14 +284,16 @@ class AidenBotSessionStore(
     // --- A New Bot on its way (R15) ---
 
     /**
-     * The New Bot an earlier launch left on its way for this pairing, read on [io] (after any
+     * The New Bot an earlier launch left on its way for this [pairing], read on [io] (after any
      * write or purge queued before it), or null. A file this build can't read is set aside as
-     * `.unreadable`, never deleted. Its age is the caller's to judge (see [AidenBotCreateFlow]).
+     * `.unreadable`, never deleted; one an earlier pairing of the same Mac and device left (its
+     * unpair's purge never landed) is that pairing's, and goes. Its age is the caller's to judge
+     * (see [AidenBotCreateFlow]).
      */
-    suspend fun pendingCreate(instanceId: String, deviceId: String): AidenBotPendingCreate? =
+    suspend fun pendingCreate(pairing: AidenPairingIdentity): AidenBotPendingCreate? =
         suspendCancellableCoroutine { continuation ->
-            synchronized(this) { createPairings += instanceId to deviceId }
-            val task = Runnable { continuation.resumeWith(runCatching { loadCreate(instanceId, deviceId) }) }
+            synchronized(this) { createPairings += pairing }
+            val task = Runnable { continuation.resumeWith(runCatching { loadCreate(pairing) }) }
             try {
                 io.execute(task)
             } catch (error: RejectedExecutionException) {
@@ -305,19 +308,18 @@ class AidenBotSessionStore(
      * then on brings it back, false when it couldn't be kept. Nothing of the create may go out
      * before that answer is true ([AidenBotCreateFlow.send]).
      */
-    fun savePendingCreate(instanceId: String, deviceId: String, create: AidenBotPendingCreate): Deferred<Boolean> {
+    fun savePendingCreate(pairing: AidenPairingIdentity, create: AidenBotPendingCreate): Deferred<Boolean> {
         val kept = CompletableDeferred<Boolean>()
-        val pairing = instanceId to deviceId
         synchronized(this) {
             createPairings += pairing
             if (pairing in revokedCreates) return kept.apply { complete(false) }
         }
-        val record = CreateRecord.of(instanceId, deviceId, create)
+        val record = CreateRecord.of(pairing, create)
         try {
             io.execute {
                 var written = false
                 try {
-                    written = writeCreate(instanceId, deviceId, record)
+                    written = writeCreate(pairing, record)
                 } finally {
                     kept.complete(written)
                 }
@@ -329,8 +331,8 @@ class AidenBotSessionStore(
     }
 
     /** The New Bot was made, let go of, or this phone lost access: nothing of it is kept. */
-    fun removePendingCreate(instanceId: String, deviceId: String) {
-        io.execute { createFileFor(instanceId, deviceId)?.let { AtomicFile(it).delete() } }
+    fun removePendingCreate(pairing: AidenPairingIdentity) {
+        io.execute { createFileFor(pairing)?.let { AtomicFile(it).delete() } }
     }
 
     @Serializable
@@ -338,6 +340,8 @@ class AidenBotSessionStore(
         val version: Int,
         val instanceId: String,
         val deviceId: String,
+        /** When the pairing it belongs to was made, in epoch milliseconds (as the pairing is stored). */
+        val pairedAt: Long? = null,
         val name: String,
         val help: String,
         val providerId: String? = null,
@@ -360,10 +364,11 @@ class AidenBotSessionStore(
         }
 
         companion object {
-            fun of(instanceId: String, deviceId: String, create: AidenBotPendingCreate) = CreateRecord(
+            fun of(pairing: AidenPairingIdentity, create: AidenBotPendingCreate) = CreateRecord(
                 version = 1,
-                instanceId = instanceId,
-                deviceId = deviceId,
+                instanceId = pairing.instanceId,
+                deviceId = pairing.deviceId,
+                pairedAt = pairing.pairedAtMs,
                 name = create.draft.name,
                 help = create.draft.help,
                 providerId = create.draft.model?.providerId,
@@ -375,15 +380,25 @@ class AidenBotSessionStore(
         }
     }
 
-    private fun loadCreate(instanceId: String, deviceId: String): AidenBotPendingCreate? {
-        val file = createFileFor(instanceId, deviceId) ?: return null
+    private fun loadCreate(pairing: AidenPairingIdentity): AidenBotPendingCreate? {
+        val file = createFileFor(pairing) ?: return null
         if (!file.exists() && !File(file.path + ".bak").exists()) return null
-        val create = try {
+        val record = try {
             val bytes = AtomicFile(file).readFully()
             if (bytes.size > MAX_CREATE_BYTES) throw IllegalStateException("too large")
             json.decodeFromString(CreateRecord.serializer(), String(bytes, Charsets.UTF_8))
-                .takeIf { it.version == 1 && it.instanceId == instanceId && it.deviceId == deviceId }
-                ?.create()
+                .takeIf { it.version == 1 && it.instanceId == pairing.instanceId && it.deviceId == pairing.deviceId }
+        } catch (_: Exception) {
+            null
+        }
+        if (record != null && record.pairedAt != pairing.pairedAtMs) {
+            // An earlier pairing's: its unpair would have purged it, and it never replays on this one.
+            report("event=bot_create_other_pairing outcome=removed")
+            AtomicFile(file).delete()
+            return null
+        }
+        val create = try {
+            record?.create()
         } catch (_: Exception) {
             null
         }
@@ -400,9 +415,9 @@ class AidenBotSessionStore(
      * when it couldn't be written or the pairing was unpaired. [AtomicFile.finishWrite] reports
      * neither a failed sync nor a failed rename, so both are checked here.
      */
-    private fun writeCreate(instanceId: String, deviceId: String, record: CreateRecord): Boolean {
-        val file = createFileFor(instanceId, deviceId) ?: return true
-        if (synchronized(this) { (instanceId to deviceId) in revokedCreates }) return false
+    private fun writeCreate(pairing: AidenPairingIdentity, record: CreateRecord): Boolean {
+        val file = createFileFor(pairing) ?: return true
+        if (synchronized(this) { pairing in revokedCreates }) return false
         val atomic = AtomicFile(file)
         var stream: java.io.FileOutputStream? = null
         return try {
@@ -423,8 +438,8 @@ class AidenBotSessionStore(
     }
 
     /** Beside the pairing's chat outboxes (named by 64-character digests, so never this name), and purged with them. */
-    internal fun createFileFor(instanceId: String, deviceId: String): File? = root?.let {
-        File(File(File(it, digest(instanceId)), digest(deviceId)), "create.json")
+    internal fun createFileFor(pairing: AidenPairingIdentity): File? = root?.let {
+        File(File(File(it, digest(pairing.instanceId)), digest(pairing.deviceId)), "create.json")
     }
 
     // --- Disk ---
@@ -623,6 +638,9 @@ class AidenBotSessionStore(
         private val defaultIo: Executor by lazy {
             Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "aiden-bot-outbox").apply { isDaemon = true } }
         }
+
+        /** A pairing's time as it is stored (to the millisecond), so a relaunch reads its own pairing's record back. */
+        private val AidenPairingIdentity.pairedAtMs: Long get() = pairedAt.toEpochMilli()
 
         private fun digest(value: String): String =
             MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

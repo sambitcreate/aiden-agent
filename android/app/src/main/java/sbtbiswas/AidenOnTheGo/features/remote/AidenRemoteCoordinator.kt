@@ -94,7 +94,9 @@ class AidenRemoteCoordinator(
     private val intentCatalogStore: AidenIntentCatalogStore? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job()),
     /** Where unsent Bot messages wait on disk; the app passes `noBackupFilesDir` so they never reach a backup. */
-    botOutboxDir: File = storageDir
+    botOutboxDir: File = storageDir,
+    /** Runs the Bot outbox's disk work in order; null uses its own thread. Tests hold it to order a read against a switch. */
+    botOutboxIo: java.util.concurrent.Executor? = null
 ) {
     val archiveStore = AidenWorkspaceArchiveStore(storageDir)
     val workspaceCache = AidenWorkspaceEnvironmentCache(File(storageDir, "workspace_cache"))
@@ -102,7 +104,9 @@ class AidenRemoteCoordinator(
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
     /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
-    val botSessionStore = AidenBotSessionStore(File(botOutboxDir, "BotOutbox-v1"))
+    val botSessionStore = File(botOutboxDir, "BotOutbox-v1").let { dir ->
+        botOutboxIo?.let { AidenBotSessionStore(dir, io = it) } ?: AidenBotSessionStore(dir)
+    }
     val modelPreferenceStore = AidenModelPreferenceStore(storageDir)
     val readSnapshotCache = AidenReadSnapshotCache(File(storageDir, "read_snapshots"))
     private val workspaceListSerializer = ListSerializer(AidenWorkspace.serializer())
@@ -121,6 +125,9 @@ class AidenRemoteCoordinator(
 
     private val _client = MutableStateFlow<AidenRemoteClient?>(null)
     val client: StateFlow<AidenRemoteClient?> = _client.asStateFlow()
+    /** The client [refreshClient] last made, with the pairing it was made for. */
+    @Volatile
+    private var clientOwner: Pair<AidenPairingIdentity, AidenRemoteClient>? = null
 
     private val _workspaces = MutableStateFlow<List<AidenWorkspace>>(emptyList())
     val workspaces: StateFlow<List<AidenWorkspace>> = _workspaces.asStateFlow()
@@ -159,6 +166,16 @@ class AidenRemoteCoordinator(
 
     /** True while [pairing] is still the pairing in use. */
     fun holdsPairing(pairing: AidenPairingIdentity?): Boolean = pairing != null && activePairing == pairing
+
+    /**
+     * The client while it was made for [pairing] and [pairing] is still in use, or null. Right
+     * after a switch the pairing in use changes before its client does; this never hands one
+     * pairing's work the other pairing's client.
+     */
+    fun pairedClient(pairing: AidenPairingIdentity?): AidenRemoteClient? {
+        val (owner, made) = clientOwner ?: return null
+        return made.takeIf { owner == pairing && holdsPairing(pairing) && _client.value === made }
+    }
 
     /**
      * Writes a Bot detail to the cache only while the pairing that was active when this was
@@ -262,6 +279,7 @@ class AidenRemoteCoordinator(
         val installation = installationStore.activeInstallation
         cancelDetachedWork { it != null && it == installation?.pairing }
         if (installation == null) {
+            clientOwner = null
             _client.value = null
             _serverInfo.value = null
             _workspaces.value = emptyList()
@@ -272,6 +290,7 @@ class AidenRemoteCoordinator(
 
         val credential = installationStore.getCredential(installation)
         if (credential == null) {
+            clientOwner = null
             _client.value = null
             _serverInfo.value = null
             _workspaces.value = emptyList()
@@ -282,6 +301,7 @@ class AidenRemoteCoordinator(
 
         val newClient = AidenRemoteClient(installation, credential, pinnedHttpClient(installation))
         botCache.activate(installation.instanceId, installation.deviceId)
+        clientOwner = installation.pairing to newClient
         _client.value = newClient
         _serverInfo.value = null
         // The last Workspace list renders at once while the desktop is reached.

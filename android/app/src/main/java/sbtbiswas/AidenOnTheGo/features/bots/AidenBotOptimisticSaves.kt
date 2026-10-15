@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.map
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotIdentityPatch
@@ -46,8 +47,8 @@ fun AidenRemoteCoordinator.botSaveHost(): AidenBotSaveHost = pairingMemo("bot-sa
     val pairing = activePairing
     fun samePairing() = holdsPairing(pairing)
     AidenBotSaveHost(
-        client = { if (samePairing()) client.value else null },
-        waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client) && samePairing() },
+        client = { pairedClient(pairing) },
+        waitForConnection = { samePairing() && aidenBotAwaitConnected(connectionState, client.map { pairedClient(pairing) }) && samePairing() },
         launch = { block -> launchDetached(block) },
         show = pinnedBotShow(),
         cache = pinnedBotCache(),

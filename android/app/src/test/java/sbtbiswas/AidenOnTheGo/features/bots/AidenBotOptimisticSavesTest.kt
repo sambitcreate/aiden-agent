@@ -21,12 +21,16 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.remote.AidenPairingIdentity
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -37,6 +41,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.io.IOException
+import java.time.Instant
 import java.util.UUID
 
 /** R15: Bot edits on the phone apply at once, wait for the connection on their own, and roll back on failure. */
@@ -549,6 +554,9 @@ class AidenBotOptimisticSavesTest {
 
     private fun body(request: AidenBotCreateRequest) = json.encodeToString(AidenBotCreateRequest.serializer(), request)
 
+    /** The pairing these launches' asks belong to. */
+    private val paired = AidenPairingIdentity("one", "device-one", Instant.ofEpochMilli(1_000))
+
     /** One launch of the app: a flow whose ask waits in a session store over [root], its disk work run on [io]. */
     private fun TestScope.launchWith(
         root: java.io.File,
@@ -562,9 +570,9 @@ class AidenBotOptimisticSavesTest {
             create = mac::create,
             cache = {},
             store = AidenBotCreateStore(
-                load = { sessions.pendingCreate(pairing.instanceId, pairing.deviceId) },
-                save = { sessions.savePendingCreate(pairing.instanceId, pairing.deviceId, it) },
-                remove = { sessions.removePendingCreate(pairing.instanceId, pairing.deviceId) }
+                load = { sessions.pendingCreate(paired) },
+                save = { sessions.savePendingCreate(paired, it) },
+                remove = { sessions.removePendingCreate(paired) }
             ),
             nowMs = clock
         )
@@ -618,7 +626,7 @@ class AidenBotOptimisticSavesTest {
 
     /** The ask as the disk holds it now, read by a store of its own (a relaunch would read this). */
     private suspend fun onDisk(root: java.io.File): AidenBotPendingCreate? =
-        AidenBotSessionStore(root, io = { it.run() }).pendingCreate(pairing.instanceId, pairing.deviceId)
+        AidenBotSessionStore(root, io = { it.run() }).pendingCreate(paired)
 
     @Test
     fun aCreateGoesOutOnlyOnceItsRequestAndKeyAreOnDiskAndADeathAfterTheMacTookItReplaysThem() = runTest {
@@ -744,12 +752,104 @@ class AidenBotOptimisticSavesTest {
 
         // The coordinator keeps it per pairing, beside the chat outboxes, and an unpair purges it.
         val phone = pairedPhone()
+        val first = phone.activePairing!!
         phone.botCreateFlow().start(AidenBotCreateDraft(name = "Chef"), catalog)!!
-        assertEquals("Chef", phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId)?.draft?.name)
-        assertNull("another pairing has none", phone.botSessionStore.pendingCreate(pairing.instanceId, "device-other"))
+        assertEquals("Chef", phone.botSessionStore.pendingCreate(first)?.draft?.name)
+        assertNull("another pairing has none", phone.botSessionStore.pendingCreate(first.copy(deviceId = "device-other")))
         phone.removeInstallation(phone.installationStore.installations.value.single().id)
-        assertNull(phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId))
-        phone.botSessionStore.savePendingCreate(pairing.instanceId, pairing.deviceId, AidenBotPendingCreate(AidenBotCreateDraft(name = "Late"), createdAtMs = 0))
-        assertNull("never written again after the unpair", phone.botSessionStore.pendingCreate(pairing.instanceId, pairing.deviceId))
+        assertNull(phone.botSessionStore.pendingCreate(first))
+        val late = phone.botSessionStore.savePendingCreate(first, AidenBotPendingCreate(AidenBotCreateDraft(name = "Late"), createdAtMs = 0))
+        assertFalse(late.await())
+        assertNull("never written again after the unpair", phone.botSessionStore.pendingCreate(first))
+
+        // Pairing that Mac again is another pairing: its New Bot is kept again.
+        phone.installationStore.addInstallation(pairing, null)
+        phone.refreshClient()
+        val again = phone.activePairing!!
+        assertFalse(again == first)
+        phone.botCreateFlow().start(AidenBotCreateDraft(name = "Scout"), catalog)!!
+        assertEquals("Scout", phone.botSessionStore.pendingCreate(again)?.draft?.name)
+    }
+
+    @Test
+    fun aNewBotKeptForOnePairingNeverComesBackOnAnotherPairingOfTheSameMac() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        fun store() = AidenBotSessionStore(root, io = { it.run() })
+        // The pairing as it was made (to the nanosecond) and as a relaunch reads it back (to the millisecond).
+        val made = AidenPairingIdentity("one", "device-one", Instant.ofEpochSecond(1_000, 123_456_789))
+        val relaunched = made.copy(pairedAt = Instant.ofEpochMilli(made.pairedAt.toEpochMilli()))
+        assertTrue(store().savePendingCreate(made, AidenBotPendingCreate(AidenBotCreateDraft(name = "Chef"), createdAtMs = 0)).await())
+        assertEquals("a relaunch reads its own pairing's ask", "Chef", store().pendingCreate(relaunched)?.draft?.name)
+
+        // Unpaired, but its purge never landed; pairing the same Mac and device again is another pairing.
+        val again = made.copy(pairedAt = made.pairedAt.plusSeconds(60))
+        assertNull("the new pairing never sees the old one's ask", store().pendingCreate(again))
+        assertNull("and it is gone", store().pendingCreate(made))
+    }
+
+    private val otherPairing = pairing.copy(
+        instanceId = "two",
+        deviceId = "device-two",
+        endpoint = "https://two.test/api/aiden/v1",
+        serverSpkiSha256 = "sha256/two",
+        credential = "secret-two"
+    )
+
+    @Test
+    fun aRestoreForOneMacThatLandsAfterASwitchToAnotherShowsNothingAndSendsNothing() = runTest {
+        val io = HeldIo()
+        val installations = AidenInstallationStore(tempFolder.root, InMemoryAidenSecureStore())
+        val two = installations.addInstallation(otherPairing, null)
+        val one = installations.addInstallation(pairing, null)
+        val phone = AidenRemoteCoordinator(
+            installationStore = installations,
+            storageDir = tempFolder.root,
+            scope = CoroutineScope(StandardTestDispatcher() + SupervisorJob()),
+            botOutboxIo = io
+        ).also { it.refreshClient() }
+        // An earlier launch left Mac one's New Bot on its way, request and key alike.
+        val draft = AidenBotCreateDraft(name = "Chef", help = "Plans meals")
+        val left = AidenBotPendingCreate(draft, draft.request(catalog)!!, UUID.randomUUID(), System.currentTimeMillis())
+        val seeded = phone.botSessionStore.savePendingCreate(phone.activePairing!!, left)
+        io.release()
+        assertTrue(seeded.await())
+
+        val onOne = phone.botCreateFlow()
+        val hostOne = phone.botSaveHost()
+        assertNotNull(hostOne.client())
+        val restoring = launch { onOne.restore() }
+        runCurrent()
+        // Its read waits on the disk while Mac two comes into use; two's client follows a moment later.
+        installations.setActiveInstallation(two.id)
+        assertNull("Mac two's work never gets Mac one's client", phone.botSaveHost().client())
+        assertNull(hostOne.client())
+        phone.refreshClient()
+        io.release()
+        restoring.join()
+
+        val onTwo = phone.botCreateFlow()
+        assertNotSame(onOne, onTwo)
+        assertNull("nothing of Mac one's shows", onOne.failure.value)
+        assertNull("Try again sends nothing", onOne.retry())
+        assertNull(onOne.start(draft, catalog))
+        assertNull(onOne.pending.value)
+        val restoringTwo = launch { onTwo.restore() }
+        runCurrent()
+        io.release()
+        restoringTwo.join()
+        assertNull("Mac two shows none of it", onTwo.failure.value)
+        assertNull(onTwo.reopening())
+
+        // Back on Mac one, its New Bot comes back, and Try again replays its own key.
+        installations.setActiveInstallation(one.id)
+        phone.refreshClient()
+        val back = phone.botCreateFlow()
+        assertSame(onOne, back)
+        val restoringOne = launch { back.restore() }
+        runCurrent()
+        io.release()
+        restoringOne.join()
+        assertEquals(draft, back.failure.value?.draft)
+        assertEquals(left.key, back.retry()?.key)
     }
 }

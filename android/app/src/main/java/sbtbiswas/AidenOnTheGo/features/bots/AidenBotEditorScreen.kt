@@ -181,6 +181,9 @@ class AidenBotCreateStore(
  * access ends, so a process death mid-create comes back ([restore]) as not made. Its Try again
  * sends the same request on the same key while the Mac still keeps that key (a day); after
  * that, or when nothing could have reached the Mac, it reopens New Bot as it was.
+ *
+ * Each flow belongs to one pairing ([holdsPairing]): while another pairing is in use it starts
+ * nothing, restores nothing and retries nothing, so one Mac's answers never reach another's.
  */
 class AidenBotCreateFlow(
     private val waitForConnection: (suspend () -> Boolean)?,
@@ -188,6 +191,8 @@ class AidenBotCreateFlow(
     /** The Mac's new Bot, kept for every screen. */
     private val cache: (AidenBotDetail) -> Unit,
     private val store: AidenBotCreateStore? = null,
+    /** True while the pairing this flow was made for is still the one in use. */
+    private val holdsPairing: () -> Boolean = { true },
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val attempts: AidenBotCreateAttempts = AidenBotCreateAttempts(nowMs),
     private val holdMillis: Long = AIDEN_BOT_SAVE_HOLD_MILLIS,
@@ -235,7 +240,7 @@ class AidenBotCreateFlow(
      * even if [send] never runs; [send] waits for it.
      */
     fun start(draft: AidenBotCreateDraft, catalog: AidenBotCapabilityCatalog?): AidenBotCreateAttempt? {
-        if (_pending.value != null) return null
+        if (_pending.value != null || !holdsPairing()) return null
         val attempt = attempts.begin(draft, catalog) ?: return null
         keeping = store?.let { attempt to it.save(attempt.kept()) }
         prefill = null
@@ -313,11 +318,13 @@ class AidenBotCreateFlow(
 
     /**
      * Brings back the New Bot an earlier launch left on its way: Bots home shows it as not made,
-     * with Try again. It looks once, and never over a create or failure of this launch.
+     * with Try again. It looks once, and never over a create or failure of this launch. A read
+     * that lands after another pairing came into use shows nothing; this pairing's next visit
+     * reads it again.
      */
     suspend fun restore() {
         val store = store ?: return
-        if (restored || !isFree()) return
+        if (restored || !isFree() || !holdsPairing()) return
         restored = true
         val saved = try {
             store.load()
@@ -326,7 +333,12 @@ class AidenBotCreateFlow(
             throw error
         } catch (_: Exception) {
             null
-        } ?: return
+        }
+        if (!holdsPairing()) {
+            restored = false
+            return
+        }
+        saved ?: return
         if (!isFree()) return
         val request = saved.request
         val key = saved.key
@@ -351,6 +363,8 @@ class AidenBotCreateFlow(
      */
     fun retry(): AidenBotCreateAttempt? {
         val failed = _failure.value ?: return null
+        // Another pairing is in use: nothing of this one goes out, or opens, there.
+        if (!holdsPairing()) return null
         if (failed.replays) return start(failed.draft, null)
         prefill = failed.draft
         _failure.value = null
@@ -403,20 +417,21 @@ fun aidenBotCreateWasTaken(
  */
 fun AidenRemoteCoordinator.botCreateFlow(): AidenBotCreateFlow = pairingMemo("bot-create-flow") {
     val host = botSaveHost()
-    val store = installationStore.activeInstallation?.let { installation ->
-        val instanceId = installation.instanceId
-        val deviceId = installation.deviceId
+    val pairing = activePairing
+    val store = pairing?.let {
         AidenBotCreateStore(
-            load = { botSessionStore.pendingCreate(instanceId, deviceId) },
-            save = { botSessionStore.savePendingCreate(instanceId, deviceId, it) },
-            remove = { botSessionStore.removePendingCreate(instanceId, deviceId) }
+            load = { botSessionStore.pendingCreate(pairing) },
+            save = { botSessionStore.savePendingCreate(pairing, it) },
+            remove = { botSessionStore.removePendingCreate(pairing) }
         )
     }
     AidenBotCreateFlow(
         waitForConnection = host.waitForConnection,
         create = { request, key -> host.connected().createBot(request, key) },
         cache = host.cache,
-        store = store
+        store = store,
+        // With no pairing, the flow stands only while none is paired (its creates can't reach a Mac).
+        holdsPairing = { activePairing == pairing }
     )
 }
 
