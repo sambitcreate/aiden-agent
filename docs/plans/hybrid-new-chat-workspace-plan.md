@@ -1,7 +1,9 @@
 # Hybrid new chat: workspace choice and progressive composer context
 
-Status: Planned (2026-10-15). The owner approved the Hybrid direction after
-comparing it with T3 Code and the ChatGPT Codex app. No implementation yet.
+Status: Phases 1–4 implemented on branch
+`claude/workspace-creation-patterns-581b17`; PR pending (2026-10-15). Phase 5
+(paired Macs and phones) is still open. The owner approved the Hybrid direction
+after comparing it with T3 Code and the ChatGPT Codex app.
 
 Interactive prototype:
 [`assets/hybrid-new-chat-prototype.html`](assets/hybrid-new-chat-prototype.html).
