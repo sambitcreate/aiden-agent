@@ -111,22 +111,29 @@ test("Undo on the toast restores the layout from just before the action", async 
   await waitFor(() => assert.ok(!marker(pad, "Extra")));
 });
 
-test("a burst of arrow-key nudges is one save and one undo step", async () => {
+test("a burst of arrow-key nudges is one save and one undo step", async (t) => {
   const server = settingsServer();
   const pad = await mountEditor();
   const mine = marker(pad, "Mine")!;
   const start = mine.style.left;
   act(() => mine.focus());
 
-  for (let press = 0; press < 3; press += 1) {
-    fireEvent.keyDown(mine, { key: "ArrowRight" });
-    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
-  }
-  // The marker follows every press while the burst is still open.
-  assert.notEqual(marker(pad, "Mine")!.style.left, start);
-  assert.equal(server.writes().length, 0);
+  // Only the burst runs on a mocked clock; waitFor below needs real timers.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (let press = 0; press < 3; press += 1) {
+      fireEvent.keyDown(mine, { key: "ArrowRight" });
+      await act(async () => t.mock.timers.tick(100));
+    }
+    // The marker follows every press while the burst is still open.
+    assert.notEqual(marker(pad, "Mine")!.style.left, start);
+    assert.equal(server.writes().length, 0);
 
-  await act(() => new Promise((resolve) => setTimeout(resolve, 600)));
+    // The burst's timer fires here; the save it starts then runs on real timers.
+    act(() => t.mock.timers.tick(600));
+  } finally {
+    t.mock.timers.reset();
+  }
   await waitFor(() => assert.equal(server.writes().length, 1));
   const moved = server.stored()?.["test::mine"];
   assert.ok(moved && moved.x > initialPlacements["test::mine"].x);

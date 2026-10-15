@@ -220,10 +220,16 @@ test("reopening the Bot's session starts a new epoch and re-sends a snapshot", a
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
+    // A watch of our own on the same session: it closes when the harness does.
+    const sessionWatch = await (await live.service.conversation("bot:a")).watch(ctx);
+    sessionWatch.start(async () => undefined);
+    let watchEnd: string | undefined;
+    void sessionWatch.closed.then((end) => (watchEnd = end.reason));
     const first = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
     await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
-    // Idle close ends the watch; the next send reopens the harness.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Idle close ends the watch; the next send reopens the harness. (Polled: the idle timer is unref'd.)
+    await waitFor(() => watchEnd !== undefined, { what: "the idle close" });
+    assert.equal(watchEnd, "session_closed");
     const second = await live.service.send("bot:a", { text: "again", requestId: "desk-2" });
     await live.service.awaitReply("bot:a", second.submissionId, new AbortController().signal);
     await waitFor(() => visibleText(tape.view).includes("assistant:after reopen"), { what: "the reopened feed" });
@@ -1149,7 +1155,7 @@ test("an intro prompt queued behind a running reply is not listed as the person'
 /** A projection whose classification can be made to fail or come back empty, with every call and report counted. */
 async function startFlaky() {
   const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
-  const control = { mode: "ok" as "ok" | "throw" | "empty", calls: 0, reports: 0 };
+  const control = { mode: "ok" as "ok" | "throw" | "empty", calls: 0, reports: 0, callTimes: [] as number[] };
   const live = await start(fauxModels, {
     projection: {
       classifyRetryMs: 150,
@@ -1158,6 +1164,7 @@ async function startFlaky() {
       },
       quietInputs: async (botId, ids) => {
         control.calls += 1;
+        control.callTimes.push(performance.now());
         if (control.mode === "throw") throw new Error("inspect failed");
         if (control.mode === "empty") return new Map();
         return live.service.quietInputs(botId, ids);
@@ -1180,13 +1187,17 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
     await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert, classified" });
     control.mode = "throw";
     control.calls = 0;
+    control.callTimes = [];
     control.reports = 0;
     await live.service.send("bot:a", { text: "drinks", requestId: "desk-3" });
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    // The first failure and two retries, while the reply keeps streaming frames.
+    await waitFor(() => control.calls >= 3, { what: "two classification retries" });
     assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert"], "drinks waits; the routine never shows");
     assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
     assert.equal(control.reports, 1, "one report per failure streak");
-    assert.ok(control.calls <= 6, `retries are throttled, saw ${control.calls}`);
+    // Frames arrive every ~25 ms; retries wait out the 150 ms pause instead of following them.
+    const [firstCall, , thirdCall] = control.callTimes;
+    assert.ok(thirdCall! - firstCall! >= 2 * 150 - 5, `retries are throttled, saw ${control.callTimes.length} calls`);
     control.mode = "ok";
     await waitFor(() => tape.view?.queued.some((item) => item.text === "drinks") === true, {
       what: "drinks after the retry, with no new frame needed",
@@ -1208,8 +1219,10 @@ test("an id the session cannot find stays hidden and is retried", async () => {
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
     await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
     control.mode = "empty";
+    control.calls = 0;
     await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // The first answer leaves dessert out, and so does the retry (whose outcome has landed once a third call starts).
+    await waitFor(() => control.calls >= 3, { what: "two classification retries" });
     assert.deepEqual(tape.view?.queued, []);
     control.mode = "ok";
     await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert after the retry" });
