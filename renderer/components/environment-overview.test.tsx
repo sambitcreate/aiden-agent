@@ -16,6 +16,7 @@ import {
 } from "./environment-overview";
 import { toast } from "./ui";
 import type { GitInfo, GitPushCapability, GitReview, Workspace } from "../lib/types";
+import type { ChatPullRequestView } from "../shared/chat-pull-requests";
 
 afterEach(cleanup);
 
@@ -173,6 +174,88 @@ test("Changes and Compare rows open the matching review mode", async () => {
   (await screen.findByRole("button", { name: /^Changes, 1 file/ })).click();
   screen.getByRole("button", { name: /Compare branch/ }).click();
   assert.deepEqual(opened, ["changes", "compare"]);
+});
+
+/** IPC channel behind useChatCurrentPullRequest (renderer/lib/ipc.ts pullRequestsApi.current). */
+const PULL_REQUEST_CURRENT_CHANNEL = "pullRequests:current";
+
+const PR_VIEW: ChatPullRequestView = {
+  host: "github.com",
+  repository: "example/aiden",
+  number: 42,
+  url: "https://github.com/example/aiden/pull/42",
+  linked: true,
+  title: "Quick View cards",
+  state: "open",
+  isDraft: false,
+  headBranch: "feature/x",
+};
+
+test("the Pull request row appears once the chat has a PR and opens it on GitHub", async () => {
+  const calls = installRepoIpc({}, {
+    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+  });
+  const opened: unknown[][] = [];
+  const open = mock.method(window, "open", (...args: unknown[]) => {
+    opened.push(args);
+    return null;
+  });
+  try {
+    renderChangesRows({ chatId: "chat-1" });
+    const row = await screen.findByRole("button", {
+      name: "Pull request #42, Open. Opens on GitHub",
+    });
+    assert.ok(row.textContent?.includes("#42 Quick View cards"));
+    fireEvent.click(row);
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0]?.[0], PR_VIEW.url);
+    assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL && call.args[0] === "chat-1"));
+  } finally {
+    open.mock.restore();
+  }
+});
+
+test("a merged PR without a title is named by its branch", async () => {
+  installRepoIpc({}, {
+    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
+      pullRequest: { ...PR_VIEW, title: undefined, state: "merged" },
+      reason: "recent-linked",
+    }),
+  });
+  renderChangesRows({ chatId: "chat-1" });
+  const row = await screen.findByRole("button", { name: "Pull request #42, Merged. Opens on GitHub" });
+  assert.ok(row.textContent?.includes("#42 feature/x"));
+});
+
+test("no Pull request row until the chat has a PR, and never one without a chat", async () => {
+  const calls = installRepoIpc({}, {
+    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: undefined, reason: "none" }),
+  });
+  renderChangesRows({ chatId: "chat-1" });
+  await screen.findByRole("button", { name: /Compare branch/ });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL)));
+  // Let the resolved query render before asserting the row stays absent.
+  await act(async () => {});
+  assert.equal(screen.queryAllByRole("button", { name: /Pull request/ }).length, 0);
+  cleanup();
+
+  const noChatCalls = installRepoIpc({}, {
+    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+  });
+  renderChangesRows();
+  await screen.findByRole("button", { name: /Compare branch/ });
+  assert.equal(noChatCalls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL), false);
+  assert.equal(screen.queryAllByRole("button", { name: /Pull request/ }).length, 0);
+});
+
+test("a closed Quick View does not ask for the chat's pull request", async () => {
+  const calls = installRepoIpc({}, {
+    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+  });
+  renderChangesRows({ chatId: "chat-1", active: false });
+  await waitFor(() => assert.ok(calls.some((call) => call.channel === GIT_CHANNELS.info)));
+  await act(async () => {});
+  assert.equal(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL), false);
 });
 
 test("a blocked mutation disables Commit or push and explains why", async () => {

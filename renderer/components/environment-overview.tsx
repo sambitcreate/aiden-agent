@@ -23,15 +23,21 @@ import {
   Text,
   toast,
 } from "./ui";
+import {
+  ChatPullRequestStateIcon,
+  chatPullRequestStateLabel,
+  openPullRequestExternal,
+} from "./chat-pull-requests";
 import { GitBranchPicker } from "./git-branch-picker";
 import { GitCommitDialog } from "./git-commit-dialog";
 import { GitPushDialog } from "./git-push-dialog";
 import { usePreferredEditor } from "./open-in-editor-picker";
 import { workspacesApi } from "../lib/ipc";
-import { useGitInfo, useGitPushCapability, useGitReview } from "../lib/queries";
+import { useChatCurrentPullRequest, useGitInfo, useGitPushCapability, useGitReview } from "../lib/queries";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import { cn } from "../lib/ui-utils";
 import type { GitPushCapability, GitReview, GitReviewSummary, Workspace } from "../lib/types";
+import type { ChatPullRequestView } from "../shared/chat-pull-requests";
 
 /** Shared Quick View row: Aiden list-row density (see SidebarListItem). */
 const ROW =
@@ -287,6 +293,27 @@ export function EnvironmentRows({
   );
 }
 
+/** The chat's pull request, shown only once one exists; opens it on GitHub. */
+function PullRequestRow({ view }: { view: ChatPullRequestView }) {
+  const state = chatPullRequestStateLabel(view);
+  return (
+    <button
+      type="button"
+      onClick={() => openPullRequestExternal(view.url)}
+      aria-label={`Pull request #${view.number}, ${state}. Opens on GitHub`}
+      className={ROW}
+    >
+      <span className="flex size-4.5 items-center justify-center" aria-hidden="true">
+        <ChatPullRequestStateIcon view={view} />
+      </span>
+      <span className="min-w-0 truncate">
+        #{view.number} {view.title ?? view.headBranch}
+      </span>
+      <span className="text-small text-tertiary">{state}</span>
+    </button>
+  );
+}
+
 export function ChangesRows({
   workspace,
   chatId,
@@ -313,6 +340,8 @@ export function ChangesRows({
   const review = useGitReview(workspace.id, active && available);
   const push = useGitPushCapability(workspace.id, active && available);
   const git = useGitInfo(workspace.id);
+  const currentPullRequest = useChatCurrentPullRequest(chatId, active);
+  const pullRequest = chatId ? currentPullRequest.data?.pullRequest ?? null : null;
   const branchLabel = git.data?.detached
     ? "Detached HEAD"
     : git.data?.branch ?? review.data?.branch;
@@ -450,6 +479,8 @@ export function ChangesRows({
             <ArrowUpRight className="size-3.5 text-tertiary" aria-hidden="true" />
           </button>
         ) : null}
+
+        {pullRequest ? <PullRequestRow view={pullRequest} /> : null}
       </div>
 
       {mutationBlockedReason ? (
