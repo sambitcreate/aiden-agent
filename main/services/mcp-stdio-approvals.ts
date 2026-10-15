@@ -145,13 +145,30 @@ export function createMcpStdioApprovalStore(file: () => Promise<string>): McpStd
 }
 
 /**
+ * Reconcile launch approvals with config seen by credential reconciliation.
+ * That config can come from the in-memory cache, which may lag a save that
+ * reached disk before failing, so it never prunes another launch's approval:
+ * it only forgets a server that is gone or no longer runs locally. A
+ * hand-edited command still cannot run, because approval is checked against
+ * the exact fingerprint; stale entries are pruned by the next successful save.
+ */
+export async function reconcileLaunchApprovals(
+  approvals: Pick<McpStdioApprovalStore, "forget">,
+  serverId: string,
+  configured: McpServer | undefined,
+): Promise<void> {
+  if (configured?.id === serverId && configured.transport === "stdio") return;
+  await approvals.forget(serverId);
+}
+
+/**
  * Publish a saved record together with its launch approval. Before
  * publication the approval is only added, so the configured launch stays
  * approved; once the record is published, approvals are pruned to its launch.
  * A failed publication prunes nothing: the write may have reached disk
  * before failing, and the in-memory config can still be the old one, so
  * pruning here could drop the approval of the launch that is now configured.
- * Credential reconciliation, which reloads config from disk, prunes later.
+ * The next successful save prunes to its published launch.
  */
 export async function publishWithLaunchApproval(
   approvals: McpStdioApprovalStore,
