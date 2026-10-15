@@ -10,6 +10,7 @@ import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -44,6 +45,8 @@ export interface TerminalSnapshot {
 
 interface TerminalSession extends TerminalSessionInfo {
   pty: IPty;
+  exited: Promise<void>;
+  settleExit: () => void;
   ownerWebContentsId: number;
   ownerDocumentId: string;
   owner: RendererDocumentOwner;
@@ -231,6 +234,7 @@ export class TerminalService {
     this.outputObserver = observer;
   }
   private readonly sessions = new Map<string, TerminalSession>();
+  private readonly pendingWorkspaceExits = new Map<string, Set<Promise<void>>>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
   private historyStore: TerminalHistoryStoreLike | undefined;
@@ -324,6 +328,8 @@ export class TerminalService {
       this.terminatePty(pty);
       throw new Error("The workspace changed before the terminal could start.");
     }
+    let settleExit: () => void = () => undefined;
+    const exited = new Promise<void>((resolve) => { settleExit = resolve; });
     const session: TerminalSession = {
       id,
       workspaceId,
@@ -331,6 +337,8 @@ export class TerminalService {
       resolvedShell,
       preferredShellSkipped,
       pty,
+      exited,
+      settleExit,
       ownerWebContentsId: owner.id,
       ownerDocumentId: owner.documentId,
       owner,
@@ -378,6 +386,7 @@ export class TerminalService {
       }
     });
     pty.onExit(({ exitCode, signal }) => {
+      session.settleExit();
       const current = this.sessions.get(id);
       if (current !== session) return;
       // Deliver the final output before the exit notification.
@@ -441,6 +450,25 @@ export class TerminalService {
     }
   }
 
+  /** Stop Aiden-owned shells and wait for their exit before removing a workspace. */
+  async closeForWorkspaceAndWait(workspaceId: string, timeoutMs = 5_000): Promise<void> {
+    const sessions = [...this.sessions].filter(([, session]) => session.workspaceId === workspaceId);
+    for (const [id, session] of sessions) this.terminate(id, session);
+    const pending = [...(this.pendingWorkspaceExits.get(workspaceId) ?? [])];
+    if (pending.length === 0) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(pending),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new ManagedWorktreeProcessActiveError()), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
   workspaceId(id: string, owner: RendererDocumentOwner): string {
     return this.getOwned(id, owner).workspaceId;
   }
@@ -481,6 +509,16 @@ export class TerminalService {
     session.pendingOutput = "";
     this.sessions.delete(id);
     session.removeOwnerInvalidation();
+    let pending = this.pendingWorkspaceExits.get(session.workspaceId);
+    if (!pending) {
+      pending = new Set();
+      this.pendingWorkspaceExits.set(session.workspaceId, pending);
+    }
+    pending.add(session.exited);
+    void session.exited.then(() => {
+      pending.delete(session.exited);
+      if (pending.size === 0) this.pendingWorkspaceExits.delete(session.workspaceId);
+    });
     this.terminatePty(session.pty);
     // Best-effort flush so the last output chunk is on disk before the session
     // is torn down (window close, workspace switch, quit). Never block on it.

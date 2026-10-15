@@ -1,4 +1,5 @@
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -165,6 +166,9 @@ function requireConfirmation(record: Record<string, unknown>): void {
 
 function mapGitError(error: unknown): never {
   if (error instanceof AidenRemoteServiceError) throw error;
+  if (error instanceof ManagedWorktreeProcessActiveError) {
+    throw new AidenRemoteServiceError("git_capability_denied", error.message, 409);
+  }
   if (error instanceof InsufficientDiskSpaceError || error instanceof WorktreeCapacityUnavailableError) {
     throw new AidenRemoteServiceError("git_capability_denied",
       error instanceof InsufficientDiskSpaceError

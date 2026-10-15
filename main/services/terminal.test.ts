@@ -780,6 +780,43 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
   });
 });
 
+test("managed worktree removal waits for owned terminal exit and reports a stuck shell", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+
+  let settled = false;
+  const closing = service.closeForWorkspaceAndWait("managed-workspace", 100)
+    .then(() => { settled = true; });
+  assert.equal(child.killed(), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "signalling the PTY is not proof that it exited");
+  child.emitExit(0);
+  await closing;
+  assert.equal(settled, true);
+
+  const stuck = fakePty();
+  const stuckService = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => stuck.pty) as typeof spawn,
+  });
+  await stuckService.create("managed-workspace", "/tmp", owner.owner);
+  await assert.rejects(
+    stuckService.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal process is still exiting/u,
+  );
+  await assert.rejects(
+    stuckService.closeForWorkspaceAndWait("managed-workspace", 10),
+    /terminal process is still exiting/u,
+  );
+  stuck.emitExit(0);
+  await stuckService.closeForWorkspaceAndWait("managed-workspace", 10);
+});
+
 test("terminal enforces the per-document session cap and history initialization order", async () => {
   const owner = ownerState();
   const service = new TerminalService({

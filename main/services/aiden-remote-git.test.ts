@@ -1,4 +1,5 @@
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -87,6 +88,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
   let createWorktreeCount = 0;
   let createFailure: Error | undefined;
   let deleteWorktreeCount = 0;
+  let deleteFailure: Error | undefined;
   const service = new AidenRemoteGitService({
     application,
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
@@ -115,6 +117,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       remove: async (_owner, id, validate) => {
         assert.equal(id, managedWorkspace.id);
         validate?.(managedWorkspace);
+        if (deleteFailure) throw deleteFailure;
         deleteWorktreeCount += 1;
         return { branchDeleted: true };
       },
@@ -276,6 +279,22 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       ),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
     );
+    deleteFailure = new ManagedWorktreeProcessActiveError();
+    await assert.rejects(
+      () => service.deleteManagedWorktree(
+        "device-1",
+        managedWorkspace.id,
+        workspaceRevision(managedWorkspace),
+        "worktree-delete-key-busy-0001",
+        { confirmedForeground: true },
+      ),
+      (error: unknown) => error instanceof AidenRemoteServiceError &&
+        error.code === "git_capability_denied" &&
+        error.status === 409 &&
+        /terminal process is still exiting/u.test(error.message),
+    );
+    assert.equal(deleteWorktreeCount, 0);
+    deleteFailure = undefined;
     const deleted = await service.deleteManagedWorktree(
       "device-1",
       managedWorkspace.id,
