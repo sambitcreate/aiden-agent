@@ -12,7 +12,7 @@ Last refreshed 2026-10-01 against `main` at `d2197dfef` (0.51.0 plus later merge
   - **Context:** shows a per-category breakdown (messages, system prompt, built-in and MCP tools, skills, memory, project and MCP instructions, deferred MCP tools). This needs a desktop-only `breakdown` field on the context projection; no CLI, Remote or phone changes.
   - **Subagents:** lists every run, grouped by state.
   - **Toolbar:** Quick View moves first and the Environment toggle last.
-- [Hybrid new chat: workspace choice and composer context](hybrid-new-chat-workspace-plan.md) — Planned (2026-10-15); owner approved the direction, no implementation yet. Prototype: [`assets/hybrid-new-chat-prototype.html`](assets/hybrid-new-chat-prototype.html).
+- [Hybrid new chat: workspace choice and composer context](hybrid-new-chat-workspace-plan.md) — In progress (2026-10-15); owner approved the direction. Phase 4 (entry points) implemented. Prototype: [`assets/hybrid-new-chat-prototype.html`](assets/hybrid-new-chat-prototype.html).
   - **New chat:** ⌘N stays an instant draft in the current workspace. The headline names the workspace and doubles as a picker.
   - **Workspace menu:** recents, path entry, Open folder (⌘⇧O) and Clone. ⌘⇧N opens a "New chat in…" palette.
   - **Composer top bar:** git chips appear only for git repos, the machine chip only with paired Macs, and the PR chip only for a GitHub repo with something to open. After the first send the bar shrinks to branch + PR instead of disappearing.
