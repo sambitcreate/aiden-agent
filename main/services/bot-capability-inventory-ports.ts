@@ -6,6 +6,7 @@ import {
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 import type { AppSettings, McpServer, Provider } from "./types.js";
+import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import type { BotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import {
   botCapabilityFactsFingerprint,
@@ -181,16 +182,20 @@ function connectionInventory(
 ): BotConnectionInventory[] {
   const scopeByServer = new Map(scopes.map((scope) => [scope.serverId, scope] as const));
   return servers.map((server) => {
-    const scope = server.enabled ? scopeByServer.get(server.id) : undefined;
+    // A server switched off for the model is listed like a disabled one: no tools, unavailable.
+    const offered = server.enabled && mcpServerOffersTools(server);
+    const scope = offered ? scopeByServer.get(server.id) : undefined;
     return {
       sourceId: server.id,
       label: server.name,
       description: server.enabled
-        ? scope
-          ? "Connected MCP tools"
-          : "Unavailable until Aiden can verify this connection"
+        ? !offered
+          ? "Turned off for the model in Aiden"
+          : scope
+            ? "Connected MCP tools"
+            : "Unavailable until Aiden can verify this connection"
         : "Turned off in Aiden",
-      available: Boolean(server.enabled && scope && scope.tools.length > 0),
+      available: Boolean(offered && scope && scope.tools.length > 0),
       connectionFingerprint:
         scope?.connectionFingerprint ??
         botCapabilityFactsFingerprint({
@@ -204,6 +209,7 @@ function connectionInventory(
           oauth: server.oauth === true,
           presetId: server.presetId ?? null,
           enabled: server.enabled,
+          ...(mcpServerOffersTools(server) ? {} : { hiddenFromModel: true }),
           unavailable: true,
         }),
       tools: (scope?.tools ?? []).map((tool) => ({

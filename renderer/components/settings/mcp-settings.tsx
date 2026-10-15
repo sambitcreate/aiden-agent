@@ -58,6 +58,7 @@ import {
 import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpSignInControls } from "./mcp-sign-in-controls";
+import { McpExposureControls } from "./mcp-exposure-controls";
 
 const COMPATIBILITY_FILTERS: ReadonlyArray<{ id: PluginCompatibilityFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -202,6 +203,17 @@ export function McpSettings() {
     }
   };
 
+  // Model access changes go through the ordinary save path (which reconnects).
+  const saveExposure = async (server: McpServer) => {
+    try {
+      await mcpApi.save(server);
+    } catch (error) {
+      toast.error(`Couldn’t change model access for ${server.name || "this server"}: ${errorMessage(error)}`);
+    } finally {
+      await invalidate().catch(() => undefined);
+    }
+  };
+
   const resetConnections = async () => {
     setResetting(true);
     try {
@@ -329,7 +341,8 @@ export function McpSettings() {
             {list.map((s, i) => (
               <React.Fragment key={s.id}>
                 {i > 0 ? <Separator /> : null}
-                <div className="flex items-center gap-3 px-3.5 py-3">
+                {/* Top-aligned: the model-access controls below the name can expand. */}
+                <div className="flex items-start gap-3 px-3.5 py-3">
                   {s.presetId ? (
                     <div
                       aria-hidden
@@ -363,6 +376,7 @@ export function McpSettings() {
                         {live.get(s.id)!.error}
                       </Text>
                     ) : null}
+                    <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
                   </div>
                   <Button
                     variant="filled"

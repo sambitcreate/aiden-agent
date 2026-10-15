@@ -14,6 +14,7 @@ import {
   type SubagentMcpMutationJournalV2,
   type SubagentMcpMutationRemoteSessionV2,
 } from "./subagent-mcp-mutation.js";
+import { createSubagentMcpMutationHost } from "./subagent-mcp-mutation-host-core.js";
 
 const profileFacts = {
   classification: "declared_mutating" as const,
@@ -484,4 +485,27 @@ test("wrong alias, expiry, and replay never gain a second dispatch", async () =>
   await replayed.gate.execute(exact);
   await assert.rejects(replayed.gate.execute(exact), /no live one-shot approval/u);
   assert.equal(replayed.rawCalls, 1);
+});
+
+test("the production mutation host refuses a tool hidden after approval before connecting", async () => {
+  let connections = 0;
+  const host = createSubagentMcpMutationHost({
+    resolveServer: async (serverId) => ({
+      id: serverId,
+      name: "Docs",
+      enabled: true,
+      transport: "http",
+      url: "https://example.test/mcp",
+      hiddenTools: [binding.tool.toolName],
+    }),
+    withClient: async () => {
+      connections += 1;
+      throw new Error("unexpected connection");
+    },
+  });
+  await assert.rejects(
+    host.openFreshSession(binding, new AbortController().signal),
+    /mutation binding changed/u,
+  );
+  assert.equal(connections, 0);
 });

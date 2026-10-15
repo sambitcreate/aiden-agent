@@ -473,6 +473,85 @@ test("a preset whose sign-in stopped working offers Sign in again and Sign out",
   assert.equal(savedServers(calls).length, 0);
 });
 
+test("model access saves the chosen exposure through the ordinary save path", async () => {
+  const calls = mount({ "mcp:save": (server: unknown) => server });
+  const access = await screen.findByRole("radiogroup", { name: "Model access for Files" });
+  assert.equal(within(access).getByRole("radio", { name: "On demand" }).getAttribute("aria-checked"), "true");
+  assert.match(document.getElementById(access.getAttribute("aria-describedby")!)?.textContent ?? "", /looks these tools up/u);
+  fireEvent.click(within(access).getByRole("radio", { name: "Always visible" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.exposure, "direct");
+  assert.equal(savedServers(calls)[0]?.id, "mcp-files");
+  assert.deepEqual(savedServers(calls)[0]?.args, localServer.args);
+});
+
+test("a server switched off for the model offers no tool list, and choosing On demand clears the setting", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...localServer, exposure: "hidden" }],
+    "mcp:save": (server: unknown) => server,
+  });
+  const access = await screen.findByRole("radiogroup", { name: "Model access for Files" });
+  assert.match(document.getElementById(access.getAttribute("aria-describedby")!)?.textContent ?? "", /can’t use this server/u);
+  assert.equal(screen.queryByRole("button", { name: /^Tools/u }), null);
+  fireEvent.click(within(access).getByRole("radio", { name: "On demand" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(savedServers(calls)[0]?.exposure, undefined);
+});
+
+test("the Tools list shows every discovered tool and hiding one saves it in hiddenTools", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...localServer, hiddenTools: ["write_file"] }],
+    "mcp:liveStatus": () => [{ serverId: "mcp-files", state: "connected", toolCount: 2 }],
+    "mcp:toolList": () => [{ name: "read_file", title: "Read file" }, { name: "write_file" }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools · 1 hidden" }));
+  const read = await screen.findByRole("switch", { name: "Let the model use Read file" });
+  const write = screen.getByRole("switch", { name: "Let the model use write_file" });
+  assert.equal(read.getAttribute("aria-checked"), "true");
+  assert.equal(write.getAttribute("aria-checked"), "false");
+  assert.deepEqual(channelCalls(calls, "mcp:toolList").map((call) => call.args[0]), ["mcp-files"]);
+  fireEvent.click(read);
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.hiddenTools, ["write_file", "read_file"]);
+});
+
+test("a same-count rediscovery refreshes the Tools list while open and after reopening", async () => {
+  let inventory = [{ name: "old_tool" }];
+  const calls = mount({
+    "mcp:liveStatus": () => [{ serverId: "mcp-files", state: "connected", toolCount: 1, toolsRevision: "rev-old" }],
+    "mcp:toolList": () => inventory,
+  });
+  const toggle = await screen.findByRole("button", { name: "Tools" });
+  fireEvent.click(toggle);
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use old_tool" }));
+
+  inventory = [{ name: "new_tool" }];
+  act(() =>
+    emitBotTestNotification("mcp:statusChanged", { serverId: "mcp-files", state: "connected", toolCount: 1, toolsRevision: "rev-new" }),
+  );
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use new_tool" }));
+  assert.equal(screen.queryByRole("switch", { name: "Let the model use old_tool" }), null);
+
+  fireEvent.click(toggle);
+  fireEvent.click(toggle);
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use new_tool" }));
+  assert.equal(screen.queryByRole("switch", { name: "Let the model use old_tool" }), null);
+  assert.equal(channelCalls(calls, "mcp:toolList").length, 2);
+});
+
+test("before any discovery the Tools list can load tools with a connection test that saves nothing", async () => {
+  const calls = mount({
+    "mcp:toolList": () => null,
+    "mcp:testDraft": () => ({ connected: true, toolCount: 1, tools: ["search"], serverCapabilities: {} }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load tools" }));
+  assert.ok(await screen.findByRole("switch", { name: "Let the model use search" }));
+  assert.equal(channelCalls(calls, "mcp:testDraft").length, 1);
+  assert.equal(savedServers(calls).length, 0);
+});
+
 test("closing a new preset's setup while its sign-in save is pending never authorizes and removes the record", async () => {
   let resolveSave: () => void = () => undefined;
   const { calls, openChanges } = renderPreset(linearState(), undefined, {

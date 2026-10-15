@@ -190,6 +190,26 @@ test("runtime admission includes non-secret name and enabled changes", () => {
   );
 });
 
+test("exposure changes move the runtime fence without touching credentials", () => {
+  const hidden = { ...server, exposure: "hidden" as const };
+  const hiddenTool = { ...server, hiddenTools: ["lookup"] };
+  for (const changed of [hidden, hiddenTool]) {
+    assert.equal(
+      sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(server), mcpRuntimeConnectionSnapshot(changed)),
+      false,
+    );
+    assert.equal(pendingMcpCredentialCleanupForSave(server, changed), null, "hiding never signs out");
+  }
+  // Defaults and list order are not exposure changes.
+  assert.deepEqual(
+    mcpRuntimeConnectionSnapshot({ ...server, exposure: "auto", hiddenTools: [] }),
+    mcpRuntimeConnectionSnapshot(server),
+  );
+  assert.deepEqual(
+    mcpRuntimeConnectionSnapshot({ ...server, hiddenTools: ["b", "a"] }),
+    mcpRuntimeConnectionSnapshot({ ...server, hiddenTools: ["a", "b"] }),
+  );
+});
 
 test("changing OAuth metadata authority rotates the credential identity and survives cleanup journal parsing", () => {
   const target = { ...server, authServerMetadataUrl: "https://identity.test/metadata" };

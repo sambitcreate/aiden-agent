@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { McpServer } from "../types.js";
+import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 import {
   ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT,
   ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
@@ -55,7 +56,8 @@ function safeIdentity(value: string, limit: number): string | undefined {
 export function assistantMcpServerInventory(
   configured: readonly McpServer[],
 ): AssistantMcpServerInventory {
-  const enabledServers = configured.filter((server) => server.enabled);
+  // Servers switched off for the model are not offered to automations either.
+  const enabledServers = configured.filter((server) => server.enabled && mcpServerOffersTools(server));
   const safeEnabledServers = enabledServers.flatMap((server) => {
     const id = safeIdentity(server.id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT);
     const name = safeIdentity(server.name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT);

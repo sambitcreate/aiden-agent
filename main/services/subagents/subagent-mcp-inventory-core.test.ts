@@ -129,3 +129,27 @@ test("negative discovery cache advances exponential backoff across retries", () 
   cache.setFailure("offline", fingerprint, 90_000);
   assert.equal(cache.get("offline", fingerprint, 209_999), null);
 });
+
+test("child inventories omit servers switched off for the model and their hidden tools", async () => {
+  const listed: string[] = [];
+  const port = (id: string): SubagentMcpClientPort => ({
+    ...client([]),
+    listTools: async () => {
+      listed.push(id);
+      return ["lookup", "search"].map((name) => ({ name, inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }));
+    },
+  });
+  const scopes = await resolveBoundedSubagentMcpInventory(new AbortController().signal, {
+    listServers: async () => [
+      { ...server, id: "off", exposure: "hidden" },
+      { ...server, id: "partly", hiddenTools: ["search"] },
+      { ...server, id: "all-hidden", hiddenTools: ["lookup", "search"] },
+    ],
+    withClient: async <T>(target: McpServer, _signal: AbortSignal, operation: (value: SubagentMcpClientPort) => Promise<T>) => operation(port(target.id)),
+    resolveCredentialRevision: async () => revisions.current,
+    cache: new SubagentMcpInventoryCache(),
+    now: () => 1_000,
+  });
+  assert.deepEqual(scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]), [["partly", ["lookup"]]]);
+  assert.ok(!listed.includes("off"));
+});

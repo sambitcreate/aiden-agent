@@ -541,6 +541,9 @@ test("connection, schema, and effect drift fail closed before invocation", async
   for (const mutate of [
     (h: Harness) => h.setServer({ ...h.getServer()!, url: "https://drift.example.test" }),
     (h: Harness) => h.setServer({ ...h.getServer()!, enabled: false }),
+    // Hiding the approved tool (or the whole server) after approval.
+    (h: Harness) => h.setServer({ ...h.getServer()!, hiddenTools: ["lookup"] }),
+    (h: Harness) => h.setServer({ ...h.getServer()!, exposure: "hidden" }),
     (h: Harness) =>
       h.setServer({
         ...h.getServer()!,
@@ -571,6 +574,20 @@ test("connection, schema, and effect drift fail closed before invocation", async
     );
     assert.equal(h.calls.length, 0);
   }
+});
+
+test("a hidden tool is refused before dispatch even when the connection fingerprint still matches", async () => {
+  const h = harness();
+  h.setServer({ ...h.getServer()!, hiddenTools: ["lookup"] });
+  // Approved against the very configuration that hides it.
+  const scope = await approvedScope(h);
+  const [tool] = await createReadOnlySubagentMcpTools({
+    scopes: [scope],
+    host: h.host,
+    consumeNetworkOperation: () => undefined,
+  });
+  assert.equal(await rejectionCode(tool!.execute("call-hidden", { query: "hello" })), "authority_drift");
+  assert.equal(h.calls.length, 0);
 });
 
 test("credential revision drift fails closed before a remote call", async () => {

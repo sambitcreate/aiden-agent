@@ -39,6 +39,7 @@ export function Segmented<T extends string>({
   disabled?: boolean;
   "aria-label"?: string;
   "aria-labelledby"?: string;
+  "aria-describedby"?: string;
 }) {
   return (
     <RadioGroupPrimitive.Root
