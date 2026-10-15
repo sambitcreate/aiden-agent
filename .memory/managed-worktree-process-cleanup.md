@@ -30,6 +30,10 @@ enumeration. Filtered or malformed inventory returns unavailable rather than
 `empty`. The Linux fixture test and a private-mount-namespace probe cover this.
 Parsing numeric PID directory names with the existing digit parser avoids
 the `strtol` C23 symbol that raised the Linux package's glibc floor.
+The worktree-remover prebuilts for macOS universal, Linux x64, and Linux arm64
+were rebuilt from this native source, with matching binary and source hashes
+in each checked-in manifest. The renderer-other CI lane checks these manifests;
+updating only the source leaves that lane red even when native tests pass.
 An invalid node-pty PID must never reach either the process-group signal or
 node-pty's own `kill()` (which also signals its reported PID on Unix). Since
 there is no session ID to audit, Aiden retains a hard removal hold for that
